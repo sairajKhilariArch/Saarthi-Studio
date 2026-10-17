@@ -70,10 +70,13 @@ public class MainActivity extends Activity {
     private LinearLayout root, messageList;
     private ScrollView scroll;
     private EditText promptInput, codeInput;
-    private Button sendButton, codeButton;
-    private TextView statusText, usageText, welcomeText;
+    private Button sendButton, codeButton, historyButton, newChatButton;
+    private TextView statusText, usageText, currentChatText;
     private boolean codeVisible = false;
     private boolean sending = false;
+    private long currentConversationId = -1L;
+    private static final String STATE_PREFS = "saarthi_chat_state";
+    private static final String CURRENT_CONVERSATION_KEY = "current_conversation_id";
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -82,7 +85,9 @@ public class MainActivity extends Activity {
         store = new Store(this);
         secureSettings = new SecureSettings(this);
         config = secureSettings.load();
+        restoreCurrentConversation();
         buildUi();
+        renderConversationTitle();
         renderHistory();
         if (config.apiKey.isEmpty() || config.baseUrl.isEmpty()) {
             statusText.setText("Setup needed · connect to FreeLLMAPI");
@@ -116,13 +121,30 @@ public class MainActivity extends Activity {
         TextView tagline = label("One workspace. Many providers.", 12, MUTED, false);
         brand.addView(tagline);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        historyButton = smallButton("Chats");
+        historyButton.setOnClickListener(v -> openConversationHistory());
+        header.addView(historyButton);
         Button settings = smallButton("Settings");
         settings.setOnClickListener(v -> openSettings());
-        header.addView(settings);
+        LinearLayout.LayoutParams settingsLp = new LinearLayout.LayoutParams(-2, -2);
+        settingsLp.leftMargin = dp(6);
+        header.addView(settings, settingsLp);
         root.addView(header);
 
+        LinearLayout chatBar = row();
+        chatBar.setGravity(Gravity.CENTER_VERTICAL);
+        chatBar.setPadding(dp(2), dp(9), dp(2), dp(5));
+        currentChatText = label("New chat", 14, TEXT, true);
+        currentChatText.setSingleLine(true);
+        currentChatText.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        chatBar.addView(currentChatText, new LinearLayout.LayoutParams(0, -2, 1));
+        newChatButton = smallButton("+ New chat");
+        newChatButton.setOnClickListener(v -> createNewConversation());
+        chatBar.addView(newChatButton);
+        root.addView(chatBar);
+
         statusText = label("Not connected", 12, MUTED, false);
-        statusText.setPadding(dp(4), dp(9), dp(4), dp(9));
+        statusText.setPadding(dp(4), dp(5), dp(4), dp(8));
         root.addView(statusText);
         View line = new View(this); line.setBackgroundColor(Color.rgb(44, 51, 65));
         root.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
@@ -191,7 +213,7 @@ public class MainActivity extends Activity {
 
     private void renderHistory() {
         messageList.removeAllViews();
-        List<Message> history = store.allMessages(150);
+        List<Message> history = store.allMessages(currentConversationId, 150);
         if (history.isEmpty()) {
             LinearLayout welcome = new LinearLayout(this);
             welcome.setOrientation(LinearLayout.VERTICAL);
@@ -199,9 +221,9 @@ public class MainActivity extends Activity {
             welcome.setBackground(round(PANEL, 18));
             TextView title = label("Welcome to Saarthi Studio", 20, TEXT, true);
             welcome.addView(title);
-            TextView body = label("Connect your FreeLLMAPI server in Settings, then ask questions, debug code, or explore ideas. Your chat history stays on this phone.", 14, MUTED, false);
+            TextView body = label("This is a separate conversation. Connect FreeLLMAPI in Settings, then ask questions, debug code, or explore ideas. Your chats stay on this phone.", 14, MUTED, false);
             body.setPadding(0, dp(9), 0, 0); welcome.addView(body);
-            TextView steps = label("Quick start\n1. Run FreeLLMAPI on your Ubuntu computer or server.\n2. Enter its network URL and unified API key in Settings.\n3. Tap Test connection, then start chatting.", 13, TEXT, false);
+            TextView steps = label("Quick start\n1. Run FreeLLMAPI on your Ubuntu computer or server.\n2. Enter its network URL and unified API key in Settings.\n3. Tap Test connection, then start chatting.\n\nUse Chats to switch between saved conversations, or + New chat to start another.", 13, TEXT, false);
             steps.setPadding(0, dp(15), 0, 0); welcome.addView(steps);
             messageList.addView(welcome, new LinearLayout.LayoutParams(-1, -2));
         } else {
@@ -245,16 +267,19 @@ public class MainActivity extends Activity {
         }
         String code = codeVisible ? codeInput.getText().toString().trim() : "";
         String fullText = prompt + (code.isEmpty() ? "" : "\n\n[Code context]\n" + code);
-        store.addMessage("user", fullText, "");
+        final long targetConversationId = currentConversationId;
+        store.renameIfDefaultTitle(targetConversationId, promptToTitle(prompt));
+        renderConversationTitle();
+        store.addMessage(targetConversationId, "user", fullText, "");
         messageList.removeAllViews();
-        for (Message m : store.allMessages(150)) addBubble(m.role, m.content, m.meta, false);
+        for (Message m : store.allMessages(targetConversationId, 150)) addBubble(m.role, m.content, m.meta, false);
         promptInput.setText("");
         ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(promptInput.getWindowToken(), 0);
         setSending(true);
         statusText.setText("Waiting for provider response…");
         usageText.setText("Sending latest 4 messages");
 
-        List<Message> context = store.latestMessages(4);
+        List<Message> context = store.latestMessages(targetConversationId, 4);
         JSONArray msgs = new JSONArray();
         try { msgs.put(new JSONObject().put("role", "system").put("content", SYSTEM_PROMPT)); }
         catch (JSONException ignored) { }
@@ -279,7 +304,7 @@ public class MainActivity extends Activity {
                 String provider = result.headers.getOrDefault("x-routed-via", "provider not reported");
                 long ms = System.currentTimeMillis() - started;
                 String meta = tokenText + " · " + String.format(Locale.US, "%.1f s", ms / 1000.0) + " · " + provider;
-                store.addMessage("assistant", answer, meta);
+                store.addMessage(targetConversationId, "assistant", answer, meta);
                 main.post(() -> {
                     setSending(false); renderHistory(); statusText.setText("Connected · " + model); usageText.setText(meta); codeInput.setText("");
                 });
@@ -287,7 +312,7 @@ public class MainActivity extends Activity {
                 String message = friendlyError(e.getMessage());
                 long ms = System.currentTimeMillis() - started;
                 String meta = "Failed after " + String.format(Locale.US, "%.1f s", ms / 1000.0);
-                store.addMessage("assistant", message, meta);
+                store.addMessage(targetConversationId, "assistant", message, meta);
                 main.post(() -> { setSending(false); renderHistory(); statusText.setText("Request failed · check Settings or server logs"); usageText.setText(meta); });
             }
         });
@@ -298,6 +323,167 @@ public class MainActivity extends Activity {
         sendButton.setEnabled(!value);
         sendButton.setText(value ? "…" : "Send");
         sendButton.setAlpha(value ? 0.6f : 1f);
+    }
+
+    private void restoreCurrentConversation() {
+        android.content.SharedPreferences state = getSharedPreferences(STATE_PREFS, MODE_PRIVATE);
+        long savedId = state.getLong(CURRENT_CONVERSATION_KEY, -1L);
+        Conversation saved = store.getConversation(savedId);
+        if (saved != null) {
+            currentConversationId = saved.id;
+            return;
+        }
+        List<Conversation> conversations = store.allConversations();
+        if (conversations.isEmpty()) {
+            currentConversationId = store.createConversation("New chat");
+        } else {
+            // On an existing installation, this selects the migrated legacy conversation.
+            currentConversationId = conversations.get(0).id;
+        }
+        saveCurrentConversationId();
+    }
+
+    private void saveCurrentConversationId() {
+        getSharedPreferences(STATE_PREFS, MODE_PRIVATE).edit()
+                .putLong(CURRENT_CONVERSATION_KEY, currentConversationId).apply();
+    }
+
+    private void renderConversationTitle() {
+        if (currentChatText == null || store == null) return;
+        Conversation conversation = store.getConversation(currentConversationId);
+        currentChatText.setText(conversation == null ? "New chat" : conversation.title);
+    }
+
+    private void createNewConversation() {
+        if (sending) { toast("Wait for the current response to finish before switching chats."); return; }
+        currentConversationId = store.createConversation("New chat");
+        saveCurrentConversationId();
+        renderConversationTitle();
+        renderHistory();
+        promptInput.setText("");
+        codeInput.setText("");
+        usageText.setText("New conversation · saved on this phone");
+    }
+
+    private void openConversationHistory() {
+        if (sending) { toast("Wait for the current response to finish before switching chats."); return; }
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(14), dp(8), dp(14), dp(8));
+        ScrollView historyScroll = new ScrollView(this);
+        historyScroll.setFillViewport(false);
+        historyScroll.addView(list);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Your conversations")
+                .setView(historyScroll)
+                .setNegativeButton("Close", (d, w) -> d.dismiss())
+                .setPositiveButton("+ New chat", (d, w) -> createNewConversation())
+                .create();
+        Runnable[] refreshHolder = new Runnable[1];
+        refreshHolder[0] = () -> {
+            list.removeAllViews();
+            List<Conversation> conversations = store.allConversations();
+            if (conversations.isEmpty()) {
+                TextView empty = label("No saved conversations yet. Create a new chat to begin.", 14, MUTED, false);
+                empty.setPadding(dp(8), dp(12), dp(8), dp(12));
+                list.addView(empty);
+                return;
+            }
+            for (Conversation conversation : conversations) {
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setBackground(round(conversation.id == currentConversationId ? PANEL_ALT : PANEL, 14));
+                card.setPadding(dp(12), dp(10), dp(12), dp(10));
+                LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+                cardLp.bottomMargin = dp(9);
+                list.addView(card, cardLp);
+                TextView title = label(conversation.title, 15, TEXT, true);
+                card.addView(title);
+                String preview = store.preview(conversation.id);
+                TextView detail = label(preview.isEmpty() ? "No messages yet" : preview, 12, MUTED, false);
+                detail.setMaxLines(2);
+                detail.setPadding(0, dp(4), 0, dp(9));
+                card.addView(detail);
+                LinearLayout actions = row();
+                actions.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+                Button open = smallButton(conversation.id == currentConversationId ? "Current" : "Open");
+                open.setEnabled(conversation.id != currentConversationId);
+                open.setOnClickListener(v -> {
+                    currentConversationId = conversation.id;
+                    saveCurrentConversationId();
+                    renderConversationTitle();
+                    renderHistory();
+                    usageText.setText("Conversation loaded · saved on this phone");
+                    dialog.dismiss();
+                });
+                Button rename = smallButton("Rename");
+                LinearLayout.LayoutParams actionLp = new LinearLayout.LayoutParams(-2, -2);
+                actionLp.leftMargin = dp(6);
+                actions.addView(open);
+                actions.addView(rename, actionLp);
+                Button delete = smallButton("Delete");
+                delete.setTextColor(Color.rgb(255, 145, 145));
+                LinearLayout.LayoutParams deleteLp = new LinearLayout.LayoutParams(-2, -2);
+                deleteLp.leftMargin = dp(6);
+                actions.addView(delete, deleteLp);
+                card.addView(actions);
+                rename.setOnClickListener(v -> promptRenameConversation(conversation, () -> {
+                    refreshHolder[0].run(); renderConversationTitle();
+                }));
+                delete.setOnClickListener(v -> confirmDeleteConversation(conversation, () -> {
+                    if (conversation.id == currentConversationId) {
+                        List<Conversation> remaining = store.allConversations();
+                        currentConversationId = remaining.isEmpty() ? store.createConversation("New chat") : remaining.get(0).id;
+                        saveCurrentConversationId();
+                        renderConversationTitle();
+                        renderHistory();
+                    }
+                    refreshHolder[0].run();
+                }));
+            }
+        };
+        refreshHolder[0].run();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(GREEN);
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(MUTED);
+        });
+        dialog.show();
+        dialog.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(24), dp(520)), Math.min(getResources().getDisplayMetrics().heightPixels - dp(100), dp(560)));
+    }
+
+    private void promptRenameConversation(Conversation conversation, Runnable onChanged) {
+        EditText input = field("Conversation name", conversation.title, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        new AlertDialog.Builder(this)
+                .setTitle("Rename conversation")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (d, w) -> {
+                    String title = input.getText().toString().trim();
+                    if (title.isEmpty()) { toast("Conversation name cannot be empty."); return; }
+                    store.renameConversation(conversation.id, title);
+                    onChanged.run();
+                })
+                .show();
+    }
+
+    private void confirmDeleteConversation(Conversation conversation, Runnable onDeleted) {
+        new AlertDialog.Builder(this)
+                .setTitle("Delete conversation?")
+                .setMessage("Delete ‘" + conversation.title + "’ and all its messages from this phone? This cannot be undone.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (d, w) -> {
+                    store.deleteConversation(conversation.id);
+                    onDeleted.run();
+                    toast("Conversation deleted.");
+                })
+                .show();
+    }
+
+    private static String promptToTitle(String prompt) {
+        String firstLine = prompt == null ? "" : prompt.trim().split("\n", 2)[0].replace("\r", "").trim();
+        if (firstLine.isEmpty()) return "New chat";
+        if (firstLine.length() > 38) return firstLine.substring(0, 35).trim() + "…";
+        return firstLine;
     }
 
     private void openSettings() {
@@ -466,26 +652,134 @@ public class MainActivity extends Activity {
         Message(String r, String c, String m) { role=r; content=c; meta=m == null ? "" : m; }
     }
 
+    private static final class Conversation {
+        final long id;
+        final String title;
+        final long updatedAt;
+        Conversation(long id, String title, long updatedAt) {
+            this.id = id;
+            this.title = title == null || title.trim().isEmpty() ? "New chat" : title;
+            this.updatedAt = updatedAt;
+        }
+    }
+
     private static final class Store extends android.database.sqlite.SQLiteOpenHelper {
-        Store(Context c) { super(c, "saarthi_history.sqlite3", null, 1); }
+        Store(Context c) { super(c, "saarthi_history.sqlite3", null, 2); }
+
+        @Override public void onConfigure(android.database.sqlite.SQLiteDatabase db) {
+            super.onConfigure(db);
+            db.setForeignKeyConstraintsEnabled(true);
+        }
+
         @Override public void onCreate(android.database.sqlite.SQLiteDatabase db) {
-            db.execSQL("CREATE TABLE messages (_id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, meta TEXT, created_at INTEGER NOT NULL)");
+            db.execSQL("CREATE TABLE conversations (_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
+            db.execSQL("CREATE TABLE messages (_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, meta TEXT, created_at INTEGER NOT NULL, FOREIGN KEY(conversation_id) REFERENCES conversations(_id) ON DELETE CASCADE)");
+            db.execSQL("CREATE INDEX idx_messages_conversation_id ON messages(conversation_id, _id)");
+            long now = System.currentTimeMillis();
+            android.content.ContentValues cv = new android.content.ContentValues();
+            cv.put("title", "New chat"); cv.put("created_at", now); cv.put("updated_at", now);
+            db.insert("conversations", null, cv);
         }
-        @Override public void onUpgrade(android.database.sqlite.SQLiteDatabase db, int oldVersion, int newVersion) { }
-        synchronized void addMessage(String role, String content, String meta) {
-            android.content.ContentValues values = new android.content.ContentValues(); values.put("role", role); values.put("content", content); values.put("meta", meta); values.put("created_at", System.currentTimeMillis());
-            getWritableDatabase().insert("messages", null, values);
+
+        @Override public void onUpgrade(android.database.sqlite.SQLiteDatabase db, int oldVersion, int newVersion) {
+            if (oldVersion < 2) {
+                long now = System.currentTimeMillis();
+                db.execSQL("CREATE TABLE conversations (_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
+                db.execSQL("INSERT INTO conversations (_id, title, created_at, updated_at) VALUES (1, 'Previous conversation', " + now + ", " + now + ")");
+                // Version 1 stored every message in one flat history. Assign all old rows to that conversation.
+                db.execSQL("ALTER TABLE messages ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 1");
+                db.execSQL("CREATE INDEX idx_messages_conversation_id ON messages(conversation_id, _id)");
+                db.execSQL("UPDATE conversations SET updated_at = COALESCE((SELECT MAX(created_at) FROM messages), created_at) WHERE _id = 1");
+            }
         }
-        synchronized List<Message> latestMessages(int limit) {
+
+        synchronized long createConversation(String title) {
+            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
+            long now = System.currentTimeMillis();
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put("title", title == null || title.trim().isEmpty() ? "New chat" : title.trim());
+            values.put("created_at", now); values.put("updated_at", now);
+            return db.insert("conversations", null, values);
+        }
+
+        synchronized Conversation getConversation(long id) {
+            if (id <= 0) return null;
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT _id,title,updated_at FROM conversations WHERE _id=?", new String[]{String.valueOf(id)})) {
+                if (c.moveToFirst()) return new Conversation(c.getLong(0), c.getString(1), c.getLong(2));
+            }
+            return null;
+        }
+
+        synchronized List<Conversation> allConversations() {
+            List<Conversation> result = new ArrayList<>();
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT _id,title,updated_at FROM conversations ORDER BY updated_at DESC, _id DESC", null)) {
+                while (c.moveToNext()) result.add(new Conversation(c.getLong(0), c.getString(1), c.getLong(2)));
+            }
+            return result;
+        }
+
+        synchronized void renameConversation(long id, String title) {
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put("title", title.trim()); values.put("updated_at", System.currentTimeMillis());
+            getWritableDatabase().update("conversations", values, "_id=?", new String[]{String.valueOf(id)});
+        }
+
+        synchronized void renameIfDefaultTitle(long id, String title) {
+            Conversation c = getConversation(id);
+            if (c != null && "New chat".equals(c.title)) renameConversation(id, title);
+        }
+
+        synchronized void deleteConversation(long id) {
+            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
+            db.beginTransaction();
+            try {
+                // Explicit delete keeps deletion correct for rows migrated from the old schema too.
+                db.delete("messages", "conversation_id=?", new String[]{String.valueOf(id)});
+                db.delete("conversations", "_id=?", new String[]{String.valueOf(id)});
+                db.setTransactionSuccessful();
+            } finally { db.endTransaction(); }
+        }
+
+        synchronized void addMessage(long conversationId, String role, String content, String meta) {
+            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
+            long now = System.currentTimeMillis();
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put("conversation_id", conversationId); values.put("role", role); values.put("content", content);
+            values.put("meta", meta); values.put("created_at", now);
+            db.insert("messages", null, values);
+            android.content.ContentValues updated = new android.content.ContentValues(); updated.put("updated_at", now);
+            db.update("conversations", updated, "_id=?", new String[]{String.valueOf(conversationId)});
+        }
+
+        synchronized String preview(long conversationId) {
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT content FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT 1",
+                    new String[]{String.valueOf(conversationId)})) {
+                if (c.moveToFirst()) {
+                    String value = c.getString(0).replaceAll("\\s+", " ").trim();
+                    return value.length() > 90 ? value.substring(0, 87) + "…" : value;
+                }
+            }
+            return "";
+        }
+
+        synchronized List<Message> latestMessages(long conversationId, int limit) {
             List<Message> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery("SELECT role,content,meta FROM messages ORDER BY _id DESC LIMIT ?", new String[]{String.valueOf(limit)})) {
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT role,content,meta FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT ?",
+                    new String[]{String.valueOf(conversationId), String.valueOf(limit)})) {
                 while (c.moveToNext()) result.add(new Message(c.getString(0), c.getString(1), c.getString(2)));
             }
             Collections.reverse(result); return result;
         }
-        synchronized List<Message> allMessages(int limit) {
+
+        synchronized List<Message> allMessages(long conversationId, int limit) {
             List<Message> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery("SELECT role,content,meta FROM messages ORDER BY _id DESC LIMIT ?", new String[]{String.valueOf(limit)})) {
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT role,content,meta FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT ?",
+                    new String[]{String.valueOf(conversationId), String.valueOf(limit)})) {
                 while (c.moveToNext()) result.add(new Message(c.getString(0), c.getString(1), c.getString(2)));
             }
             Collections.reverse(result); return result;
