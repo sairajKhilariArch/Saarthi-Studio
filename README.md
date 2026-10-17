@@ -5,7 +5,8 @@ A native Android companion app for Saarthi Studio. It connects to a FreeLLMAPI/O
 ## Features
 
 - Native Android chat interface and optional code context panel
-- Persistent local chat history (SQLite)
+- Separate conversations with a saved chat list, open/switch, rename, and delete actions
+- Persistent local chat history (SQLite), with automatic migration of the previous single-chat history into “Previous conversation”
 - Sends only the latest four stored messages plus a short system instruction, while keeping longer history on the phone
 - OpenAI-compatible `POST /v1/chat/completions` support, `model: auto` by default
 - Connection test using the `GET /v1/models` endpoint
@@ -35,7 +36,7 @@ Use JDK 17 and Android SDK Platform 35. From this folder, run:
 gradle assembleDebug
 ```
 
-This requires a compatible Gradle installation (Gradle 8.9 or newer compatible with Android Gradle Plugin 8.7.3) and a configured Android SDK. If you use Android Studio, the IDE can manage the SDK and build tools for you.
+This requires a compatible Gradle installation (Gradle 8.9 compatible with Android Gradle Plugin 8.7.3) and a configured Android SDK. If you use Android Studio, the IDE can manage the SDK and build tools for you.
 
 ## Connect the phone to FreeLLMAPI
 
@@ -89,12 +90,12 @@ Saarthi keeps chat history locally but sends only the latest four messages to th
 - Display name: Saarthi Studio
 - Minimum Android: Android 8.0 (API 26)
 - Compile/target SDK: 35
-- Version: 1.0.0
+- Version: 1.1.0 (conversation management)
 - Android native UI written in Java; provider requests use `HttpURLConnection`.
 
-## Add Android to an existing Saarthi-Studio repository (keep the Rust app)
+## Optional: nest Android under `android/` on a shared branch
 
-The Android app is intended to live in an `android/` subfolder alongside the Rust desktop app. That keeps the existing Rust source intact.
+This is an alternative layout for projects that keep all platforms on one branch. Your current setup uses a dedicated `android` branch with the Android Gradle project at the repository root, so use `UPGRADE-INSTRUCTIONS.md` and `apply-chat-management-upgrade.sh` for your current branch instead. For a shared-branch layout, the Android app can live in an `android/` subfolder alongside the Rust desktop app.
 
 If you have cloned the Saarthi-Studio repository to `~/Projects/Saarthi-Studio`, extract this ZIP and run from the extracted folder:
 
@@ -103,3 +104,10 @@ If you have cloned the Saarthi-Studio repository to `~/Projects/Saarthi-Studio`,
 ```
 
 Then run the Git commands printed by the script. The script refuses to overwrite an existing `android/app` directory. Pushing the project triggers `.github/workflows/build-android.yml`, which compiles the debug APK on a GitHub-hosted runner and uploads it as an Actions artifact. Open the repository's **Actions** tab, choose the completed **Build Saarthi Studio Android APK** run, then download the `saarthi-studio-android-debug-apk` artifact ZIP. Extract that artifact ZIP to find `app-debug.apk`.
+
+
+## Upgrade from 1.0.0 to 1.1.0
+
+Version 1.1.0 adds independent conversations, a Chats list, automatic titles based on the first prompt, rename, and delete. The SQLite database version is upgraded from 1 to 2. On an in-place app update, the previous flat message history is migrated to a conversation called **Previous conversation**. Avoid uninstalling the existing app before updating because uninstalling removes its private local history and settings. If Android reports a signing-certificate conflict when installing the new debug APK, do not uninstall until you have decided how to preserve that data; debug APKs built on different machines may have different debug signing keys.
+
+To update the repository branch where the Android Gradle project is at its root, use `apply-chat-management-upgrade.sh` from this archive and pass your local clone path. It checks that the checked-out branch is `android` and updates only `MainActivity.java`, the Android module version, and the Android build workflow.
