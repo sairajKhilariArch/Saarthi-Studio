@@ -1,9 +1,11 @@
-name: Build Saarthi Studio APK
+
+name: Build Saarthi Studio Android APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches:
+      - android
     paths:
       - 'app/**'
       - '*.gradle.kts'
@@ -15,7 +17,9 @@ permissions:
 
 jobs:
   build:
+    name: Build debug APK
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -35,7 +39,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK components
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
