@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Free AI Studio</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">✳</div><div><strong>Free AI Studio</strong><small>Local coding workspace</small></div></div>
+    <button id="newChat" class="primary full">＋ New conversation</button>
+    <div class="side-label">YOUR HISTORY</div>
+    <div id="conversationList" class="conversation-list"><div class="muted pad">Loading history…</div></div>
+    <div class="sidebar-bottom">
+      <div class="privacy-note"><span class="dot"></span><span>Runs locally on this computer</span></div>
+      <button class="nav-button" data-tab="usage">◷ &nbsp; Usage & errors</button>
+      <button class="nav-button" data-tab="settings">⚙ &nbsp; Router settings</button>
+      <div class="side-foot">Your chats are stored in local SQLite.</div>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div><span class="eyebrow">WORKSPACE</span><h1 id="pageTitle">AI Coding Chat</h1></div>
+      <div class="top-actions"><span class="status-pill"><span class="dot"></span><span id="connectionLabel">Router not tested</span></span><button id="openProviderDashboard" class="secondary dashboard-button" type="button">Provider setup ↗</button><button id="openSettings" class="icon-button" title="Settings">⚙</button></div>
+    </header>
+
+    <section id="chatTab" class="tab-panel chat-layout">
+      <div class="chat-column">
+        <div id="welcome" class="welcome">
+          <div class="welcome-icon">✳</div><h2>Your coding partner, your setup.</h2>
+          <p>Ask questions, debug errors, or include code from the editor. Configure a compatible router in Settings to get started.</p>
+          <div class="suggestions">
+            <button class="suggestion" data-prompt="Explain Rust ownership with a small example.">Explain Rust ownership <span>↗</span></button>
+            <button class="suggestion" data-prompt="Help me debug this error. Explain the likely cause and how to fix it.">Debug an error <span>↗</span></button>
+            <button class="suggestion" data-prompt="Review the code in my editor for bugs, security issues, and improvements.">Review my code <span>↗</span></button>
+          </div>
+        </div>
+        <div id="messages" class="messages"></div>
+        <div id="thinking" class="thinking hidden"><span class="spinner"></span> Asking your configured router…</div>
+        <div class="composer-wrap">
+          <textarea id="prompt" rows="3" placeholder="Ask a coding question… (Enter to send, Shift+Enter for a new line)"></textarea>
+          <div class="composer-bottom"><span class="hint">Your configured router handles provider fallback.</span><button id="send" class="primary">Send ↗</button></div>
+        </div>
+      </div>
+      <aside class="editor-panel">
+        <div class="panel-heading"><div><span class="eyebrow">CODE CONTEXT</span><h2>Code editor</h2></div><span class="editor-badge">EDITABLE</span></div>
+        <div class="editor-tools"><label for="language">Language</label><select id="language"><option>rust</option><option>python</option><option>javascript</option><option>typescript</option><option>java</option><option>cpp</option><option>c</option><option>sql</option><option>html</option><option>css</option><option>bash</option><option>text</option></select><button id="clearCode" class="subtle-button">Clear</button></div>
+        <textarea id="codeEditor" spellcheck="false" aria-label="Code editor" placeholder="// Paste or write code here.&#10;// It will only be sent when you send a chat message."></textarea>
+        <div class="editor-footer"><span id="codeCount">0 characters</span><button id="copyCode" class="subtle-button">Copy code</button></div>
+        <button id="askAboutCode" class="secondary full">Ask about this code ↗</button>
+        <div class="editor-tip"><strong>Tip</strong><p>Nothing is executed by this editor. Your code is included as context when you send a request.</p></div>
+      </aside>
+    </section>
+
+    <section id="settingsTab" class="tab-panel page-card hidden">
+      <div class="page-intro"><span class="eyebrow">CONNECTION</span><h2>Router settings</h2><p>Connect to FreeLLMAPI, OmniRoute, or another OpenAI-compatible API. Your provider keys belong in the router dashboard, not here.</p></div>
+      <form id="settingsForm" class="settings-form">
+        <label>Router base URL <input id="baseUrl" type="url" placeholder="http://localhost:3001/v1" required><small>FreeLLMAPI default: http://localhost:3001/v1 · OmniRoute default: http://localhost:20128/v1</small></label>
+        <label>Router / unified API key <input id="apiKey" type="password" placeholder="Paste your router API key" autocomplete="new-password"><small id="keyStatus">Key not configured. The key is saved in a permission-restricted local config file.</small></label>
+        <label>Model <input id="model" type="text" value="auto" placeholder="auto"><small>Use <code>auto</code> when your router supports automatic model selection and fallback.</small></label>
+        <div class="form-actions"><button type="submit" class="primary">Save settings</button><button type="button" id="testConnection" class="secondary">Test connection</button></div>
+        <div id="settingsMessage" class="message-box hidden"></div>
+      </form>
+      <div class="info-card"><h3>Set up providers once</h3><p>Add your free-tier provider credentials and configure the fallback chain in FreeLLMAPI. Then create/copy its unified API key into the field above.</p><p><button id="openProviderDashboardSettings" type="button" class="secondary">Open FreeLLMAPI dashboard ↗</button></p><ol><li>Open your router dashboard (usually <code>http://localhost:3001</code> for FreeLLMAPI).</li><li>Add eligible free-tier provider credentials in its Keys / Providers page.</li><li>Enable and order a fallback chain if supported.</li><li>Copy the router's unified API key here, then test the connection.</li></ol><p class="muted">Free tiers have provider-defined quotas. Automatic fallback only works when another enabled provider/model has capacity and the router recognizes the error as retryable.</p></div>
+    </section>
+
+    <section id="usageTab" class="tab-panel hidden usage-page">
+      <div class="page-intro"><span class="eyebrow">OBSERVABILITY</span><h2>Usage & errors</h2><p>Local request history from this app. Providers may not report token usage for every request.</p></div>
+      <div class="stats-grid">
+        <div class="stat-card"><span>Requests</span><strong id="statRequests">0</strong></div>
+        <div class="stat-card"><span>Successful</span><strong id="statSuccess">0</strong></div>
+        <div class="stat-card"><span>Errors</span><strong id="statErrors">0</strong></div>
+        <div class="stat-card"><span>Reported tokens</span><strong id="statTokens">0</strong></div>
+        <div class="stat-card"><span>Avg. latency</span><strong id="statLatency">—</strong></div>
+      </div>
+      <div class="table-card"><div class="table-heading"><h3>Recent requests</h3><button id="refreshUsage" class="subtle-button">Refresh ↻</button></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Status</th><th>Provider / model</th><th>Latency</th><th>Tokens</th><th>Details</th></tr></thead><tbody id="usageRows"><tr><td colspan="6" class="muted">No requests yet.</td></tr></tbody></table></div></div>
+      <p class="muted small-note">This page tracks requests made through Free AI Studio. For provider-level quota, remaining budgets, and detailed fallback traces, also check your router dashboard.</p>
+    </section>
+    <footer class="main-footer"><span>Free AI Studio · Local-first</span><span>No paid dependencies · No code execution</span></footer>
+  </main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
