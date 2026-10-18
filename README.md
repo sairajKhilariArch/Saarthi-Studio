@@ -56,3 +56,14 @@ cat ~/.local/state/free-ai-suite/studio.log
 If the Rust build fails, run `cargo build --release` inside `~/.local/share/free-ai-suite/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
 
 FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi
+
+## Monorepo layout and application roles
+
+The Rust desktop app remains the **primary product and intended host**. Its existing Rust service and web UI remain at `app/`; the desktop README, build scripts, and data locations remain the root-level source of truth.
+
+- **Desktop host:** `app/` — Rust service and browser UI. Do not move or replace these files as part of Android work.
+- **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI.
+- **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
+- **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
+
+**Important:** this directory restructure keeps desktop and Android source side by side; it does not itself implement desktop-host connectivity. The current Android app still configures a router endpoint directly. Do not advertise desktop-host pairing as available until the authenticated host API and Android client transport are implemented and tested.

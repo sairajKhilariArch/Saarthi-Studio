@@ -1,0 +1,199 @@
+name: Build Saarthi Studio Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, lint, build, and verify Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK components
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Verify monorepo Android project layout
+        run: |
+          set -eu
+          test -f README.md
+          test -f app/Cargo.toml
+          test -f app/src/main.rs
+          test -f app/static/index.html
+          test -f android/settings.gradle.kts
+          test -f android/app/build.gradle.kts
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/java/com/saarthi/studio/MainActivity.java
+          test -f android/app/src/main/java/com/saarthi/studio/ChatDatabase.java
+          test -f android/app/src/main/java/com/saarthi/studio/DatabaseMigrations.java
+          test -f android/app/src/test/java/com/saarthi/studio/BackupPolicyTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/DatabaseMigrationInstrumentedTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/ChatHistoryPagingInstrumentedTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/BackupRestoreInstrumentedTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/AppLaunchInstrumentedTest.java
+          test -f android/scripts/ci/run-android-instrumentation.sh
+          test -f android/scripts/ci/test-run-android-instrumentation.sh
+
+      - name: Test instrumentation CI wrapper and result parsing
+        run: bash android/scripts/ci/test-run-android-instrumentation.sh
+
+      - name: Check committed whitespace
+        id: whitespace
+        continue-on-error: true
+        run: git show --check --oneline HEAD
+
+      - name: Run JVM regression tests
+        id: unit
+        continue-on-error: true
+        working-directory: android
+        run: gradle --no-daemon --stacktrace testDebugUnitTest
+
+      - name: Run Android lint
+        id: lint
+        continue-on-error: true
+        working-directory: android
+        run: gradle --no-daemon --stacktrace lintDebug
+
+      - name: Print Android lint report
+        if: always()
+        working-directory: android
+        run: |
+          REPORT="android/app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt"
+          if [ -f "$REPORT" ]; then cat "$REPORT"; else echo "Android lint text report was not generated."; fi
+
+      - name: Assemble debug APK
+        id: assemble
+        continue-on-error: true
+        working-directory: android
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Assemble instrumentation APK
+        id: assemble_tests
+        if: always() && steps.assemble.outcome == 'success'
+        continue-on-error: true
+        working-directory: android
+        run: gradle --no-daemon --stacktrace assembleDebugAndroidTest
+
+      - name: Upload debug APK artifact
+        if: always() && steps.assemble.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: saarthi-studio-android-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: saarthi-studio-android-lint-report
+          path: |
+            android/app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+            android/app/build/reports/lint-results-debug.html
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enable KVM access for Android emulator
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          if [[ ! -e /dev/kvm ]]; then
+            echo "::error::/dev/kvm is missing on this runner; hardware-accelerated Android emulation is unavailable."
+            exit 1
+          fi
+          # The emulator action checks /dev/kvm read/write access before launch.
+          # Install a persistent udev rule and immediately fix the existing device.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+          ls -l /dev/kvm
+
+      - name: Run Android instrumentation tests
+        id: instrumented
+        if: always() && steps.assemble.outcome == 'success' && steps.assemble_tests.outcome == 'success'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -wipe-data
+          disable-animations: true
+          # Keep this as one command: this action executes script lines in separate shells.
+          script: bash android/scripts/ci/run-android-instrumentation.sh
+
+      - name: Upload Android test reports and crash diagnostics
+        if: always() && steps.instrumented.outcome != 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: saarthi-studio-android-failure-diagnostics
+          path: |
+            ${{ github.workspace }}/android/ci-diagnostics/**
+            android/app/build/reports/androidTests/**
+            android/app/build/outputs/androidTest-results/**
+            android/app/build/outputs/logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce release validation gate
+        if: always()
+        env:
+          WHITESPACE_OUTCOME: ${{ steps.whitespace.outcome }}
+          UNIT_OUTCOME: ${{ steps.unit.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          ASSEMBLE_OUTCOME: ${{ steps.assemble.outcome }}
+          ASSEMBLE_TESTS_OUTCOME: ${{ steps.assemble_tests.outcome }}
+          INSTRUMENTED_OUTCOME: ${{ steps.instrumented.outcome }}
+        run: |
+          failed=0
+          for result in "$WHITESPACE_OUTCOME" "$UNIT_OUTCOME" "$LINT_OUTCOME" "$ASSEMBLE_OUTCOME" "$ASSEMBLE_TESTS_OUTCOME" "$INSTRUMENTED_OUTCOME"; do
+            if [ "$result" != "success" ]; then
+              echo "Validation step failed: $result"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "Android validation failed. Inspect the test and diagnostics artifacts above."
+            exit 1
+          fi
+          echo "All required Android validation steps passed."
