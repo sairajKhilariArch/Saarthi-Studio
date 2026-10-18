@@ -5,6 +5,9 @@ A native Android companion app for Saarthi Studio. It connects to a FreeLLMAPI/O
 ## Features
 
 - Native Android chat interface and optional code context panel
+- Lightweight Markdown rendering for headings, lists, bold/italic text, and inline code
+- Fenced code blocks rendered in monospaced, horizontally scrollable panels with one-tap Copy code
+- One-tap Copy response action for complete assistant replies
 - Separate conversations with a saved chat list, open/switch, rename, and delete actions
 - Persistent local chat history (SQLite), with automatic migration of the previous single-chat history into “Previous conversation”
 - Sends only the latest four stored messages plus a short system instruction, while keeping longer history on the phone
@@ -90,7 +93,7 @@ Saarthi keeps chat history locally but sends only the latest four messages to th
 - Display name: Saarthi Studio
 - Minimum Android: Android 8.0 (API 26)
 - Compile/target SDK: 35
-- Version: 1.1.0 (conversation management)
+- Version: 1.2.0 (conversation management and Markdown/code display)
 - Android native UI written in Java; provider requests use `HttpURLConnection`.
 
 ## Optional: nest Android under `android/` on a shared branch
@@ -111,3 +114,8 @@ Then run the Git commands printed by the script. The script refuses to overwrite
 Version 1.1.0 adds independent conversations, a Chats list, automatic titles based on the first prompt, rename, and delete. The SQLite database version is upgraded from 1 to 2. On an in-place app update, the previous flat message history is migrated to a conversation called **Previous conversation**. Avoid uninstalling the existing app before updating because uninstalling removes its private local history and settings. If Android reports a signing-certificate conflict when installing the new debug APK, do not uninstall until you have decided how to preserve that data; debug APKs built on different machines may have different debug signing keys.
 
 To update the repository branch where the Android Gradle project is at its root, use `apply-chat-management-upgrade.sh` from this archive and pass your local clone path. It checks that the checked-out branch is `android` and updates only `MainActivity.java`, the Android module version, and the Android build workflow.
+
+
+## Upgrade from 1.1.0 to 1.2.0
+
+Version 1.2.0 improves assistant replies for coding work without changing the database schema or network API. Markdown headings, bullets, bold/italic text and inline code receive basic formatting; fenced code blocks use a monospaced, horizontally scrollable card with a **Copy code** button. Assistant replies also have **Copy response**. Existing conversations and encrypted settings should be retained by an in-place update built with a compatible signing key.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — Markdown and code-copy actions
+
+- Renders Markdown headings, bullets, inline code, bold and italic spans using native Android widgets.
+- Shows fenced code blocks in monospaced, horizontally scrollable panels with language labels.
+- Adds one-tap **Copy code** and **Copy response** actions.
+- Keeps original Markdown response text in SQLite; formatting is applied when displaying it.
+- Does not change the SQLite schema, server API, router settings, or conversation history.
+- Increments Android `versionCode` to 3 and `versionName` to 1.2.0.
+
+
 ## 1.1.0 — Conversation management
 
 - Added separate conversations instead of one global message list.
