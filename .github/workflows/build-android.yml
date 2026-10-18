@@ -131,6 +131,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Enable KVM access for Android emulator
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          if [[ ! -e /dev/kvm ]]; then
+            echo "::error::/dev/kvm is missing on this runner; hardware-accelerated Android emulation is unavailable."
+            exit 1
+          fi
+          # The emulator action checks /dev/kvm read/write access before launch.
+          # Install a persistent udev rule and immediately fix the existing device.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+          ls -l /dev/kvm
+
       - name: Run Android instrumentation tests
         id: instrumented
         if: always() && steps.assemble.outcome == 'success' && steps.assemble_tests.outcome == 'success'
