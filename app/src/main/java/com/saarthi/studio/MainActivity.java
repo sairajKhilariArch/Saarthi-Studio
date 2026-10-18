@@ -89,6 +89,11 @@ public class MainActivity extends Activity {
     private long currentConversationId = -1L;
     private static final String STATE_PREFS = "saarthi_chat_state";
     private static final String CURRENT_CONVERSATION_KEY = "current_conversation_id";
+    private static final int REQUEST_EXPORT_MARKDOWN = 6101;
+    private static final int REQUEST_EXPORT_BACKUP = 6102;
+    private static final int REQUEST_IMPORT_BACKUP = 6103;
+    private static final int MAX_BACKUP_BYTES = 10 * 1024 * 1024;
+    private String pendingExportContent;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -111,6 +116,29 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         super.onDestroy();
         executor.shutdownNow();
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_EXPORT_MARKDOWN || requestCode == REQUEST_EXPORT_BACKUP) {
+            String output = pendingExportContent;
+            pendingExportContent = null;
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            if (output == null) { toast("Nothing to export."); return; }
+            try (OutputStream stream = getContentResolver().openOutputStream(data.getData())) {
+                if (stream == null) throw new Exception("Could not open the selected file.");
+                stream.write(output.getBytes(StandardCharsets.UTF_8));
+                stream.flush();
+                toast(requestCode == REQUEST_EXPORT_MARKDOWN ? "Conversation exported." : "Chat backup saved.");
+            } catch (Exception e) {
+                toast("Could not save the export: " + friendlyError(e.getMessage()));
+            }
+            return;
+        }
+        if (requestCode == REQUEST_IMPORT_BACKUP) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            importBackup(data.getData());
+        }
     }
 
     private void buildUi() {
@@ -150,9 +178,14 @@ public class MainActivity extends Activity {
         currentChatText.setSingleLine(true);
         currentChatText.setEllipsize(android.text.TextUtils.TruncateAt.END);
         chatBar.addView(currentChatText, new LinearLayout.LayoutParams(0, -2, 1));
+        Button backupButton = smallButton("Backup");
+        backupButton.setOnClickListener(v -> showBackupMenu());
+        chatBar.addView(backupButton);
         newChatButton = smallButton("+ New chat");
         newChatButton.setOnClickListener(v -> createNewConversation());
-        chatBar.addView(newChatButton);
+        LinearLayout.LayoutParams newChatLp = new LinearLayout.LayoutParams(-2, -2);
+        newChatLp.leftMargin = dp(6);
+        chatBar.addView(newChatButton, newChatLp);
         root.addView(chatBar);
 
         statusText = label("Not connected", 12, MUTED, false);
@@ -507,6 +540,199 @@ public class MainActivity extends Activity {
         sendButton.setEnabled(!value);
         sendButton.setText(value ? "…" : "Send");
         sendButton.setAlpha(value ? 0.6f : 1f);
+    }
+
+    private void showBackupMenu() {
+        String[] options = new String[]{
+                "Export current conversation (.md)",
+                "Export all chats (backup .json)",
+                "Restore chats from backup (.json)"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("Backup & export")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) exportCurrentConversation();
+                    else if (which == 1) exportAllConversations();
+                    else if (which == 2) confirmRestoreBackup();
+                })
+                .show();
+    }
+
+    private void exportCurrentConversation() {
+        Conversation conversation = store.getConversation(currentConversationId);
+        if (conversation == null) { toast("There is no current conversation to export."); return; }
+        List<Message> messages = store.allMessages(currentConversationId, 10000);
+        StringBuilder markdown = new StringBuilder();
+        markdown.append("# ").append(conversation.title.replace("\n", " ").replace("\r", " "))
+                .append("\n\nExported from Saarthi Studio on ")
+                .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(new Date()))
+                .append(".\n\n");
+        for (Message message : messages) {
+            String heading = "user".equals(message.role) ? "You" : ("assistant".equals(message.role) ? "Saarthi" : message.role);
+            markdown.append("## ").append(heading).append("\n\n")
+                    .append(message.content == null ? "" : message.content).append("\n\n");
+            if (message.meta != null && !message.meta.trim().isEmpty()) {
+                markdown.append("_ ").append(message.meta).append(" _\n\n");
+            }
+            markdown.append("---\n\n");
+        }
+        startSaveDocument(markdown.toString(), "text/markdown", safeFilename(conversation.title, ".md"), REQUEST_EXPORT_MARKDOWN);
+    }
+
+    private void exportAllConversations() {
+        try {
+            JSONObject backup = new JSONObject();
+            backup.put("format", "saarthi-studio-backup");
+            backup.put("schema_version", 1);
+            backup.put("exported_at", System.currentTimeMillis());
+            JSONArray conversationsJson = new JSONArray();
+            List<Conversation> all = store.allConversations();
+            if (all.size() > 500) throw new Exception("Too many conversations for one backup (maximum 500).");
+            int totalMessages = 0;
+            for (Conversation conversation : all) {
+                JSONObject item = new JSONObject();
+                item.put("title", conversation.title);
+                item.put("updated_at", conversation.updatedAt);
+                JSONArray messagesJson = new JSONArray();
+                List<Message> messages = store.allMessages(conversation.id, 10000);
+                totalMessages += messages.size();
+                if (totalMessages > 20000) throw new Exception("Too many messages for one backup (maximum 20,000).");
+                for (Message message : messages) {
+                    JSONObject messageJson = new JSONObject();
+                    messageJson.put("role", message.role);
+                    messageJson.put("content", message.content);
+                    messageJson.put("meta", message.meta == null ? "" : message.meta);
+                    messagesJson.put(messageJson);
+                }
+                item.put("messages", messagesJson);
+                conversationsJson.put(item);
+            }
+            backup.put("conversations", conversationsJson);
+            String filename = "saarthi-studio-backup-" + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".json";
+            String jsonText = backup.toString(2);
+            if (jsonText.getBytes(StandardCharsets.UTF_8).length > MAX_BACKUP_BYTES) {
+                throw new Exception("Backup would exceed 10 MB. Export individual conversations instead.");
+            }
+            startSaveDocument(jsonText, "application/json", filename, REQUEST_EXPORT_BACKUP);
+        } catch (Exception e) {
+            toast("Could not prepare the backup: " + friendlyError(e.getMessage()));
+        }
+    }
+
+    private void confirmRestoreBackup() {
+        new AlertDialog.Builder(this)
+                .setTitle("Restore chat backup?")
+                .setMessage("Choose a Saarthi Studio JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. Importing the same file twice can create duplicates.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Choose backup", (dialog, which) -> {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("application/json");
+                    try { startActivityForResult(intent, REQUEST_IMPORT_BACKUP); }
+                    catch (Exception e) { toast("Could not open the file picker."); }
+                })
+                .show();
+    }
+
+    private void startSaveDocument(String content, String mimeType, String filename, int requestCode) {
+        pendingExportContent = content;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mimeType);
+        intent.putExtra(Intent.EXTRA_TITLE, filename);
+        try {
+            startActivityForResult(intent, requestCode);
+        } catch (Exception e) {
+            pendingExportContent = null;
+            toast("Could not open the save dialog.");
+        }
+    }
+
+    private static String safeFilename(String title, String extension) {
+        String safe = title == null ? "conversation" : title.trim();
+        safe = safe.replaceAll("[^A-Za-z0-9._-]+", "-").replaceAll("-+", "-");
+        safe = safe.replaceAll("^[.-]+|[.-]+$", "");
+        if (safe.isEmpty()) safe = "conversation";
+        if (safe.length() > 70) safe = safe.substring(0, 70);
+        return safe + extension;
+    }
+
+    private void importBackup(Uri uri) {
+        executor.execute(() -> {
+            try (InputStream stream = getContentResolver().openInputStream(uri)) {
+                if (stream == null) throw new Exception("Could not open the selected backup file.");
+                byte[] bytes = readLimited(stream, MAX_BACKUP_BYTES);
+                JSONObject backup = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+                if (!"saarthi-studio-backup".equals(backup.optString("format"))) {
+                    throw new Exception("This file is not a Saarthi Studio backup.");
+                }
+                if (backup.optInt("schema_version", -1) != 1) {
+                    throw new Exception("This backup version is not supported by this app.");
+                }
+                JSONArray inputConversations = backup.optJSONArray("conversations");
+                if (inputConversations == null || inputConversations.length() == 0) {
+                    throw new Exception("The backup does not contain any conversations.");
+                }
+                if (inputConversations.length() > 500) throw new Exception("The backup contains too many conversations (maximum 500).");
+
+                List<ImportedConversation> parsed = new ArrayList<>();
+                int totalMessages = 0;
+                for (int i = 0; i < inputConversations.length(); i++) {
+                    JSONObject item = inputConversations.optJSONObject(i);
+                    if (item == null) throw new Exception("Conversation " + (i + 1) + " is invalid.");
+                    String title = item.optString("title", "Imported chat").trim();
+                    if (title.isEmpty()) title = "Imported chat";
+                    if (title.length() > 160) title = title.substring(0, 160);
+                    JSONArray inputMessages = item.optJSONArray("messages");
+                    if (inputMessages == null) inputMessages = new JSONArray();
+                    if (inputMessages.length() > 10000) throw new Exception("A conversation contains too many messages.");
+                    List<Message> messages = new ArrayList<>();
+                    for (int j = 0; j < inputMessages.length(); j++) {
+                        JSONObject message = inputMessages.optJSONObject(j);
+                        if (message == null) continue;
+                        String role = message.optString("role", "");
+                        if (!"user".equals(role) && !"assistant".equals(role)) continue;
+                        String content = message.optString("content", "");
+                        if (content.length() > 500000) throw new Exception("A message is too large to import.");
+                        String meta = message.optString("meta", "");
+                        if (meta.length() > 1000) meta = meta.substring(0, 1000);
+                        messages.add(new Message(role, content, meta));
+                        totalMessages++;
+                        if (totalMessages > 20000) throw new Exception("The backup contains too many messages (maximum 20,000).");
+                    }
+                    parsed.add(new ImportedConversation(title, messages));
+                }
+                if (parsed.isEmpty()) throw new Exception("No valid conversations were found in this backup.");
+                List<Long> importedIds = store.importConversations(parsed);
+                long currentId = importedIds.get(importedIds.size() - 1);
+                int importedMessageCount = totalMessages;
+                main.post(() -> {
+                    currentConversationId = currentId;
+                    saveCurrentConversationId();
+                    renderConversationTitle();
+                    renderHistory();
+                    usageText.setText("Backup restored · " + importedIds.size() + " conversations");
+                    toast("Restored " + importedIds.size() + " conversations and " + importedMessageCount + " messages. Existing chats were kept.");
+                });
+            } catch (Exception e) {
+                String message = e.getMessage() == null ? "Unknown import error." : e.getMessage();
+                main.post(() -> toast("Could not restore backup: " + friendlyError(message)));
+            }
+        });
+    }
+
+    private static byte[] readLimited(InputStream input, int maxBytes) throws Exception {
+        try (InputStream in = input; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            int total = 0;
+            while ((count = in.read(buffer)) != -1) {
+                total += count;
+                if (total > maxBytes) throw new Exception("Backup file is too large (maximum 10 MB).");
+                out.write(buffer, 0, count);
+            }
+            return out.toByteArray();
+        }
     }
 
     private void restoreCurrentConversation() {
@@ -1026,6 +1252,15 @@ public class MainActivity extends Activity {
         final int status; final String body; final java.util.Map<String,String> headers;
         HttpResult(int s, String b, java.util.Map<String,String> h) { status=s; body=b; headers=h; }
     }
+    private static final class ImportedConversation {
+        final String title;
+        final List<Message> messages;
+        ImportedConversation(String title, List<Message> messages) {
+            this.title = title == null || title.trim().isEmpty() ? "Imported chat" : title.trim();
+            this.messages = messages == null ? new ArrayList<>() : messages;
+        }
+    }
+
     private static final class Message {
         final String role, content, meta;
         Message(String r, String c, String m) { role=r; content=c; meta=m == null ? "" : m; }
@@ -1226,6 +1461,39 @@ public class MainActivity extends Activity {
                 while (c.moveToNext()) result.add(new Conversation(c.getLong(0), c.getString(1), c.getLong(2)));
             }
             return result;
+        }
+
+        synchronized List<Long> importConversations(List<ImportedConversation> imported) {
+            List<Long> ids = new ArrayList<>();
+            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
+            db.beginTransaction();
+            try {
+                for (ImportedConversation conversation : imported) {
+                    long now = System.currentTimeMillis();
+                    android.content.ContentValues conversationValues = new android.content.ContentValues();
+                    conversationValues.put("title", conversation.title);
+                    conversationValues.put("created_at", now);
+                    conversationValues.put("updated_at", now);
+                    long id = db.insert("conversations", null, conversationValues);
+                    if (id < 0) throw new IllegalStateException("Could not create an imported conversation.");
+                    ids.add(id);
+                    for (Message message : conversation.messages) {
+                        android.content.ContentValues messageValues = new android.content.ContentValues();
+                        messageValues.put("conversation_id", id);
+                        messageValues.put("role", message.role);
+                        messageValues.put("content", message.content);
+                        messageValues.put("meta", message.meta == null ? "" : message.meta);
+                        messageValues.put("created_at", now);
+                        if (db.insert("messages", null, messageValues) < 0) {
+                            throw new IllegalStateException("Could not import a message.");
+                        }
+                    }
+                }
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+            }
+            return ids;
         }
 
         synchronized void renameConversation(long id, String title) {

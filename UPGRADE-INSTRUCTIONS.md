@@ -1,53 +1,37 @@
-# Upgrade the existing Android branch to Saarthi Studio 1.1.0
+# Saarthi Studio 1.5.0 — Backup & Export Upgrade
 
-This update adds separate conversations, history browsing, new chat, rename, delete, and a database migration from the existing single-chat history.
+## Features
 
-## Apply the update to an existing local clone
+- Export the current chat as Markdown (`.md`).
+- Export all chats as a portable JSON backup (`.json`). The backup contains conversation titles, message roles, message contents, and display metadata. It deliberately excludes the FreeLLMAPI URL, API key, and other settings.
+- Restore a Saarthi Studio JSON backup. Restored conversations are appended; existing chats are not deleted. Importing the same backup more than once creates duplicates.
+- Backup restore validates the format, limits the selected file to 10 MB and keeps the import in a database transaction to avoid partial imports.
 
-1. Extract this archive.
-2. Open a terminal in the extracted `saarthi-studio-android` folder.
-3. Make sure your local repository is cloned and the `android` branch is checked out. Example:
+## Apply on Ubuntu
 
-   ```bash
-   git -C ~/Projects/Saarthi-Studio switch android
-   ```
+Extract this ZIP. In a terminal, update the local Android branch and run the script from this extracted directory:
 
-4. Run the included updater (replace the path if your clone is elsewhere):
+```bash
+cd ~/Projects/Saarthi-Studio
+git switch android
+git pull --ff-only origin android
+# From the extracted saarthi-studio-android-backup-export folder:
+./apply-backup-export-upgrade.sh ~/Projects/Saarthi-Studio
+```
 
-   ```bash
-   ./apply-chat-management-upgrade.sh ~/Projects/Saarthi-Studio
-   ```
+Then review and commit the changes:
 
-   It updates only these files in the clone:
-   - `app/src/main/java/com/saarthi/studio/MainActivity.java`
-   - `app/build.gradle.kts`
-   - `.github/workflows/build-android.yml`
+```bash
+cd ~/Projects/Saarthi-Studio
+git diff --check
+git diff --stat
+git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
+git commit -m "Add chat backup and export"
+git push origin android
+```
 
-5. Review and push the changes:
+Run **Build Saarthi Studio Android APK** in GitHub Actions on the `android` branch. Install the new APK over the existing app only after the build succeeds and only if it is signed with the same key. Do not uninstall the app to upgrade; that can delete local chat history and settings.
 
-   ```bash
-   cd ~/Projects/Saarthi-Studio
-   git diff --check
-   git diff
-   git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts .github/workflows/build-android.yml
-   git commit -m "Add conversation management to Android app"
-   git push origin android
-   ```
+## Use
 
-6. Open the repository's Actions tab and run **Build Saarthi Studio Android APK** on the `android` branch. When it succeeds, download the `saarthi-studio-android-debug-apk` artifact and extract `app-debug.apk`.
-
-## What is included
-
-- Each chat gets its own conversation ID and message history.
-- **Chats** lists conversations and shows a message preview.
-- **+ New chat** starts a separate conversation.
-- Conversations are auto-titled from the first prompt and can be renamed or deleted.
-- The existing v1.0.0 flat message history is migrated to a conversation named **Previous conversation** when the app is updated in place.
-- The app version is bumped to 1.1.0 / versionCode 2.
-- The Android Actions workflow avoids the obsolete `tools` SDK package and watches the `android` branch.
-
-## Important data/signing note
-
-Do not uninstall your existing app before attempting an in-place update; uninstalling removes the app-private chat database and settings. If Android reports that the new APK's signing certificate differs from the installed app, stop instead of uninstalling and decide how to retain the local data. GitHub-hosted debug builds may not use the same debug signing key across different runs.
-
-The source was checked for Java syntax-pattern errors and the SQLite v1-to-v2 migration was simulated successfully. A full Android Gradle compilation has not been run in this environment because the Android SDK is unavailable here.
+Tap **Backup** in the chat header, then choose Export current conversation, Export all chats, or Restore chats from backup. Android will ask where to save or which file to open.

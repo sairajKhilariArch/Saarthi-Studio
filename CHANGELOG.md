@@ -1,8 +1,9 @@
 # Changelog
 
-## 1.4.0
-- Added Usage & Diagnostics dashboard.
-- Records AI request successes, failures, status codes, latency, token counts when provided, and routed provider metadata when returned.
-- Adds a one-tap FreeLLMAPI connection test from diagnostics.
-- Adds database schema migration with best-effort backfill from existing saved assistant messages.
-- Preserves existing conversation, Markdown/code copy, and model-picker features.
+## 1.5.0 — Chat Backup & Export
+
+- Export the current conversation to a Markdown file using Android's document picker.
+- Export all conversations as a JSON backup that excludes API keys and provider settings.
+- Restore a JSON backup by appending imported conversations without deleting existing chats.
+- Validate backup format and size before importing; import is transactional.
+- Keeps the existing FreeLLMAPI connection, encrypted settings, Markdown rendering, model picker, and diagnostics.

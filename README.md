@@ -1,21 +1,13 @@
-# Saarthi Studio Android — Usage & Diagnostics Update
+# Saarthi Studio Android — Backup & Export Update
 
-Version 1.4.0 adds an in-app **Usage & Diagnostics** panel to the existing Saarthi Studio Android project.
+Version 1.5.0 adds conversation export and restore to the existing native Android application.
 
-## Features
+## Included
 
-- Total recorded AI requests and successful/failed requests.
-- Total tokens only when FreeLLMAPI reports a usage total.
-- Average observed response duration.
-- Recent request records with model ID, HTTP status (when known), provider header (when supplied), and concise failure details.
-- A one-tap connection test against the configured FreeLLMAPI `/v1/models` endpoint.
-- SQLite schema migration and backfill from existing saved assistant replies where metadata is available.
-- Leaves conversation management, Markdown/code copy, model picker, encrypted settings, and the FreeLLMAPI connection in place.
+- Current chat export as Markdown
+- Full conversation backup as JSON
+- Restore backup while retaining existing conversations
+- Checks for file size, format, message count, and role validity
+- API key and router settings are excluded from backups
 
-## Apply update
-
-See [`UPGRADE-INSTRUCTIONS-1.4.0.md`](UPGRADE-INSTRUCTIONS-1.4.0.md). The update script copies two files into your existing repository and preserves timestamped backups. Apply it only to the `android` branch.
-
-## Limitations
-
-This is local usage telemetry, not provider-side quota data. Unreported token totals remain unknown. A successful source edit is not a compiled APK; wait for the GitHub Actions workflow to succeed before installing the new build.
+See `UPGRADE-INSTRUCTIONS-1.5.0.md` for the install steps. This package supplies source files and an upgrade script; it is not a precompiled APK. The GitHub Actions build must succeed before installing it.
