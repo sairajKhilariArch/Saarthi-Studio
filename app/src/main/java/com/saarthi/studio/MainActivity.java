@@ -1,5 +1,7 @@
 package com.saarthi.studio;
 
+import static com.saarthi.studio.ChatDatabase.*;
+
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
@@ -36,7 +38,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.speech.RecognizerIntent;
-import android.speech.tts.TextToSpeech;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -86,7 +87,7 @@ public class MainActivity extends Activity {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private Store store;
+    private ChatDatabase store;
     private SecureSettings secureSettings;
     private Config config;
     private LinearLayout root, messageList;
@@ -98,12 +99,14 @@ public class MainActivity extends Activity {
     private TextView streamingTextView;
     private final List<AttachedFile> attachedFiles = new ArrayList<>();
     private final List<AttachedImage> attachedImages = new ArrayList<>();
-    private TextToSpeech textToSpeech;
-    private boolean textToSpeechReady = false;
+    private SpeechOutputController speechOutput;
     private TextView statusText, usageText, currentChatText;
     private boolean codeVisible = false;
     private boolean sending = false;
     private long currentConversationId = -1L;
+    private int messageHistoryLimit = 150;
+    private static final int MESSAGE_PAGE_SIZE = 150;
+    private static final int MAX_VISIBLE_MESSAGES = 1500;
     private static final String STATE_PREFS = "saarthi_chat_state";
     private static final String CURRENT_CONVERSATION_KEY = "current_conversation_id";
     private static final int REQUEST_EXPORT_MARKDOWN = 6101;
@@ -112,14 +115,14 @@ public class MainActivity extends Activity {
     private static final int REQUEST_ATTACH_TEXT = 6104;
     private static final int REQUEST_VOICE_INPUT = 6105;
     private static final int REQUEST_ATTACH_IMAGE = 6106;
-    private static final int MAX_BACKUP_BYTES = 10 * 1024 * 1024;
-    private static final int MAX_TEXT_FILE_BYTES = 512 * 1024;
-    private static final int MAX_TOTAL_TEXT_BYTES = 1024 * 1024;
-    private static final int MAX_MESSAGE_CHARS = 1600000;
-    private static final int MAX_ATTACHED_FILES = 3;
-    private static final int MAX_ATTACHED_IMAGES = 2;
-    private static final int MAX_TOTAL_IMAGE_BYTES = 900 * 1024;
-    private static final int MAX_IMAGE_BYTES = 800 * 1024;
+    private static final int MAX_BACKUP_BYTES = BackupPolicy.MAX_BACKUP_BYTES;
+    private static final int MAX_TEXT_FILE_BYTES = AttachmentPolicy.MAX_TEXT_FILE_BYTES;
+    private static final int MAX_TOTAL_TEXT_BYTES = AttachmentPolicy.MAX_TOTAL_TEXT_BYTES;
+    private static final int MAX_MESSAGE_CHARS = BackupPolicy.MAX_MESSAGE_CHARS;
+    private static final int MAX_ATTACHED_FILES = AttachmentPolicy.MAX_TEXT_FILES;
+    private static final int MAX_ATTACHED_IMAGES = AttachmentPolicy.MAX_IMAGES;
+    private static final int MAX_TOTAL_IMAGE_BYTES = AttachmentPolicy.MAX_TOTAL_IMAGE_BYTES;
+    private static final int MAX_IMAGE_BYTES = AttachmentPolicy.MAX_IMAGE_BYTES;
     private static final Pattern STORED_IMAGE_PATTERN = Pattern.compile("\\[\\[SAARTHI_IMAGE:([a-zA-Z0-9.+/-]+):([A-Za-z0-9+/=]+)\\]\\]");
     private String pendingExportContent;
 
@@ -127,10 +130,10 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
-        store = new Store(this);
+        store = new ChatDatabase(this);
         secureSettings = new SecureSettings(this);
         config = secureSettings.load();
-        textToSpeech = new TextToSpeech(this, status -> textToSpeechReady = status == TextToSpeech.SUCCESS);
+        speechOutput = new SpeechOutputController(this);
         restoreCurrentConversation();
         buildUi();
         renderConversationTitle();
@@ -145,7 +148,7 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         HttpURLConnection connection = activeConnection;
         if (connection != null) connection.disconnect();
-        if (textToSpeech != null) { textToSpeech.stop(); textToSpeech.shutdown(); }
+        if (speechOutput != null) speechOutput.shutdown();
         super.onDestroy();
         executor.shutdownNow();
     }
@@ -321,9 +324,17 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void renderHistory() {
+    private void renderHistory() { renderHistory(0); }
+
+    /** Render a bounded slice of the chat; load older messages on demand to avoid huge view trees. */
+    private void renderHistory(int previousLimit) {
         messageList.removeAllViews();
-        List<Message> history = store.allMessages(currentConversationId, 150);
+        int totalMessages = store.countMessages(currentConversationId);
+        int visibleLimit = Math.max(MESSAGE_PAGE_SIZE, Math.min(messageHistoryLimit, MAX_VISIBLE_MESSAGES));
+        messageHistoryLimit = visibleLimit;
+        List<Message> history = store.allMessages(currentConversationId, visibleLimit);
+        boolean hasOlderMessages = totalMessages > history.size();
+        boolean showHistoryControl = hasOlderMessages;
         if (history.isEmpty()) {
             LinearLayout welcome = new LinearLayout(this);
             welcome.setOrientation(LinearLayout.VERTICAL);
@@ -337,9 +348,36 @@ public class MainActivity extends Activity {
             steps.setPadding(0, dp(15), 0, 0); welcome.addView(steps);
             messageList.addView(welcome, new LinearLayout.LayoutParams(-1, -2));
         } else {
+            if (showHistoryControl) {
+                if (visibleLimit < MAX_VISIBLE_MESSAGES) {
+                    Button older = smallButton("Load older messages · " + (totalMessages - history.size()) + " remaining");
+                    older.setContentDescription("Load earlier messages in this conversation");
+                    older.setOnClickListener(v -> {
+                        int oldLimit = messageHistoryLimit;
+                        messageHistoryLimit = Math.min(MAX_VISIBLE_MESSAGES, messageHistoryLimit + MESSAGE_PAGE_SIZE);
+                        renderHistory(oldLimit);
+                    });
+                    LinearLayout.LayoutParams olderLp = new LinearLayout.LayoutParams(-1, dp(40));
+                    olderLp.bottomMargin = dp(12);
+                    messageList.addView(older, olderLp);
+                } else {
+                    TextView capped = label("Showing the latest 1,500 messages for performance. Export this conversation to retain a full copy.", 11, MUTED, false);
+                    capped.setPadding(dp(8), dp(5), dp(8), dp(12));
+                    messageList.addView(capped, new LinearLayout.LayoutParams(-1, -2));
+                }
+            }
             for (Message m : history) addBubble(m, false);
         }
-        scrollToBottom();
+        if (previousLimit > 0 && !history.isEmpty() && messageList.getChildCount() > 1) {
+            // Keep the earliest message that was previously visible at the same viewport position.
+            int oldVisibleIndex = Math.max(0, history.size() - previousLimit);
+            int childIndex = (showHistoryControl ? 1 : 0) + oldVisibleIndex;
+            View anchor = messageList.getChildAt(Math.min(childIndex, messageList.getChildCount() - 1));
+            if (anchor != null) scroll.post(() -> scroll.scrollTo(0, Math.max(0, anchor.getTop())));
+            else scrollToBottom();
+        } else {
+            scrollToBottom();
+        }
     }
 
     private void addBubble(Message message, boolean scrollNow) {
@@ -687,9 +725,8 @@ public class MainActivity extends Activity {
                         break;
                     } catch (Exception candidateError) {
                         if (stopRequested || candidateError instanceof java.io.InterruptedIOException) throw candidateError;
-                        String message = candidateError.getMessage() == null ? "" : candidateError.getMessage().toLowerCase(Locale.ROOT);
-                        boolean transientTransportOrServerError = responseStatus == 408 || responseStatus == 500 || responseStatus == 502 || responseStatus == 503 || responseStatus == 504 ||
-                                message.contains("failed to connect") || message.contains("connection reset") || message.contains("timed out") || message.contains("timeout");
+                        boolean transientTransportOrServerError = NetworkPolicy.shouldRetrySameModel(
+                                responseStatus, candidateError.getMessage(), answer.length() > 0);
                         if (answer.length() == 0 && !transientRetried && transientTransportOrServerError) {
                             transientRetried = true;
                             lastModelError = candidateError;
@@ -736,8 +773,9 @@ public class MainActivity extends Activity {
                     });
                 } else {
                     String message = friendlyError(e.getMessage());
-                    String storedAnswer = answer.length() == 0 ? message : answer + "\n\n[Stream interrupted: " + message + "]";
-                    store.addRequestLog(model, false, responseStatus, -1, ms, routedProvider, safeDiagnostic(message, key));
+                    String safeMessage = safeDiagnostic(message, key);
+                    String storedAnswer = answer.length() == 0 ? safeMessage : answer + "\n\n[Stream interrupted: " + safeMessage + "]";
+                    store.addRequestLog(model, false, responseStatus, -1, ms, routedProvider, safeMessage);
                     store.addMessage(targetConversationId, "assistant", storedAnswer, meta);
                     main.post(() -> {
                         streamingTextView = null;
@@ -900,17 +938,15 @@ public class MainActivity extends Activity {
     }
 
     private void stopSpeech() {
-        if (textToSpeech != null && textToSpeech.isSpeaking()) { textToSpeech.stop(); toast("Speech stopped."); }
+        if (speechOutput != null && speechOutput.stopIfSpeaking()) toast("Speech stopped.");
         else toast("No speech is playing.");
     }
 
     private void speakText(String text) {
         String value = text == null ? "" : text.trim();
         if (value.isEmpty()) { toast("There is no text to read aloud."); return; }
-        if (textToSpeech == null || !textToSpeechReady) { toast("Text-to-speech is not ready. Check that a speech engine is installed."); return; }
-        if (value.length() > 3500) value = value.substring(0, 3500) + "… Text shortened for speech.";
-        int result = textToSpeech.speak(value, TextToSpeech.QUEUE_FLUSH, null, "saarthi-response");
-        if (result == TextToSpeech.ERROR) toast("Could not start text-to-speech.");
+        if (speechOutput == null || !speechOutput.isReady()) { toast("Text-to-speech is not ready. Check that a speech engine is installed."); return; }
+        if (!speechOutput.speak(value)) toast("Could not start text-to-speech.");
     }
 
     private static boolean isKnownVisionModel(String model) {
@@ -919,7 +955,7 @@ public class MainActivity extends Activity {
     }
 
     private void pickImage() {
-        if (attachedImages.size() >= MAX_ATTACHED_IMAGES) { toast("Attach up to " + MAX_ATTACHED_IMAGES + " images per message."); return; }
+        if (!AttachmentPolicy.canAddImage(attachedImages.size())) { toast("Attach up to " + MAX_ATTACHED_IMAGES + " images per message."); return; }
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("image/*");
@@ -929,11 +965,11 @@ public class MainActivity extends Activity {
 
     private void handlePickedImage(Uri uri) {
         try {
-            if (attachedImages.size() >= MAX_ATTACHED_IMAGES) throw new Exception("A maximum of " + MAX_ATTACHED_IMAGES + " images can be attached.");
+            if (!AttachmentPolicy.canAddImage(attachedImages.size())) throw new Exception("A maximum of " + MAX_ATTACHED_IMAGES + " images can be attached.");
             String mime = getContentResolver().getType(uri);
             if (mime == null) mime = "";
             mime = mime.toLowerCase(Locale.ROOT);
-            if (!ReleaseRules.isSupportedImageMimeType(mime)) {
+            if (!AttachmentPolicy.isSupportedImageMimeType(mime)) {
                 throw new Exception("Use a JPEG, PNG, WebP, or GIF image.");
             }
             int existing = 0;
@@ -943,7 +979,8 @@ public class MainActivity extends Activity {
                 if (stream == null) throw new Exception("Could not read the selected image.");
                 bytes = readLimitedBytes(stream, MAX_IMAGE_BYTES);
             }
-            if (existing + bytes.length > MAX_TOTAL_IMAGE_BYTES) throw new Exception("Images together must be no larger than 900 KiB. Resize the images and retry.");
+            if (!AttachmentPolicy.isImageWithinLimit(bytes.length)) throw new Exception("Image exceeds the per-file size limit.");
+            if (!AttachmentPolicy.isImageTotalWithinLimit(existing, bytes.length)) throw new Exception("Images together must be no larger than 900 KiB. Resize the images and retry.");
             String name = displayName(uri);
             for (AttachedImage image : attachedImages) if (image.name.equalsIgnoreCase(name)) throw new Exception("That image is already attached.");
             attachedImages.add(new AttachedImage(name, mime, Base64.encodeToString(bytes, Base64.NO_WRAP), bytes.length));
@@ -1049,7 +1086,7 @@ public class MainActivity extends Activity {
     }
 
     private static boolean shouldFallbackModel(int status, String message) {
-        return ReleaseRules.shouldFallbackModel(status, message);
+        return NetworkPolicy.shouldFallbackModel(status, message, false);
     }
 
     private CharSequence highlightCode(String source, String language) {
@@ -1089,7 +1126,7 @@ public class MainActivity extends Activity {
     }
 
     private void pickTextFile() {
-        if (attachedFiles.size() >= MAX_ATTACHED_FILES) {
+        if (!AttachmentPolicy.canAddTextFile(attachedFiles.size())) {
             toast("A maximum of " + MAX_ATTACHED_FILES + " text files can be attached to one message.");
             return;
         }
@@ -1105,7 +1142,7 @@ public class MainActivity extends Activity {
         try {
             String name = displayName(uri);
             String extension = fileExtension(name);
-            if (!isSupportedTextExtension(extension)) {
+            if (!AttachmentPolicy.isSupportedTextExtension(extension)) {
                 throw new Exception("Unsupported text file. Supported: source code, JSON, Markdown, YAML, TOML, SQL, XML, HTML/CSS, shell, CSV, config and log files.");
             }
             for (AttachedFile existing : attachedFiles) {
@@ -1118,7 +1155,8 @@ public class MainActivity extends Activity {
                 if (stream == null) throw new Exception("Could not open that file.");
                 bytes = readLimitedBytes(stream, MAX_TEXT_FILE_BYTES);
             }
-            if (currentBytes + bytes.length > MAX_TOTAL_TEXT_BYTES) throw new Exception("All attachments together must be no larger than 1 MiB.");
+            if (!AttachmentPolicy.isTextFileWithinLimit(bytes.length)) throw new Exception("Text file exceeds the per-file size limit.");
+            if (!AttachmentPolicy.isTextTotalWithinLimit(currentBytes, bytes.length)) throw new Exception("All attachments together must be no larger than 1 MiB.");
             String content;
             try {
                 content = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -1396,8 +1434,8 @@ public class MainActivity extends Activity {
     private void exportAllConversations() {
         try {
             JSONObject backup = new JSONObject();
-            backup.put("format", "saarthi-studio-backup");
-            backup.put("schema_version", 3);
+            backup.put("format", BackupPolicy.FORMAT);
+            backup.put("schema_version", BackupPolicy.CURRENT_SCHEMA_VERSION);
             backup.put("exported_at", System.currentTimeMillis());
             JSONArray conversationsJson = new JSONArray();
             List<Conversation> all = store.allConversations();
@@ -1414,7 +1452,7 @@ public class MainActivity extends Activity {
                 JSONArray messagesJson = new JSONArray();
                 List<Message> messages = store.allMessages(conversation.id, 10000);
                 totalMessages += messages.size();
-                if (totalMessages > 20000) throw new Exception("Too many messages for one backup (maximum 20,000).");
+                if (totalMessages > BackupPolicy.MAX_MESSAGES_TOTAL) throw new Exception("Too many messages for one backup (maximum 20,000).");
                 for (Message message : messages) {
                     JSONObject messageJson = new JSONObject();
                     messageJson.put("role", message.role);
@@ -1447,7 +1485,7 @@ public class MainActivity extends Activity {
     private void confirmRestoreBackup() {
         new AlertDialog.Builder(this)
                 .setTitle("Restore chat backup?")
-                .setMessage("Choose a Saarthi Studio JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. Importing the same file twice can create duplicates.")
+                .setMessage("Choose a Saarthi Studio JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. The exact same backup file will only be imported once to avoid accidental duplicates.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Choose backup", (dialog, which) -> {
                     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -1487,19 +1525,17 @@ public class MainActivity extends Activity {
             try (InputStream stream = getContentResolver().openInputStream(uri)) {
                 if (stream == null) throw new Exception("Could not open the selected backup file.");
                 byte[] bytes = readLimited(stream, MAX_BACKUP_BYTES);
-                JSONObject backup = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-                if (!"saarthi-studio-backup".equals(backup.optString("format"))) {
-                    throw new Exception("This file is not a Saarthi Studio backup.");
-                }
+                String backupHash = BackupPolicy.sha256(bytes);
+                JSONObject backup = BackupPolicy.parseObject(bytes);
                 int backupSchema = backup.optInt("schema_version", -1);
-                if (backupSchema != 1 && backupSchema != 2 && backupSchema != 3) {
-                    throw new Exception("This backup version is not supported by this app.");
+                if (!BackupPolicy.isSupportedBackup(backup.optString("format"), backupSchema)) {
+                    throw new Exception("This is not a supported Saarthi Studio backup (schemas 1, 2, and 3 are supported).");
                 }
                 JSONArray inputConversations = backup.optJSONArray("conversations");
                 if (inputConversations == null || inputConversations.length() == 0) {
                     throw new Exception("The backup does not contain any conversations.");
                 }
-                if (inputConversations.length() > 500) throw new Exception("The backup contains too many conversations (maximum 500).");
+                if (inputConversations.length() > BackupPolicy.MAX_CONVERSATIONS) throw new Exception("The backup contains too many conversations (maximum 500).");
 
                 List<ImportedConversation> parsed = new ArrayList<>();
                 int totalMessages = 0;
@@ -1511,20 +1547,23 @@ public class MainActivity extends Activity {
                     if (title.length() > 160) title = title.substring(0, 160);
                     JSONArray inputMessages = item.optJSONArray("messages");
                     if (inputMessages == null) inputMessages = new JSONArray();
-                    if (inputMessages.length() > 10000) throw new Exception("A conversation contains too many messages.");
+                    if (inputMessages.length() > BackupPolicy.MAX_MESSAGES_PER_CONVERSATION) throw new Exception("A conversation contains too many messages.");
                     List<Message> messages = new ArrayList<>();
                     for (int j = 0; j < inputMessages.length(); j++) {
                         JSONObject message = inputMessages.optJSONObject(j);
                         if (message == null) continue;
                         String role = message.optString("role", "");
-                        if (!"user".equals(role) && !"assistant".equals(role)) continue;
+                        if (!BackupPolicy.isValidMessageRole(role)) continue;
                         String content = message.optString("content", "");
                         if (content.length() > MAX_MESSAGE_CHARS) throw new Exception("A message is too large to import.");
+                        if (BackupPolicy.containsMalformedImageMarkers(content)) {
+                            throw new Exception("A stored image attachment in this backup is malformed or exceeds the supported image limits.");
+                        }
                         String meta = message.optString("meta", "");
                         if (meta.length() > 1000) meta = meta.substring(0, 1000);
                         messages.add(new Message(role, content, meta));
                         totalMessages++;
-                        if (totalMessages > 20000) throw new Exception("The backup contains too many messages (maximum 20,000).");
+                        if (totalMessages > BackupPolicy.MAX_MESSAGES_TOTAL) throw new Exception("The backup contains too many messages (maximum 20,000).");
                     }
                     parsed.add(new ImportedConversation(title, messages,
                             item.optString("folder", ""), item.optString("tags", ""),
@@ -1534,23 +1573,29 @@ public class MainActivity extends Activity {
                 List<PromptPreset> importedPresets = new ArrayList<>();
                 JSONArray presetArray = backup.optJSONArray("prompt_presets");
                 if (presetArray != null) {
-                    if (presetArray.length() > 100) throw new Exception("The backup contains too many prompt presets (maximum 100).");
+                    if (presetArray.length() > BackupPolicy.MAX_PROMPT_PRESETS) throw new Exception("The backup contains too many prompt presets (maximum 100).");
                     for (int i = 0; i < presetArray.length(); i++) {
                         JSONObject presetJson = presetArray.optJSONObject(i);
                         if (presetJson == null) continue;
                         String presetName = presetJson.optString("name", "").trim();
                         String presetContent = presetJson.optString("content", "").trim();
                         if (presetName.isEmpty() || presetContent.isEmpty()) continue;
-                        if (presetName.length() > 80 || presetContent.length() > 8000) throw new Exception("A prompt preset in this backup is too large.");
+                        if (presetName.length() > BackupPolicy.MAX_PRESET_NAME_CHARS || presetContent.length() > BackupPolicy.MAX_PRESET_CONTENT_CHARS) throw new Exception("A prompt preset in this backup is too large.");
                         importedPresets.add(new PromptPreset(-1L, presetName, presetContent, false));
                     }
                 }
-                List<Long> importedIds = store.importConversations(parsed);
-                int importedPresetCount = store.importPromptPresets(importedPresets);
+                BackupImportResult importResult = store.importBackupIfNew(parsed, importedPresets, backupHash);
+                if (importResult.duplicate) {
+                    main.post(() -> toast("This exact backup file was already restored. No duplicate conversations or presets were added."));
+                    return;
+                }
+                List<Long> importedIds = importResult.conversationIds;
+                int importedPresetCount = importResult.presetCount;
                 long currentId = importedIds.get(importedIds.size() - 1);
-                int importedMessageCount = totalMessages;
+                int importedMessageCount = importResult.messageCount;
                 main.post(() -> {
                     currentConversationId = currentId;
+                    messageHistoryLimit = MESSAGE_PAGE_SIZE;
                     saveCurrentConversationId();
                     renderConversationTitle();
                     renderHistory();
@@ -1586,12 +1631,12 @@ public class MainActivity extends Activity {
             currentConversationId = saved.id;
             return;
         }
-        List<Conversation> conversations = store.allConversations();
-        if (conversations.isEmpty()) {
+        Conversation mostRecent = store.mostRecentConversation();
+        if (mostRecent == null) {
             currentConversationId = store.createConversation("New chat");
         } else {
-            // On an existing installation, this selects the migrated legacy conversation.
-            currentConversationId = conversations.get(0).id;
+            // On an existing installation, this selects the latest migrated conversation without loading every row.
+            currentConversationId = mostRecent.id;
         }
         saveCurrentConversationId();
     }
@@ -1608,6 +1653,7 @@ public class MainActivity extends Activity {
     }
 
     private void createNewConversation() {
+        messageHistoryLimit = MESSAGE_PAGE_SIZE;
         if (sending) { toast("Wait for the current response to finish before switching chats."); return; }
         clearDraftAttachments();
         currentConversationId = store.createConversation("New chat");
@@ -1657,7 +1703,7 @@ public class MainActivity extends Activity {
             options.add("All conversations"); options.add("Pinned only"); options.add("Favorites only");
             LinkedHashSet<String> folders = new LinkedHashSet<>();
             LinkedHashSet<String> tags = new LinkedHashSet<>();
-            for (Conversation item : store.allConversations()) {
+            for (Conversation item : store.recentConversations(500)) {
                 if (!item.folder.isEmpty()) folders.add(item.folder);
                 for (String tag : item.tagsCsv.split(",")) if (!tag.trim().isEmpty()) tags.add(tag.trim());
             }
@@ -1673,17 +1719,7 @@ public class MainActivity extends Activity {
         refreshHolder[0] = () -> {
             list.removeAllViews();
             String query = searchField.getText().toString().trim();
-            List<Conversation> found = query.isEmpty()
-                    ? store.allConversations() : store.searchConversations(query);
-            List<Conversation> conversations = new ArrayList<>();
-            for (Conversation item : found) {
-                String filter = selectedFilter[0];
-                if ("Pinned only".equals(filter) && !item.pinned) continue;
-                if ("Favorites only".equals(filter) && !item.favorite) continue;
-                if (filter.startsWith("Folder: ") && !item.folder.equals(filter.substring(8))) continue;
-                if (filter.startsWith("Tag: ") && !java.util.Arrays.asList(item.tagsCsv.split(",")).contains(filter.substring(5))) continue;
-                conversations.add(item);
-            }
+            List<Conversation> conversations = store.searchConversations(query, selectedFilter[0], 250);
             if (conversations.isEmpty()) {
                 String emptyText = query.isEmpty()
                         ? ("All conversations".equals(selectedFilter[0]) ? "No saved conversations yet. Create a new chat to begin." : "No conversations match this filter.")
@@ -1692,6 +1728,11 @@ public class MainActivity extends Activity {
                 empty.setPadding(dp(8), dp(12), dp(8), dp(12));
                 list.addView(empty);
                 return;
+            }
+            if (conversations.size() >= 250) {
+                TextView boundedNote = label("Showing up to 250 conversations. Search to narrow large histories.", 11, MUTED, false);
+                boundedNote.setPadding(dp(8), dp(4), dp(8), dp(9));
+                list.addView(boundedNote);
             }
             for (Conversation conversation : conversations) {
                 LinearLayout card = new LinearLayout(this);
@@ -1721,6 +1762,7 @@ public class MainActivity extends Activity {
                 open.setOnClickListener(v -> {
                     clearDraftAttachments();
                     currentConversationId = conversation.id;
+                    messageHistoryLimit = MESSAGE_PAGE_SIZE;
                     saveCurrentConversationId();
                     renderConversationTitle();
                     renderHistory();
@@ -1765,8 +1807,8 @@ public class MainActivity extends Activity {
                 }));
                 delete.setOnClickListener(v -> confirmDeleteConversation(conversation, () -> {
                     if (conversation.id == currentConversationId) {
-                        List<Conversation> remaining = store.allConversations();
-                        currentConversationId = remaining.isEmpty() ? store.createConversation("New chat") : remaining.get(0).id;
+                        Conversation remaining = store.mostRecentConversation();
+                        currentConversationId = remaining == null ? store.createConversation("New chat") : remaining.id;
                         saveCurrentConversationId();
                         renderConversationTitle();
                         renderHistory();
@@ -2120,9 +2162,7 @@ public class MainActivity extends Activity {
     }
 
     private static String safeDiagnostic(String message, String secret) {
-        String safe = message == null ? "Unknown error" : message.replaceAll("[\\r\\n\\t]+", " ").trim();
-        if (secret != null && secret.length() >= 4) safe = safe.replace(secret, "[redacted]");
-        return safe.length() > 260 ? safe.substring(0, 257) + "…" : safe;
+        return NetworkPolicy.redactDiagnostic(message, secret);
     }
 
     private static String formatInteger(long value) {
@@ -2210,7 +2250,7 @@ public class MainActivity extends Activity {
     }
     private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.HORIZONTAL); return l; }
     private Button smallButton(String text) {
-        Button b = new Button(this); b.setText(text); b.setTextSize(12); b.setAllCaps(false); b.setTextColor(TEXT); b.setBackground(round(PANEL_ALT, 12));
+        Button b = new Button(this); b.setText(text); b.setContentDescription(text); b.setTextSize(12); b.setAllCaps(false); b.setTextColor(TEXT); b.setBackground(round(PANEL_ALT, 12));
         b.setPadding(dp(8), 0, dp(8), 0); return b;
     }
     private EditText field(String hint, String value, int type) {
@@ -2262,554 +2302,6 @@ public class MainActivity extends Activity {
         }
         String extension() { return ext == null ? "txt" : ext; }
     }
-    private static final class PromptPreset {
-        final long id; final String name, content; final boolean builtIn;
-        PromptPreset(long id, String name, String content, boolean builtIn) {
-            this.id = id; this.name = name == null ? "" : name; this.content = content == null ? "" : content; this.builtIn = builtIn;
-        }
-    }
-    private static final class ImportedConversation {
-        final String title, folder, tagsCsv;
-        final boolean pinned, favorite;
-        final List<Message> messages;
-        ImportedConversation(String title, List<Message> messages) { this(title, messages, "", "", false, false); }
-        ImportedConversation(String title, List<Message> messages, String folder, String tagsCsv, boolean pinned, boolean favorite) {
-            this.title = title == null || title.trim().isEmpty() ? "Imported chat" : title.trim();
-            this.messages = messages == null ? new ArrayList<>() : messages;
-            this.folder = sanitizeOrganizationText(folder, 80);
-            this.tagsCsv = sanitizeTags(tagsCsv);
-            this.pinned = pinned; this.favorite = favorite;
-        }
-    }
-
-    private static final class Message {
-        final long id;
-        final String role, content, meta;
-        Message(String r, String c, String m) { this(-1L, r, c, m); }
-        Message(long id, String r, String c, String m) {
-            this.id = id; role = r; content = c == null ? "" : c; meta = m == null ? "" : m;
-        }
-    }
-
-    private static final class Conversation {
-        final long id;
-        final String title, folder, tagsCsv;
-        final long updatedAt;
-        final boolean pinned, favorite;
-        Conversation(long id, String title, long updatedAt) { this(id, title, updatedAt, "", "", false, false); }
-        Conversation(long id, String title, long updatedAt, String folder, String tagsCsv, boolean pinned, boolean favorite) {
-            this.id = id;
-            this.title = title == null || title.trim().isEmpty() ? "New chat" : title;
-            this.updatedAt = updatedAt;
-            this.folder = sanitizeOrganizationText(folder, 80);
-            this.tagsCsv = sanitizeTags(tagsCsv);
-            this.pinned = pinned; this.favorite = favorite;
-        }
-    }
-
-    private static final class UsageSummary {
-        long totalRequests;
-        long successfulRequests;
-        long failedRequests;
-        long reportedTokens;
-        double averageDurationMs;
-        long timedRequests;
-    }
-
-    private static final class RequestLog {
-        final String model;
-        final boolean success;
-        final int statusCode;
-        final int tokens;
-        final long durationMs;
-        final String provider;
-        final String detail;
-        final long createdAt;
-        RequestLog(String model, boolean success, int statusCode, int tokens, long durationMs, String provider, String detail, long createdAt) {
-            this.model = model == null ? "auto" : model;
-            this.success = success;
-            this.statusCode = statusCode;
-            this.tokens = tokens;
-            this.durationMs = durationMs;
-            this.provider = provider == null ? "" : provider;
-            this.detail = detail == null ? "" : detail;
-            this.createdAt = createdAt;
-        }
-    }
-
-    private static final class Store extends android.database.sqlite.SQLiteOpenHelper {
-        Store(Context c) { super(c, "saarthi_history.sqlite3", null, 5); }
-
-        @Override public void onConfigure(android.database.sqlite.SQLiteDatabase db) {
-            super.onConfigure(db);
-            db.setForeignKeyConstraintsEnabled(true);
-        }
-
-        @Override public void onCreate(android.database.sqlite.SQLiteDatabase db) {
-            db.execSQL("CREATE TABLE conversations (_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, folder TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', is_pinned INTEGER NOT NULL DEFAULT 0, is_favorite INTEGER NOT NULL DEFAULT 0)");
-            db.execSQL("CREATE TABLE messages (_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, meta TEXT, created_at INTEGER NOT NULL, FOREIGN KEY(conversation_id) REFERENCES conversations(_id) ON DELETE CASCADE)");
-            db.execSQL("CREATE INDEX idx_messages_conversation_id ON messages(conversation_id, _id)");
-            db.execSQL("CREATE INDEX IF NOT EXISTS idx_conversations_organization ON conversations(is_pinned DESC, is_favorite DESC, updated_at DESC)");
-            createRequestLogTable(db);
-            createPromptPresetsTable(db);
-            seedDefaultPromptPresets(db);
-            long now = System.currentTimeMillis();
-            android.content.ContentValues cv = new android.content.ContentValues();
-            cv.put("title", "New chat"); cv.put("created_at", now); cv.put("updated_at", now);
-            db.insert("conversations", null, cv);
-        }
-
-        @Override public void onUpgrade(android.database.sqlite.SQLiteDatabase db, int oldVersion, int newVersion) {
-            if (oldVersion < 2) {
-                long now = System.currentTimeMillis();
-                db.execSQL("CREATE TABLE conversations (_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
-                db.execSQL("INSERT INTO conversations (_id, title, created_at, updated_at) VALUES (1, 'Previous conversation', " + now + ", " + now + ")");
-                // Version 1 stored every message in one flat history. Assign all old rows to that conversation.
-                db.execSQL("ALTER TABLE messages ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 1");
-                db.execSQL("CREATE INDEX idx_messages_conversation_id ON messages(conversation_id, _id)");
-                db.execSQL("UPDATE conversations SET updated_at = COALESCE((SELECT MAX(created_at) FROM messages), created_at) WHERE _id = 1");
-            }
-            if (oldVersion < 3) {
-                createRequestLogTable(db);
-                // Backfill diagnostics from saved assistant replies so upgrading does not start with an empty dashboard.
-                try (android.database.Cursor c = db.rawQuery("SELECT meta,content,created_at FROM messages WHERE role='assistant' ORDER BY _id", null)) {
-                    while (c.moveToNext()) {
-                        String meta = c.getString(0) == null ? "" : c.getString(0);
-                        String content = c.getString(1) == null ? "" : c.getString(1);
-                        boolean success = !meta.startsWith("Failed after") && !content.startsWith("FreeLLMAPI returned HTTP ");
-                        int tokens = parseTokensFromMeta(meta);
-                        long duration = parseDurationFromMeta(meta);
-                        String provider = parseProviderFromMeta(meta);
-                        int statusCode = parseStatusCode(content);
-                        android.content.ContentValues values = new android.content.ContentValues();
-                        values.put("model", "historical");
-                        values.put("success", success ? 1 : 0);
-                        values.put("status_code", statusCode);
-                        values.put("tokens", tokens);
-                        values.put("duration_ms", duration);
-                        values.put("provider", provider);
-                        values.put("detail", success ? "" : truncateDiagnostic(content));
-                        values.put("created_at", c.getLong(2));
-                        db.insert("request_logs", null, values);
-                    }
-                }
-            }
-            if (oldVersion < 4) {
-                createPromptPresetsTable(db);
-                seedDefaultPromptPresets(db);
-            }
-            if (oldVersion < 5) {
-                addColumnIfMissing(db, "conversations", "folder", "TEXT NOT NULL DEFAULT ''");
-                addColumnIfMissing(db, "conversations", "tags", "TEXT NOT NULL DEFAULT ''");
-                addColumnIfMissing(db, "conversations", "is_pinned", "INTEGER NOT NULL DEFAULT 0");
-                addColumnIfMissing(db, "conversations", "is_favorite", "INTEGER NOT NULL DEFAULT 0");
-                db.execSQL("CREATE INDEX IF NOT EXISTS idx_conversations_organization ON conversations(is_pinned DESC, is_favorite DESC, updated_at DESC)");
-            }
-        }
-
-        private static void addColumnIfMissing(android.database.sqlite.SQLiteDatabase db, String table, String column, String definition) {
-            boolean found = false;
-            try (android.database.Cursor c = db.rawQuery("PRAGMA table_info(" + table + ")", null)) {
-                while (c.moveToNext()) if (column.equalsIgnoreCase(c.getString(1))) { found = true; break; }
-            }
-            if (!found) db.execSQL("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
-        }
-
-        private static void createPromptPresetsTable(android.database.sqlite.SQLiteDatabase db) {
-            db.execSQL("CREATE TABLE IF NOT EXISTS prompt_presets (_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE, content TEXT NOT NULL, built_in INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)");
-        }
-
-        private static void seedDefaultPromptPresets(android.database.sqlite.SQLiteDatabase db) {
-            String[][] defaults = {
-                    {"Explain Rust error", "Explain this Rust error step by step. Identify the root cause, show an idiomatic fix, and explain ownership, borrowing, or lifetimes when relevant. Keep the example minimal."},
-                    {"Java QA test failure", "Analyze this Java QA automation test failure. Identify the likely root cause, propose a reliable fix, and suggest a focused regression test. Do not invent test output."},
-                    {"Python debugging", "Debug this Python code. Explain the root cause, show the smallest safe correction, and mention any relevant edge cases."},
-                    {"Code review", "Review the code for correctness, security, maintainability, performance, and testing gaps. Prioritize actionable findings with severity and file/line references when available."},
-                    {"Debug with minimal reproduction", "Help debug this issue. First summarize what is known, list the most likely causes, then propose the smallest reproducible example and a verification step."},
-                    {"Explain step by step", "Teach this concept from first principles. Use a short example, explain each important line, then give me one small practice exercise with its answer hidden until I ask."}
-            };
-            for (String[] item : defaults) {
-                try (android.database.Cursor c = db.rawQuery("SELECT _id FROM prompt_presets WHERE name=?", new String[]{item[0]})) {
-                    if (c.moveToFirst()) continue;
-                }
-                android.content.ContentValues values = new android.content.ContentValues();
-                values.put("name", item[0]); values.put("content", item[1]); values.put("built_in", 1); values.put("updated_at", System.currentTimeMillis());
-                db.insertWithOnConflict("prompt_presets", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_IGNORE);
-            }
-        }
-
-        private static void createRequestLogTable(android.database.sqlite.SQLiteDatabase db) {
-            db.execSQL("CREATE TABLE IF NOT EXISTS request_logs (_id INTEGER PRIMARY KEY AUTOINCREMENT, model TEXT NOT NULL, success INTEGER NOT NULL, status_code INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT -1, duration_ms INTEGER NOT NULL DEFAULT -1, provider TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)");
-            db.execSQL("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_at DESC, _id DESC)");
-        }
-
-        private static int parseTokensFromMeta(String meta) {
-            Matcher m = Pattern.compile("(\\d+)\\s+tokens").matcher(meta == null ? "" : meta);
-            if (m.find()) { try { return Integer.parseInt(m.group(1)); } catch (Exception ignored) { } }
-            return -1;
-        }
-
-        private static long parseDurationFromMeta(String meta) {
-            Matcher m = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)\\s*s").matcher(meta == null ? "" : meta);
-            if (m.find()) { try { return (long)(Double.parseDouble(m.group(1)) * 1000.0); } catch (Exception ignored) { } }
-            return -1;
-        }
-
-        private static String parseProviderFromMeta(String meta) {
-            if (meta == null || meta.trim().isEmpty() || meta.startsWith("Failed after")) return "";
-            String[] parts = meta.split(" · ", 3);
-            return parts.length >= 3 ? parts[2] : "";
-        }
-
-        private static int parseStatusCode(String text) {
-            Matcher m = Pattern.compile("HTTP\\s+(\\d{3})").matcher(text == null ? "" : text);
-            if (m.find()) { try { return Integer.parseInt(m.group(1)); } catch (Exception ignored) { } }
-            return 0;
-        }
-
-        private static String truncateDiagnostic(String text) {
-            String value = text == null ? "" : text.replaceAll("[\\r\\n\\t]+", " ").trim();
-            return value.length() > 260 ? value.substring(0, 257) + "…" : value;
-        }
-
-        synchronized void addRequestLog(String model, boolean success, int statusCode, int tokens, long durationMs, String provider, String detail) {
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put("model", model == null || model.trim().isEmpty() ? "auto" : model.trim());
-            values.put("success", success ? 1 : 0);
-            values.put("status_code", statusCode);
-            values.put("tokens", tokens);
-            values.put("duration_ms", durationMs);
-            values.put("provider", provider == null ? "" : provider);
-            values.put("detail", detail == null ? "" : detail);
-            values.put("created_at", System.currentTimeMillis());
-            getWritableDatabase().insert("request_logs", null, values);
-        }
-
-        synchronized List<String> recentModels(int limit) {
-            List<String> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT model,MAX(created_at) AS newest FROM request_logs WHERE success=1 GROUP BY model ORDER BY newest DESC LIMIT ?",
-                    new String[]{String.valueOf(Math.max(1, Math.min(limit, 20)))})) {
-                while (c.moveToNext()) if (c.getString(0) != null && !c.getString(0).trim().isEmpty()) result.add(c.getString(0));
-            }
-            return result;
-        }
-
-        synchronized UsageSummary getUsageSummary() {
-            UsageSummary summary = new UsageSummary();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT COUNT(*), COALESCE(SUM(success),0), COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN tokens>=0 THEN tokens ELSE 0 END),0), COALESCE(AVG(CASE WHEN duration_ms>=0 THEN duration_ms END),0), COALESCE(SUM(CASE WHEN duration_ms>=0 THEN 1 ELSE 0 END),0) FROM request_logs", null)) {
-                if (c.moveToFirst()) {
-                    summary.totalRequests = c.getLong(0);
-                    summary.successfulRequests = c.getLong(1);
-                    summary.failedRequests = c.getLong(2);
-                    summary.reportedTokens = c.getLong(3);
-                    summary.averageDurationMs = c.getDouble(4);
-                    summary.timedRequests = c.getLong(5);
-                }
-            }
-            return summary;
-        }
-
-        synchronized List<RequestLog> recentRequestLogs(int limit) {
-            List<RequestLog> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT model,success,status_code,tokens,duration_ms,provider,detail,created_at FROM request_logs ORDER BY created_at DESC, _id DESC LIMIT ?",
-                    new String[]{String.valueOf(limit)})) {
-                while (c.moveToNext()) result.add(new RequestLog(c.getString(0), c.getInt(1) != 0, c.getInt(2), c.getInt(3), c.getLong(4), c.getString(5), c.getString(6), c.getLong(7)));
-            }
-            return result;
-        }
-
-        synchronized long createConversation(String title) {
-            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
-            long now = System.currentTimeMillis();
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put("title", title == null || title.trim().isEmpty() ? "New chat" : title.trim());
-            values.put("created_at", now); values.put("updated_at", now);
-            return db.insert("conversations", null, values);
-        }
-
-        synchronized Conversation getConversation(long id) {
-            if (id <= 0) return null;
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,title,updated_at,folder,tags,is_pinned,is_favorite FROM conversations WHERE _id=?", new String[]{String.valueOf(id)})) {
-                if (c.moveToFirst()) return new Conversation(c.getLong(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4), c.getInt(5) != 0, c.getInt(6) != 0);
-            }
-            return null;
-        }
-
-        synchronized List<Conversation> allConversations() {
-            List<Conversation> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,title,updated_at,folder,tags,is_pinned,is_favorite FROM conversations ORDER BY is_pinned DESC,is_favorite DESC,updated_at DESC,_id DESC", null)) {
-                while (c.moveToNext()) result.add(new Conversation(c.getLong(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4), c.getInt(5) != 0, c.getInt(6) != 0));
-            }
-            return result;
-        }
-
-        synchronized List<Conversation> searchConversations(String query) {
-            List<Conversation> result = new ArrayList<>();
-            String term = query == null ? "" : query.trim();
-            if (term.isEmpty()) return allConversations();
-            String sql = "SELECT c._id,c.title,c.updated_at,c.folder,c.tags,c.is_pinned,c.is_favorite FROM conversations c "
-                    + "WHERE instr(lower(c.title), lower(?)) > 0 OR instr(lower(c.folder), lower(?)) > 0 OR instr(lower(c.tags), lower(?)) > 0 "
-                    + "OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c._id AND instr(lower(m.content), lower(?)) > 0) "
-                    + "ORDER BY c.is_pinned DESC,c.is_favorite DESC,c.updated_at DESC,c._id DESC";
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(sql, new String[]{term, term, term, term})) {
-                while (c.moveToNext()) result.add(new Conversation(c.getLong(0), c.getString(1), c.getLong(2), c.getString(3), c.getString(4), c.getInt(5) != 0, c.getInt(6) != 0));
-            }
-            return result;
-        }
-
-        synchronized List<Long> importConversations(List<ImportedConversation> imported) {
-            List<Long> ids = new ArrayList<>();
-            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
-            db.beginTransaction();
-            try {
-                for (ImportedConversation conversation : imported) {
-                    long now = System.currentTimeMillis();
-                    android.content.ContentValues conversationValues = new android.content.ContentValues();
-                    conversationValues.put("title", conversation.title);
-                    conversationValues.put("created_at", now);
-                    conversationValues.put("updated_at", now);
-                    conversationValues.put("folder", conversation.folder);
-                    conversationValues.put("tags", conversation.tagsCsv);
-                    conversationValues.put("is_pinned", conversation.pinned ? 1 : 0);
-                    conversationValues.put("is_favorite", conversation.favorite ? 1 : 0);
-                    long id = db.insert("conversations", null, conversationValues);
-                    if (id < 0) throw new IllegalStateException("Could not create an imported conversation.");
-                    ids.add(id);
-                    for (Message message : conversation.messages) {
-                        android.content.ContentValues messageValues = new android.content.ContentValues();
-                        messageValues.put("conversation_id", id);
-                        messageValues.put("role", message.role);
-                        messageValues.put("content", message.content);
-                        messageValues.put("meta", message.meta == null ? "" : message.meta);
-                        messageValues.put("created_at", now);
-                        if (db.insert("messages", null, messageValues) < 0) {
-                            throw new IllegalStateException("Could not import a message.");
-                        }
-                    }
-                }
-                db.setTransactionSuccessful();
-            } finally {
-                db.endTransaction();
-            }
-            return ids;
-        }
-
-        synchronized void renameConversation(long id, String title) {
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put("title", title.trim()); values.put("updated_at", System.currentTimeMillis());
-            getWritableDatabase().update("conversations", values, "_id=?", new String[]{String.valueOf(id)});
-        }
-
-        synchronized void saveConversationOrganization(long id, String folder, String tags, boolean pinned, boolean favorite) {
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put("folder", sanitizeOrganizationText(folder, 80));
-            values.put("tags", sanitizeTags(tags));
-            values.put("is_pinned", pinned ? 1 : 0);
-            values.put("is_favorite", favorite ? 1 : 0);
-            values.put("updated_at", System.currentTimeMillis());
-            getWritableDatabase().update("conversations", values, "_id=?", new String[]{String.valueOf(id)});
-        }
-
-        synchronized void renameIfDefaultTitle(long id, String title) {
-            Conversation c = getConversation(id);
-            if (c != null && "New chat".equals(c.title)) renameConversation(id, title);
-        }
-
-        synchronized void deleteConversation(long id) {
-            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
-            db.beginTransaction();
-            try {
-                // Explicit delete keeps deletion correct for rows migrated from the old schema too.
-                db.delete("messages", "conversation_id=?", new String[]{String.valueOf(id)});
-                db.delete("conversations", "_id=?", new String[]{String.valueOf(id)});
-                db.setTransactionSuccessful();
-            } finally { db.endTransaction(); }
-        }
-
-        synchronized void addMessage(long conversationId, String role, String content, String meta) {
-            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
-            long now = System.currentTimeMillis();
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put("conversation_id", conversationId); values.put("role", role); values.put("content", content);
-            values.put("meta", meta); values.put("created_at", now);
-            db.insert("messages", null, values);
-            android.content.ContentValues updated = new android.content.ContentValues(); updated.put("updated_at", now);
-            db.update("conversations", updated, "_id=?", new String[]{String.valueOf(conversationId)});
-        }
-
-        synchronized Message getMessage(long conversationId, long messageId) {
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,role,content,meta FROM messages WHERE conversation_id=? AND _id=?",
-                    new String[]{String.valueOf(conversationId), String.valueOf(messageId)})) {
-                if (c.moveToFirst()) return new Message(c.getLong(0), c.getString(1), c.getString(2), c.getString(3));
-            }
-            return null;
-        }
-
-        synchronized Message latestUserMessage(long conversationId) {
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,role,content,meta FROM messages WHERE conversation_id=? AND role='user' ORDER BY _id DESC LIMIT 1",
-                    new String[]{String.valueOf(conversationId)})) {
-                if (c.moveToFirst()) return new Message(c.getLong(0), c.getString(1), c.getString(2), c.getString(3));
-            }
-            return null;
-        }
-
-        synchronized Message lastUserMessageBefore(long conversationId, long messageId) {
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,role,content,meta FROM messages WHERE conversation_id=? AND role='user' AND _id<? ORDER BY _id DESC LIMIT 1",
-                    new String[]{String.valueOf(conversationId), String.valueOf(messageId)})) {
-                if (c.moveToFirst()) return new Message(c.getLong(0), c.getString(1), c.getString(2), c.getString(3));
-            }
-            return null;
-        }
-
-        synchronized boolean isLatestMessage(long conversationId, long messageId) {
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT 1",
-                    new String[]{String.valueOf(conversationId)})) {
-                return c.moveToFirst() && c.getLong(0) == messageId;
-            }
-        }
-
-        synchronized void deleteMessage(long conversationId, long messageId) {
-            getWritableDatabase().delete("messages", "conversation_id=? AND _id=?", new String[]{String.valueOf(conversationId), String.valueOf(messageId)});
-            android.content.ContentValues updated = new android.content.ContentValues(); updated.put("updated_at", System.currentTimeMillis());
-            getWritableDatabase().update("conversations", updated, "_id=?", new String[]{String.valueOf(conversationId)});
-        }
-
-        synchronized void editUserMessageAndTrim(long conversationId, long messageId, String content) {
-            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
-            db.beginTransaction();
-            try {
-                android.content.ContentValues values = new android.content.ContentValues(); values.put("content", content); values.put("meta", "");
-                int changed = db.update("messages", values, "conversation_id=? AND _id=? AND role='user'",
-                        new String[]{String.valueOf(conversationId), String.valueOf(messageId)});
-                if (changed != 1) throw new IllegalStateException("That user message no longer exists.");
-                db.delete("messages", "conversation_id=? AND _id>?", new String[]{String.valueOf(conversationId), String.valueOf(messageId)});
-                android.content.ContentValues updated = new android.content.ContentValues(); updated.put("updated_at", System.currentTimeMillis());
-                db.update("conversations", updated, "_id=?", new String[]{String.valueOf(conversationId)});
-                db.setTransactionSuccessful();
-            } finally { db.endTransaction(); }
-        }
-
-        synchronized List<PromptPreset> allPromptPresets() {
-            List<PromptPreset> values = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,name,content,built_in FROM prompt_presets ORDER BY built_in DESC, name COLLATE NOCASE", null)) {
-                while (c.moveToNext()) values.add(new PromptPreset(c.getLong(0), c.getString(1), c.getString(2), c.getInt(3) != 0));
-            }
-            return values;
-        }
-
-        synchronized List<PromptPreset> customPromptPresets() {
-            List<PromptPreset> values = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,name,content,built_in FROM prompt_presets WHERE built_in=0 ORDER BY name COLLATE NOCASE", null)) {
-                while (c.moveToNext()) values.add(new PromptPreset(c.getLong(0), c.getString(1), c.getString(2), false));
-            }
-            return values;
-        }
-
-        synchronized void savePromptPreset(long id, String name, String content, boolean builtIn) {
-            android.content.ContentValues values = new android.content.ContentValues();
-            values.put("name", name.trim()); values.put("content", content.trim());
-            values.put("built_in", builtIn ? 1 : 0); values.put("updated_at", System.currentTimeMillis());
-            if (id > 0) {
-                int updated = getWritableDatabase().update("prompt_presets", values, "_id=?", new String[]{String.valueOf(id)});
-                if (updated != 1) throw new IllegalStateException("The selected prompt preset no longer exists.");
-            } else {
-                if (getWritableDatabase().insert("prompt_presets", null, values) < 0) throw new IllegalStateException("A preset with that name already exists.");
-            }
-        }
-
-        synchronized void deletePromptPreset(long id) {
-            getWritableDatabase().delete("prompt_presets", "_id=? AND built_in=0", new String[]{String.valueOf(id)});
-        }
-
-        synchronized int importPromptPresets(List<PromptPreset> presets) {
-            if (presets == null || presets.isEmpty()) return 0;
-            android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
-            int imported = 0;
-            db.beginTransaction();
-            try {
-                for (PromptPreset preset : presets) {
-                    String base = preset.name == null ? "Imported preset" : preset.name.trim();
-                    if (base.isEmpty()) base = "Imported preset";
-                    String candidate = base.length() > 80 ? base.substring(0, 80) : base;
-                    int suffix = 2;
-                    while (promptPresetNameExists(db, candidate)) {
-                        String ending = " (Imported " + suffix++ + ")";
-                        int keep = Math.max(1, 80 - ending.length());
-                        candidate = base.substring(0, Math.min(base.length(), keep)) + ending;
-                    }
-                    android.content.ContentValues values = new android.content.ContentValues();
-                    values.put("name", candidate); values.put("content", preset.content); values.put("built_in", 0); values.put("updated_at", System.currentTimeMillis());
-                    if (db.insert("prompt_presets", null, values) >= 0) imported++;
-                }
-                db.setTransactionSuccessful();
-            } finally { db.endTransaction(); }
-            return imported;
-        }
-
-        private static boolean promptPresetNameExists(android.database.sqlite.SQLiteDatabase db, String name) {
-            try (android.database.Cursor c = db.rawQuery("SELECT 1 FROM prompt_presets WHERE name=?", new String[]{name})) { return c.moveToFirst(); }
-        }
-
-        synchronized String matchingPreview(long conversationId, String query) {
-            String term = query == null ? "" : query.trim();
-            if (term.isEmpty()) return "";
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT content FROM messages WHERE conversation_id=? AND instr(lower(content), lower(?)) > 0 ORDER BY _id DESC LIMIT 1",
-                    new String[]{String.valueOf(conversationId), term})) {
-                if (c.moveToFirst()) {
-                    String value = c.getString(0).replaceAll("\s+", " ").trim();
-                    int index = value.toLowerCase(Locale.ROOT).indexOf(term.toLowerCase(Locale.ROOT));
-                    if (index > 44) value = "…" + value.substring(index - 40);
-                    return value.length() > 90 ? value.substring(0, 87) + "…" : value;
-                }
-            }
-            return "";
-        }
-
-        synchronized String preview(long conversationId) {
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT content FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT 1",
-                    new String[]{String.valueOf(conversationId)})) {
-                if (c.moveToFirst()) {
-                    String value = c.getString(0).replaceAll("\\s+", " ").trim();
-                    return value.length() > 90 ? value.substring(0, 87) + "…" : value;
-                }
-            }
-            return "";
-        }
-
-        synchronized List<Message> latestMessages(long conversationId, int limit) {
-            List<Message> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,role,content,meta FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT ?",
-                    new String[]{String.valueOf(conversationId), String.valueOf(limit)})) {
-                while (c.moveToNext()) result.add(new Message(c.getLong(0), c.getString(1), c.getString(2), c.getString(3)));
-            }
-            Collections.reverse(result); return result;
-        }
-
-        synchronized List<Message> allMessages(long conversationId, int limit) {
-            List<Message> result = new ArrayList<>();
-            try (android.database.Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT _id,role,content,meta FROM messages WHERE conversation_id=? ORDER BY _id DESC LIMIT ?",
-                    new String[]{String.valueOf(conversationId), String.valueOf(limit)})) {
-                while (c.moveToNext()) result.add(new Message(c.getLong(0), c.getString(1), c.getString(2), c.getString(3)));
-            }
-            Collections.reverse(result); return result;
-        }
-    }
-
     private static final class SecureSettings {
         private final SharedPreferences prefs;
         SecureSettings(Context c) { prefs = c.getSharedPreferences("secure_config", Context.MODE_PRIVATE); }

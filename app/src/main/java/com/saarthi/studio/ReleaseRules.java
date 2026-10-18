@@ -35,12 +35,7 @@ final class ReleaseRules {
     }
 
     static boolean shouldFallbackModel(int status, String message) {
-        String lower = message == null ? "" : message.toLowerCase(Locale.ROOT);
-        if (status == 408 || status == 425 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504) return true;
-        return lower.contains("quota") || lower.contains("rate limit") || lower.contains("rate-limit") ||
-                lower.contains("temporarily unavailable") || lower.contains("model not found") || lower.contains("unknown model") ||
-                lower.contains("no available model") || lower.contains("provider unavailable") ||
-                lower.contains("failed to connect") || lower.contains("connection reset") || lower.contains("timed out") || lower.contains("timeout");
+        return NetworkPolicy.shouldFallbackModel(status, message, false);
     }
 
     static String sanitizeOrganizationText(String value, int maxLength) {
@@ -61,26 +56,11 @@ final class ReleaseRules {
     }
 
     static boolean isSupportedTextExtension(String extension) {
-        switch (extension == null ? "" : extension.toLowerCase(Locale.ROOT)) {
-            case "rs": case "java": case "py": case "json": case "md": case "txt":
-            case "c": case "h": case "cpp": case "hpp": case "js": case "jsx": case "ts": case "tsx":
-            case "kt": case "kts": case "go": case "rb": case "php": case "swift": case "sql":
-            case "sh": case "bash": case "log": case "csv": case "xml": case "html": case "css":
-            case "yaml": case "yml": case "toml": case "ini": case "conf": case "gradle": case "properties":
-                return true;
-            default:
-                return false;
-        }
+        return AttachmentPolicy.isSupportedTextExtension(extension);
     }
 
     static boolean isSupportedImageMimeType(String mime) {
-        if (mime == null) return false;
-        switch (mime.toLowerCase(Locale.ROOT)) {
-            case "image/jpeg": case "image/png": case "image/webp": case "image/gif":
-                return true;
-            default:
-                return false;
-        }
+        return AttachmentPolicy.isSupportedImageMimeType(mime);
     }
 
     static boolean isLikelyVisionModel(String model) {

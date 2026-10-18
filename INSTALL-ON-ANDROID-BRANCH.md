@@ -1,55 +1,38 @@
-# Install this project on the `android` branch
+# Install Saarthi Studio Android 1.11.1 onto the `android` branch
 
-This is a complete standalone Android project at version **1.11.0 / versionCode 13**, not a patch-only archive. The combined source preserves the v1.10.0 features and adds v1.11.0 reliability/model preferences, quota inspection, chat organization, expanded developer attachments, voice, and limited image input. The source is integrated in `app/src/main/java/com/saarthi/studio/MainActivity.java` plus pure-Java release rules. SQLite schema v5 preserves existing chats while adding organization metadata.
+This archive is a complete Android source project for version **1.11.1 / versionCode 14**. It keeps `minSdk = 26`, uses Java 17, and includes the release stabilization refactor and regression tests. It is a source package, not a prebuilt or device-verified APK.
 
-## Back up first
+## Before replacing files
 
-On your Ubuntu/Linux machine, make sure the local repository is checked out to the Android branch. Review uncommitted work before replacing files.
+1. Run `git switch android` and `git pull --ff-only origin android` in your existing repository.
+2. Back up the installed app's chats as JSON. Keep a second copy outside the phone.
+3. Back up the repository working tree with Git, or use a separate fresh clone.
+4. Extract this archive and review the complete files before copying them into the Android project root.
 
-```bash
-cd ~/Projects/Saarthi-Studio
-git switch android
-git status --short
-```
+## Apply and verify
 
-If you have local changes you need, commit or stash them before proceeding. Make a backup of the repo files and export chats from the installed app before installing a newly built APK.
-
-## Copy the project files
-
-If you extracted this ZIP into `~/Downloads/Saarthi-Studio-Android-1.11.0`:
-
-```bash
-cd ~/Projects/Saarthi-Studio
-tar -czf ~/Saarthi-Studio-android-before-1.11.0.tgz --exclude=.git --exclude=.gradle --exclude='*/build' .
-rsync -av \
-  --exclude='.git/' \
-  --exclude='.gradle/' \
-  --exclude='**/build/' \
-  ~/Downloads/Saarthi-Studio-Android-1.11.0/ ./
-```
-
-This copies the supplied project files without deleting extra files in your checkout. Keep this on the `android` branch; do not overwrite `main` or a branch containing desktop/Apple source code.
-
-## Review, build, and push
+Copy the extracted project contents to the root of your repository checkout. Do not copy the extracted directory as a nested subfolder. Then run:
 
 ```bash
 git diff --check
-git diff --stat
 ./BUILD-APK-UBUNTU.sh
 ```
 
-The build script requires JDK 17, Gradle 8.9, Android SDK Platform 35, and Build Tools 35.0.0. If the local build succeeds, commit and push:
+If any command fails, fix the reported issue instead of committing an unverified build. Once JDK 17, Gradle 8.9, Android SDK Platform 35, and Build Tools 35.0.0 are available, the expected debug APK is `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Commit and push
 
 ```bash
+git status --short
 git add -A
-git commit -m "Add Saarthi Studio 1.11.0 features"
+git commit -m "fix(android): stabilize v1.11.1 and add regression coverage"
 git push origin android
 ```
 
-The repository's workflow runs unit tests, Android lint, and a debug APK build on a push to `android` touching app, tests, Gradle, documentation, or workflow files. It uploads `saarthi-studio-android-debug-apk`. Confirm the Actions run succeeds before installing the APK.
+GitHub Actions should run JVM regression tests, lint, debug APK assembly, and emulator instrumentation tests. It uploads the APK after a successful assembly and uploads the lint report for inspection. The workflow remains failed if any required gate fails.
 
-## Update warning
+## Manual acceptance still required
 
-An in-place app update preserves private app data only when the application ID and signing certificate are compatible. Debug APKs built on different machines can use different debug certificates. If Android refuses the update because of a signature mismatch, do not uninstall the current app just to force installation; export chats first because uninstalling usually deletes private app data.
+Install the APK **over** the existing v1.10.0/v1.11.0 app without uninstalling first. Confirm chat history and custom prompt presets remain intact. Then test FreeLLMAPI connect/stream/Stop/Retry/fallback, voice services, image input on a vision-capable model, and backup/restore using schema v1/v2/v3 files. This physical-device validation cannot be inferred from a successful compilation alone.
 
-Do not commit API keys, FreeLLMAPI `.env` files, router databases, signing keys, or local settings. Use plain HTTP only over a trusted private LAN/hotspot; use HTTPS for remote/public connections.
+Keep FreeLLMAPI limited to your trusted hotspot/LAN; do not expose the server port or unified key publicly.

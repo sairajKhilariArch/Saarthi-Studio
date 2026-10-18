@@ -1,10 +1,10 @@
-# Saarthi Studio Android 1.11.0
+# Saarthi Studio Android 1.11.1
 
 Saarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This project preserves locally stored chats and encrypted endpoint settings while adding conversation organization, model preferences/fallback, budget inspection, developer attachments, voice, and optional vision input.
 
 ## Project status
 
-**v1.11.0 release candidate — build/device validation required.** The source package should not be treated as a verified APK until CI succeeds and the physical-device checklist in `UPGRADE-GUIDE-1.11.0.md` is completed.
+**v1.11.1 release candidate — build/device validation required.** The source package should not be treated as a verified APK until CI succeeds and the physical-device checklist in `UPGRADE-GUIDE-1.11.1.md` is completed.
 
 ## Included capabilities
 - OpenAI-compatible FreeLLMAPI chat, model listing, streaming and Stop.
@@ -30,4 +30,4 @@ Saarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This 
 - The quota screen reports what `/api/free-tier` returns; it does not assert an exact remaining daily quota when the server does not provide one. PDF extraction is not included in this version.
 
 ## Build
-See `BUILDING.md` for Gradle/Android SDK requirements and CI workflow. See `CHANGELOG.md` and `UPGRADE-GUIDE-1.11.0.md` for details.
+See `BUILDING.md` for Gradle/Android SDK requirements and CI workflow. See `CHANGELOG.md` and `UPGRADE-GUIDE-1.11.1.md` for details.

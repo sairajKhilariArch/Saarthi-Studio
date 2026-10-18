@@ -10,6 +10,15 @@ on:
       - 'README.md'
       - 'CHANGELOG.md'
       - 'BUILDING.md'
+      - 'UPGRADE-GUIDE-1.11.1.md'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/build-android.yml'
+  pull_request:
+    branches:
+      - android
+    paths:
+      - 'app/**'
       - '*.gradle.kts'
       - 'gradle.properties'
       - '.github/workflows/build-android.yml'
@@ -19,48 +28,95 @@ permissions:
 
 jobs:
   build:
-    name: Build debug APK
+    name: Test, lint, build, and verify Android
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v5
-
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-
       - name: Install Android SDK components
         run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Verify Android project layout
+      - name: Verify project layout
         run: |
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/saarthi/studio/MainActivity.java
-
-      - name: Check patch whitespace
+          test -f app/src/main/java/com/saarthi/studio/ChatDatabase.java
+          test -f app/src/main/java/com/saarthi/studio/DatabaseMigrations.java
+          test -f app/src/test/java/com/saarthi/studio/BackupPolicyTest.java
+          test -f app/src/androidTest/java/com/saarthi/studio/DatabaseMigrationInstrumentedTest.java
+          test -f app/src/androidTest/java/com/saarthi/studio/ChatHistoryPagingInstrumentedTest.java
+      - name: Check committed whitespace
         run: git show --check --oneline HEAD
-
-      - name: Run Android unit-test task, lint, and debug build
-        run: gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
-
-      - name: Upload APK artifact
+      - name: Run JVM regression tests
+        id: unit
+        continue-on-error: true
+        run: gradle --no-daemon testDebugUnitTest
+      - name: Run Android lint
+        id: lint
+        continue-on-error: true
+        run: gradle --no-daemon lintDebug
+      - name: Print Android lint report
+        if: always()
+        run: |
+          REPORT="app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt"
+          if [ -f "$REPORT" ]; then cat "$REPORT"; else echo "Android lint text report was not generated."; fi
+      - name: Assemble debug APK
+        id: assemble
+        continue-on-error: true
+        run: gradle --no-daemon assembleDebug
+      - name: Upload debug APK artifact
+        if: always() && steps.assemble.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: saarthi-studio-android-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: saarthi-studio-android-lint-report
+          path: |
+            app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+            app/build/reports/lint-results-debug.html
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Run Android database migration and app-launch tests
+        id: instrumented
+        if: always() && steps.assemble.outcome == 'success'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          script: gradle --no-daemon connectedDebugAndroidTest
+      - name: Enforce release validation gate
+        if: always()
+        env:
+          UNIT_OUTCOME: ${{ steps.unit.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+          ASSEMBLE_OUTCOME: ${{ steps.assemble.outcome }}
+          INSTRUMENTED_OUTCOME: ${{ steps.instrumented.outcome }}
+        run: |
+          failed=0
+          for result in "$UNIT_OUTCOME" "$LINT_OUTCOME" "$ASSEMBLE_OUTCOME" "$INSTRUMENTED_OUTCOME"; do
+            if [ "$result" != "success" ]; then echo "Validation step failed: $result"; failed=1; fi
+          done
+          test "$failed" -eq 0

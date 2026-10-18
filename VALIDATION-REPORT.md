@@ -1,40 +1,13 @@
-# Saarthi Studio Android 1.11.0 — Validation Report
+# Saarthi Studio Android 1.11.1 — Validation Report
 
-- Package: `com.saarthi.studio`
-- App version: `1.11.0`, `versionCode = 13`
-- Baseline: Saarthi Studio Android v1.10.0 source package
-- SQLite schema: v5; migration adds conversation folder, tags, pinned, and favorite metadata
-- Backup writer: schema v3; importer accepts schemas v1, v2, and v3
+- Version: `1.11.1`, version code `14`; minimum Android SDK remains 26.
+- API 27 navigation-bar appearance item moved into `values-v27/styles.xml`; the base theme is API-26 compatible.
+- Persistence and data models moved to `ChatDatabase.java`; migration helpers are in `DatabaseMigrations.java`. Schema v6 records imported backup fingerprints.
+- Restore path is transactional and only skips byte-for-byte identical previously imported backup files.
+- 21 pure-Java regression test methods were executed with a lightweight local runner and passed; they cover backup schema versions/limits, attachment type/size/image payload policies, network retry/fallback rules, secret redaction, model selection, and search-query construction. This is not a substitute for running the Gradle JUnit task in CI.
+- Instrumentation tests cover v4→v5→v6 migration preservation, duplicate/failed backup imports, parameterized search/filter SQL, bounded message-history paging, and app launch.
+- GitHub Actions reports lint output, uploads the APK whenever assembleDebug succeeds, and runs emulator instrumentation tests before enforcing the final pass/fail gate.
 
-## Checks completed in this environment
+## Not yet verified
 
-- `AndroidManifest.xml` parsed successfully as XML.
-- `.github/workflows/build-android.yml` parsed successfully as YAML.
-- `ReleaseRules.java` compiled with the locally installed `javac`.
-- 12 direct Java smoke assertions passed for ordered model fallback, model-list normalization, fallback decisions, folder/tag sanitation and caps, attachment allowlists, and vision-model name heuristics.
-- A SQLite v4→v5 migration simulation passed and retained the existing conversation/message rows while adding organization-column defaults.
-- The conversation-search SQL was reviewed for parameter count and exercised against a SQLite schema simulation.
-- `javac` reported no common Java syntax diagnostics for `MainActivity.java`, but produced errors for unavailable Android framework and `org.json` types. This is a source-level syntax scan only, not an Android compile.
-- Git diff whitespace scan reported no whitespace diagnostics for the modified main Java file.
-
-## Checks not completed
-
-This environment does not contain Gradle or an Android SDK (`ANDROID_HOME` and `ANDROID_SDK_ROOT` are unset). Consequently, the following have **not** been run here:
-
-- Android Gradle compilation, Android Lint, or the JUnit `testDebugUnitTest` task
-- APK assembly
-- Emulator or physical-device execution
-- Live FreeLLMAPI streaming, fallback, quota endpoint, voice recognition/TTS, or vision request tests
-- Actual installation-over-v1.10.0 database migration on an Android device
-
-The project includes JUnit tests for the pure-Java rules and the GitHub Actions workflow invokes `testDebugUnitTest`, `lintDebug`, and `assembleDebug`. Treat this package as source code pending those checks, not as a verified APK.
-
-## Before release
-
-1. Back up chats from the installed v1.10.0 app.
-2. Open the project in Android Studio or run `./BUILD-APK-UBUNTU.sh` with JDK 17, Android Gradle Plugin 8.7.3, Gradle 8.9, Android SDK Platform 35, and Build Tools 35.0.0.
-3. Resolve any compilation/lint/test issues reported by the actual Android toolchain.
-4. Test upgrade-in-place, saved chats, preset import, streaming/Stop/retry, folders/tags/search, quota endpoint unavailable handling, voice permissions, and image support against the user's FreeLLMAPI setup.
-5. Push only after local review; confirm the `android` branch workflow succeeds before distributing its APK artifact.
-
-This package has **not** been pushed to GitHub, and no APK is included.
+This environment does not contain Gradle or an Android SDK, so no local Android Gradle build, actual lint run, APK install, or emulator test is claimed. The previous v1.11.0 Actions run failed at lint due to `android:windowLightNavigationBar` requiring API 27 under minSdk 26; this source moves that item to an API-27 resource folder. The previous lint run did not expose the 40 warning details in its logs and had no report artifact. The revised workflow uploads a lint-report artifact so those warnings can be inspected on the next run and meaningful issues fixed. Physical-device FreeLLMAPI, speech, vision, upgrade, and backup scenarios remain required.
