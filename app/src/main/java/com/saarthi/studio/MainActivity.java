@@ -46,6 +46,7 @@ import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -657,10 +658,19 @@ public class MainActivity extends Activity {
         help.setPadding(0, 0, 0, dp(12)); form.addView(help);
         EditText base = field("Base URL, e.g. http://192.168.1.10:3001/v1", config.baseUrl, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         form.addView(base, fieldLp());
-        EditText model = field("Model", config.model, InputType.TYPE_CLASS_TEXT);
+        EditText model = field("Model ID (default: auto)", config.model, InputType.TYPE_CLASS_TEXT);
         form.addView(model, fieldLp());
+        TextView modelHelp = label("Use auto for router-managed selection, load model IDs from FreeLLMAPI, or type a model ID manually.", 12, MUTED, false);
+        modelHelp.setPadding(dp(2), 0, dp(2), dp(9));
+        form.addView(modelHelp);
         EditText key = field("Unified API key (leave blank to keep saved key)", "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         form.addView(key, fieldLp());
+        Button loadModels = smallButton("Load available models");
+        loadModels.setTextColor(GREEN);
+        LinearLayout.LayoutParams loadModelsLp = new LinearLayout.LayoutParams(-1, dp(42));
+        loadModelsLp.bottomMargin = dp(10);
+        form.addView(loadModels, loadModelsLp);
+        loadModels.setOnClickListener(v -> fetchModels(base, key, model));
         Button test = smallButton("Test connection");
         test.setTextColor(GREEN);
         LinearLayout.LayoutParams testLp = new LinearLayout.LayoutParams(-1, dp(44));
@@ -712,6 +722,70 @@ public class MainActivity extends Activity {
         if (!(url.startsWith("http://") || url.startsWith("https://"))) return false;
         try { Uri u = Uri.parse(url); return !u.getHost().isEmpty() && url.endsWith("/v1"); }
         catch (Exception e) { return false; }
+    }
+
+    private void fetchModels(EditText baseField, EditText keyField, EditText modelField) {
+        String url = baseField.getText().toString().trim().replaceAll("/+$", "");
+        String key = keyField.getText().toString().trim().isEmpty()
+                ? config.apiKey : keyField.getText().toString().trim();
+        if (!validUrl(url)) {
+            baseField.setError("Use a valid http:// or https:// URL ending in /v1");
+            return;
+        }
+        if (key.isEmpty()) {
+            keyField.setError("Enter your unified API key, or save one in Settings first");
+            return;
+        }
+        toast("Loading model list…");
+        executor.execute(() -> {
+            try {
+                HttpResult response = request("GET", endpoint(url, "models"), key, null);
+                JSONObject json = parseJson(response.body);
+                if (response.status < 200 || response.status >= 300) {
+                    throw new Exception(errorText(json, response.body, response.status));
+                }
+                JSONArray data = json.optJSONArray("data");
+                if (data == null) data = json.optJSONArray("models");
+                LinkedHashSet<String> ids = new LinkedHashSet<>();
+                ids.add("auto");
+                if (data != null) {
+                    for (int i = 0; i < data.length(); i++) {
+                        Object item = data.opt(i);
+                        String id = "";
+                        if (item instanceof JSONObject) {
+                            JSONObject obj = (JSONObject) item;
+                            id = obj.optString("id", obj.optString("name", ""));
+                        } else if (item instanceof String) {
+                            id = (String) item;
+                        }
+                        id = id == null ? "" : id.trim();
+                        if (!id.isEmpty()) ids.add(id);
+                    }
+                }
+                if (ids.size() <= 1) {
+                    main.post(() -> toast("FreeLLMAPI did not return model IDs. Keep using auto or type a model ID manually."));
+                    return;
+                }
+                List<String> models = new ArrayList<>(ids);
+                main.post(() -> showModelPicker(modelField, models));
+            } catch (Exception e) {
+                String message = friendlyError(e.getMessage());
+                main.post(() -> toast("Could not load models: " + message));
+            }
+        });
+    }
+
+    private void showModelPicker(EditText modelField, List<String> models) {
+        String current = modelField.getText().toString().trim();
+        int selected = models.indexOf(current);
+        new AlertDialog.Builder(this)
+                .setTitle("Choose a model")
+                .setSingleChoiceItems(models.toArray(new String[0]), selected, (dialog, which) -> {
+                    modelField.setText(models.get(which));
+                    dialog.dismiss();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void testConnection(EditText base, EditText key) {
