@@ -28,21 +28,12 @@ cp "$SOURCE_DIR/app/src/main/java/com/saarthi/studio/MainActivity.java" \
   "$TARGET_DIR/app/src/main/java/com/saarthi/studio/MainActivity.java"
 cp "$SOURCE_DIR/app/build.gradle.kts" "$TARGET_DIR/app/build.gradle.kts"
 
-printf '
-Applied Saarthi Studio 1.2.0 Markdown/code-copy update to branch %s.\n' "$BRANCH"
+printf '\nApplied Saarthi Studio 1.2.0 Markdown/code-copy update to branch %s.\n' "$BRANCH"
 printf 'Only MainActivity.java and app/build.gradle.kts were replaced; the workflow and database schema were left unchanged.\n'
-printf '
-Review and push with:
-'
-printf '  cd %q
-' "$TARGET_DIR"
-printf '  git diff --check
-'
-printf '  git diff -- app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
-'
-printf '  git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
-'
-printf '  git commit -m "Improve Markdown and code copying in Android chat"
-'
-printf '  git push origin android
-'
+printf '\nReview and push with:\n'
+printf '  cd %q\n' "$TARGET_DIR"
+printf '  git diff --check\n'
+printf '  git diff -- app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts\n'
+printf '  git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts\n'
+printf '  git commit -m "Improve Markdown and code copying in Android chat"\n'
+printf '  git push origin android\n'

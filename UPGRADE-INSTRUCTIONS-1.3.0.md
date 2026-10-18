@@ -1,10 +1,10 @@
 # Upgrade Saarthi Studio Android from 1.2.0 to 1.3.0
 
-Version 1.3.0 adds a model chooser to Router settings. Tap **Load available models** to request IDs from FreeLLMAPI's OpenAI-compatible `GET /v1/models` endpoint. Choose `auto` for router-managed selection or pick an ID returned by the server. The text field remains editable if you prefer manual entry.
+Version 1.3.0 adds a model chooser to Router settings. Tap **Load available models** to request IDs from FreeLLMAPI's OpenAI-compatible `GET /v1/models` endpoint. Choose `auto` for router-managed selection or pick an ID returned by FreeLLMAPI. The text field remains editable for manual entry.
 
 ## Apply the update to your existing repository
 
-1. Download and extract this archive.
+1. Download and extract the archive.
 2. Open Terminal and switch the local repository to the Android branch:
 
    ```bash
@@ -13,7 +13,7 @@ Version 1.3.0 adds a model chooser to Router settings. Tap **Load available mode
    git pull --ff-only origin android
    ```
 
-3. From this archive's extracted `saarthi-studio-android` directory, run:
+3. From this archive's extracted project directory, run:
 
    ```bash
    ./apply-model-picker-upgrade.sh ~/Projects/Saarthi-Studio
@@ -36,6 +36,6 @@ Version 1.3.0 adds a model chooser to Router settings. Tap **Load available mode
 
 - The update changes only `MainActivity.java` and `app/build.gradle.kts`.
 - It does not alter the SQLite schema, saved conversations, or encrypted settings format.
-- Keep the existing app installed while upgrading. If Android reports a signing-certificate conflict, do not uninstall the current app without backing up your chats and settings.
-- The model picker relies on the router implementing `GET /v1/models`. If no model list is returned, the existing manual model entry still works.
-- The source package has not been compiled with an Android SDK in this environment; the GitHub Actions build is needed to validate compilation.
+- Keep the existing app installed while upgrading. If Android reports a signing-certificate conflict, do not uninstall the current app without backing up chats and settings.
+- The model picker relies on the router implementing `GET /v1/models`. If no model list is returned, manual model entry still works.
+- The source package requires an Android SDK-equipped build or a successful GitHub Actions build to validate compilation.

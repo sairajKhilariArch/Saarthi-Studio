@@ -98,7 +98,7 @@ printf '%s\n' "$API_DIR" > "$CONFIG_HOME/freellmapi-dir"
 printf '%s\n' "$API_PORT" > "$CONFIG_HOME/freellmapi-port"
 chmod 600 "$CONFIG_HOME/freellmapi-dir" "$CONFIG_HOME/freellmapi-port"
 
-say "Building the Free AI Studio Rust application (first build downloads Rust crates)."
+say "Building the Free AI Suite Rust application (first build downloads Rust crates)."
 (cd "$APP_HOME" && cargo build --release)
 [[ -x "$APP_HOME/target/release/free-ai-studio" ]] || fail "Rust build did not create the application binary."
 
