@@ -3,6 +3,8 @@ package com.saarthi.studio;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
@@ -13,6 +15,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.SpannableStringBuilder;
+import android.text.style.BackgroundColorSpan;
+import android.text.style.StyleSpan;
+import android.text.style.TypefaceSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,6 +27,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -243,19 +250,174 @@ public class MainActivity extends Activity {
         TextView who = label(user ? "YOU" : "SAARTHI", 10, user ? GREEN : MUTED, true);
         who.setPadding(dp(4), 0, dp(4), dp(5));
         wrap.addView(who);
-        TextView bubble = label(content, 15, TEXT, false);
-        bubble.setTextIsSelectable(true);
-        bubble.setPadding(dp(13), dp(11), dp(13), dp(11));
-        bubble.setBackground(round(user ? USER_BUBBLE : PANEL, 16));
-        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2);
-        bp.leftMargin = user ? dp(28) : 0;
-        bp.rightMargin = user ? 0 : dp(18);
-        wrap.addView(bubble, bp);
+        if (user) {
+            TextView bubble = label(content, 15, TEXT, false);
+            bubble.setTextIsSelectable(true);
+            bubble.setPadding(dp(13), dp(11), dp(13), dp(11));
+            bubble.setBackground(round(USER_BUBBLE, 16));
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2);
+            bp.leftMargin = dp(28);
+            wrap.addView(bubble, bp);
+        } else {
+            addAssistantMarkdown(wrap, content);
+        }
         if (meta != null && !meta.isEmpty()) {
             TextView m = label(meta, 10, MUTED, false);
             m.setPadding(dp(4), dp(5), dp(4), 0); wrap.addView(m);
         }
         if (scrollNow) scrollToBottom();
+    }
+
+    /** Render a small, dependency-free Markdown subset suitable for model replies. */
+    private void addAssistantMarkdown(LinearLayout parent, String content) {
+        String[] lines = content.split("\\n", -1);
+        StringBuilder prose = new StringBuilder();
+        StringBuilder code = new StringBuilder();
+        boolean inCode = false;
+        String language = "";
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("```")) {
+                if (!inCode) {
+                    flushMarkdownProse(parent, prose.toString());
+                    prose.setLength(0);
+                    inCode = true;
+                    language = trimmed.substring(3).trim();
+                    code.setLength(0);
+                } else {
+                    addCodeBlock(parent, code.toString().replaceFirst("\\n$", ""), language);
+                    code.setLength(0);
+                    language = "";
+                    inCode = false;
+                }
+            } else if (inCode) {
+                code.append(line).append('\n');
+            } else {
+                prose.append(line).append('\n');
+            }
+        }
+        if (inCode) addCodeBlock(parent, code.toString().replaceFirst("\\n$", ""), language);
+        if (prose.length() > 0) flushMarkdownProse(parent, prose.toString());
+
+        Button copyResponse = smallButton("Copy response");
+        copyResponse.setOnClickListener(v -> copyToClipboard("Saarthi response", content));
+        LinearLayout.LayoutParams copyLp = new LinearLayout.LayoutParams(-2, dp(38));
+        copyLp.topMargin = dp(5);
+        parent.addView(copyResponse, copyLp);
+    }
+
+    private void flushMarkdownProse(LinearLayout parent, String raw) {
+        if (raw == null || raw.trim().isEmpty()) return;
+        String[] lines = raw.split("\\n", -1);
+        for (String original : lines) {
+            String line = original.trim();
+            if (line.isEmpty()) continue;
+            int size = 15;
+            boolean bold = false;
+            int color = TEXT;
+            String display = line;
+            if (line.matches("^#{1,6}\\s+.*")) {
+                int count = 0;
+                while (count < line.length() && line.charAt(count) == '#') count++;
+                display = line.substring(count).trim();
+                size = Math.max(15, 21 - count);
+                bold = true;
+            } else if (line.matches("^[-*+]\\s+.*")) {
+                display = "•  " + line.substring(2).trim();
+            } else if (line.matches("^\\d+[.)]\\s+.*")) {
+                display = line;
+            } else if (line.startsWith("> ")) {
+                display = line.substring(2).trim();
+                color = MUTED;
+            }
+            TextView text = label("", size, color, bold);
+            text.setText(formatInlineMarkdown(display));
+            text.setTextIsSelectable(true);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.bottomMargin = dp(6);
+            parent.addView(text, lp);
+        }
+    }
+
+    private CharSequence formatInlineMarkdown(String source) {
+        SpannableStringBuilder out = new SpannableStringBuilder();
+        int i = 0;
+        while (i < source.length()) {
+            if (source.startsWith("**", i)) {
+                int end = source.indexOf("**", i + 2);
+                if (end > i + 2) {
+                    int startOut = out.length();
+                    out.append(source.substring(i + 2, end));
+                    out.setSpan(new StyleSpan(Typeface.BOLD), startOut, out.length(), 0);
+                    i = end + 2;
+                    continue;
+                }
+            }
+            if (source.charAt(i) == '`') {
+                int end = source.indexOf('`', i + 1);
+                if (end > i + 1) {
+                    int startOut = out.length();
+                    out.append(source.substring(i + 1, end));
+                    out.setSpan(new TypefaceSpan("monospace"), startOut, out.length(), 0);
+                    out.setSpan(new BackgroundColorSpan(PANEL_ALT), startOut, out.length(), 0);
+                    i = end + 1;
+                    continue;
+                }
+            }
+            if (source.charAt(i) == '*') {
+                int end = source.indexOf('*', i + 1);
+                if (end > i + 1 && (i == 0 || source.charAt(i - 1) != '*')) {
+                    int startOut = out.length();
+                    out.append(source.substring(i + 1, end));
+                    out.setSpan(new StyleSpan(Typeface.ITALIC), startOut, out.length(), 0);
+                    i = end + 1;
+                    continue;
+                }
+            }
+            out.append(source.charAt(i));
+            i++;
+        }
+        return out;
+    }
+
+    private void addCodeBlock(LinearLayout parent, String code, String language) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(11), dp(8), dp(11), dp(8));
+        card.setBackground(round(PANEL_ALT, 12));
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+        cardLp.bottomMargin = dp(9);
+        parent.addView(card, cardLp);
+
+        LinearLayout toolbar = row();
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        String labelText = language == null || language.isEmpty() ? "CODE" : language.toUpperCase(Locale.ROOT);
+        TextView languageLabel = label(labelText, 10, MUTED, true);
+        toolbar.addView(languageLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        Button copyCode = smallButton("Copy code");
+        copyCode.setOnClickListener(v -> copyToClipboard("Code", code));
+        toolbar.addView(copyCode);
+        card.addView(toolbar);
+
+        HorizontalScrollView horizontal = new HorizontalScrollView(this);
+        horizontal.setHorizontalScrollBarEnabled(false);
+        horizontal.setFillViewport(false);
+        TextView codeText = label(code, 13, TEXT, false);
+        codeText.setTypeface(Typeface.MONOSPACE);
+        codeText.setTextIsSelectable(true);
+        codeText.setPadding(0, dp(9), dp(8), dp(7));
+        horizontal.addView(codeText, new HorizontalScrollView.LayoutParams(-2, -2));
+        card.addView(horizontal, new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    private void copyToClipboard(String label, String text) {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText(label, text == null ? "" : text));
+            toast(label + " copied to clipboard.");
+        } else {
+            toast("Clipboard is unavailable.");
+        }
     }
 
     private void sendMessage() {
