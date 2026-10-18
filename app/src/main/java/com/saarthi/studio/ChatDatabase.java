@@ -636,5 +636,3 @@ public final class ChatDatabase extends android.database.sqlite.SQLiteOpenHelper
             Collections.reverse(result); return result;
         }
     }
-
-
