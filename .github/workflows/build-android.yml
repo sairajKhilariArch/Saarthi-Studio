@@ -138,18 +138,61 @@ jobs:
           disable-animations: true
           script: |
             set +e
-            gradle --no-daemon --stacktrace connectedDebugAndroidTest
-            test_exit=$?
+            WORKSPACE="${GITHUB_WORKSPACE:-$PWD}"
+            DIAG_DIR="$WORKSPACE/ci-diagnostics"
+            mkdir -p "$DIAG_DIR"
+            printf 'Workspace: %s\nWorking directory: %s\n' "$WORKSPACE" "$PWD" > "$DIAG_DIR/environment.txt"
 
-            # Capture emulator state BEFORE android-emulator-runner tears it down.
-            mkdir -p ci-diagnostics
-            adb logcat -b all -d -v threadtime > ci-diagnostics/logcat.txt 2>&1 || true
-            adb shell dumpsys activity processes > ci-diagnostics/activity-processes.txt 2>&1 || true
-            adb shell dumpsys meminfo > ci-diagnostics/meminfo.txt 2>&1 || true
-            adb shell getprop > ci-diagnostics/getprop.txt 2>&1 || true
-            find app/build/outputs -maxdepth 7 -type f \( -name '*.xml' -o -name '*.txt' \) -print -exec cp --parents {} ci-diagnostics/ \; || true
-            find app/build/reports -maxdepth 7 -type f -print || true
-            exit "$test_exit"
+            # Start with a clean device log and preserve it before the emulator is removed.
+            adb logcat -c >/dev/null 2>&1 || true
+
+            adb install -r "$WORKSPACE/app/build/outputs/apk/debug/app-debug.apk" > "$DIAG_DIR/install-app.log" 2>&1
+            APP_INSTALL_EXIT=$?
+            adb install -r -t "$WORKSPACE/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk" > "$DIAG_DIR/install-tests.log" 2>&1
+            TEST_INSTALL_EXIT=$?
+
+            cat "$DIAG_DIR/install-app.log"
+            cat "$DIAG_DIR/install-tests.log"
+
+            TEST_EXIT=0
+            if [ "$APP_INSTALL_EXIT" -ne 0 ] || [ "$TEST_INSTALL_EXIT" -ne 0 ]; then
+              echo 'Installing the app or instrumentation APK failed.' | tee "$DIAG_DIR/test-summary.txt"
+              TEST_EXIT=1
+            else
+              # Bypass the Gradle UTP wrapper and invoke the same AndroidJUnitRunner directly.
+              # am instrument itself can exit zero even when tests fail, so parse runner status markers.
+              adb shell am instrument -w -r com.saarthi.studio.test/androidx.test.runner.AndroidJUnitRunner > "$DIAG_DIR/instrumentation.log" 2>&1
+              INSTRUMENT_EXIT=$?
+              cat "$DIAG_DIR/instrumentation.log"
+
+              if [ "$INSTRUMENT_EXIT" -ne 0 ]; then
+                echo "adb instrumentation command failed with exit code $INSTRUMENT_EXIT." | tee "$DIAG_DIR/test-summary.txt"
+                TEST_EXIT=1
+              elif grep -Eq '^INSTRUMENTATION_STATUS_CODE: -(1|2)$|^INSTRUMENTATION_RESULT: shortMsg=Process crashed|^INSTRUMENTATION_FAILED' "$DIAG_DIR/instrumentation.log"; then
+                echo 'AndroidJUnitRunner reported a test failure or process crash.' | tee "$DIAG_DIR/test-summary.txt"
+                TEST_EXIT=1
+              elif ! grep -Eq '^INSTRUMENTATION_STATUS: numtests=[1-9][0-9]*$' "$DIAG_DIR/instrumentation.log"; then
+                echo 'AndroidJUnitRunner did not report any tests; treating this as a failure.' | tee "$DIAG_DIR/test-summary.txt"
+                TEST_EXIT=1
+              elif ! grep -q '^INSTRUMENTATION_CODE: -1$' "$DIAG_DIR/instrumentation.log"; then
+                echo 'AndroidJUnitRunner did not report normal completion.' | tee "$DIAG_DIR/test-summary.txt"
+                TEST_EXIT=1
+              else
+                echo 'AndroidJUnitRunner completed the test suite without failure markers.' | tee "$DIAG_DIR/test-summary.txt"
+              fi
+            fi
+
+            adb logcat -b all -d -v threadtime > "$DIAG_DIR/logcat.txt" 2>&1 || true
+            adb shell dumpsys activity processes > "$DIAG_DIR/activity-processes.txt" 2>&1 || true
+            adb shell dumpsys meminfo > "$DIAG_DIR/meminfo.txt" 2>&1 || true
+            adb shell getprop > "$DIAG_DIR/getprop.txt" 2>&1 || true
+            find "$WORKSPACE/app/build/outputs" -maxdepth 7 -type f \( -name '*.xml' -o -name '*.txt' -o -name '*.log' \) -print -exec cp --parents {} "$DIAG_DIR/" \; || true
+
+            echo 'Recent Android runtime errors:'
+            grep -Ei 'FATAL EXCEPTION|AndroidRuntime|INSTRUMENTATION_FAILED|Process: com\.saarthi|Fatal signal|Permission Denial|lowmemorykiller' "$DIAG_DIR/logcat.txt" | tail -n 200 || true
+            echo 'Diagnostic files captured:'
+            find "$DIAG_DIR" -maxdepth 8 -type f -printf '%p (%s bytes)\n' || true
+            exit "$TEST_EXIT"
 
       - name: Upload Android test reports and crash diagnostics
         if: always() && steps.instrumented.outcome != 'success'
@@ -157,7 +200,7 @@ jobs:
         with:
           name: saarthi-studio-android-failure-diagnostics
           path: |
-            ci-diagnostics/**
+            ${{ github.workspace }}/ci-diagnostics/**
             app/build/reports/androidTests/**
             app/build/outputs/androidTest-results/**
             app/build/outputs/logs/**

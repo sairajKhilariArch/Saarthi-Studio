@@ -1,5 +1,13 @@
 # Changelog
 
+## CI follow-up — Android instrumentation reliability
+
+### Fixed in CI configuration
+- Remove the trailing whitespace reported in `VALIDATION-REPORT.md` by the committed-whitespace guard.
+- Run the AndroidJUnitRunner directly after installing the app and test APKs, parsing per-test runner status markers rather than trusting the `am instrument` shell exit code.
+- Capture instrumentation output, Android logcat, process state, and memory details into an absolute workspace path before the emulator is torn down.
+- Preserve the final release-validation gate; an empty test run, process crash, assertion failure, or install failure still fails CI.
+
 ## 1.11.1 — CI regression and instrumentation-test safety correction
 
 ### Fixed
