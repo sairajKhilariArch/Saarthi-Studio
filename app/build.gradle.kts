@@ -8,12 +8,17 @@ android {
         applicationId = "com.saarthi.studio"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.10.0"
+        versionCode = 13
+        versionName = "1.11.0"
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }

@@ -11,5 +11,5 @@ fi
 if [[ -z "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" ]]; then
   echo "ANDROID_HOME / ANDROID_SDK_ROOT is not set. Install Android SDK Platform 35 in Android Studio first." >&2; exit 3
 fi
-gradle assembleDebug
+gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
 echo "APK created: $(pwd)/app/build/outputs/apk/debug/app-debug.apk"

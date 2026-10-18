@@ -7,6 +7,9 @@ on:
       - android
     paths:
       - 'app/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'BUILDING.md'
       - '*.gradle.kts'
       - 'gradle.properties'
       - '.github/workflows/build-android.yml'
@@ -48,8 +51,11 @@ jobs:
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/saarthi/studio/MainActivity.java
 
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      - name: Check patch whitespace
+        run: git show --check --oneline HEAD
+
+      - name: Run Android unit-test task, lint, and debug build
+        run: gradle --no-daemon testDebugUnitTest lintDebug assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

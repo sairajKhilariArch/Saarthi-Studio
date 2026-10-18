@@ -1,6 +1,6 @@
 # Install this project on the `android` branch
 
-This is a complete standalone Android project at version **1.10.0 / versionCode 12**, not a patch-only archive. All release features from 1.7.0 through 1.10.0 are implemented in `app/src/main/java/com/saarthi/studio/MainActivity.java` in package `com.saarthi.studio`. SQLite schema v4 preserves existing chats and adds prompt presets.
+This is a complete standalone Android project at version **1.11.0 / versionCode 13**, not a patch-only archive. The combined source preserves the v1.10.0 features and adds v1.11.0 reliability/model preferences, quota inspection, chat organization, expanded developer attachments, voice, and limited image input. The source is integrated in `app/src/main/java/com/saarthi/studio/MainActivity.java` plus pure-Java release rules. SQLite schema v5 preserves existing chats while adding organization metadata.
 
 ## Back up first
 
@@ -16,16 +16,16 @@ If you have local changes you need, commit or stash them before proceeding. Make
 
 ## Copy the project files
 
-If you extracted this ZIP into `~/Downloads/Saarthi-Studio-Android-1.10.0`:
+If you extracted this ZIP into `~/Downloads/Saarthi-Studio-Android-1.11.0`:
 
 ```bash
 cd ~/Projects/Saarthi-Studio
-tar -czf ~/Saarthi-Studio-android-before-1.10.0.tgz --exclude=.git --exclude=.gradle --exclude='*/build' .
+tar -czf ~/Saarthi-Studio-android-before-1.11.0.tgz --exclude=.git --exclude=.gradle --exclude='*/build' .
 rsync -av \
   --exclude='.git/' \
   --exclude='.gradle/' \
   --exclude='**/build/' \
-  ~/Downloads/Saarthi-Studio-Android-1.10.0/ ./
+  ~/Downloads/Saarthi-Studio-Android-1.11.0/ ./
 ```
 
 This copies the supplied project files without deleting extra files in your checkout. Keep this on the `android` branch; do not overwrite `main` or a branch containing desktop/Apple source code.
@@ -42,11 +42,11 @@ The build script requires JDK 17, Gradle 8.9, Android SDK Platform 35, and Build
 
 ```bash
 git add -A
-git commit -m "Add streaming, text attachments, message actions and prompt presets"
+git commit -m "Add Saarthi Studio 1.11.0 features"
 git push origin android
 ```
 
-The repository's workflow should build on a push to `android` touching app or Gradle files and upload `saarthi-studio-android-debug-apk`. Confirm the Actions run succeeds before installing the APK.
+The repository's workflow runs unit tests, Android lint, and a debug APK build on a push to `android` touching app, tests, Gradle, documentation, or workflow files. It uploads `saarthi-studio-android-debug-apk`. Confirm the Actions run succeeds before installing the APK.
 
 ## Update warning
 

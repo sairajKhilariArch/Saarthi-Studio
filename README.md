@@ -1,63 +1,33 @@
-# Saarthi Studio for Android
+# Saarthi Studio Android 1.11.0
 
-**Version 1.10.0 (versionCode 12)** — native Android companion for Saarthi Studio.
+Saarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This project preserves locally stored chats and encrypted endpoint settings while adding conversation organization, model preferences/fallback, budget inspection, developer attachments, voice, and optional vision input.
 
-Saarthi Studio connects to a FreeLLMAPI / OpenAI-compatible router running on your Ubuntu computer or another server. The Android app does not run AI models locally; requests are routed by the configured server.
+## Project status
 
-## Features included in this combined 1.7.0–1.10.0 implementation
+**v1.11.0 release candidate — build/device validation required.** The source package should not be treated as a verified APK until CI succeeds and the physical-device checklist in `UPGRADE-GUIDE-1.11.0.md` is completed.
 
-- **Streaming answers with Stop**: receive server-sent-event (SSE) chunks as they arrive; cancel an active request; save a clearly marked partial reply when stopped; fall back to non-stream mode only for explicit early stream-capability errors before any text was received.
-- **Text-file attachments**: select `.rs`, `.java`, `.py`, `.json`, `.md`, and `.txt` via Android's document picker; max 3 files, 512 KiB each, 1 MiB total; UTF-8 validation; remove files before sending. Content is inlined into the user message, not uploaded as a binary object.
-- **Edit and resend**: edit an earlier user message, then atomically remove later turns in that same conversation before resending the edited message.
-- **Regenerate response**: regenerate only the latest assistant response without duplicating the preceding user message.
-- **Prompt presets**: built-in presets for Rust, Java QA, Python, code review, minimal reproductions, and step-by-step explanations; create, edit, duplicate and delete custom presets; apply as visible editable composer text.
-- **Preset-aware backups**: JSON backup schema 2 includes custom presets; restore still accepts legacy schema 1 backups and adds imported chats/presets without overwriting existing records.
-- Multiple saved conversations, automatic titles, switch/open, rename and delete.
-- Search conversation titles and message contents.
-- Persistent local history using SQLite; schema v4 adds presets without deleting existing conversations/messages.
-- Markdown-style answer formatting and copy buttons for answers/code blocks.
-- Optional code context panel, model picker via `/v1/models`, local usage diagnostics, Markdown export, full chat JSON backup/restore.
-- Unified API key encrypted at rest with Android Keystore and AES-GCM.
-- No third-party Android runtime libraries; Android platform APIs are used.
+## Included capabilities
+- OpenAI-compatible FreeLLMAPI chat, model listing, streaming and Stop.
+- Local SQLite chat history; rename/delete/search; edit/regenerate; prompt presets.
+- Request diagnostics and reported token counts.
+- JSON backup/restore and Markdown export.
+- Retry of failed requests, bounded transient retry, and ordered model fallback.
+- Favorite/default/fallback model preferences and FreeLLMAPI free-tier budget viewer.
+- Folders, tags, pinned/favorite chats, and message-content search.
+- Syntax highlighting for a basic common-token subset; code/text attachments.
+- Android speech-recognition input and text-to-speech output.
+- Limited image input using OpenAI-compatible multimodal message content when the model/router supports vision.
 
-## Important attachment/privacy behavior
+## Setup
+1. Start FreeLLMAPI on the PC/server. For use over a trusted local hotspot, bind the service to the LAN interface and use the PC's LAN address from the phone.
+2. Open Saarthi Studio Settings and enter the base URL ending in `/v1`, for example `http://192.168.1.10:3001/v1`, and the unified API key.
+3. Load models if available, pick the default model, optionally configure favorite/fallback model IDs, and test the connection.
 
-Attached source files are read on the phone and inserted as text into the next user message. That means the file contents become part of local chat history and are included in JSON chat backups. Review contents before sending. This version intentionally does **not** claim to parse PDFs, DOCX/XLSX documents, images, or arbitrary binary formats.
-
-Use plain HTTP only between your phone and a server on a trusted private LAN/hotspot. Do not expose the FreeLLMAPI port directly to the public internet. Use HTTPS for remote/public connections.
-
-## Project layout
-
-```text
-Saarthi-Studio-Android-1.10.0/
-├── .github/workflows/build-android.yml
-├── app/
-│   ├── build.gradle.kts  # versionName 1.10.0, versionCode 12
-│   └── src/main/
-│       ├── AndroidManifest.xml
-│       ├── java/com/saarthi/studio/MainActivity.java  # all feature code in this one package/file
-│       └── res/values/styles.xml
-├── build.gradle.kts
-├── gradle.properties
-├── settings.gradle.kts
-├── BUILD-APK-UBUNTU.sh
-├── BUILDING.md
-├── CHANGELOG.md
-└── INSTALL-ON-ANDROID-BRANCH.md
-```
+## Important limits
+- Text attachments: 3 files maximum, 512 KiB each, 1 MiB combined.
+- Images: 2 maximum, 900 KiB combined; model/router must support vision. Image bytes are held in the local message content and included in JSON backups.
+- Backup files are limited to 10 MiB.
+- The quota screen reports what `/api/free-tier` returns; it does not assert an exact remaining daily quota when the server does not provide one. PDF extraction is not included in this version.
 
 ## Build
-
-Requirements: JDK 17, Gradle 8.9, Android SDK Platform 35, Build Tools 35.0.0.
-
-```bash
-export ANDROID_HOME="$HOME/Android/Sdk"  # adjust to your SDK location
-export ANDROID_SDK_ROOT="$ANDROID_HOME"
-./BUILD-APK-UBUNTU.sh
-```
-
-The APK output path is `app/build/outputs/apk/debug/app-debug.apk`. Open the project in Android Studio and use **Build APK(s)** as an alternative.
-
-## Versioning
-
-The combined feature package is version `1.10.0`, code `12`. Future Android releases must use a `versionCode` greater than 12. Android update installation also requires a compatible signing certificate; always export an important chat backup before updating.
+See `BUILDING.md` for Gradle/Android SDK requirements and CI workflow. See `CHANGELOG.md` and `UPGRADE-GUIDE-1.11.0.md` for details.

@@ -1,7 +1,7 @@
 # Saarthi Studio Android 1.10.0 — Upgrade Notes
 
-**Final combined feature release:** 1.10.0 (`versionCode = 12`)  
-**Package:** `com.saarthi.studio`  
+**Final combined feature release:** 1.10.0 (`versionCode = 12`)
+**Package:** `com.saarthi.studio`
 **All feature source:** `app/src/main/java/com/saarthi/studio/MainActivity.java`
 
 ## Included features

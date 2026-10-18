@@ -1,50 +1,27 @@
 # Changelog
 
-## 1.10.0 — combined feature release (versionCode 12)
+## 1.11.0 — Power User Update (release candidate)
 
-This project bundles the planned 1.7.0–1.10.0 feature set into the single `com.saarthi.studio.MainActivity.java` source file.
+This release bundles reliability, model preferences/fallback, quota inspection, conversation organization, richer developer tools, voice input/output, and opt-in image input. This source package is a release candidate until CI and physical-device checks pass.
 
-### Streaming responses (1.7.0)
-- Parse OpenAI-compatible SSE `data:` frames and append answer deltas live.
-- Add a Stop button that disconnects the active HTTP connection.
-- Keep partial text with a “Stopped by user” marker when generation is cancelled after text arrives.
-- Retry non-streaming only for selected explicit early stream-capability rejections (400/404/405/422), before any content was displayed.
-- Store token usage only if it was reported by the router/provider.
+### Added
+- Bounded same-model retry for selected transient transport/server failures, ordered fallback-model attempts before any text is returned, and a manual Retry action for failed latest responses.
+- Favorite/default/fallback model preferences; favorite models are ordered first in the model picker.
+- FreeLLMAPI `/api/free-tier` budget viewer. It displays the server response as a monthly budget overview when supported; it does not claim exact live daily quota or remaining messages.
+- Conversation folders, tags, pinning, favorites, combined filters, and full-message/folder/tag search.
+- SQLite schema v5 migration adds organization metadata without dropping conversations, messages, diagnostics, or prompt presets.
+- Syntax coloring for common code tokens in code blocks and expanded text/code attachment extensions.
+- Voice dictation through Android's speech-recognition intent and text-to-speech with a stop control.
+- JPEG/PNG/WebP/GIF image attachment support using the OpenAI-compatible `image_url` content format, after a confirmation when vision support cannot be recognized from the model name.
+- Backup schema v3 stores conversation organization and image-bearing message content while preserving import support for schema v1 and v2 backups.
+- GitHub Actions runs `testDebugUnitTest`, `lintDebug`, and `assembleDebug` before uploading the APK artifact.
 
-### Text-file attachments (1.8.0)
-- Add Android Storage Access Framework document selection for `.rs`, `.java`, `.py`, `.json`, `.md`, and `.txt`.
-- Enforce max 3 files, 512 KiB per file, and 1 MiB total; reject invalid UTF-8 and unsupported extensions.
-- Inline selected contents into the outgoing user message as text; no separate binary upload or broad storage permission.
-- Indicate that contents become chat history and backup data; clear unsent attachments on conversation switch.
+### Preserved
+- FreeLLMAPI base URL and encrypted API-key storage, streamed responses, Stop, saved conversation history, rename/delete/search, edit/regenerate, prompt presets, diagnostics, Markdown export, and JSON backup/restore.
 
-### Edit/resend/regenerate (1.9.0)
-- Give persisted messages stable database IDs in the UI model.
-- Edit a user message and atomically delete subsequent turns in the same conversation before resending.
-- Regenerate only the latest assistant reply using its preceding user message without inserting a duplicate user turn.
-
-### Prompt presets (1.10.0)
-- Upgrade SQLite schema from v3 to v4 by adding `prompt_presets`; retain existing chat and request log rows.
-- Seed six built-in programming/debugging presets.
-- Add create, edit, duplicate, delete and composer insertion flows; preset text remains visible/editable before sending.
-- Bump JSON backup schema to v2 to include custom prompts; continue accepting v1 backups.
-
-## 1.6.0
-- Added live search for saved conversation titles and message content.
-- Search result cards show the matching message excerpt where available.
-- Kept search on the existing SQLite schema.
-- Bundled the complete standalone Android Studio/Gradle project source.
-
-## 1.5.0
-- Added chat export to Markdown, full JSON backup, and restore.
-
-## 1.4.0
-- Added Usage & Diagnostics: local request outcomes, reported token totals, latency, recent failures, and connection testing.
-
-## 1.3.0
-- Added a model picker that queries FreeLLMAPI's `/v1/models` endpoint while retaining `auto` and manual model IDs.
-
-## 1.2.0
-- Added Markdown-style formatting and copy controls for responses/code blocks.
-
-## 1.1.0
-- Added separate conversations, conversation history, rename/delete, and automatic titles.
+### Limits / caveats
+- Text attachments: maximum 3 files, 512 KiB each and 1 MiB total. Supported file extensions are listed in the in-app guidance/source.
+- Images: maximum 2 images per message and 900 KiB combined; the selected model and router must support vision. Image bytes are encoded inside the stored message for reliable local history and backup, so large backups can hit the 10 MiB backup cap.
+- Quota display depends on FreeLLMAPI exposing `/api/free-tier` to the configured key. The returned overview is not guaranteed to be an exact live balance for that key.
+- PDF text extraction is deferred because it requires a PDF parser dependency and its own file-size/security tests; PDFs are not silently treated as text.
+- A successful source change or push is not the same as a successful build/device test.
