@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.11.1 — CI regression and instrumentation-test safety correction
+
+### Fixed
+- Correct the activity-launch smoke test to verify the visible message composer `EditText` hint rather than its empty text value.
+- Add a package-private database-name constructor for isolated instrumentation fixtures while preserving `saarthi_history.sqlite3` as the production default.
+- Move backup/restore and history-paging instrumentation tests to unique test-only databases. Their setup and cleanup no longer delete the user's production chat-history database.
+- Keep the production database schema and installed app version unchanged; this patch corrects validation and test-data safety without changing user-facing features.
+
+## 1.11.1 — Stabilization and regression coverage
+
 ## 1.11.1 — Stabilization and regression coverage
 
 ### Fixed

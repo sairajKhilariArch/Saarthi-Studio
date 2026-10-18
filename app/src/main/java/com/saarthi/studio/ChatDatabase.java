@@ -99,7 +99,24 @@ public final class ChatDatabase extends android.database.sqlite.SQLiteOpenHelper
     }
 
 
-    public ChatDatabase(Context c) { super(c, "saarthi_history.sqlite3", null, 6); }
+    private static final String DATABASE_NAME = "saarthi_history.sqlite3";
+
+    public ChatDatabase(Context c) { this(c, DATABASE_NAME); }
+
+    /**
+     * Package-private database-name injection for instrumentation tests.
+     * Tests must use a dedicated filename and must never delete the user's production DB.
+     */
+    ChatDatabase(Context c, String databaseName) {
+        super(c, requireDatabaseName(databaseName), null, 6);
+    }
+
+    private static String requireDatabaseName(String databaseName) {
+        if (databaseName == null || databaseName.trim().isEmpty()) {
+            throw new IllegalArgumentException("Database name must not be empty.");
+        }
+        return databaseName;
+    }
 
         @Override public void onConfigure(android.database.sqlite.SQLiteDatabase db) {
             super.onConfigure(db);

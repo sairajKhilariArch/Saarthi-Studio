@@ -9,10 +9,11 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class ChatHistoryPagingInstrumentedTest {
+    private static final String TEST_DATABASE_NAME = "saarthi_history_test_paging.sqlite3";
     @Test public void messageCountAndBoundedHistoryReturnLatestMessagesInChronologicalOrder() {
         Context context = ApplicationProvider.getApplicationContext();
-        context.deleteDatabase("saarthi_history.sqlite3");
-        ChatDatabase store = new ChatDatabase(context);
+        context.deleteDatabase(TEST_DATABASE_NAME);
+        ChatDatabase store = new ChatDatabase(context, TEST_DATABASE_NAME);
         try {
             long conversationId = store.createConversation("Paging test");
             for (int i = 0; i < 205; i++) {
@@ -29,7 +30,7 @@ public class ChatHistoryPagingInstrumentedTest {
             assertEquals("message-204", fullWindow.get(204).content);
         } finally {
             store.close();
-            context.deleteDatabase("saarthi_history.sqlite3");
+            context.deleteDatabase(TEST_DATABASE_NAME);
         }
     }
 }

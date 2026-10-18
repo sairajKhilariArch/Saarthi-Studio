@@ -13,6 +13,7 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class BackupRestoreInstrumentedTest {
+    private static final String TEST_DATABASE_NAME = "saarthi_history_test_backup_restore.sqlite3";
     @Test public void malformedOversizedUtf8AndImageMetadataAreRejected() throws Exception {
         try {
             BackupPolicy.parseObject("{ not-json".getBytes(StandardCharsets.UTF_8));
@@ -39,8 +40,8 @@ public class BackupRestoreInstrumentedTest {
 
     @Test public void exactBackupIsImportedOnceAndFailedImportDoesNotReserveFingerprint() {
         Context context = ApplicationProvider.getApplicationContext();
-        context.deleteDatabase("saarthi_history.sqlite3");
-        ChatDatabase store = new ChatDatabase(context);
+        context.deleteDatabase(TEST_DATABASE_NAME);
+        ChatDatabase store = new ChatDatabase(context, TEST_DATABASE_NAME);
         try {
             String digest = BackupPolicy.sha256("test-backup-v1".getBytes(StandardCharsets.UTF_8));
             ChatDatabase.Message validMessage = new ChatDatabase.Message("user", "Preserve this message", "");
@@ -71,7 +72,7 @@ public class BackupRestoreInstrumentedTest {
             assertFalse("A failed import must not reserve the fingerprint", recovered.duplicate);
         } finally {
             store.close();
-            context.deleteDatabase("saarthi_history.sqlite3");
+            context.deleteDatabase(TEST_DATABASE_NAME);
         }
     }
 }
