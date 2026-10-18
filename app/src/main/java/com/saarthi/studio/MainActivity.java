@@ -48,6 +48,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Locale;
+import java.util.Date;
+import java.text.SimpleDateFormat;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -78,7 +82,7 @@ public class MainActivity extends Activity {
     private LinearLayout root, messageList;
     private ScrollView scroll;
     private EditText promptInput, codeInput;
-    private Button sendButton, codeButton, historyButton, newChatButton;
+    private Button sendButton, codeButton, historyButton, newChatButton, usageButton;
     private TextView statusText, usageText, currentChatText;
     private boolean codeVisible = false;
     private boolean sending = false;
@@ -188,9 +192,15 @@ public class MainActivity extends Activity {
             codeButton.setText(codeVisible ? "− Hide code" : "＋ Code context");
         });
         toolRow.addView(codeButton);
-        usageText = label("Saved on this phone", 11, MUTED, false);
+        usageButton = smallButton("Usage");
+        usageButton.setOnClickListener(v -> showUsageDiagnostics());
+        LinearLayout.LayoutParams usageButtonLp = new LinearLayout.LayoutParams(-2, -2);
+        usageButtonLp.leftMargin = dp(6);
+        toolRow.addView(usageButton, usageButtonLp);
+        usageText = label("Saved locally", 11, MUTED, false);
         usageText.setGravity(Gravity.CENTER_VERTICAL | Gravity.RIGHT);
         LinearLayout.LayoutParams usageLp = new LinearLayout.LayoutParams(0, -2, 1);
+        usageLp.leftMargin = dp(6);
         toolRow.addView(usageText, usageLp);
         root.addView(toolRow);
 
@@ -455,18 +465,28 @@ public class MainActivity extends Activity {
         String model = config.model == null || config.model.trim().isEmpty() ? "auto" : config.model.trim();
         executor.execute(() -> {
             long started = System.currentTimeMillis();
+            int responseStatus = 0;
+            String routedProvider = "";
             try {
                 JSONObject body = new JSONObject(); body.put("model", model); body.put("messages", msgs); body.put("stream", false);
                 HttpResult result = request("POST", endpoint(base, "chat/completions"), key, body.toString());
+                responseStatus = result.status;
+                routedProvider = result.headers.getOrDefault("x-routed-via", "provider not reported");
                 JSONObject json = parseJson(result.body);
                 if (result.status < 200 || result.status >= 300) throw new Exception(errorText(json, result.body, result.status));
                 String answer = responseText(json);
                 if (answer.trim().isEmpty()) throw new Exception("Router returned an empty response.");
                 JSONObject usage = json.optJSONObject("usage");
-                String tokenText = usage == null ? "token count not reported" : (usage.opt("total_tokens") == null ? "token count not reported" : usage.opt("total_tokens") + " tokens");
-                String provider = result.headers.getOrDefault("x-routed-via", "provider not reported");
+                int reportedTokens = -1;
+                if (usage != null && usage.has("total_tokens")) {
+                    Object tokenValue = usage.opt("total_tokens");
+                    try { reportedTokens = tokenValue instanceof Number ? ((Number) tokenValue).intValue() : Integer.parseInt(String.valueOf(tokenValue)); }
+                    catch (Exception ignored) { reportedTokens = -1; }
+                }
+                String tokenText = reportedTokens < 0 ? "token count not reported" : reportedTokens + " tokens";
                 long ms = System.currentTimeMillis() - started;
-                String meta = tokenText + " · " + String.format(Locale.US, "%.1f s", ms / 1000.0) + " · " + provider;
+                String meta = tokenText + " · " + String.format(Locale.US, "%.1f s", ms / 1000.0) + " · " + routedProvider;
+                store.addRequestLog(model, true, responseStatus, reportedTokens, ms, routedProvider, "");
                 store.addMessage(targetConversationId, "assistant", answer, meta);
                 main.post(() -> {
                     setSending(false); renderHistory(); statusText.setText("Connected · " + model); usageText.setText(meta); codeInput.setText("");
@@ -475,6 +495,7 @@ public class MainActivity extends Activity {
                 String message = friendlyError(e.getMessage());
                 long ms = System.currentTimeMillis() - started;
                 String meta = "Failed after " + String.format(Locale.US, "%.1f s", ms / 1000.0);
+                store.addRequestLog(model, false, responseStatus, -1, ms, routedProvider, safeDiagnostic(message, key));
                 store.addMessage(targetConversationId, "assistant", message, meta);
                 main.post(() -> { setSending(false); renderHistory(); statusText.setText("Request failed · check Settings or server logs"); usageText.setText(meta); });
             }
@@ -788,6 +809,128 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private void showUsageDiagnostics() {
+        UsageSummary stats = store.getUsageSummary();
+        List<RequestLog> recent = store.recentRequestLogs(12);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(16), dp(8), dp(16), dp(8));
+
+        TextView intro = label("Local request records from this phone. Token totals include only values reported by FreeLLMAPI; this screen cannot see provider-side quota balances.", 12, MUTED, false);
+        intro.setPadding(0, 0, 0, dp(12));
+        content.addView(intro);
+
+        addDiagnosticStat(content, "AI requests", String.valueOf(stats.totalRequests));
+        addDiagnosticStat(content, "Successful", String.valueOf(stats.successfulRequests));
+        addDiagnosticStat(content, "Failed", String.valueOf(stats.failedRequests));
+        addDiagnosticStat(content, "Reported tokens", formatInteger(stats.reportedTokens));
+        addDiagnosticStat(content, "Average response time", stats.timedRequests == 0 ? "—" : String.format(Locale.getDefault(), "%.2f s", stats.averageDurationMs / 1000.0));
+
+        TextView recentTitle = label("Recent requests", 15, TEXT, true);
+        recentTitle.setPadding(0, dp(17), 0, dp(7));
+        content.addView(recentTitle);
+        if (recent.isEmpty()) {
+            TextView empty = label("No requests recorded yet. Send a message to start tracking usage.", 13, MUTED, false);
+            empty.setPadding(0, dp(4), 0, dp(10));
+            content.addView(empty);
+        } else {
+            SimpleDateFormat dateFormat = new SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault());
+            for (RequestLog entry : recent) {
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(11), dp(9), dp(11), dp(9));
+                card.setBackground(round(PANEL, 12));
+                LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+                cardLp.bottomMargin = dp(7);
+                content.addView(card, cardLp);
+
+                String state = entry.success ? "✓ Success" : "✕ Failed";
+                TextView title = label(state + " · " + entry.model, 13, entry.success ? GREEN : Color.rgb(255, 137, 137), true);
+                card.addView(title);
+                StringBuilder detail = new StringBuilder(dateFormat.format(new Date(entry.createdAt)));
+                if (entry.durationMs >= 0) detail.append(" · ").append(String.format(Locale.US, "%.2f s", entry.durationMs / 1000.0));
+                if (entry.tokens >= 0) detail.append(" · ").append(entry.tokens).append(" tokens");
+                if (entry.statusCode > 0) detail.append(" · HTTP ").append(entry.statusCode);
+                if (entry.provider != null && !entry.provider.trim().isEmpty()) detail.append(" · ").append(entry.provider);
+                TextView meta = label(detail.toString(), 11, MUTED, false);
+                meta.setPadding(0, dp(4), 0, 0);
+                card.addView(meta);
+                if (!entry.success && entry.detail != null && !entry.detail.trim().isEmpty()) {
+                    TextView error = label(entry.detail, 12, TEXT, false);
+                    error.setPadding(0, dp(5), 0, 0);
+                    card.addView(error);
+                }
+            }
+        }
+
+        ScrollView scroller = new ScrollView(this);
+        scroller.setFillViewport(false);
+        scroller.addView(content);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Usage & Diagnostics")
+                .setView(scroller)
+                .setNegativeButton("Close", (d, which) -> d.dismiss())
+                .setNeutralButton("Test connection", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+            dialog.dismiss();
+            testConfiguredConnection();
+        }));
+        dialog.show();
+        dialog.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(28), dp(520)), dp(600));
+    }
+
+    private void addDiagnosticStat(LinearLayout parent, String name, String value) {
+        LinearLayout line = row();
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        line.setPadding(dp(1), dp(7), dp(1), dp(7));
+        TextView key = label(name, 13, MUTED, false);
+        line.addView(key, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView val = label(value, 14, TEXT, true);
+        line.addView(val);
+        parent.addView(line);
+        View separator = new View(this);
+        separator.setBackgroundColor(Color.rgb(44, 51, 65));
+        parent.addView(separator, new LinearLayout.LayoutParams(-1, dp(1)));
+    }
+
+    private void testConfiguredConnection() {
+        if (config.baseUrl == null || config.baseUrl.trim().isEmpty() || config.apiKey == null || config.apiKey.trim().isEmpty()) {
+            toast("Open Settings and save the FreeLLMAPI URL and unified API key first.");
+            openSettings();
+            return;
+        }
+        statusText.setText("Testing FreeLLMAPI connection…");
+        executor.execute(() -> {
+            String message;
+            boolean ok = false;
+            try {
+                HttpResult result = request("GET", endpoint(config.baseUrl, "models"), config.apiKey, null);
+                ok = result.status >= 200 && result.status < 300;
+                message = ok ? "Connection successful. FreeLLMAPI is reachable." : "Server responded with HTTP " + result.status + ". Check the URL, key, and server logs.";
+            } catch (Exception e) {
+                message = "Could not reach FreeLLMAPI: " + friendlyError(e.getMessage());
+            }
+            final boolean success = ok;
+            final String finalMessage = message;
+            main.post(() -> {
+                statusText.setText(success ? "FreeLLMAPI connection successful" : "Connection test failed");
+                toast(finalMessage);
+            });
+        });
+    }
+
+    private static String safeDiagnostic(String message, String secret) {
+        String safe = message == null ? "Unknown error" : message.replaceAll("[\\r\\n\\t]+", " ").trim();
+        if (secret != null && secret.length() >= 4) safe = safe.replace(secret, "[redacted]");
+        return safe.length() > 260 ? safe.substring(0, 257) + "…" : safe;
+    }
+
+    private static String formatInteger(long value) {
+        return String.format(Locale.getDefault(), "%,d", value);
+    }
+
     private void testConnection(EditText base, EditText key) {
         String url = base.getText().toString().trim().replaceAll("/+$", "");
         String k = key.getText().toString().trim().isEmpty() ? config.apiKey : key.getText().toString().trim();
@@ -899,8 +1042,38 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static final class UsageSummary {
+        long totalRequests;
+        long successfulRequests;
+        long failedRequests;
+        long reportedTokens;
+        double averageDurationMs;
+        long timedRequests;
+    }
+
+    private static final class RequestLog {
+        final String model;
+        final boolean success;
+        final int statusCode;
+        final int tokens;
+        final long durationMs;
+        final String provider;
+        final String detail;
+        final long createdAt;
+        RequestLog(String model, boolean success, int statusCode, int tokens, long durationMs, String provider, String detail, long createdAt) {
+            this.model = model == null ? "auto" : model;
+            this.success = success;
+            this.statusCode = statusCode;
+            this.tokens = tokens;
+            this.durationMs = durationMs;
+            this.provider = provider == null ? "" : provider;
+            this.detail = detail == null ? "" : detail;
+            this.createdAt = createdAt;
+        }
+    }
+
     private static final class Store extends android.database.sqlite.SQLiteOpenHelper {
-        Store(Context c) { super(c, "saarthi_history.sqlite3", null, 2); }
+        Store(Context c) { super(c, "saarthi_history.sqlite3", null, 3); }
 
         @Override public void onConfigure(android.database.sqlite.SQLiteDatabase db) {
             super.onConfigure(db);
@@ -911,6 +1084,7 @@ public class MainActivity extends Activity {
             db.execSQL("CREATE TABLE conversations (_id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
             db.execSQL("CREATE TABLE messages (_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, meta TEXT, created_at INTEGER NOT NULL, FOREIGN KEY(conversation_id) REFERENCES conversations(_id) ON DELETE CASCADE)");
             db.execSQL("CREATE INDEX idx_messages_conversation_id ON messages(conversation_id, _id)");
+            createRequestLogTable(db);
             long now = System.currentTimeMillis();
             android.content.ContentValues cv = new android.content.ContentValues();
             cv.put("title", "New chat"); cv.put("created_at", now); cv.put("updated_at", now);
@@ -927,6 +1101,104 @@ public class MainActivity extends Activity {
                 db.execSQL("CREATE INDEX idx_messages_conversation_id ON messages(conversation_id, _id)");
                 db.execSQL("UPDATE conversations SET updated_at = COALESCE((SELECT MAX(created_at) FROM messages), created_at) WHERE _id = 1");
             }
+            if (oldVersion < 3) {
+                createRequestLogTable(db);
+                // Backfill diagnostics from saved assistant replies so upgrading does not start with an empty dashboard.
+                try (android.database.Cursor c = db.rawQuery("SELECT meta,content,created_at FROM messages WHERE role='assistant' ORDER BY _id", null)) {
+                    while (c.moveToNext()) {
+                        String meta = c.getString(0) == null ? "" : c.getString(0);
+                        String content = c.getString(1) == null ? "" : c.getString(1);
+                        boolean success = !meta.startsWith("Failed after") && !content.startsWith("FreeLLMAPI returned HTTP ");
+                        int tokens = parseTokensFromMeta(meta);
+                        long duration = parseDurationFromMeta(meta);
+                        String provider = parseProviderFromMeta(meta);
+                        int statusCode = parseStatusCode(content);
+                        android.content.ContentValues values = new android.content.ContentValues();
+                        values.put("model", "historical");
+                        values.put("success", success ? 1 : 0);
+                        values.put("status_code", statusCode);
+                        values.put("tokens", tokens);
+                        values.put("duration_ms", duration);
+                        values.put("provider", provider);
+                        values.put("detail", success ? "" : truncateDiagnostic(content));
+                        values.put("created_at", c.getLong(2));
+                        db.insert("request_logs", null, values);
+                    }
+                }
+            }
+        }
+
+        private static void createRequestLogTable(android.database.sqlite.SQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS request_logs (_id INTEGER PRIMARY KEY AUTOINCREMENT, model TEXT NOT NULL, success INTEGER NOT NULL, status_code INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT -1, duration_ms INTEGER NOT NULL DEFAULT -1, provider TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_at DESC, _id DESC)");
+        }
+
+        private static int parseTokensFromMeta(String meta) {
+            Matcher m = Pattern.compile("(\\d+)\\s+tokens").matcher(meta == null ? "" : meta);
+            if (m.find()) { try { return Integer.parseInt(m.group(1)); } catch (Exception ignored) { } }
+            return -1;
+        }
+
+        private static long parseDurationFromMeta(String meta) {
+            Matcher m = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)\\s*s").matcher(meta == null ? "" : meta);
+            if (m.find()) { try { return (long)(Double.parseDouble(m.group(1)) * 1000.0); } catch (Exception ignored) { } }
+            return -1;
+        }
+
+        private static String parseProviderFromMeta(String meta) {
+            if (meta == null || meta.trim().isEmpty() || meta.startsWith("Failed after")) return "";
+            String[] parts = meta.split(" · ", 3);
+            return parts.length >= 3 ? parts[2] : "";
+        }
+
+        private static int parseStatusCode(String text) {
+            Matcher m = Pattern.compile("HTTP\\s+(\\d{3})").matcher(text == null ? "" : text);
+            if (m.find()) { try { return Integer.parseInt(m.group(1)); } catch (Exception ignored) { } }
+            return 0;
+        }
+
+        private static String truncateDiagnostic(String text) {
+            String value = text == null ? "" : text.replaceAll("[\\r\\n\\t]+", " ").trim();
+            return value.length() > 260 ? value.substring(0, 257) + "…" : value;
+        }
+
+        synchronized void addRequestLog(String model, boolean success, int statusCode, int tokens, long durationMs, String provider, String detail) {
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put("model", model == null || model.trim().isEmpty() ? "auto" : model.trim());
+            values.put("success", success ? 1 : 0);
+            values.put("status_code", statusCode);
+            values.put("tokens", tokens);
+            values.put("duration_ms", durationMs);
+            values.put("provider", provider == null ? "" : provider);
+            values.put("detail", detail == null ? "" : detail);
+            values.put("created_at", System.currentTimeMillis());
+            getWritableDatabase().insert("request_logs", null, values);
+        }
+
+        synchronized UsageSummary getUsageSummary() {
+            UsageSummary summary = new UsageSummary();
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT COUNT(*), COALESCE(SUM(success),0), COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN tokens>=0 THEN tokens ELSE 0 END),0), COALESCE(AVG(CASE WHEN duration_ms>=0 THEN duration_ms END),0), COALESCE(SUM(CASE WHEN duration_ms>=0 THEN 1 ELSE 0 END),0) FROM request_logs", null)) {
+                if (c.moveToFirst()) {
+                    summary.totalRequests = c.getLong(0);
+                    summary.successfulRequests = c.getLong(1);
+                    summary.failedRequests = c.getLong(2);
+                    summary.reportedTokens = c.getLong(3);
+                    summary.averageDurationMs = c.getDouble(4);
+                    summary.timedRequests = c.getLong(5);
+                }
+            }
+            return summary;
+        }
+
+        synchronized List<RequestLog> recentRequestLogs(int limit) {
+            List<RequestLog> result = new ArrayList<>();
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT model,success,status_code,tokens,duration_ms,provider,detail,created_at FROM request_logs ORDER BY created_at DESC, _id DESC LIMIT ?",
+                    new String[]{String.valueOf(limit)})) {
+                while (c.moveToNext()) result.add(new RequestLog(c.getString(0), c.getInt(1) != 0, c.getInt(2), c.getInt(3), c.getLong(4), c.getString(5), c.getString(6), c.getLong(7)));
+            }
+            return result;
         }
 
         synchronized long createConversation(String title) {

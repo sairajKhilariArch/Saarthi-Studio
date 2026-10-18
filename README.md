@@ -1,129 +1,21 @@
-# Saarthi Studio for Android
+# Saarthi Studio Android — Usage & Diagnostics Update
 
-A native Android companion app for Saarthi Studio. It connects to a FreeLLMAPI/OpenAI-compatible router running on your Ubuntu computer or another server. The app does not run the AI model on the phone; model/provider routing remains on the server.
+Version 1.4.0 adds an in-app **Usage & Diagnostics** panel to the existing Saarthi Studio Android project.
 
 ## Features
 
-- Native Android chat interface and optional code context panel
-- Lightweight Markdown rendering for headings, lists, bold/italic text, and inline code
-- Fenced code blocks rendered in monospaced, horizontally scrollable panels with one-tap Copy code
-- One-tap Copy response action for complete assistant replies
-- Separate conversations with a saved chat list, open/switch, rename, and delete actions
-- Persistent local chat history (SQLite), with automatic migration of the previous single-chat history into “Previous conversation”
-- Sends only the latest four stored messages plus a short system instruction, while keeping longer history on the phone
-- OpenAI-compatible `POST /v1/chat/completions` support, `model: auto` by default
-- Connection test using the `GET /v1/models` endpoint
-- Model picker that fetches available model IDs from FreeLLMAPI, with `auto` as the default and manual entry as a fallback
-- API key encrypted at rest using Android Keystore + AES-GCM
-- Displays provider and token/latency metadata when returned by FreeLLMAPI
-- No third-party Android runtime libraries; uses Android platform APIs
+- Total recorded AI requests and successful/failed requests.
+- Total tokens only when FreeLLMAPI reports a usage total.
+- Average observed response duration.
+- Recent request records with model ID, HTTP status (when known), provider header (when supplied), and concise failure details.
+- A one-tap connection test against the configured FreeLLMAPI `/v1/models` endpoint.
+- SQLite schema migration and backfill from existing saved assistant replies where metadata is available.
+- Leaves conversation management, Markdown/code copy, model picker, encrypted settings, and the FreeLLMAPI connection in place.
 
-## Build an APK
+## Apply update
 
-This repository contains the Android Studio project source. The build environment used to prepare this archive did not have the Android SDK installed and external package downloads were unavailable, so a compiled APK could not be produced here.
+See [`UPGRADE-INSTRUCTIONS-1.4.0.md`](UPGRADE-INSTRUCTIONS-1.4.0.md). The update script copies two files into your existing repository and preserves timestamped backups. Apply it only to the `android` branch.
 
-### Option A: Android Studio (recommended)
+## Limitations
 
-1. Install Android Studio on Linux, Windows, or macOS.
-2. Open this folder as a project.
-3. Allow Android Studio to install Android SDK Platform 35 and the compatible Gradle plugin if prompted.
-4. Wait for Gradle sync to finish.
-5. Choose **Build → Build Bundle(s) / APK(s) → Build APK(s)**.
-6. The debug APK will be at `app/build/outputs/apk/debug/app-debug.apk`.
-7. Transfer that APK to your Android device and install it. For a directly transferred APK, Android may ask you to allow installs from that file manager/browser.
-
-### Option B: Terminal
-
-Use JDK 17 and Android SDK Platform 35. From this folder, run:
-
-```bash
-gradle assembleDebug
-```
-
-This requires a compatible Gradle installation (Gradle 8.9 compatible with Android Gradle Plugin 8.7.3) and a configured Android SDK. If you use Android Studio, the IDE can manage the SDK and build tools for you.
-
-## Connect the phone to FreeLLMAPI
-
-### 1. Get your Ubuntu computer's LAN IP
-
-On Ubuntu, run:
-
-```bash
-hostname -I
-```
-
-Use the LAN address for the same Wi-Fi network (often starts with `192.168.` or `10.`). Do not use `localhost` or `127.0.0.1` in the Android app: those addresses point to the phone itself.
-
-### 2. Make FreeLLMAPI reachable from the phone
-
-If FreeLLMAPI is published on port 3001, ensure the container is running and that the host firewall allows port 3001 from your trusted local network. In `~/freellmapi`, you can check the service with:
-
-```bash
-sudo docker compose ps
-```
-
-If the server binds only to loopback or a firewall blocks the port, the phone cannot reach it. Do not expose port 3001 directly to the public internet without appropriate TLS and access controls.
-
-### 3. Configure Saarthi Studio
-
-Open Settings in the Android app and enter:
-
-- **Base URL:** `http://YOUR_UBUNTU_LAN_IP:3001/v1` when the phone and server share a trusted private Wi-Fi. Example format: `http://192.168.1.10:3001/v1` (replace with your real IP).
-- **Model:** `auto` unless your FreeLLMAPI router uses a different model name.
-- **Unified API key:** create/copy the router key from the FreeLLMAPI dashboard. This is not the upstream provider key.
-
-Tap **Test connection**. A successful test depends on FreeLLMAPI exposing its OpenAI-compatible `GET /v1/models` route. If your server does not implement that route, chat requests may still work; inspect its logs and API compatibility.
-
-For a remote server outside your trusted local network, use an HTTPS endpoint and proper TLS. Cleartext HTTP is enabled to support local-network installations, so only use it on a network you trust.
-
-## Token usage and fallback
-
-Saarthi keeps chat history locally but sends only the latest four messages to the router with each request. The router's `auto` model and fallback configuration are controlled by FreeLLMAPI; Saarthi cannot create free quotas or guarantee a provider switch. Free tiers have usage limits.
-
-## Security and privacy
-
-- The unified key is encrypted with Android Keystore and not placed in source code.
-- Chat history is stored in this app's private SQLite database on the phone. Uninstalling the app normally removes this local history and settings.
-- Android backup is disabled for this app.
-- Do not share your unified key, upstream provider keys, `.env` file, or router logs containing secrets.
-- For public/server use, use HTTPS. The HTTP support exists for a trusted local Wi-Fi setup only.
-
-## Project details
-
-- Package/application ID: `com.saarthi.studio`
-- Display name: Saarthi Studio
-- Minimum Android: Android 8.0 (API 26)
-- Compile/target SDK: 35
-- Version: 1.3.0 (conversation management, Markdown/code display, and model selection)
-- Android native UI written in Java; provider requests use `HttpURLConnection`.
-
-## Optional: nest Android under `android/` on a shared branch
-
-This is an alternative layout for projects that keep all platforms on one branch. Your current setup uses a dedicated `android` branch with the Android Gradle project at the repository root, so use `UPGRADE-INSTRUCTIONS.md` and `apply-chat-management-upgrade.sh` for your current branch instead. For a shared-branch layout, the Android app can live in an `android/` subfolder alongside the Rust desktop app.
-
-If you have cloned the Saarthi-Studio repository to `~/Projects/Saarthi-Studio`, extract this ZIP and run from the extracted folder:
-
-```bash
-./integrate-into-repo.sh ~/Projects/Saarthi-Studio
-```
-
-Then run the Git commands printed by the script. The script refuses to overwrite an existing `android/app` directory. Pushing the project triggers `.github/workflows/build-android.yml`, which compiles the debug APK on a GitHub-hosted runner and uploads it as an Actions artifact. Open the repository's **Actions** tab, choose the completed **Build Saarthi Studio Android APK** run, then download the `saarthi-studio-android-debug-apk` artifact ZIP. Extract that artifact ZIP to find `app-debug.apk`.
-
-
-## Upgrade from 1.0.0 to 1.1.0
-
-Version 1.1.0 adds independent conversations, a Chats list, automatic titles based on the first prompt, rename, and delete. The SQLite database version is upgraded from 1 to 2. On an in-place app update, the previous flat message history is migrated to a conversation called **Previous conversation**. Avoid uninstalling the existing app before updating because uninstalling removes its private local history and settings. If Android reports a signing-certificate conflict when installing the new debug APK, do not uninstall until you have decided how to preserve that data; debug APKs built on different machines may have different debug signing keys.
-
-To update the repository branch where the Android Gradle project is at its root, use `apply-chat-management-upgrade.sh` from this archive and pass your local clone path. It checks that the checked-out branch is `android` and updates only `MainActivity.java`, the Android module version, and the Android build workflow.
-
-
-## Upgrade from 1.1.0 to 1.2.0
-
-Version 1.2.0 improves assistant replies for coding work without changing the database schema or network API. Markdown headings, bullets, bold/italic text and inline code receive basic formatting; fenced code blocks use a monospaced, horizontally scrollable card with a **Copy code** button. Assistant replies also have **Copy response**. Existing conversations and encrypted settings should be retained by an in-place update built with a compatible signing key.
-
-
-## Upgrade from 1.2.0 to 1.3.0
-
-Version 1.3.0 adds a **Load available models** button to Router settings. It requests `GET /v1/models`, then allows you to select `auto` or a model ID returned by FreeLLMAPI. The model field remains editable, so you can still enter an ID manually if the endpoint does not expose a model list. The chat database and encrypted settings format are unchanged.
-
-For the current layout (Android Gradle project at the root of the dedicated `android` branch), extract this archive and run `./apply-model-picker-upgrade.sh ~/Projects/Saarthi-Studio`. Review the diff, commit, and push to `android`; GitHub Actions should build the debug APK.
+This is local usage telemetry, not provider-side quota data. Unreported token totals remain unknown. A successful source edit is not a compiled APK; wait for the GitHub Actions workflow to succeed before installing the new build.
