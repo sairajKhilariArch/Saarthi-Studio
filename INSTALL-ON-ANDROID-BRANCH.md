@@ -1,10 +1,10 @@
-# Install this full project on the `android` branch
+# Install this project on the `android` branch
 
-This archive contains a complete standalone Android project, not a patch-only archive. It includes source, manifest, resources, Gradle configuration, the APK build workflow, README, changelog, and build instructions.
+This is a complete standalone Android project at version **1.10.0 / versionCode 12**, not a patch-only archive. All release features from 1.7.0 through 1.10.0 are implemented in `app/src/main/java/com/saarthi/studio/MainActivity.java` in package `com.saarthi.studio`. SQLite schema v4 preserves existing chats and adds prompt presets.
 
-## Before copying
+## Back up first
 
-Use a local clone at `~/Projects/Saarthi-Studio`. Make sure any local work you need is committed or backed up.
+On your Ubuntu/Linux machine, make sure the local repository is checked out to the Android branch. Review uncommitted work before replacing files.
 
 ```bash
 cd ~/Projects/Saarthi-Studio
@@ -12,44 +12,44 @@ git switch android
 git status --short
 ```
 
-If `git status --short` lists work you still need, commit or stash it before replacing project files.
+If you have local changes you need, commit or stash them before proceeding. Make a backup of the repo files and export chats from the installed app before installing a newly built APK.
 
-## Back up and copy the full project
+## Copy the project files
 
-Assuming you extracted this ZIP into `~/Downloads/Saarthi-Studio-Android-1.6.0`:
+If you extracted this ZIP into `~/Downloads/Saarthi-Studio-Android-1.10.0`:
 
 ```bash
 cd ~/Projects/Saarthi-Studio
-tar -czf ~/Saarthi-Studio-android-before-1.6.0.tgz --exclude=.git --exclude=.gradle --exclude='*/build' .
-
-# Install rsync if the command is missing: sudo apt install rsync
-rsync -av --delete \
+tar -czf ~/Saarthi-Studio-android-before-1.10.0.tgz --exclude=.git --exclude=.gradle --exclude='*/build' .
+rsync -av \
   --exclude='.git/' \
   --exclude='.gradle/' \
   --exclude='**/build/' \
-  ~/Downloads/Saarthi-Studio-Android-1.6.0/ ./
+  ~/Downloads/Saarthi-Studio-Android-1.10.0/ ./
 ```
 
-The `--delete` option makes the Android branch match this standalone project snapshot and removes old duplicate or misplaced source files that could otherwise break compilation. It preserves the Git database and build/cache directories excluded above. Do not use this procedure on `main` or on a branch that contains desktop/Apple source code.
+This copies the supplied project files without deleting extra files in your checkout. Keep this on the `android` branch; do not overwrite `main` or a branch containing desktop/Apple source code.
 
-## Review, commit, and push
+## Review, build, and push
 
 ```bash
-git status --short
 git diff --check
 git diff --stat
+./BUILD-APK-UBUNTU.sh
 ```
 
-Review the changes, then:
+The build script requires JDK 17, Gradle 8.9, Android SDK Platform 35, and Build Tools 35.0.0. If the local build succeeds, commit and push:
 
 ```bash
 git add -A
-git commit -m "Add conversation search and full Android project"
+git commit -m "Add streaming, text attachments, message actions and prompt presets"
 git push origin android
 ```
 
-The push should trigger `.github/workflows/build-android.yml`. When the workflow succeeds, download the `saarthi-studio-android-debug-apk` artifact from GitHub Actions.
+The repository's workflow should build on a push to `android` touching app or Gradle files and upload `saarthi-studio-android-debug-apk`. Confirm the Actions run succeeds before installing the APK.
 
-An in-place app update should preserve phone data when the application ID and signing certificate are compatible. Back up important chats first. Do not uninstall the current app to bypass a signing-certificate mismatch, because uninstalling usually deletes its private local history and settings.
+## Update warning
 
-Do not commit API keys, FreeLLMAPI `.env` files, router databases, signing keys, or local settings.
+An in-place app update preserves private app data only when the application ID and signing certificate are compatible. Debug APKs built on different machines can use different debug certificates. If Android refuses the update because of a signature mismatch, do not uninstall the current app just to force installation; export chats first because uninstalling usually deletes private app data.
+
+Do not commit API keys, FreeLLMAPI `.env` files, router databases, signing keys, or local settings. Use plain HTTP only over a trusted private LAN/hotspot; use HTTPS for remote/public connections.

@@ -8,8 +8,8 @@ android {
         applicationId = "com.saarthi.studio"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.6.0"
+        versionCode = 12
+        versionName = "1.10.0"
     }
 
     compileOptions {
