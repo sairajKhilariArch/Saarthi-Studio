@@ -3,12 +3,14 @@
 ## 1.11.1 — CI regression and instrumentation-test safety correction
 
 ### Fixed
-- Correct the activity-launch smoke test to verify the visible message composer `EditText` hint rather than its empty text value.
+- Improve Android instrumentation failure diagnostics by collecting logcat and emulator process/memory state before emulator teardown.
+- Ensure pull requests targeting `main` run Android validation as well as pull requests targeting `android`.
+- Keep whitespace validation strict while allowing tests and build diagnostics to run before the final CI gate.
+- Separate application APK assembly from instrumentation APK assembly so a test APK failure does not hide an otherwise buildable debug APK.
+- Correct the app-launch smoke test to verify the visible message composer `EditText` hint without relying on `View.isShown()`.
 - Add a package-private database-name constructor for isolated instrumentation fixtures while preserving `saarthi_history.sqlite3` as the production default.
 - Move backup/restore and history-paging instrumentation tests to unique test-only databases. Their setup and cleanup no longer delete the user's production chat-history database.
-- Keep the production database schema and installed app version unchanged; this patch corrects validation and test-data safety without changing user-facing features.
-
-## 1.11.1 — Stabilization and regression coverage
+- Keep the production database schema and installed app version unchanged; the patch corrects validation and test-data safety without changing user-facing features.
 
 ## 1.11.1 — Stabilization and regression coverage
 
