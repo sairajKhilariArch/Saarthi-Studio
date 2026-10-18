@@ -15,6 +15,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.text.SpannableStringBuilder;
 import android.text.style.BackgroundColorSpan;
 import android.text.style.StyleSpan;
@@ -777,24 +779,42 @@ public class MainActivity extends Activity {
 
     private void openConversationHistory() {
         if (sending) { toast("Wait for the current response to finish before switching chats."); return; }
+
+        LinearLayout dialogContent = new LinearLayout(this);
+        dialogContent.setOrientation(LinearLayout.VERTICAL);
+        dialogContent.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        EditText searchField = field("Search conversation titles and messages", "", InputType.TYPE_CLASS_TEXT);
+        searchField.setSingleLine(true);
+        searchField.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        LinearLayout.LayoutParams searchLp = new LinearLayout.LayoutParams(-1, -2);
+        searchLp.bottomMargin = dp(10);
+        dialogContent.addView(searchField, searchLp);
+
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(14), dp(8), dp(14), dp(8));
         ScrollView historyScroll = new ScrollView(this);
         historyScroll.setFillViewport(false);
         historyScroll.addView(list);
+        dialogContent.addView(historyScroll, new LinearLayout.LayoutParams(-1, dp(430)));
+
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Your conversations")
-                .setView(historyScroll)
+                .setView(dialogContent)
                 .setNegativeButton("Close", (d, w) -> d.dismiss())
                 .setPositiveButton("+ New chat", (d, w) -> createNewConversation())
                 .create();
         Runnable[] refreshHolder = new Runnable[1];
         refreshHolder[0] = () -> {
             list.removeAllViews();
-            List<Conversation> conversations = store.allConversations();
+            String query = searchField.getText().toString().trim();
+            List<Conversation> conversations = query.isEmpty()
+                    ? store.allConversations() : store.searchConversations(query);
             if (conversations.isEmpty()) {
-                TextView empty = label("No saved conversations yet. Create a new chat to begin.", 14, MUTED, false);
+                String emptyText = query.isEmpty()
+                        ? "No saved conversations yet. Create a new chat to begin."
+                        : "No conversations match ‘" + query + "’. Try another search.";
+                TextView empty = label(emptyText, 14, MUTED, false);
                 empty.setPadding(dp(8), dp(12), dp(8), dp(12));
                 list.addView(empty);
                 return;
@@ -809,7 +829,8 @@ public class MainActivity extends Activity {
                 list.addView(card, cardLp);
                 TextView title = label(conversation.title, 15, TEXT, true);
                 card.addView(title);
-                String preview = store.preview(conversation.id);
+                String preview = query.isEmpty() ? "" : store.matchingPreview(conversation.id, query);
+                if (preview.isEmpty()) preview = store.preview(conversation.id);
                 TextView detail = label(preview.isEmpty() ? "No messages yet" : preview, 12, MUTED, false);
                 detail.setMaxLines(2);
                 detail.setPadding(0, dp(4), 0, dp(9));
@@ -852,13 +873,20 @@ public class MainActivity extends Activity {
                 }));
             }
         };
+        searchField.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable s) { refreshHolder[0].run(); }
+        });
         refreshHolder[0].run();
         dialog.setOnShowListener(ignored -> {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(GREEN);
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(MUTED);
         });
         dialog.show();
-        dialog.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(24), dp(520)), Math.min(getResources().getDisplayMetrics().heightPixels - dp(100), dp(560)));
+        dialog.getWindow().setLayout(
+                Math.min(getResources().getDisplayMetrics().widthPixels - dp(24), dp(520)),
+                Math.min(getResources().getDisplayMetrics().heightPixels - dp(100), dp(600)));
     }
 
     private void promptRenameConversation(Conversation conversation, Runnable onChanged) {
@@ -1463,6 +1491,21 @@ public class MainActivity extends Activity {
             return result;
         }
 
+        synchronized List<Conversation> searchConversations(String query) {
+            List<Conversation> result = new ArrayList<>();
+            String term = query == null ? "" : query.trim();
+            if (term.isEmpty()) return allConversations();
+            String sql = "SELECT c._id,c.title,c.updated_at FROM conversations c "
+                    + "WHERE instr(lower(c.title), lower(?)) > 0 "
+                    + "OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c._id "
+                    + "AND instr(lower(m.content), lower(?)) > 0) "
+                    + "ORDER BY c.updated_at DESC, c._id DESC";
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(sql, new String[]{term, term})) {
+                while (c.moveToNext()) result.add(new Conversation(c.getLong(0), c.getString(1), c.getLong(2)));
+            }
+            return result;
+        }
+
         synchronized List<Long> importConversations(List<ImportedConversation> imported) {
             List<Long> ids = new ArrayList<>();
             android.database.sqlite.SQLiteDatabase db = getWritableDatabase();
@@ -1527,6 +1570,22 @@ public class MainActivity extends Activity {
             db.insert("messages", null, values);
             android.content.ContentValues updated = new android.content.ContentValues(); updated.put("updated_at", now);
             db.update("conversations", updated, "_id=?", new String[]{String.valueOf(conversationId)});
+        }
+
+        synchronized String matchingPreview(long conversationId, String query) {
+            String term = query == null ? "" : query.trim();
+            if (term.isEmpty()) return "";
+            try (android.database.Cursor c = getReadableDatabase().rawQuery(
+                    "SELECT content FROM messages WHERE conversation_id=? AND instr(lower(content), lower(?)) > 0 ORDER BY _id DESC LIMIT 1",
+                    new String[]{String.valueOf(conversationId), term})) {
+                if (c.moveToFirst()) {
+                    String value = c.getString(0).replaceAll("\s+", " ").trim();
+                    int index = value.toLowerCase(Locale.ROOT).indexOf(term.toLowerCase(Locale.ROOT));
+                    if (index > 44) value = "…" + value.substring(index - 40);
+                    return value.length() > 90 ? value.substring(0, 87) + "…" : value;
+                }
+            }
+            return "";
         }
 
         synchronized String preview(long conversationId) {

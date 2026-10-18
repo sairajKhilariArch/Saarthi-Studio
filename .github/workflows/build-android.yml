@@ -46,6 +46,7 @@ jobs:
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/saarthi/studio/MainActivity.java
 
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
