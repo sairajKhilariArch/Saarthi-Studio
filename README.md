@@ -13,6 +13,7 @@ A native Android companion app for Saarthi Studio. It connects to a FreeLLMAPI/O
 - Sends only the latest four stored messages plus a short system instruction, while keeping longer history on the phone
 - OpenAI-compatible `POST /v1/chat/completions` support, `model: auto` by default
 - Connection test using the `GET /v1/models` endpoint
+- Model picker that fetches available model IDs from FreeLLMAPI, with `auto` as the default and manual entry as a fallback
 - API key encrypted at rest using Android Keystore + AES-GCM
 - Displays provider and token/latency metadata when returned by FreeLLMAPI
 - No third-party Android runtime libraries; uses Android platform APIs
@@ -93,7 +94,7 @@ Saarthi keeps chat history locally but sends only the latest four messages to th
 - Display name: Saarthi Studio
 - Minimum Android: Android 8.0 (API 26)
 - Compile/target SDK: 35
-- Version: 1.2.0 (conversation management and Markdown/code display)
+- Version: 1.3.0 (conversation management, Markdown/code display, and model selection)
 - Android native UI written in Java; provider requests use `HttpURLConnection`.
 
 ## Optional: nest Android under `android/` on a shared branch
@@ -119,3 +120,10 @@ To update the repository branch where the Android Gradle project is at its root,
 ## Upgrade from 1.1.0 to 1.2.0
 
 Version 1.2.0 improves assistant replies for coding work without changing the database schema or network API. Markdown headings, bullets, bold/italic text and inline code receive basic formatting; fenced code blocks use a monospaced, horizontally scrollable card with a **Copy code** button. Assistant replies also have **Copy response**. Existing conversations and encrypted settings should be retained by an in-place update built with a compatible signing key.
+
+
+## Upgrade from 1.2.0 to 1.3.0
+
+Version 1.3.0 adds a **Load available models** button to Router settings. It requests `GET /v1/models`, then allows you to select `auto` or a model ID returned by FreeLLMAPI. The model field remains editable, so you can still enter an ID manually if the endpoint does not expose a model list. The chat database and encrypted settings format are unchanged.
+
+For the current layout (Android Gradle project at the root of the dedicated `android` branch), extract this archive and run `./apply-model-picker-upgrade.sh ~/Projects/Saarthi-Studio`. Review the diff, commit, and push to `android`; GitHub Actions should build the debug APK.

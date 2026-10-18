@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 — FreeLLMAPI model picker
+
+- Adds a **Load available models** control in Router settings.
+- Fetches model IDs from the router's OpenAI-compatible `GET /v1/models` endpoint.
+- Lets users select `auto` or any returned model ID, while keeping manual model-ID entry available.
+- Gives clearer feedback when the model endpoint is unavailable, returns no usable model IDs, or rejects the request.
+- Leaves local conversation storage, database schema, encrypted settings format, and chat request format unchanged.
+- Increments Android `versionCode` to 4 and `versionName` to 1.3.0.
+
 ## 1.2.0 — Markdown and code-copy actions
 
 - Renders Markdown headings, bullets, inline code, bold and italic spans using native Android widgets.
