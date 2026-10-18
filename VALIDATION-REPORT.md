@@ -1,4 +1,4 @@
-# Saarthi Studio Android 1.11.1 — Validation Report
+# Saarthi Studio Android 1.11.1 — Validation Report 
 
 - Version: `1.11.1`, version code `14`; minimum Android SDK remains 26.
 - API 27 navigation-bar appearance item moved into `values-v27/styles.xml`; the base theme is API-26 compatible.
