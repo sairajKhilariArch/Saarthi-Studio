@@ -19,6 +19,8 @@ use std::{
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+mod host_auth;
+
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8765;
@@ -506,6 +508,15 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    if args.first().map(String::as_str) == Some("host-token") {
+        let (config_path, _, _) = paths();
+        let token_path = config_path.with_file_name("host-auth.json");
+        let store = host_auth::HostTokenStore::new(token_path);
+        host_auth::run_cli(&args[1..], &store)?;
+        return Ok(());
+    }
+
     let (config_path, database_path, static_dir) = paths();
     let state = AppState {
         config_path,
