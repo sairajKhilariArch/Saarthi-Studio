@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 use uuid::Uuid;
 
 mod host_auth;
+mod host_api;
 
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
