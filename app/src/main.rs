@@ -22,6 +22,7 @@ use uuid::Uuid;
 mod host_auth;
 mod host_api;
 mod host_transport;
+mod host_security;
 
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
@@ -555,7 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tls_config = remote.load_tls_config().await?;
         let remote_listener = TcpListener::bind(remote.socket_addr()).await?;
         let remote_std_listener = remote_listener.into_std()?;
-        let remote_router = host_api::build_router(state.clone(), token_store);
+        let remote_router = host_security::harden_router(host_api::build_router(state.clone(), token_store));
         let address = remote.socket_addr();
         let server_handle = axum_server::Handle::new();
         let handle_for_shutdown = server_handle.clone();

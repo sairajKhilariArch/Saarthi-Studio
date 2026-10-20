@@ -1,0 +1,54 @@
+name: Rust Desktop Host API Security CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/rust-host-api-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/rust-host-api-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-host-api-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Format, test, and lint Rust host
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app -> target
+
+      - name: Check formatting of host modules
+        run: |
+          rustfmt --edition 2021 --check \
+            app/src/host_auth.rs \
+            app/src/host_api.rs \
+            app/src/host_transport.rs \
+            app/src/host_security.rs
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path app/Cargo.toml
+
+      - name: Run Clippy checks
+        run: cargo clippy --manifest-path app/Cargo.toml --all-targets
