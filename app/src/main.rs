@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 mod host_auth;
 mod host_api;
+mod host_transport;
 
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
@@ -530,9 +531,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_PORT);
     let address = format!("{HOST}:{port}");
     let listener = TcpListener::bind(&address).await?;
-    println!("{APP_NAME} (Rust) is running at http://{address}");
-    println!("Settings: {}", state.config_path.display());
-    println!("Conversation database: {}", state.database_path.display());
     let app = Router::new()
         .route("/", get(root))
         .route("/static/*file", get(static_file))
@@ -544,10 +542,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/health", get(health))
         .route("/api/test", post(test_router))
         .route("/api/chat", post(chat))
-        .with_state(state);
-    axum::serve(listener, app).with_graceful_shutdown(async {
+        .with_state(state.clone());
+    let remote_config = host_transport::RemoteListenerConfig::from_env()?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let remote_task = if let Some(remote) = remote_config {
+        let token_path = state.config_path.with_file_name("host-auth.json");
+        let token_store = host_auth::HostTokenStore::new(token_path);
+        if token_store.status()?.is_none() {
+            return Err("Desktop Host API is enabled but no host token exists. Run `free-ai-studio host-token create` locally first.".into());
+        }
+
+        let tls_config = remote.load_tls_config().await?;
+        let remote_listener = TcpListener::bind(remote.socket_addr()).await?;
+        let remote_std_listener = remote_listener.into_std()?;
+        let remote_router = host_api::build_router(state.clone(), token_store);
+        let address = remote.socket_addr();
+        let server_handle = axum_server::Handle::new();
+        let handle_for_shutdown = server_handle.clone();
+        let mut remote_shutdown_rx = shutdown_rx.clone();
+        let server = axum_server::from_tcp_rustls(remote_std_listener, tls_config)
+            .handle(server_handle)
+            .serve(remote_router.into_make_service());
+
+        println!("Desktop Host API enabled over HTTPS at https://{address}/api/host/v1 (bearer authentication required).");
+        Some(tokio::spawn(async move {
+            tokio::pin!(server);
+            tokio::select! {
+                result = &mut server => result.map_err(|error| format!("Desktop Host API server failed: {error}")),
+                changed = remote_shutdown_rx.changed() => {
+                    if changed.is_ok() && *remote_shutdown_rx.borrow() {
+                        handle_for_shutdown.graceful_shutdown(Some(Duration::from_secs(10)));
+                        server.await.map_err(|error| format!("Desktop Host API shutdown failed: {error}"))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        }))
+    } else {
+        println!("Desktop Host API disabled (default). Set FREE_AI_STUDIO_HOST_API_ENABLED=true only after configuring TLS and a host token.");
+        None
+    };
+
+    println!("{APP_NAME} (Rust) is running at http://{address}");
+    println!("Settings: {}", state.config_path.display());
+    println!("Conversation database: {}", state.database_path.display());
+
+    let signal_tx = shutdown_tx.clone();
+    let local_result = axum::serve(listener, app).with_graceful_shutdown(async move {
         let _ = tokio::signal::ctrl_c().await;
+        let _ = signal_tx.send(true);
         println!("Stopping Free AI Studio.");
-    }).await?;
+    }).await;
+    let _ = shutdown_tx.send(true);
+
+    if let Some(task) = remote_task {
+        match task.await? {
+            Ok(()) => {},
+            Err(message) => return Err(io::Error::new(io::ErrorKind::Other, message).into()),
+        }
+    }
+    local_result?;
     Ok(())
 }
