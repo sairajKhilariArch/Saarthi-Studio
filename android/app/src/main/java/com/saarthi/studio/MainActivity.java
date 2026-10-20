@@ -2047,7 +2047,7 @@ public class MainActivity extends Activity {
             }
             return;
         }
-        statusText.setText("Testing authenticated Desktop Host health…");
+        statusText.setText("Checking Desktop Host health, capabilities, and models…");
         final String checkedUrl = hostUrl;
         final String checkedToken = token;
         executor.execute(() -> {
@@ -2056,23 +2056,65 @@ public class MainActivity extends Activity {
             long started = System.currentTimeMillis();
             try {
                 DesktopHostTransport transport = new DesktopHostTransport();
-                HttpResult response = request("GET", transport.endpoint(checkedUrl, "health"), checkedToken, null);
-                JSONObject body = parseJson(response.body);
-                ok = HostConnectionPolicy.isHealthyResponse(
-                        response.status,
-                        body.optBoolean("ok", false),
-                        body.optString("host_id", ""),
-                        body.optString("api_version", ""));
-                message = ok
-                        ? "Desktop Host connection successful (" + (System.currentTimeMillis() - started) + " ms)."
-                        : HostConnectionPolicy.safeHttpFailure(response.status);
+                HttpResult health = request("GET", transport.endpoint(checkedUrl, "health"), checkedToken, null);
+                JSONObject healthBody = parseJson(health.body);
+                boolean healthy = HostConnectionPolicy.isHealthyResponse(
+                        health.status,
+                        healthBody.optBoolean("ok", false),
+                        healthBody.optString("host_id", ""),
+                        healthBody.optString("api_version", ""));
+                if (!healthy) {
+                    message = HostConnectionPolicy.safeHttpFailure(health.status);
+                } else {
+                    HttpResult capabilities = request("GET", transport.endpoint(checkedUrl, "capabilities"), checkedToken, null);
+                    JSONObject capabilitiesBody = parseJson(capabilities.body);
+                    JSONObject features = capabilitiesBody.optJSONObject("features");
+                    boolean compatible = HostDiscoveryPolicy.capabilitiesCompatible(
+                            capabilities.status,
+                            capabilitiesBody.optString("api_version", ""),
+                            features != null && features.optBoolean("non_streaming_chat", false),
+                            features != null && features.optBoolean("model_list", false));
+                    if (!compatible) {
+                        message = HostDiscoveryPolicy.safeFailure("capabilities", capabilities.status);
+                    } else {
+                        HttpResult modelResponse = request("GET", transport.endpoint(checkedUrl, "models"), checkedToken, null);
+                        JSONObject modelBody = parseJson(modelResponse.body);
+                        JSONArray modelData = modelBody.optJSONArray("data");
+                        LinkedHashSet<String> modelIds = new LinkedHashSet<>();
+                        if (modelData != null) {
+                            for (int i = 0; i < modelData.length() && modelIds.size() < 200; i++) {
+                                JSONObject item = modelData.optJSONObject(i);
+                                String id = item == null ? "" : item.optString("id", "").trim();
+                                if (!id.isEmpty() && id.length() <= 256) modelIds.add(id);
+                            }
+                        }
+                        boolean modelsCompatible = HostDiscoveryPolicy.modelListCompatible(
+                                modelResponse.status,
+                                modelBody.optString("api_version", ""),
+                                modelData != null,
+                                modelIds.size());
+                        if (!modelsCompatible) {
+                            message = HostDiscoveryPolicy.safeFailure("model list", modelResponse.status);
+                        } else if (modelIds.isEmpty()) {
+                            message = "Desktop Host connected · API v1, but no models were reported. Check the desktop router configuration.";
+                            ok = true;
+                        } else {
+                            List<String> preview = new ArrayList<>(modelIds);
+                            String names = String.join(", ", preview.subList(0, Math.min(4, preview.size())));
+                            if (preview.size() > 4) names += ", …";
+                            message = "Desktop Host connected · " + modelIds.size() + " model(s): " + names
+                                    + " · " + (System.currentTimeMillis() - started) + " ms";
+                            ok = true;
+                        }
+                    }
+                }
             } catch (Exception failure) {
                 message = HostConnectionPolicy.safeNetworkFailure(failure.getMessage());
             }
             final boolean success = ok;
             final String finalMessage = message;
             main.post(() -> {
-                statusText.setText(success ? "Desktop Host connection successful" : "Desktop Host connection test failed");
+                statusText.setText(success ? "Desktop Host discovery successful" : "Desktop Host discovery failed");
                 toast(finalMessage);
             });
         });

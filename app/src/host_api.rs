@@ -4,7 +4,7 @@
 //! router and is not mounted on a network listener until the transport guardrails
 //! in the next implementation step are in place.
 
-use super::{chat, create_conversation, open_db, AppState};
+use super::{chat, create_conversation, load_config, open_db, router_url, AppState};
 use crate::host_auth::HostTokenStore;
 use axum::{
     body::{to_bytes, Body},
@@ -40,6 +40,7 @@ pub(super) fn build_router(state: AppState, token_store: HostTokenStore) -> Rout
     Router::new()
         .route("/api/host/v1/health", get(host_health))
         .route("/api/host/v1/capabilities", get(host_capabilities))
+        .route("/api/host/v1/models", get(host_models))
         .route(
             "/api/host/v1/conversations",
             get(list_host_conversations).post(create_host_conversation),
@@ -221,6 +222,7 @@ async fn host_capabilities() -> Json<Value> {
             "conversation_create": true,
             "message_history": true,
             "non_streaming_chat": true,
+            "model_list": true,
             "streaming": false,
             "attachments": false,
             "conversation_delete": false,
@@ -235,6 +237,97 @@ async fn host_capabilities() -> Json<Value> {
             "message_page_size": MAX_MESSAGE_PAGE_SIZE
         }
     }))
+}
+
+async fn host_models(State(state): State<AppState>) -> Response<Body> {
+    let cfg = load_config(&state);
+    if cfg.api_key.trim().is_empty() {
+        return host_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "host_not_configured",
+            "The desktop host's AI router is not configured.",
+        );
+    }
+
+    let response = match state
+        .client
+        .get(router_url(&cfg, "models"))
+        .bearer_auth(&cfg.api_key)
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => response,
+        Ok(_) => {
+            return host_error(
+                StatusCode::BAD_GATEWAY,
+                "models_unavailable",
+                "The desktop host could not retrieve its configured model list.",
+            );
+        }
+        Err(_) => {
+            return host_error(
+                StatusCode::BAD_GATEWAY,
+                "models_unavailable",
+                "The desktop host could not retrieve its configured model list.",
+            );
+        }
+    };
+
+    let payload = match response.json::<Value>().await {
+        Ok(payload) => payload,
+        Err(_) => {
+            return host_error(
+                StatusCode::BAD_GATEWAY,
+                "invalid_models_response",
+                "The configured AI router returned an invalid model list.",
+            );
+        }
+    };
+    let models = match sanitize_model_list(&payload) {
+        Some(models) => models,
+        None => {
+            return host_error(
+                StatusCode::BAD_GATEWAY,
+                "invalid_models_response",
+                "The configured AI router returned an invalid model list.",
+            );
+        }
+    };
+
+    Json(json!({
+        "api_version": API_VERSION,
+        "object": "list",
+        "count": models.len(),
+        "data": models
+    }))
+    .into_response()
+}
+
+/// Remove upstream metadata and credentials from the public model list. The host API
+/// intentionally exposes no provider ownership fields or raw router response objects.
+fn sanitize_model_list(payload: &Value) -> Option<Vec<Value>> {
+    const MAX_PUBLIC_MODELS: usize = 200;
+    let items = payload.get("data")?.as_array()?;
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut models = Vec::new();
+    for item in items {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("").trim();
+        if id.is_empty() || id.chars().count() > 256 || !seen.insert(id.to_owned()) {
+            continue;
+        }
+        let raw_name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(id);
+        let name = raw_name.chars().take(128).collect::<String>();
+        models.push(json!({ "id": id, "name": name }));
+        if models.len() >= MAX_PUBLIC_MODELS {
+            break;
+        }
+    }
+    Some(models)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1089,6 +1182,7 @@ mod tests {
         assert_eq!(data["api_version"], API_VERSION);
         assert_eq!(data["model_policy"], "desktop_configured");
         assert_eq!(data["features"]["streaming"], false);
+        assert_eq!(data["features"]["model_list"], true);
         assert_eq!(data["features"]["attachments"], false);
         assert_eq!(data["features"]["conversation_delete"], false);
         assert_eq!(data["features"]["usage_diagnostics"], false);
@@ -1369,5 +1463,89 @@ mod tests {
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         let data = Fixture::response_json(response).await;
         assert_eq!(data["error"]["code"], "payload_too_large");
+    }
+
+    #[tokio::test]
+    async fn model_list_requires_router_configuration_and_returns_safe_error() {
+        let fixture = Fixture::new();
+        let response = fixture
+            .send(
+                Method::GET,
+                "/api/host/v1/models",
+                Some(&fixture.token),
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let data = Fixture::response_json(response).await;
+        assert_eq!(data["error"]["code"], "host_not_configured");
+        let body = data.to_string();
+        assert!(!body.contains("localhost:3001"));
+        assert!(!body.contains("API key"));
+    }
+
+    async fn fake_router_models(headers: axum::http::HeaderMap) -> Json<Value> {
+        assert_eq!(
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer router-test-secret")
+        );
+        Json(json!({
+            "data": [
+                {"id": "model-a", "name": "Model A", "owned_by": "private-provider", "created": 123},
+                {"id": "model-a", "name": "Duplicate"},
+                {"id": "model-b", "name": "Model B", "extra_private_field": "must-not-leak"},
+                {"id": "", "name": "Invalid"}
+            ],
+            "private_metadata": "must-not-leak"
+        }))
+    }
+
+    #[tokio::test]
+    async fn model_endpoint_returns_bounded_allowlisted_fields_only() {
+        let fixture = Fixture::new();
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock router");
+        let upstream_address = upstream_listener.local_addr().expect("mock router address");
+        let upstream = Router::new().route("/v1/models", get(fake_router_models));
+        tokio::spawn(async move {
+            axum::serve(upstream_listener, upstream)
+                .await
+                .expect("serve mock router");
+        });
+
+        let config = json!({
+            "base_url": format!("http://{upstream_address}/v1"),
+            "model": "auto",
+            "api_key": "router-test-secret"
+        });
+        fs::write(
+            &fixture.config_path,
+            serde_json::to_vec_pretty(&config).expect("serialize fixture config"),
+        )
+        .expect("write fixture config");
+
+        let response = fixture
+            .send(
+                Method::GET,
+                "/api/host/v1/models",
+                Some(&fixture.token),
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = Fixture::response_json(response).await;
+        assert_eq!(data["api_version"], API_VERSION);
+        assert_eq!(data["count"], 2);
+        assert_eq!(data["data"][0]["id"], "model-a");
+        assert_eq!(data["data"][0]["name"], "Model A");
+        assert!(data["data"][0].get("owned_by").is_none());
+        assert!(data["data"][1].get("extra_private_field").is_none());
+        let public_body = data.to_string();
+        assert!(!public_body.contains("private-provider"));
+        assert!(!public_body.contains("must-not-leak"));
+        assert!(!public_body.contains("router-test-secret"));
     }
 }
