@@ -587,6 +587,10 @@ public class MainActivity extends Activity {
     private void sendMessage() { sendMessage(false); }
 
     private void sendMessage(boolean visionConfirmed) {
+        if (config.connectionMode != ConnectionMode.DIRECT_ROUTER) {
+            toast("Desktop Host chat is not enabled in this milestone. Direct Router remains available.");
+            return;
+        }
         if (sending) return;
         if (!attachedImages.isEmpty() && !visionConfirmed && !isKnownVisionModel(config.model)) {
             new AlertDialog.Builder(this).setTitle("Try image with this model?")
@@ -634,6 +638,10 @@ public class MainActivity extends Activity {
     }
 
     private void startRequest(long targetConversationId, Message userMessage) {
+        if (config.connectionMode != ConnectionMode.DIRECT_ROUTER) {
+            toast("Desktop Host chat is not enabled in this milestone. Direct Router remains available.");
+            return;
+        }
         if (sending) return;
         if (userMessage == null) { toast("Could not find the user message to send."); return; }
         if (config.baseUrl.trim().isEmpty() || config.apiKey.trim().isEmpty()) {
@@ -658,8 +666,9 @@ public class MainActivity extends Activity {
             try { msgs.put(apiMessage(m)); }
             catch (JSONException ignored) { }
         }
+        ConnectionTransport transport = ConnectionTransportFactory.create(config.connectionMode);
         String base = config.baseUrl;
-        String key = config.apiKey;
+        String key = transport.credential(config.apiKey, config.desktopHostToken);
         String model = config.model == null || config.model.trim().isEmpty() ? "auto" : config.model.trim();
         executor.execute(() -> {
             long started = System.currentTimeMillis();
@@ -684,7 +693,7 @@ public class MainActivity extends Activity {
                         body.put("model", candidateModel);
                         body.put("messages", msgs);
                         body.put("stream", true);
-                        StreamResult streamed = requestStream(endpoint(base, "chat/completions"), key, body.toString(), answer);
+                        StreamResult streamed = requestStream(transport.endpoint(base, "chat/completions"), key, body.toString(), answer);
                         if (stopRequested) throw new java.io.InterruptedIOException("Generation stopped by user");
                         responseStatus = streamed.status;
                         routedProvider = streamed.provider == null || streamed.provider.isEmpty() ? "provider not reported" : streamed.provider;
@@ -696,7 +705,7 @@ public class MainActivity extends Activity {
                                     (responseStatus == 400 || responseStatus == 404 || responseStatus == 405 || responseStatus == 422);
                             if (streamMayBeUnsupported) {
                                 body.put("stream", false);
-                                HttpResult nonStreaming = request("POST", endpoint(base, "chat/completions"), key, body.toString());
+                                HttpResult nonStreaming = request("POST", transport.endpoint(base, "chat/completions"), key, body.toString());
                                 responseStatus = nonStreaming.status;
                                 routedProvider = nonStreaming.headers.getOrDefault("x-routed-via", routedProvider);
                                 JSONObject json = parseJson(nonStreaming.body);
@@ -2274,8 +2283,24 @@ public class MainActivity extends Activity {
     private static final class Config {
         String baseUrl = ""; String model = "auto"; String apiKey = "";
         String favoriteModels = ""; String fallbackModels = "";
-        JSONObject toJson() throws JSONException { JSONObject j = new JSONObject(); j.put("base_url", baseUrl); j.put("model", model); j.put("api_key", apiKey); j.put("favorite_models", favoriteModels); j.put("fallback_models", fallbackModels); return j; }
-        static Config fromJson(JSONObject j) { Config c = new Config(); c.baseUrl=j.optString("base_url", ""); c.model=j.optString("model", "auto"); c.apiKey=j.optString("api_key", ""); c.favoriteModels=j.optString("favorite_models", ""); c.fallbackModels=j.optString("fallback_models", ""); return c; }
+        ConnectionMode connectionMode = ConnectionMode.DIRECT_ROUTER;
+        String desktopHostUrl = ""; String desktopHostToken = "";
+        JSONObject toJson() throws JSONException {
+            JSONObject j = new JSONObject();
+            j.put("base_url", baseUrl); j.put("model", model); j.put("api_key", apiKey);
+            j.put("favorite_models", favoriteModels); j.put("fallback_models", fallbackModels);
+            j.put("connection_mode", connectionMode.name());
+            j.put("desktop_host_url", desktopHostUrl); j.put("desktop_host_token", desktopHostToken);
+            return j;
+        }
+        static Config fromJson(JSONObject j) {
+            Config c = new Config();
+            c.baseUrl=j.optString("base_url", ""); c.model=j.optString("model", "auto"); c.apiKey=j.optString("api_key", "");
+            c.favoriteModels=j.optString("favorite_models", ""); c.fallbackModels=j.optString("fallback_models", "");
+            c.connectionMode=ConnectionMode.fromStoredValue(j.optString("connection_mode", "DIRECT_ROUTER"));
+            c.desktopHostUrl=j.optString("desktop_host_url", ""); c.desktopHostToken=j.optString("desktop_host_token", "");
+            return c;
+        }
     }
     private static final class HttpResult {
         final int status; final String body; final java.util.Map<String,String> headers;
