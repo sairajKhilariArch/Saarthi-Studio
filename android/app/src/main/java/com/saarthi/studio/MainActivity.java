@@ -138,7 +138,11 @@ public class MainActivity extends Activity {
         buildUi();
         renderConversationTitle();
         renderHistory();
-        if (config.apiKey.isEmpty() || config.baseUrl.isEmpty()) {
+        if (config.connectionMode == ConnectionMode.DESKTOP_HOST) {
+            statusText.setText(config.desktopHostUrl.isEmpty() || config.desktopHostToken.isEmpty()
+                    ? "Desktop Host setup needed · open Settings"
+                    : "Desktop Host configured · test connection in Settings");
+        } else if (config.apiKey.isEmpty() || config.baseUrl.isEmpty()) {
             statusText.setText("Setup needed · connect to FreeLLMAPI");
         } else {
             statusText.setText("Ready to connect · " + config.model);
@@ -1904,40 +1908,80 @@ public class MainActivity extends Activity {
         form.setPadding(dp(20), dp(10), dp(20), dp(4));
         form.setOrientation(LinearLayout.VERTICAL);
         form.setBackgroundColor(PANEL);
-        TextView help = label("Point Saarthi to your FreeLLMAPI instance. On the same Wi-Fi, use your Ubuntu computer's LAN IP—not localhost.", 13, MUTED, false);
+        final ConnectionMode[] selectedMode = {config.connectionMode == null ? ConnectionMode.DIRECT_ROUTER : config.connectionMode};
+        Button modeButton = smallButton("Connection mode: " + (selectedMode[0] == ConnectionMode.DESKTOP_HOST ? "Desktop Host" : "Direct Router"));
+        LinearLayout directSection = new LinearLayout(this);
+        directSection.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout hostSection = new LinearLayout(this);
+        hostSection.setOrientation(LinearLayout.VERTICAL);
+        TextView help = label("Choose how Saarthi connects. Direct Router sends requests to your configured OpenAI-compatible router. Desktop Host uses the authenticated HTTPS API on your Saarthi desktop.", 13, MUTED, false);
         help.setPadding(0, 0, 0, dp(12)); form.addView(help);
+        form.addView(modeButton);
+        form.addView(directSection);
         EditText base = field("Base URL, e.g. http://192.168.1.10:3001/v1", config.baseUrl, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        form.addView(base, fieldLp());
+        directSection.addView(base, fieldLp());
         EditText model = field("Default model ID (auto is router-managed)", config.model, InputType.TYPE_CLASS_TEXT);
-        form.addView(model, fieldLp());
+        directSection.addView(model, fieldLp());
         EditText favoriteModels = field("Favorite model IDs (comma-separated)", config.favoriteModels, InputType.TYPE_CLASS_TEXT);
-        form.addView(favoriteModels, fieldLp());
+        directSection.addView(favoriteModels, fieldLp());
         EditText fallbackModels = field("Fallback model IDs (ordered, comma-separated)", config.fallbackModels, InputType.TYPE_CLASS_TEXT);
-        form.addView(fallbackModels, fieldLp());
+        directSection.addView(fallbackModels, fieldLp());
         TextView modelHelp = label("Favorites are shown first in the model picker. Fallback models are attempted only before any answer text arrives and only for likely temporary/quota/model-availability errors. Do not add models that are not returned by your router.", 12, MUTED, false);
         modelHelp.setPadding(dp(2), 0, dp(2), dp(9));
-        form.addView(modelHelp);
+        directSection.addView(modelHelp);
         EditText key = field("Unified API key (leave blank to keep saved key)", "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        form.addView(key, fieldLp());
+        directSection.addView(key, fieldLp());
         Button loadModels = smallButton("Load available models");
         loadModels.setTextColor(GREEN);
         LinearLayout.LayoutParams loadModelsLp = new LinearLayout.LayoutParams(-1, dp(42));
         loadModelsLp.bottomMargin = dp(10);
-        form.addView(loadModels, loadModelsLp);
+        directSection.addView(loadModels, loadModelsLp);
         loadModels.setOnClickListener(v -> fetchModels(base, key, model));
         Button test = smallButton("Test connection");
         test.setTextColor(GREEN);
         LinearLayout.LayoutParams testLp = new LinearLayout.LayoutParams(-1, dp(44));
         testLp.bottomMargin = dp(10);
-        form.addView(test, testLp);
+        directSection.addView(test, testLp);
         test.setOnClickListener(v -> testConnection(base, key));
         TextView security = label("Security: HTTP is suitable only for a trusted local network. Use HTTPS for a public server. The key is encrypted with Android Keystore on this phone.", 12, MUTED, false);
-        security.setPadding(0, dp(2), 0, dp(7)); form.addView(security);
+        security.setPadding(0, dp(2), 0, dp(7)); directSection.addView(security);
         TextView dash = label("Provider dashboard opens at the server address (without /v1). Create/copy your unified key there.", 12, MUTED, false);
-        dash.setPadding(0, 0, 0, dp(5)); form.addView(dash);
+        dash.setPadding(0, 0, 0, dp(5)); directSection.addView(dash);
+        TextView hostHelp = label("Desktop Host requires the remote host API to be enabled and reachable over HTTPS. Enter the origin only; do not add /api/host/v1. The Android client keeps normal certificate verification enabled.", 12, MUTED, false);
+        hostHelp.setPadding(0, dp(4), 0, dp(9));
+        hostSection.addView(hostHelp);
+        EditText hostUrl = field("HTTPS origin, e.g. https://192.168.1.20:8766", config.desktopHostUrl, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        hostSection.addView(hostUrl, fieldLp());
+        EditText hostToken = field("Desktop Host token (blank keeps saved token)", "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        hostSection.addView(hostToken, fieldLp());
+        TextView tokenHelp = label("Use the token generated by the desktop host-token command. This is not your FreeLLMAPI key. The token is stored inside the existing Android Keystore-encrypted settings blob and is never shown after saving.", 12, MUTED, false);
+        tokenHelp.setPadding(0, dp(1), 0, dp(9));
+        hostSection.addView(tokenHelp);
+        Button testHost = smallButton("Test Desktop Host connection");
+        testHost.setTextColor(GREEN);
+        LinearLayout.LayoutParams testHostLp = new LinearLayout.LayoutParams(-1, dp(44));
+        testHostLp.bottomMargin = dp(10);
+        hostSection.addView(testHost, testHostLp);
+        testHost.setOnClickListener(v -> testDesktopHostConnection(hostUrl, hostToken));
+        form.addView(hostSection);
+        Runnable updateModeSections = () -> {
+            boolean hostMode = selectedMode[0] == ConnectionMode.DESKTOP_HOST;
+            directSection.setVisibility(hostMode ? View.GONE : View.VISIBLE);
+            hostSection.setVisibility(hostMode ? View.VISIBLE : View.GONE);
+            modeButton.setText("Connection mode: " + (hostMode ? "Desktop Host" : "Direct Router"));
+        };
+        updateModeSections.run();
+        modeButton.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("Connection mode")
+                .setItems(new String[]{"Direct Router", "Desktop Host"}, (d, which) -> {
+                    selectedMode[0] = which == 1 ? ConnectionMode.DESKTOP_HOST : ConnectionMode.DIRECT_ROUTER;
+                    updateModeSections.run();
+                })
+                .setNegativeButton("Cancel", null)
+                .show());
         ScrollView sc = new ScrollView(this); sc.addView(form);
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Router settings")
+                .setTitle("Connection settings")
                 .setView(sc)
                 .setNegativeButton("Close", (d, w) -> d.dismiss())
                 .setNeutralButton("Open dashboard", null)
@@ -1948,22 +1992,90 @@ public class MainActivity extends Activity {
                 String url = base.getText().toString().trim().replaceAll("/+$", "");
                 String mod = model.getText().toString().trim(); if (mod.isEmpty()) mod = "auto";
                 String newKey = key.getText().toString().trim();
-                if (!validUrl(url)) { base.setError("Use a valid http:// or https:// URL ending in /v1"); return; }
-                if (!newKey.isEmpty()) config.apiKey = newKey;
-                config.baseUrl = url; config.model = mod;
-                config.favoriteModels = normalizeModelList(favoriteModels.getText().toString());
-                config.fallbackModels = normalizeModelList(fallbackModels.getText().toString());
+                if (selectedMode[0] == ConnectionMode.DIRECT_ROUTER) {
+                    if (!validUrl(url)) { base.setError("Use a valid http:// or https:// URL ending in /v1"); return; }
+                    if (!newKey.isEmpty()) config.apiKey = newKey;
+                    config.baseUrl = url; config.model = mod;
+                    config.favoriteModels = normalizeModelList(favoriteModels.getText().toString());
+                    config.fallbackModels = normalizeModelList(fallbackModels.getText().toString());
+                } else {
+                    String hostBase = hostUrl.getText().toString().trim().replaceAll("/+$", "");
+                    String newHostToken = hostToken.getText().toString().trim();
+                    String effectiveHostToken = newHostToken.isEmpty() ? config.desktopHostToken : newHostToken;
+                    String validation = HostConnectionPolicy.validationError(hostBase, effectiveHostToken);
+                    if (validation != null) {
+                        if (validation.toLowerCase(Locale.ROOT).contains("url") || validation.toLowerCase(Locale.ROOT).contains("https")) {
+                            hostUrl.setError(validation);
+                        } else {
+                            hostToken.setError(validation);
+                        }
+                        return;
+                    }
+                    config.desktopHostUrl = hostBase;
+                    if (!newHostToken.isEmpty()) config.desktopHostToken = newHostToken;
+                }
+                config.connectionMode = selectedMode[0];
                 try {
                     secureSettings.save(config);
-                    statusText.setText(config.apiKey.isEmpty() ? "API key needed" : "Settings saved · ready to test");
-                    toast("Settings saved securely on this phone."); dialog.dismiss();
+                    if (config.connectionMode == ConnectionMode.DESKTOP_HOST) {
+                        statusText.setText("Desktop Host saved · test connection in Settings");
+                        toast("Desktop Host settings saved securely on this phone.");
+                    } else {
+                        statusText.setText(config.apiKey.isEmpty() ? "API key needed" : "Settings saved · ready to test");
+                        toast("Direct Router settings saved securely on this phone.");
+                    }
+                    dialog.dismiss();
                 } catch (Exception ex) { toast("Could not save settings: " + ex.getMessage()); }
             });
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> openDashboard(base.getText().toString().trim()));
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> openDashboard(selectedMode[0] == ConnectionMode.DESKTOP_HOST ? hostUrl.getText().toString().trim() : base.getText().toString().trim()));
         });
         dialog.show();
         dialog.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(24), dp(520)), ViewGroup.LayoutParams.WRAP_CONTENT);
         dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+    }
+
+    private void testDesktopHostConnection(EditText hostUrlField, EditText hostTokenField) {
+        String hostUrl = hostUrlField.getText().toString().trim().replaceAll("/+$", "");
+        String enteredToken = hostTokenField.getText().toString().trim();
+        String token = enteredToken.isEmpty() ? config.desktopHostToken : enteredToken;
+        String validation = HostConnectionPolicy.validationError(hostUrl, token);
+        if (validation != null) {
+            if (validation.toLowerCase(Locale.ROOT).contains("url") || validation.toLowerCase(Locale.ROOT).contains("https")) {
+                hostUrlField.setError(validation);
+            } else {
+                hostTokenField.setError(validation);
+            }
+            return;
+        }
+        statusText.setText("Testing authenticated Desktop Host health…");
+        final String checkedUrl = hostUrl;
+        final String checkedToken = token;
+        executor.execute(() -> {
+            boolean ok = false;
+            String message;
+            long started = System.currentTimeMillis();
+            try {
+                DesktopHostTransport transport = new DesktopHostTransport();
+                HttpResult response = request("GET", transport.endpoint(checkedUrl, "health"), checkedToken, null);
+                JSONObject body = parseJson(response.body);
+                ok = HostConnectionPolicy.isHealthyResponse(
+                        response.status,
+                        body.optBoolean("ok", false),
+                        body.optString("host_id", ""),
+                        body.optString("api_version", ""));
+                message = ok
+                        ? "Desktop Host connection successful (" + (System.currentTimeMillis() - started) + " ms)."
+                        : HostConnectionPolicy.safeHttpFailure(response.status);
+            } catch (Exception failure) {
+                message = HostConnectionPolicy.safeNetworkFailure(failure.getMessage());
+            }
+            final boolean success = ok;
+            final String finalMessage = message;
+            main.post(() -> {
+                statusText.setText(success ? "Desktop Host connection successful" : "Desktop Host connection test failed");
+                toast(finalMessage);
+            });
+        });
     }
 
     private void openDashboard(String base) {
