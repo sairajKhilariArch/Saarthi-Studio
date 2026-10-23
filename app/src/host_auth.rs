@@ -58,10 +58,7 @@ impl HostTokenStore {
     pub fn rotate(&self) -> io::Result<String> {
         let mut entropy = [0_u8; TOKEN_BYTES];
         getrandom(&mut entropy).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("operating-system random generator failed: {error}"),
-            )
+            io::Error::other(format!("operating-system random generator failed: {error}"))
         })?;
 
         let token = format!("{TOKEN_PREFIX}{}", encode_hex(&entropy));
@@ -167,10 +164,7 @@ impl HostTokenStore {
         for _ in 0..8 {
             let mut suffix = [0_u8; 8];
             getrandom(&mut suffix).map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("operating-system random generator failed: {error}"),
-                )
+                io::Error::other(format!("operating-system random generator failed: {error}"))
             })?;
             let temporary_path = parent.join(format!(".{file_name}.{}.tmp", encode_hex(&suffix)));
             let mut options = OpenOptions::new();
@@ -303,7 +297,7 @@ fn now_unix_secs() -> io::Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))
+        .map_err(io::Error::other)
 }
 
 fn parent_directory(path: &Path) -> &Path {

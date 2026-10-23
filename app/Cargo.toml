@@ -11,6 +11,7 @@ axum = "=0.7.9"
 axum-server = { version = "=0.7.3", default-features = false, features = ["tls-rustls"] }
 getrandom = "=0.2.15"
 reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.217", features = ["derive"] }
 serde_json = "=1.0.138"

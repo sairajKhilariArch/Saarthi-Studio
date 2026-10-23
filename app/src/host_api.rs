@@ -332,7 +332,7 @@ fn sanitize_model_list(payload: &Value) -> Option<Vec<Value>> {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConversationCursor {
-    updated_at: f64,
+    updated_at_bits: u64,
     id: String,
 }
 
@@ -402,7 +402,9 @@ async fn list_host_conversations(
 
     let result = (|| -> rusqlite::Result<Vec<HostConversationSummary>> {
         let conn = open_db(&state.database_path)?;
-        let cursor_updated_at = cursor.as_ref().map(|item| item.updated_at);
+        let cursor_updated_at = cursor
+            .as_ref()
+            .map(|item| f64::from_bits(item.updated_at_bits));
         let cursor_id = cursor.as_ref().map(|item| item.id.as_str());
         let mut statement = conn.prepare(
             "SELECT id, title, created_at, updated_at
@@ -478,7 +480,7 @@ fn parse_host_query(
 
 fn encode_conversation_cursor(item: &HostConversationSummary) -> Option<String> {
     let cursor = ConversationCursor {
-        updated_at: item.updated_at,
+        updated_at_bits: item.updated_at.to_bits(),
         id: item.id.clone(),
     };
     let bytes = serde_json::to_vec(&cursor).ok()?;
@@ -494,7 +496,8 @@ fn decode_conversation_cursor(value: &str) -> Option<ConversationCursor> {
     }
     let bytes = decode_hex(value)?;
     let cursor: ConversationCursor = serde_json::from_slice(&bytes).ok()?;
-    if !cursor.updated_at.is_finite() || Uuid::parse_str(&cursor.id).is_err() {
+    let updated_at = f64::from_bits(cursor.updated_at_bits);
+    if !updated_at.is_finite() || Uuid::parse_str(&cursor.id).is_err() {
         return None;
     }
     Some(cursor)

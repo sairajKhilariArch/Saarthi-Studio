@@ -544,6 +544,12 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Choose a process-wide Rustls provider before any TLS client/server builder:
+    // reqwest and axum-server can enable both aws-lc-rs and ring through Cargo
+    // feature unification, and Rustls panics when it cannot infer a provider.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args.first().map(String::as_str) == Some("host-token") {
         let (config_path, _, _) = paths();
@@ -634,7 +640,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(task) = remote_task {
         match task.await? {
             Ok(()) => {},
-            Err(message) => return Err(io::Error::new(io::ErrorKind::Other, message).into()),
+            Err(message) => return Err(io::Error::other(message).into()),
         }
     }
     local_result?;
