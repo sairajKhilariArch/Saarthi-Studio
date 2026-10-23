@@ -80,3 +80,4 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
 - Pushing a `v*` tag runs "Desktop Release": Linux x86_64 tarball, `.deb` (cargo-deb), and AppImage, each with SHA-256 checksums, attached to the GitHub release.
 - Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/free-ai-suite/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
+

@@ -8,11 +8,15 @@ license = "MIT"
 
 [dependencies]
 axum = "=0.7.9"
+axum-server = { version = "=0.7.3", default-features = false, features = ["tls-rustls"] }
+getrandom = "=0.2.15"
 reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.217", features = ["derive"] }
 serde_json = "=1.0.138"
-tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal"] }
+sha2 = "=0.10.9"
+subtle = "=2.6.1"
+tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
 
 [profile.release]
@@ -39,3 +43,5 @@ assets = [
     ["packaging/free-ai-suite.desktop", "usr/share/applications/free-ai-suite.desktop", "644"],
     ["packaging/icons/free-ai-suite.svg", "usr/share/icons/hicolor/scalable/apps/free-ai-suite.svg", "644"],
 ]
+[dev-dependencies]
+tower = { version = "=0.5.2", features = ["util"] }
