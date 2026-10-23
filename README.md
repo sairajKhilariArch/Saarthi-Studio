@@ -67,3 +67,6 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
 
 **Important:** this directory restructure keeps desktop and Android source side by side; it does not itself implement desktop-host connectivity. The current Android app still configures a router endpoint directly. Do not advertise desktop-host pairing as available until the authenticated host API and Android client transport are implemented and tested.
+
+## Production Ready - Branch: main
+- Cross-platform build configured for Ubuntu & Android.
