@@ -1,6 +1,6 @@
 # Free AI Suite for Ubuntu — Rust edition
 
-A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The application backend, local HTTP server, router client, settings persistence, usage tracking, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The existing browser interface uses HTML, CSS, and JavaScript, served locally by the Rust app.
+A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The browser interface uses HTML, CSS, and JavaScript, served locally by the Rust app: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
 ## One-command install
 
@@ -28,20 +28,25 @@ Never share the unified API key, provider keys, or `.env` file in chat or public
 
 - Rust HTTP backend and OpenAI-compatible router client
 - Persistent conversations and message history (SQLite)
-- Code editor and code-review context
+- Workspace explorer: open any local folder, browse the tree, and edit files in tabs
+  - Atomic saves (temp file + rename), `Ctrl+S`, `Tab` indentation, line numbers
+  - Create, rename, and delete files/folders, with unsaved-change protection
+  - Scratch pad for pasting one-off code, and “Attach to chat” for file context
+- Markdown replies with code blocks and copy buttons; threads with automatic titles
 - Usage/error log with latency and token counts when the provider reports them
 - Router connection test and saved settings
 - Token-conscious context: stores full local history but sends only the latest four messages plus a short system prompt with each request
 - Binds to `127.0.0.1` only; key is stored on the server side in a `0600` configuration file
 - One-click launcher for the Rust app and FreeLLMAPI Docker service
 
-The code editor edits text; it does not execute code. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
+The editor edits text; it does not execute code or open a terminal. Workspace access is confined to the folder you explicitly open: paths are canonicalised, `..`/absolute escapes and symlinks leaving that folder are rejected, binary and files over 1 MB are refused, and workspace routes reject non-loopback hosts/foreign origins. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
 
 ## Addresses and local data
 
 - AI Studio: `http://127.0.0.1:8765`
 - FreeLLMAPI dashboard: `http://127.0.0.1:3001` by default
 - Settings: `~/.config/free-ai-studio/config.json`
+- Last opened folder: `~/.config/free-ai-studio/workspace.json`
 - Chat history: `~/.local/share/free-ai-studio/history.sqlite3`
 - App log: `~/.local/state/free-ai-suite/studio.log`
 
@@ -62,7 +67,8 @@ FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi
 The Rust desktop app remains the **primary product and intended host**. Its existing Rust service and web UI remain at `app/`; the desktop README, build scripts, and data locations remain the root-level source of truth.
 
 - **Desktop host:** `app/` — Rust service and browser UI. Do not move or replace these files as part of Android work.
-- **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI.
+- **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI. It shares the desktop UI's dark, accent-led visual language.
+- **Build toolchain:** `.cargo/config.toml` + `rust-toolchain.toml` pin nightly with the cranelift backend and mold linking for fast development builds; both are required (see the file comments). Android requires JDK 17 — newer JDKs can break Gradle 8.9's embedded Kotlin.
 - **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
 - **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease bundleRelease` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
 

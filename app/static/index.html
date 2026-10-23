@@ -8,81 +8,316 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-<div class="app-shell">
-  <aside class="sidebar">
-    <div class="brand"><div class="brand-mark">✦</div><div><strong>Free AI Studio</strong><small>Local coding workspace</small></div></div>
-    <button id="newChat" class="primary full">＋ New conversation</button>
-    <div class="side-label">YOUR HISTORY</div>
-    <div id="conversationList" class="conversation-list"><div class="muted pad">Loading history…</div></div>
-    <div class="sidebar-bottom">
-      <div class="privacy-note"><span class="dot"></span><span>Runs locally on this computer</span></div>
-      <button class="nav-button" data-tab="usage">◷ &nbsp; Usage & errors</button>
-      <button class="nav-button" data-tab="settings">⚙ &nbsp; Router settings</button>
-      <div class="side-foot">Your chats are stored in local SQLite.</div>
-    </div>
-  </aside>
-  <main class="main">
-    <header class="topbar">
-      <div><span class="eyebrow">WORKSPACE</span><h1 id="pageTitle">AI Coding Chat</h1></div>
-      <div class="top-actions"><span class="status-pill"><span class="dot"></span><span id="connectionLabel">Router not tested</span></span><button id="openProviderDashboard" class="secondary dashboard-button" type="button">Provider setup ↗</button><button id="openSettings" class="icon-button" title="Settings">⚙</button></div>
-    </header>
+<svg class="icon-sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.6l1.9 6.2a3.4 3.4 0 0 0 1.3 1.3l6.2 1.9-6.2 1.9a3.4 3.4 0 0 0-1.3 1.3L12 21.4l-1.9-6.2a3.4 3.4 0 0 0-1.3-1.3L2.6 12l6.2-1.9a3.4 3.4 0 0 0 1.3-1.3z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-5 4z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h7l5 5v13H6z"/><path d="M13 3v5h5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 2h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5H6a2 2 0 0 0-2 2v9"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5.4 20c.7-3.5 3.3-5.4 6.6-5.4s5.9 1.9 6.6 5.4"/></symbol>
+  <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h10a5 5 0 0 1 0 10H8"/><path d="M8 5L4 9l4 4"/></symbol>
+</svg>
 
-    <section id="chatTab" class="tab-panel chat-layout">
-      <div class="chat-column">
-        <div id="welcome" class="welcome">
-          <div class="welcome-icon">✦</div><h2>Your coding partner, your setup.</h2>
-          <p>Ask questions, debug errors, or include code from the editor. Configure a compatible router in Settings to get started.</p>
-          <div class="suggestions">
-            <button class="suggestion" data-prompt="Explain Rust ownership with a small example.">Explain Rust ownership <span>↗</span></button>
-            <button class="suggestion" data-prompt="Help me debug this error. Explain the likely cause and how to fix it.">Debug an error <span>↗</span></button>
-            <button class="suggestion" data-prompt="Review the code in my editor for bugs, security issues, and improvements.">Review my code <span>↗</span></button>
+<div id="app" class="app">
+  <aside id="sidebar" class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg class="icon"><use href="#i-spark"/></svg></div>
+      <div class="brand-text">
+        <strong>Free AI Studio</strong>
+        <span>local coding agent</span>
+      </div>
+    </div>
+
+    <div class="segmented" role="tablist" aria-label="Sidebar view">
+      <button id="modeThreads" class="segmented-btn active" role="tab" aria-selected="true">Threads</button>
+      <button id="modeFiles" class="segmented-btn" role="tab" aria-selected="false">Files</button>
+    </div>
+
+    <section id="threadsPane" class="pane">
+      <button id="newChat" class="btn btn-accent btn-block">
+        <svg class="icon"><use href="#i-plus"/></svg><span>New thread</span>
+      </button>
+      <p class="pane-label">Recent</p>
+      <div id="conversationList" class="thread-list">
+        <p class="empty-note">Loading history…</p>
+      </div>
+    </section>
+
+    <section id="filesPane" class="pane hidden">
+      <div class="ws-card">
+        <div class="ws-title-row">
+          <svg class="icon ws-icon"><use href="#i-folder"/></svg>
+          <div class="ws-title-text">
+            <strong id="wsName">No folder open</strong>
+            <span id="wsPath">Open a folder to browse and edit files.</span>
+          </div>
+          <button id="wsClose" class="icon-btn tiny hidden" title="Close folder" aria-label="Close folder">
+            <svg class="icon"><use href="#i-close"/></svg>
+          </button>
+        </div>
+        <div class="ws-actions">
+          <button id="openFolderBtn" class="btn btn-quiet btn-small">Open folder…</button>
+          <button id="scratchBtn" class="btn btn-quiet btn-small">Scratch pad</button>
+        </div>
+        <div id="wsRecent" class="ws-recent hidden"></div>
+      </div>
+      <div class="tree-tools hidden" id="treeTools">
+        <button id="newFileBtn" class="tree-tool" title="New file">+ File</button>
+        <button id="newFolderBtn" class="tree-tool" title="New folder">+ Folder</button>
+        <button id="renameBtn" class="tree-tool" title="Rename selected">Rename</button>
+        <button id="deleteBtn" class="tree-tool danger" title="Delete selected">Delete</button>
+      </div>
+      <div id="fileTree" class="tree" role="tree" aria-label="Workspace files"></div>
+    </section>
+
+    <footer class="sidebar-foot">
+      <div class="conn-row">
+        <span id="connDot" class="conn-dot"></span>
+        <span id="connText">Router not tested</span>
+      </div>
+      <div class="foot-actions">
+        <button id="usageBtn" class="foot-btn"><svg class="icon"><use href="#i-chart"/></svg>Usage</button>
+        <button id="settingsBtn" class="foot-btn"><svg class="icon"><use href="#i-gear"/></svg>Settings</button>
+      </div>
+      <p class="foot-note">Chats stay in local SQLite. Files stay on this computer.</p>
+    </footer>
+  </aside>
+
+  <div id="scrim" class="scrim hidden"></div>
+
+  <main class="main">
+    <div class="tabbar">
+      <button id="sidebarToggle" class="icon-btn rail-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">
+        <svg class="icon"><use href="#i-menu"/></svg>
+      </button>
+      <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
+      <div class="tabbar-tools">
+        <span id="connPill" class="status-pill"><span class="conn-dot"></span><span id="connPillText">not tested</span></span>
+      </div>
+    </div>
+
+    <section id="chatView" class="view chat-view" role="tabpanel" aria-label="Chat">
+      <div id="chatScroll" class="chat-scroll">
+        <div class="chat-column">
+          <div id="welcome" class="welcome">
+            <div class="welcome-mark"><svg class="icon"><use href="#i-spark"/></svg></div>
+            <h1>What are we shipping today?</h1>
+            <p>Ask about your code, paste an error, or open a folder to edit files with your router's models.</p>
+            <div class="suggestions">
+              <button class="suggestion" data-prompt="Explain the architecture of the project in the open folder. Start with the entry points and how the pieces fit together.">
+                <span class="suggestion-icon"><svg class="icon"><use href="#i-file"/></svg></span>
+                <span><strong>Explain this codebase</strong><small>Map entry points and data flow</small></span>
+              </button>
+              <button class="suggestion" data-prompt="Help me debug an error. Ask for the error text if I have not shared it, then explain the likely cause and the fix.">
+                <span class="suggestion-icon"><svg class="icon"><use href="#i-spark"/></svg></span>
+                <span><strong>Debug an error</strong><small>Trace a failure to its cause</small></span>
+              </button>
+              <button class="suggestion" data-prompt="Review the file I attach for bugs, security problems, and readability. Suggest a concrete improved version.">
+                <span class="suggestion-icon"><svg class="icon"><use href="#i-spark"/></svg></span>
+                <span><strong>Review my open file</strong><small>Attach a file, then ask</small></span>
+              </button>
+              <button class="suggestion" data-prompt="Write focused tests for the code I attach, covering edge cases and failure paths.">
+                <span class="suggestion-icon"><svg class="icon"><use href="#i-copy"/></svg></span>
+                <span><strong>Write tests</strong><small>Cover edges and failures</small></span>
+              </button>
+            </div>
+          </div>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <div id="thinking" class="thinking hidden"><span class="spinner"></span><span>Thinking with your router…</span></div>
+        </div>
+      </div>
+      <div class="composer-shell">
+        <div class="composer">
+          <div id="contextChip" class="context-chip hidden">
+            <svg class="icon"><use href="#i-file"/></svg>
+            <span id="contextLabel">file</span>
+            <button id="contextClear" class="chip-close" title="Remove file context" aria-label="Remove file context">
+              <svg class="icon"><use href="#i-close"/></svg>
+            </button>
+          </div>
+          <textarea id="prompt" rows="2" placeholder="Ask anything — paste an error, describe a change, or reference an open file…"></textarea>
+          <div class="composer-bar">
+            <div class="composer-left">
+              <button id="attachContextBtn" class="btn btn-quiet btn-small" title="Attach the active file as context">
+                <svg class="icon"><use href="#i-plus"/></svg>Context
+              </button>
+              <span class="kbd-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
+            </div>
+            <div class="composer-right">
+              <span id="modelChip" class="model-chip">auto</span>
+              <button id="sendBtn" class="btn btn-accent send-btn" title="Send">
+                <span>Send</span><svg class="icon"><use href="#i-arrow"/></svg>
+              </button>
+            </div>
           </div>
         </div>
-        <div id="messages" class="messages"></div>
-        <div id="thinking" class="thinking hidden"><span class="spinner"></span> Asking your configured router…</div>
-        <div class="composer-wrap">
-          <textarea id="prompt" rows="3" placeholder="Ask a coding question… (Enter to send, Shift+Enter for a new line)"></textarea>
-          <div class="composer-bottom"><span class="hint">Your configured router handles provider fallback.</span><button id="send" class="primary">Send ↗</button></div>
+      </div>
+    </section>
+
+    <section id="editorView" class="view editor-view hidden" role="tabpanel" aria-label="Editor">
+      <div class="editor-toolbar">
+        <div class="editor-file">
+          <svg class="icon"><use href="#i-file"/></svg>
+          <span id="editorPath" class="editor-path">file</span>
+          <span id="editorDirty" class="dirty-dot hidden" title="Unsaved changes"></span>
+        </div>
+        <div class="editor-actions">
+          <button id="attachFileBtn" class="btn btn-quiet btn-small">Attach to chat</button>
+          <button id="copyPathBtn" class="btn btn-quiet btn-small" title="Copy file path">Copy path</button>
+          <button id="revertBtn" class="btn btn-quiet btn-small" title="Discard unsaved changes">Revert</button>
+          <button id="saveBtn" class="btn btn-accent btn-small" title="Save (Ctrl+S)">
+            <svg class="icon"><use href="#i-save"/></svg>Save
+          </button>
         </div>
       </div>
-      <aside class="editor-panel">
-        <div class="panel-heading"><div><span class="eyebrow">CODE CONTEXT</span><h2>Code editor</h2></div><span class="editor-badge">EDITABLE</span></div>
-        <div class="editor-tools"><label for="language">Language</label><select id="language"><option>rust</option><option>python</option><option>javascript</option><option>typescript</option><option>java</option><option>cpp</option><option>c</option><option>sql</option><option>html</option><option>css</option><option>bash</option><option>text</option></select><button id="clearCode" class="subtle-button">Clear</button></div>
-        <textarea id="codeEditor" spellcheck="false" aria-label="Code editor" placeholder="// Paste or write code here.&#10;// It will only be sent when you send a chat message."></textarea>
-        <div class="editor-footer"><span id="codeCount">0 characters</span><button id="copyCode" class="subtle-button">Copy code</button></div>
-        <button id="askAboutCode" class="secondary full">Ask about this code ↗</button>
-        <div class="editor-tip"><strong>Tip</strong><p>Nothing is executed by this editor. Your code is included as context when you send a request.</p></div>
-      </aside>
-    </section>
-
-    <section id="settingsTab" class="tab-panel page-card hidden">
-      <div class="page-intro"><span class="eyebrow">CONNECTION</span><h2>Router settings</h2><p>Connect to FreeLLMAPI, OmniRoute, or another OpenAI-compatible API. Your provider keys belong in the router dashboard, not here.</p></div>
-      <form id="settingsForm" class="settings-form">
-        <label>Router base URL <input id="baseUrl" type="url" placeholder="http://localhost:3001/v1" required><small>FreeLLMAPI default: http://localhost:3001/v1 · OmniRoute default: http://localhost:20128/v1</small></label>
-        <label>Router / unified API key <input id="apiKey" type="password" placeholder="Paste your router API key" autocomplete="new-password"><small id="keyStatus">Key not configured. The key is saved in a permission-restricted local config file.</small></label>
-        <label>Model <input id="model" type="text" value="auto" placeholder="auto"><small>Use <code>auto</code> when your router supports automatic model selection and fallback.</small></label>
-        <div class="form-actions"><button type="submit" class="primary">Save settings</button><button type="button" id="testConnection" class="secondary">Test connection</button></div>
-        <div id="settingsMessage" class="message-box hidden"></div>
-      </form>
-      <div class="info-card"><h3>Set up providers once</h3><p>Add your free-tier provider credentials and configure the fallback chain in FreeLLMAPI. Then create/copy its unified API key into the field above.</p><p><button id="openProviderDashboardSettings" type="button" class="secondary">Open FreeLLMAPI dashboard ↗</button></p><ol><li>Open your router dashboard (usually <code>http://localhost:3001</code> for FreeLLMAPI).</li><li>Add eligible free-tier provider credentials in its Keys / Providers page.</li><li>Enable and order a fallback chain if supported.</li><li>Copy the router's unified API key here, then test the connection.</li></ol><p class="muted">Free tiers have provider-defined quotas. Automatic fallback only works when another enabled provider/model has capacity and the router recognizes the error as retryable.</p></div>
-    </section>
-
-    <section id="usageTab" class="tab-panel hidden usage-page">
-      <div class="page-intro"><span class="eyebrow">OBSERVABILITY</span><h2>Usage & errors</h2><p>Local request history from this app. Providers may not report token usage for every request.</p></div>
-      <div class="stats-grid">
-        <div class="stat-card"><span>Requests</span><strong id="statRequests">0</strong></div>
-        <div class="stat-card"><span>Successful</span><strong id="statSuccess">0</strong></div>
-        <div class="stat-card"><span>Errors</span><strong id="statErrors">0</strong></div>
-        <div class="stat-card"><span>Reported tokens</span><strong id="statTokens">0</strong></div>
-        <div class="stat-card"><span>Avg. latency</span><strong id="statLatency">—</strong></div>
+      <div class="editor-body">
+        <pre id="gutter" class="gutter" aria-hidden="true"></pre>
+        <textarea id="codeArea" class="code-area" spellcheck="false" wrap="off" autocapitalize="off" autocorrect="off" aria-label="File contents"></textarea>
       </div>
-      <div class="table-card"><div class="table-heading"><h3>Recent requests</h3><button id="refreshUsage" class="subtle-button">Refresh ↻</button></div><div class="table-scroll"><table><thead><tr><th>Time</th><th>Status</th><th>Provider / model</th><th>Latency</th><th>Tokens</th><th>Details</th></tr></thead><tbody id="usageRows"><tr><td colspan="6" class="muted">No requests yet.</td></tr></tbody></table></div></div>
-      <p class="muted small-note">This page tracks requests made through Free AI Studio. For provider-level quota, remaining budgets, and detailed fallback traces, also check your router dashboard.</p>
+      <div class="editor-status">
+        <span id="editorLang">text</span>
+        <span id="editorCursor">Ln 1, Col 1</span>
+        <span id="editorSize">0 bytes</span>
+        <span id="editorState" class="editor-state">Saved</span>
+        <span class="editor-hint">Ctrl+S saves · Tab indents</span>
+      </div>
     </section>
-    <footer class="main-footer"><span>Free AI Studio · Local-first</span><span>No paid dependencies · No code execution</span></footer>
+
+    <section id="settingsView" class="view page-view hidden" role="tabpanel" aria-label="Settings">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Connection</p>
+          <h1>Router settings</h1>
+          <p>Point Studio at FreeLLMAPI, OmniRoute, or any OpenAI-compatible router. Provider keys belong in the router, not here.</p>
+        </header>
+        <form id="settingsForm" class="card form-card">
+          <label class="field">
+            <span>Router base URL</span>
+            <input id="baseUrl" type="url" placeholder="http://localhost:3001/v1" required>
+            <small>FreeLLMAPI default: <code>http://localhost:3001/v1</code> · OmniRoute: <code>http://localhost:20128/v1</code></small>
+          </label>
+          <label class="field">
+            <span>Router API key</span>
+            <input id="apiKey" type="password" placeholder="Paste your router API key" autocomplete="new-password">
+            <small id="keyStatus">Stored in a permission-restricted local config file.</small>
+          </label>
+          <label class="field">
+            <span>Model</span>
+            <input id="model" type="text" value="auto" placeholder="auto">
+            <small>Use <code>auto</code> when the router handles model selection and fallback.</small>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Save settings</button>
+            <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>
+            <button type="button" id="openProviderDashboardSettings" class="btn btn-link">Open router dashboard ↗</button>
+          </div>
+          <div id="settingsMessage" class="notice hidden"></div>
+        </form>
+
+        <div class="card info-card">
+          <h2>One-time router setup</h2>
+          <ol>
+            <li>Open your router dashboard (FreeLLMAPI usually runs on <code>http://localhost:3001</code>).</li>
+            <li>Add free-tier provider credentials in its Keys / Providers page.</li>
+            <li>Enable and order a fallback chain.</li>
+            <li>Copy the router's unified API key into the field above, then test the connection.</li>
+          </ol>
+          <p class="muted">Free tiers have provider-defined quotas. Fallback only works while another enabled provider has capacity and the router recognises the error as retryable.</p>
+        </div>
+
+        <div class="card info-card">
+          <h2>Workspace &amp; privacy</h2>
+          <p>Studio reads and writes only inside the folder you explicitly open, keeps chats in local SQLite at <code>~/.local/share/free-ai-studio</code>, and never uploads files anywhere else. Code is sent to your configured router only when you attach it to a message.</p>
+          <p class="muted">The editor does not run code, open a terminal, or touch files outside the open folder.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="usageView" class="view page-view hidden" role="tabpanel" aria-label="Usage">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Observability</p>
+          <h1>Usage &amp; errors</h1>
+          <p>Local request history from this app. Providers do not report token usage for every request.</p>
+        </header>
+        <div class="stats-grid">
+          <div class="stat-card"><span>Requests</span><strong id="statRequests">0</strong></div>
+          <div class="stat-card"><span>Succeeded</span><strong id="statSuccess">0</strong></div>
+          <div class="stat-card"><span>Errors</span><strong id="statErrors">0</strong></div>
+          <div class="stat-card"><span>Reported tokens</span><strong id="statTokens">0</strong></div>
+          <div class="stat-card"><span>Avg. latency</span><strong id="statLatency">—</strong></div>
+        </div>
+        <div class="card table-card">
+          <div class="table-head">
+            <h2>Recent requests</h2>
+            <button id="refreshUsage" class="btn btn-quiet btn-small">Refresh</button>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Time</th><th>Status</th><th>Provider / model</th><th>Latency</th><th>Tokens</th><th>Details</th></tr></thead>
+              <tbody id="usageRows"><tr><td colspan="6" class="muted">No requests yet.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="muted page-note">For provider-level quotas and fallback traces, also check your router dashboard.</p>
+      </div>
+    </section>
   </main>
 </div>
-<div id="toast" class="toast hidden" role="status"></div>
+
+<div id="folderModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">
+  <div class="modal-card">
+    <header class="modal-head">
+      <h2 id="folderModalTitle">Open a folder</h2>
+      <button id="folderCancelIcon" class="icon-btn" aria-label="Close dialog"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <p class="modal-copy">Studio can browse and edit every file inside the folder you choose. Nothing outside it is readable.</p>
+    <label class="field">
+      <span>Folder path</span>
+      <input id="folderInput" type="text" spellcheck="false" placeholder="/home/you/projects/app" autocomplete="off">
+    </label>
+    <div class="modal-quick">
+      <button id="folderHome" class="btn btn-quiet btn-small">Home folder</button>
+      <button id="folderBrowse" class="btn btn-quiet btn-small">Browse…</button>
+    </div>
+    <div id="folderRecent" class="folder-recent"></div>
+    <div id="folderMessage" class="notice hidden"></div>
+    <footer class="modal-foot">
+      <button id="folderCancel" class="btn btn-quiet">Cancel</button>
+      <button id="folderOpen" class="btn btn-accent">Open folder</button>
+    </footer>
+  </div>
+</div>
+
+<div id="promptModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+  <div class="modal-card narrow">
+    <header class="modal-head">
+      <h2 id="promptTitle">New file</h2>
+      <button id="promptCancelIcon" class="icon-btn" aria-label="Close dialog"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <label class="field">
+      <span id="promptLabel">Name</span>
+      <input id="promptInput" type="text" spellcheck="false" autocomplete="off">
+      <small id="promptHint" class="hidden"></small>
+    </label>
+    <div id="promptMessage" class="notice hidden"></div>
+    <footer class="modal-foot">
+      <button id="promptCancel" class="btn btn-quiet">Cancel</button>
+      <button id="promptSubmit" class="btn btn-accent">Create</button>
+    </footer>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

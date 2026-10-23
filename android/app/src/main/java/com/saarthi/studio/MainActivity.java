@@ -75,13 +75,16 @@ import android.security.keystore.KeyProperties;
 import android.util.Base64;
 
 public class MainActivity extends Activity {
-    private static final int BG = Color.rgb(16, 19, 26);
-    private static final int PANEL = Color.rgb(27, 32, 43);
-    private static final int PANEL_ALT = Color.rgb(35, 42, 55);
-    private static final int TEXT = Color.rgb(238, 242, 248);
-    private static final int MUTED = Color.rgb(155, 166, 184);
-    private static final int GREEN = Color.rgb(118, 215, 165);
-    private static final int USER_BUBBLE = Color.rgb(39, 64, 60);
+    private static final int BG = Color.rgb(8, 8, 10);
+    private static final int PANEL = Color.rgb(17, 17, 21);
+    private static final int PANEL_ALT = Color.rgb(24, 24, 30);
+    private static final int TEXT = Color.rgb(237, 237, 242);
+    private static final int MUTED = Color.rgb(154, 154, 166);
+    private static final int GREEN = Color.rgb(75, 214, 160);
+    private static final int ACCENT = Color.rgb(255, 138, 61);
+    private static final int LINE = Color.rgb(35, 35, 41);
+    private static final int DANGER = Color.rgb(255, 107, 107);
+    private static final int USER_BUBBLE = Color.rgb(32, 26, 20);
     private static final String SYSTEM_PROMPT = "You are a concise, helpful coding assistant. Be accurate and safe; never claim to run code unless you did.";
     private static final String KEY_ALIAS = "SaarthiStudioSettingsKeyV1";
 
@@ -213,15 +216,15 @@ public class MainActivity extends Activity {
 
         LinearLayout header = row();
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView logo = label("S", 23, GREEN, true);
+        TextView logo = label("✦", 21, ACCENT, true);
         logo.setGravity(Gravity.CENTER);
-        logo.setBackground(round(PANEL_ALT, 16));
-        header.addView(logo, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        logo.setBackground(rounded(PANEL_ALT, 12, LINE));
+        header.addView(logo, new LinearLayout.LayoutParams(dp(40), dp(40)));
         LinearLayout brand = new LinearLayout(this);
         brand.setOrientation(LinearLayout.VERTICAL);
         brand.setPadding(dp(11), 0, 0, 0);
-        brand.addView(label("Saarthi Studio", 20, TEXT, true));
-        TextView tagline = label("One workspace. Many providers.", 12, MUTED, false);
+        brand.addView(label("Saarthi Studio", 19, TEXT, true));
+        TextView tagline = label("local coding agent", 11, MUTED, false);
         brand.addView(tagline);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
         historyButton = smallButton("Chats");
@@ -254,7 +257,7 @@ public class MainActivity extends Activity {
         statusText = label("Not connected", 12, MUTED, false);
         statusText.setPadding(dp(4), dp(5), dp(4), dp(8));
         root.addView(statusText);
-        View line = new View(this); line.setBackgroundColor(Color.rgb(44, 51, 65));
+        View line = new View(this); line.setBackgroundColor(LINE);
         root.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
 
         scroll = new ScrollView(this);
@@ -275,7 +278,7 @@ public class MainActivity extends Activity {
         codeInput.setTypeface(Typeface.MONOSPACE);
         codeInput.setMinLines(4); codeInput.setMaxLines(9);
         codeInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        codeInput.setBackground(round(PANEL, 12)); codeInput.setPadding(dp(12), dp(10), dp(12), dp(10));
+        codeInput.setBackground(rounded(PANEL, 12, LINE)); codeInput.setPadding(dp(12), dp(10), dp(12), dp(10));
         codeInput.setVisibility(View.GONE);
         LinearLayout.LayoutParams codeLp = new LinearLayout.LayoutParams(-1, -2);
         codeLp.bottomMargin = dp(8); root.addView(codeInput, codeLp);
@@ -309,13 +312,13 @@ public class MainActivity extends Activity {
         promptInput.setGravity(Gravity.TOP | Gravity.START);
         promptInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         promptInput.setImeOptions(EditorInfo.IME_ACTION_SEND);
-        promptInput.setBackground(round(PANEL, 16));
+        promptInput.setBackground(rounded(PANEL, 16, LINE));
         promptInput.setPadding(dp(13), dp(12), dp(13), dp(12));
         composer.addView(promptInput, new LinearLayout.LayoutParams(0, -2, 1));
         sendButton = new Button(this); sendButton.setText("Send"); sendButton.setTextColor(BG);
         sendButton.setAllCaps(false); sendButton.setTextSize(14); sendButton.setTypeface(null, Typeface.BOLD);
-        sendButton.setBackground(round(GREEN, 14));
-        LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(dp(82), dp(49));
+        sendButton.setBackground(round(ACCENT, 12));
+        LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(dp(78), dp(46));
         sendLp.leftMargin = dp(8); composer.addView(sendButton, sendLp);
         root.addView(composer);
         sendButton.setOnClickListener(v -> {
@@ -400,14 +403,14 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(-1, -2);
         wrapLp.bottomMargin = dp(13);
         messageList.addView(wrap, wrapLp);
-        TextView who = label(user ? "YOU" : "SAARTHI", 10, user ? GREEN : MUTED, true);
+        TextView who = label(user ? "YOU" : "SAARTHI", 10, user ? MUTED : ACCENT, true);
         who.setPadding(dp(4), 0, dp(4), dp(5));
         wrap.addView(who);
         if (user) {
             TextView bubble = label(displayMessageContent(content), 15, TEXT, false);
             bubble.setTextIsSelectable(true);
             bubble.setPadding(dp(13), dp(11), dp(13), dp(11));
-            bubble.setBackground(round(USER_BUBBLE, 16));
+            bubble.setBackground(rounded(USER_BUBBLE, 14, LINE));
             LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-1, -2);
             bp.leftMargin = dp(28);
             wrap.addView(bubble, bp);
@@ -551,7 +554,7 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(11), dp(8), dp(11), dp(8));
-        card.setBackground(round(PANEL_ALT, 12));
+        card.setBackground(rounded(PANEL_ALT, 12, LINE));
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
         cardLp.bottomMargin = dp(9);
         parent.addView(card, cardLp);
@@ -809,7 +812,8 @@ public class MainActivity extends Activity {
         if (sendButton != null) {
             sendButton.setEnabled(true);
             sendButton.setText(value ? "Stop" : "Send");
-            sendButton.setBackground(round(value ? Color.rgb(224, 112, 112) : GREEN, 14));
+            sendButton.setTextColor(value ? Color.WHITE : BG);
+            sendButton.setBackground(round(value ? DANGER : ACCENT, 12));
             sendButton.setAlpha(1f);
         }
         if (historyButton != null) historyButton.setEnabled(!value);
@@ -2292,7 +2296,7 @@ public class MainActivity extends Activity {
         line.addView(val);
         parent.addView(line);
         View separator = new View(this);
-        separator.setBackgroundColor(Color.rgb(44, 51, 65));
+        separator.setBackgroundColor(LINE);
         parent.addView(separator, new LinearLayout.LayoutParams(-1, dp(1)));
     }
 
@@ -2413,8 +2417,8 @@ public class MainActivity extends Activity {
     }
     private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.HORIZONTAL); return l; }
     private Button smallButton(String text) {
-        Button b = new Button(this); b.setText(text); b.setContentDescription(text); b.setTextSize(12); b.setAllCaps(false); b.setTextColor(TEXT); b.setBackground(round(PANEL_ALT, 12));
-        b.setPadding(dp(8), 0, dp(8), 0); return b;
+        Button b = new Button(this); b.setText(text); b.setContentDescription(text); b.setTextSize(12); b.setAllCaps(false); b.setTextColor(TEXT); b.setBackground(rounded(PANEL_ALT, 10, LINE));
+        b.setMinHeight(dp(32)); b.setMinWidth(dp(0)); b.setPadding(dp(10), 0, dp(10), 0); return b;
     }
     private EditText field(String hint, String value, int type) {
         EditText e = new EditText(this); e.setSingleLine(true); e.setTextSize(14); e.setTextColor(TEXT); e.setHintTextColor(MUTED);
@@ -2423,6 +2427,9 @@ public class MainActivity extends Activity {
     }
     private LinearLayout.LayoutParams fieldLp() { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.bottomMargin = dp(10); return p; }
     private GradientDrawable round(int color, int radius) { GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
+    private GradientDrawable rounded(int color, int radius, int stroke) {
+        GradientDrawable d = round(color, radius); d.setStroke(dp(1), stroke); return d;
+    }
     private int dp(float value) { return (int)(value * getResources().getDisplayMetrics().density + 0.5f); }
     private void toast(String msg) { Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); }
 

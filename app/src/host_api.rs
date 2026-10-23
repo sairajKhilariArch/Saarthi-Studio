@@ -1009,6 +1009,7 @@ mod tests {
                 config_path: config_path.clone(),
                 database_path: database_path.clone(),
                 static_dir: root.join("static"),
+                workspace: crate::workspace::WorkspaceStore::load(root.join("workspace.json")),
                 client: reqwest::Client::builder()
                     .timeout(Duration::from_secs(2))
                     .build()

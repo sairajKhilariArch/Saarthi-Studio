@@ -1,7 +1,8 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -23,6 +24,7 @@ mod host_auth;
 mod host_api;
 mod host_transport;
 mod host_security;
+mod workspace;
 
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
@@ -34,6 +36,7 @@ struct AppState {
     config_path: PathBuf,
     database_path: PathBuf,
     static_dir: PathBuf,
+    workspace: workspace::WorkspaceStore,
     client: Client,
 }
 
@@ -184,6 +187,25 @@ fn save_config_file(path: &FsPath, cfg: &Config) -> io::Result<()> {
 
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response<Body> {
     (status, Json(json!({"error": message.into()}))).into_response()
+}
+
+/// Baseline browser hardening for the local UI. The app has no third-party
+/// assets, so the policy can stay tight; inline styles are allowed because the
+/// UI uses `element.style` for small dynamic layout details.
+async fn local_security_headers(request: Request<Body>, next: Next) -> Response<Body> {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+             script-src 'self'; connect-src 'self'; base-uri 'none'",
+        ),
+    );
+    response
 }
 
 fn clean_title(value: &str) -> String {
@@ -560,7 +582,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (config_path, database_path, static_dir) = paths();
+    let workspace_state_path = config_path.with_file_name("workspace.json");
     let state = AppState {
+        workspace: workspace::WorkspaceStore::load(workspace_state_path),
         config_path,
         database_path,
         static_dir,
@@ -582,6 +606,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/health", get(health))
         .route("/api/test", post(test_router))
         .route("/api/chat", post(chat))
+        .merge(workspace::router(port))
+        .layer(middleware::from_fn(local_security_headers))
         .with_state(state.clone());
     let remote_config = host_transport::RemoteListenerConfig::from_env()?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

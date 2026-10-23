@@ -203,6 +203,7 @@ mod tests {
                 config_path,
                 database_path,
                 static_dir: root.join("static"),
+                workspace: crate::workspace::WorkspaceStore::load(root.join("workspace.json")),
                 client: reqwest::Client::builder()
                     .timeout(Duration::from_secs(2))
                     .build()
