@@ -1,0 +1,12 @@
+# Maximum-speed build tooling. Requires the nightly toolchain (pinned in
+# rust-toolchain.toml), the rustc-codegen-cranelift component, and the mold
+# linker installed system-wide (`apt install mold`).
+[build]
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Z", "threads=8"]
+
+[unstable]
+codegen-backend = true
+
+[profile.dev]
+codegen-backend = "cranelift"
+debug = 1
