@@ -1,0 +1,64 @@
+name: Desktop CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/desktop-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/desktop-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, lint, and build desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Verify desktop project layout
+        run: |
+          set -eu
+          test -f app/Cargo.toml
+          test -f app/Cargo.lock
+          test -f app/src/main.rs
+          test -f app/static/index.html
+          test -f app/static/app.js
+          test -f app/static/styles.css
+          test -f app/packaging/free-ai-suite.desktop
+          test -f app/packaging/icons/free-ai-suite.svg
+
+      - name: Build debug binary
+        working-directory: app
+        run: cargo build --locked
+
+      - name: Run desktop tests
+        working-directory: app
+        run: cargo test --locked
+
+      - name: Run clippy
+        working-directory: app
+        run: cargo clippy --locked --all-targets -- -D warnings

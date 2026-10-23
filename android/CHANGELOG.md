@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.12.0 — Production release build
+
+### Added
+- Production `release` build type with R8 code shrinking/obfuscation and resource shrinking (`proguard-android-optimize.txt` plus an intentionally empty `proguard-rules.pro`; the app uses no reflection, JNI, or runtime serialization, so no keep rules are required).
+- Scoped network security configuration replacing app-wide `android:usesCleartextTraffic="true"`: plaintext HTTP is now allowed only for loopback and private/link-local ranges (`localhost`, `127.0.0.1`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fd00::/8`). Every other router host must use HTTPS, matching the transport rule in `PLATFORM-ARCHITECTURE.md`.
+- Adaptive launcher icon (vector background/foreground with a monochrome layer for Android 13+ themed icons), replacing the default system icon. minSdk 26 covers every adaptive-icon-capable device, so no density PNG fallbacks are needed.
+- CI now assembles the unsigned release APK and AAB alongside the existing debug gates and uploads them as the `saarthi-studio-android-release-unsigned` artifact; the release build is part of the required validation gate.
+
+### Changed
+- `targetSdk` raised from 34 to 35 to match `compileSdk` (Google Play has required API 35 since August 31, 2025).
+- Removed the stale `build-android.yml` workflow, which triggered on a nonexistent `android` branch and ran Gradle from the repository root where no Gradle project exists. `android-ci.yml` (now named "Android CI") is the single Android workflow.
+- Version: `1.12.0`, version code `15`.
+
+### Release gate
+- No signing configuration is committed: release artifacts are unsigned (`app-release-unsigned.apk`, `app-release.aab`) and are signed at distribution time.
+- Physical-device upgrade, LAN-plaintext, and public-HTTPS router tests remain required before production distribution.
+
 ## CI follow-up — Android instrumentation reliability
 
 ### Fixed in CI configuration

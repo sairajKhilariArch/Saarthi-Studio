@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Free AI Suite
+GenericName=AI Chat and Coding Workspace
+Comment=Local-first AI chat and coding workspace for FreeLLMAPI
+Exec=free-ai-studio
+Icon=free-ai-suite
+Terminal=false
+Categories=Development;
+Keywords=AI;LLM;chat;code;assistant;

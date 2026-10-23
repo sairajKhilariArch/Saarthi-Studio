@@ -64,9 +64,19 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - **Desktop host:** `app/` — Rust service and browser UI. Do not move or replace these files as part of Android work.
 - **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI.
 - **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
-- **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
+- **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease bundleRelease` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
 
 **Important:** this directory restructure keeps desktop and Android source side by side; it does not itself implement desktop-host connectivity. The current Android app still configures a router endpoint directly. Do not advertise desktop-host pairing as available until the authenticated host API and Android client transport are implemented and tested.
 
 ## Production Ready - Branch: main
-- Cross-platform build configured for Ubuntu & Android.
+
+### Android (companion client)
+- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.12.0` (version code `15`).
+- The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB (`saarthi-studio-android-release-unsigned`). Sign artifacts with your own keystore at distribution time.
+- Plaintext router endpoints are restricted to loopback/private LAN ranges via `network_security_config.xml`; public hosts must use HTTPS.
+- Local helper: `android/BUILD-APK-UBUNTU.sh` runs unit tests, lint, debug and release assembly.
+
+### Desktop (Rust host)
+- The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
+- Pushing a `v*` tag runs "Desktop Release": Linux x86_64 tarball, `.deb` (cargo-deb), and AppImage, each with SHA-256 checksums, attached to the GitHub release.
+- Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/free-ai-suite/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.

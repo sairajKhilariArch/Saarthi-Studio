@@ -8,9 +8,23 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         applicationId = "com.saarthi.studio"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 14
-        versionName = "1.11.1"
+        targetSdk = 35
+        versionCode = 15
+        versionName = "1.12.0"
+    }
+
+    buildTypes {
+        release {
+            // Production release build: R8 code shrinking/obfuscation plus
+            // resource shrinking. No signing config is committed; release
+            // artifacts are assembled unsigned and signed at distribution time.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
     }
 
     compileOptions {

@@ -1,4 +1,4 @@
-name: Build Saarthi Studio Android APK
+name: Android CI
 
 on:
   workflow_dispatch:
@@ -111,12 +111,32 @@ jobs:
         working-directory: android
         run: gradle --no-daemon --stacktrace assembleDebugAndroidTest
 
+      # Production build: R8 minified + resource-shrunk release APK and AAB.
+      # No signing config is committed, so both artifacts are unsigned and are
+      # signed at distribution time.
+      - name: Assemble release APK and AAB (R8, unsigned)
+        id: assemble_release
+        continue-on-error: true
+        working-directory: android
+        run: gradle --no-daemon --stacktrace assembleRelease bundleRelease
+
       - name: Upload debug APK artifact
         if: always() && steps.assemble.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: saarthi-studio-android-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APK and AAB (unsigned)
+        if: always() && steps.assemble_release.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: saarthi-studio-android-release-unsigned
+          path: |
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+            android/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 30
 
@@ -185,10 +205,11 @@ jobs:
           LINT_OUTCOME: ${{ steps.lint.outcome }}
           ASSEMBLE_OUTCOME: ${{ steps.assemble.outcome }}
           ASSEMBLE_TESTS_OUTCOME: ${{ steps.assemble_tests.outcome }}
+          RELEASE_OUTCOME: ${{ steps.assemble_release.outcome }}
           INSTRUMENTED_OUTCOME: ${{ steps.instrumented.outcome }}
         run: |
           failed=0
-          for result in "$WHITESPACE_OUTCOME" "$UNIT_OUTCOME" "$LINT_OUTCOME" "$ASSEMBLE_OUTCOME" "$ASSEMBLE_TESTS_OUTCOME" "$INSTRUMENTED_OUTCOME"; do
+          for result in "$WHITESPACE_OUTCOME" "$UNIT_OUTCOME" "$LINT_OUTCOME" "$ASSEMBLE_OUTCOME" "$ASSEMBLE_TESTS_OUTCOME" "$RELEASE_OUTCOME" "$INSTRUMENTED_OUTCOME"; do
             if [ "$result" != "success" ]; then
               echo "Validation step failed: $result"
               failed=1

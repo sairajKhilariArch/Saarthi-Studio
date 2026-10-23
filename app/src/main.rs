@@ -69,8 +69,41 @@ fn paths() -> (PathBuf, PathBuf, PathBuf) {
     (
         home.join(".config/free-ai-studio/config.json"),
         home.join(".local/share/free-ai-studio/history.sqlite3"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"),
+        resolve_static_dir(),
     )
+}
+
+/// Ordered candidate directories for the static UI. `FREE_AI_STUDIO_STATIC_DIR`
+/// (when set) is authoritative; otherwise the installed system layout
+/// (`<exe dir>/../share/free-ai-suite/static`, used by the .deb and AppImage)
+/// is preferred, then a `static/` directory next to the executable (portable
+/// tarball), and finally the source tree as a `cargo run` development
+/// fallback. Keeping this runtime-resolved is what lets one binary work from
+/// any of those layouts.
+fn static_dir_candidates(exe_dir: Option<&FsPath>, env_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = env_dir {
+        candidates.push(dir);
+    }
+    if let Some(dir) = exe_dir {
+        candidates.push(dir.join("../share/free-ai-suite/static"));
+        candidates.push(dir.join("static"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
+    candidates
+}
+
+fn resolve_static_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("FREE_AI_STUDIO_STATIC_DIR") {
+        return PathBuf::from(dir);
+    }
+    let exe_dir = env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from));
+    static_dir_candidates(exe_dir.as_deref(), None)
+        .into_iter()
+        .find(|dir| dir.join("index.html").is_file())
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"))
 }
 
 fn set_private_permissions(path: &FsPath, dir: bool) -> io::Result<()> {
@@ -521,6 +554,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{APP_NAME} (Rust) is running at http://{address}");
     println!("Settings: {}", state.config_path.display());
     println!("Conversation database: {}", state.database_path.display());
+    println!("Static UI directory: {}", state.static_dir.display());
     let app = Router::new()
         .route("/", get(root))
         .route("/static/*file", get(static_file))
@@ -538,4 +572,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Stopping Free AI Studio.");
     }).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn static_dir_candidates_prefer_env_then_installed_then_adjacent_then_source() {
+        let exe_dir = scratch("bin");
+        let env_dir = scratch("override");
+        let candidates = static_dir_candidates(Some(&exe_dir), Some(env_dir.clone()));
+        assert_eq!(candidates[0], env_dir);
+        assert_eq!(candidates[1], exe_dir.join("../share/free-ai-suite/static"));
+        assert_eq!(candidates[2], exe_dir.join("static"));
+        assert_eq!(candidates[3], PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
+    }
+
+    #[test]
+    fn static_dir_candidates_fall_back_to_source_tree() {
+        let candidates = static_dir_candidates(None, None);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].join("index.html").is_file());
+    }
 }

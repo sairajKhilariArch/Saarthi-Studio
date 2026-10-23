@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.0.0"
+version = "1.12.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -14,3 +14,28 @@ serde = { version = "=1.0.217", features = ["derive"] }
 serde_json = "=1.0.138"
 tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+
+# Packaging metadata for `cargo deb` (used by the desktop release workflow).
+# The binary locates its UI via <exe dir>/../share/free-ai-suite/static at
+# runtime, so the deb asset paths below are load-bearing.
+[package.metadata.deb]
+maintainer = "SAIRAJ KHILARI <sairajkhilari191918110+github1@gmail.com>"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """Free AI Suite is a local-first AI chat and coding workspace. It runs a
+loopback-only HTTP service that serves a browser UI and routes chat requests
+to a self-hosted FreeLLMAPI endpoint."""
+assets = [
+    ["target/release/free-ai-studio", "usr/bin/free-ai-studio", "755"],
+    ["static/index.html", "usr/share/free-ai-suite/static/index.html", "644"],
+    ["static/app.js", "usr/share/free-ai-suite/static/app.js", "644"],
+    ["static/styles.css", "usr/share/free-ai-suite/static/styles.css", "644"],
+    ["packaging/free-ai-suite.desktop", "usr/share/applications/free-ai-suite.desktop", "644"],
+    ["packaging/icons/free-ai-suite.svg", "usr/share/icons/hicolor/scalable/apps/free-ai-suite.svg", "644"],
+]

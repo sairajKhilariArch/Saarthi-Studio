@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plaintext HTTP is permitted only for loopback and private/ link-local
+  ranges, matching the self-hosted-LAN usage in README.md and the transport
+  rule in PLATFORM-ARCHITECTURE.md ("plain HTTP on an untrusted network must
+  not be promoted as safe"). Everything else requires HTTPS, so a router URL
+  on a public host must be served over TLS.
+-->
+<network-security-config>
+    <base-config cleartextTrafficEnabled="false" />
+    <domain-config cleartextTrafficEnabled="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">::1</domain>
+        <domain includeSubdomains="false">10.0.0.0/8</domain>
+        <domain includeSubdomains="false">172.16.0.0/12</domain>
+        <domain includeSubdomains="false">192.168.0.0/16</domain>
+        <domain includeSubdomains="false">169.254.0.0/16</domain>
+        <domain includeSubdomains="false">fd00::/8</domain>
+    </domain-config>
+</network-security-config>
