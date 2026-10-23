@@ -54,7 +54,7 @@ async function loadConversations() {
 function addMessage(role, content, meta=null, isError=false) {
   $("welcome").classList.add("hidden");
   const row = document.createElement("div"); row.className = `message ${role}` + (isError ? " error" : "");
-  const avatar = document.createElement("div"); avatar.className = "avatar"; avatar.textContent = role === "user" ? "Y" : isError ? "!" : "✳";
+  const avatar = document.createElement("div"); avatar.className = "avatar"; avatar.textContent = role === "user" ? "Y" : isError ? "!" : "✦";
   const body = document.createElement("div"); body.className = "bubble"; body.textContent = content;
   const wrap = document.createElement("div"); wrap.style.minWidth = "0"; wrap.style.maxWidth = "100%"; wrap.appendChild(body);
   if (meta) {
