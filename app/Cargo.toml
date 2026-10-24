@@ -19,6 +19,14 @@ sha2 = "=0.10.9"
 subtle = "=2.6.1"
 tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
+# Desktop application window (Tauri v2). Disable with --no-default-features
+# for a headless server-only build.
+tauri = { version = "2", optional = true }
+
+[features]
+default = ["gui"]
+# Native application window around the local UI. Off => server-only binary.
+gui = ["dep:tauri"]
 
 [profile.release]
 lto = true
@@ -44,5 +52,8 @@ assets = [
     ["packaging/free-ai-suite.desktop", "usr/share/applications/free-ai-suite.desktop", "644"],
     ["packaging/icons/free-ai-suite.svg", "usr/share/icons/hicolor/scalable/apps/free-ai-suite.svg", "644"],
 ]
+[build-dependencies]
+tauri-build = "2"
+
 [dev-dependencies]
 tower = { version = "=0.5.2", features = ["util"] }

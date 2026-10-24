@@ -1,5 +1,157 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
-  <!-- Matches the Android adaptive launcher icon: deep indigo tile, white spark. -->
-  <rect x="0" y="0" width="108" height="108" rx="20" fill="#1B2A4A"/>
-  <path d="M54,26 C57.5,41 61,44.5 76,48 C61,51.5 57.5,55 54,70 C50.5,55 47,51.5 32,48 C47,44.5 50.5,41 54,26 Z" fill="#FFFFFF"/>
+
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#35105F"/>
+      <stop offset=".48" stop-color="#10102F"/>
+      <stop offset="1" stop-color="#080B25"/>
+    </linearGradient>
+
+    <linearGradient id="border" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7A1A"/>
+      <stop offset=".5" stop-color="#792BFF"/>
+      <stop offset="1" stop-color="#FF4D75"/>
+    </linearGradient>
+
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF5D2"/>
+      <stop offset=".3" stop-color="#FFD36A"/>
+      <stop offset=".65" stop-color="#FF922E"/>
+      <stop offset="1" stop-color="#FF4E68"/>
+    </linearGradient>
+
+    <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF5CE"/>
+      <stop offset=".25" stop-color="#FFD36C"/>
+      <stop offset=".55" stop-color="#FF851F"/>
+      <stop offset=".8" stop-color="#E83CBB"/>
+      <stop offset="1" stop-color="#672CFF"/>
+    </linearGradient>
+
+    <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF91DB"/>
+      <stop offset=".45" stop-color="#B34BFF"/>
+      <stop offset="1" stop-color="#5435F5"/>
+    </linearGradient>
+
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#C5A1FF"/>
+      <stop offset=".5" stop-color="#EF72E8"/>
+      <stop offset="1" stop-color="#FF9A38"/>
+    </linearGradient>
+
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#FF8A36" stop-opacity=".22"/>
+      <stop offset=".6" stop-color="#872DFF" stop-opacity=".12"/>
+      <stop offset="1" stop-color="#10102F" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Midnight purple background -->
+  <rect width="512" height="512" rx="88" fill="url(#bg)"/>
+  <rect x="4" y="4" width="504" height="504" rx="84"
+        fill="none" stroke="url(#border)" stroke-width="3"/>
+
+  <!-- Atmospheric halo -->
+  <circle cx="256" cy="190" r="168" fill="url(#halo)"/>
+  <circle cx="256" cy="190" r="153"
+          fill="none" stroke="#E6B5FF"
+          stroke-opacity=".2" stroke-width="1.5"/>
+
+  <!-- Decorative flowing waves -->
+  <path d="M0 245 Q85 220 145 274 T275 305
+           Q385 335 512 250 L512 310
+           Q400 390 300 343 T130 312 Q55 275 0 300Z"
+        fill="#6B29FF" opacity=".14"/>
+  <path d="M0 252 Q85 225 145 278 T275 310
+           Q390 337 512 254"
+        fill="none" stroke="#FF813A"
+        stroke-opacity=".35" stroke-width="2"/>
+
+  <!-- Original flowing S emblem -->
+  <path d="M329 76
+           C290 54 222 59 186 84
+           C150 108 149 138 180 159
+           C208 179 250 193 286 214
+           C327 237 347 263 338 295
+           C328 331 288 352 247 351
+           C206 350 177 330 164 302
+           C154 282 160 260 173 244
+           C177 276 199 294 226 299
+           C253 304 280 293 282 278
+           C284 263 254 250 222 234
+           C180 213 146 194 132 166
+           C114 129 139 94 179 73
+           C223 50 289 47 329 62Z"
+        fill="url(#ribbon)"/>
+
+  <!-- Violet ribbon edge -->
+  <path d="M173 244
+           C159 268 168 302 193 322
+           C210 337 228 343 246 341
+           C211 329 184 296 173 244Z"
+        fill="url(#purple)"/>
+
+  <!-- Mountain silhouettes -->
+  <path d="M183 286 L208 260 L226 273
+           L250 240 L270 265 L289 251
+           L315 282 L315 302 L183 302Z"
+        fill="#221448"/>
+
+  <path d="M207 278 L226 273 L250 240
+           L270 265 L289 251 L304 278
+           L281 269 L267 281 L250 262
+           L231 286Z"
+        fill="#49216D" opacity=".9"/>
+
+  <!-- Sun on the horizon -->
+  <circle cx="292" cy="273" r="14" fill="#FFD77B"/>
+
+  <!-- Winding golden path -->
+  <path d="M256 266
+           C228 276 210 284 225 294
+           C241 304 273 307 260 319
+           C249 330 229 335 211 337"
+        fill="none" stroke="#FFF0C5"
+        stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Compass ring -->
+  <path d="M302 88 A48 48 0 0 1 330 68"
+        fill="none" stroke="#FFB33F" stroke-width="2.5"/>
+  <path d="M351 69 A48 48 0 0 1 379 96"
+        fill="none" stroke="#FFB33F" stroke-width="2.5"/>
+  <path d="M379 122 A48 48 0 0 1 352 150"
+        fill="none" stroke="#B84BFF" stroke-width="2.5"/>
+
+  <!-- Guiding star -->
+  <path d="M342 57
+           C347 84 355 92 382 97
+           C355 102 347 110 342 137
+           C337 110 329 102 302 97
+           C329 92 337 84 342 57Z"
+        fill="url(#gold)"/>
+
+  <!-- Sparkle accents -->
+  <circle cx="105" cy="158" r="3" fill="#FF9A35"/>
+  <circle cx="126" cy="207" r="3.5" fill="#FF713C"/>
+  <circle cx="406" cy="214" r="2.5" fill="#CE59FF"/>
+
+  <!-- Brand name -->
+  <text x="256" y="402"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="43" font-weight="700"
+        letter-spacing="-1.8"
+        fill="#FFF0D4">Saarthi<tspan
+        fill="#FFB34F">-</tspan><tspan
+        fill="url(#word)">Studio</tspan></text>
+
+  <!-- Signature underline -->
+  <path d="M116 427 H226 M286 427 H396"
+        fill="none" stroke="url(#border)"
+        stroke-width="3" stroke-linecap="round"/>
+
+  <path d="M256 416 L267 427 L256 438 L245 427Z"
+        fill="url(#gold)"/>
 </svg>

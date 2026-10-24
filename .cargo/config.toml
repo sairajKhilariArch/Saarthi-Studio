@@ -1,7 +1,11 @@
 # Maximum-speed build tooling. Requires the nightly toolchain (pinned in
 # rust-toolchain.toml), the rustc-codegen-cranelift component, and the mold
 # linker installed system-wide (`apt install mold`).
-[build]
+#
+# mold and the cranelift dev backend are Linux-only; the flags are scoped to
+# Linux so the same config file works for Windows builds.
+
+[target.'cfg(all(unix, target_os = "linux"))']
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Z", "threads=8"]
 
 [unstable]

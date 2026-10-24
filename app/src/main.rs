@@ -25,6 +25,10 @@ mod host_api;
 mod host_transport;
 mod host_security;
 mod workspace;
+mod router;
+mod context;
+#[cfg(feature = "gui")]
+mod gui;
 
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
@@ -46,7 +50,20 @@ struct Config {
     model: String,
     #[serde(default)]
     api_key: String,
+    /// Per-request token budget for the packed context.
+    #[serde(default = "default_context_budget_tokens")]
+    context_budget_tokens: usize,
+    /// How many recent messages are considered for each request.
+    #[serde(default = "default_history_messages")]
+    history_messages: usize,
+    /// Send a compact file-tree outline of the open folder with each request.
+    #[serde(default = "default_outline_enabled")]
+    send_workspace_outline: bool,
 }
+
+fn default_context_budget_tokens() -> usize { context::DEFAULT_BUDGET_TOKENS }
+fn default_history_messages() -> usize { context::DEFAULT_HISTORY_MESSAGES }
+fn default_outline_enabled() -> bool { true }
 
 impl Config {
     fn defaults() -> Self {
@@ -55,6 +72,9 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:3001/v1".to_string()),
             model: "auto".to_string(),
             api_key: String::new(),
+            context_budget_tokens: default_context_budget_tokens(),
+            history_messages: default_history_messages(),
+            send_workspace_outline: true,
         }
     }
 }
@@ -67,7 +87,9 @@ fn now_seconds() -> f64 {
 }
 
 fn home_dir() -> PathBuf {
+    // HOME on Linux/macOS, USERPROFILE on Windows.
     env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -223,6 +245,13 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     cfg.model = if cfg.model.trim().is_empty() { "auto".to_string() } else { cfg.model.trim().to_string() };
     cfg.api_key = cfg.api_key.trim().to_string();
 
+    cfg.context_budget_tokens = cfg
+        .context_budget_tokens
+        .clamp(context::MIN_BUDGET_TOKENS, context::MAX_BUDGET_TOKENS);
+    cfg.history_messages = cfg
+        .history_messages
+        .clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES);
+
     let parsed = Url::parse(&cfg.base_url).map_err(|_| "Router URL must start with http:// or https://.".to_string())?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("Router URL must start with http:// or https://.".into());
@@ -341,7 +370,32 @@ async fn serve_static(state: AppState, relative: &str) -> Response<Body> {
 
 async fn get_config(State(state): State<AppState>) -> Json<Value> {
     let cfg = load_config(&state);
-    Json(json!({ "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty() }))
+    Json(json!({
+        "base_url": cfg.base_url,
+        "model": cfg.model,
+        "has_api_key": !cfg.api_key.is_empty(),
+        "context_budget_tokens": cfg.context_budget_tokens,
+        "history_messages": cfg.history_messages,
+        "send_workspace_outline": cfg.send_workspace_outline,
+    }))
+}
+
+async fn router_status(State(_state): State<AppState>) -> Json<Value> {
+    Json(router::status().await.to_json())
+}
+
+async fn router_start(State(_state): State<AppState>) -> Response<Body> {
+    match router::manual_start().await {
+        Ok(status) => Json(status.to_json()).into_response(),
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+async fn router_stop(State(_state): State<AppState>) -> Response<Body> {
+    match router::manual_stop().await {
+        Ok(status) => Json(status.to_json()).into_response(),
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
 }
 
 async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
@@ -350,6 +404,15 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     let model = input.get("model").and_then(Value::as_str).unwrap_or(&cfg.model).to_string();
     if let Some(key) = input.get("api_key").and_then(Value::as_str) {
         if !key.trim().is_empty() { cfg.api_key = key.trim().to_string(); }
+    }
+    if let Some(budget) = input.get("context_budget_tokens").and_then(Value::as_u64) {
+        cfg.context_budget_tokens = budget as usize;
+    }
+    if let Some(history) = input.get("history_messages").and_then(Value::as_u64) {
+        cfg.history_messages = history as usize;
+    }
+    if let Some(outline) = input.get("send_workspace_outline").and_then(Value::as_bool) {
+        cfg.send_workspace_outline = outline;
     }
     cfg.base_url = base_url;
     cfg.model = model;
@@ -360,7 +423,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty()})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline})).into_response()
 }
 
 async fn list_conversations(State(state): State<AppState>) -> Response<Body> {
@@ -503,7 +566,9 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
     } else {
         format!("{message}\n\nHere is the code from my editor (language: {language}):\n```{language}\n{code}\n```")
     };
-    let history_result = (|| -> rusqlite::Result<Option<Vec<Value>>> {
+    let cfg = load_config(&state);
+    let history_limit = cfg.history_messages.clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES) as i64;
+    let history_result = (|| -> rusqlite::Result<Option<Vec<(String, String)>>> {
         let mut conn = open_db(&state.database_path)?;
         let tx = conn.transaction()?;
         let title = tx.query_row("SELECT title FROM conversations WHERE id=?1", [&cid], |r| r.get::<_, String>(0)).optional()?;
@@ -515,27 +580,34 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
         } else {
             tx.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now_seconds(), cid])?;
         }
-        let mut stmt = tx.prepare("SELECT role,content FROM messages WHERE conversation_id=?1 ORDER BY id DESC LIMIT 4")?;
-        let rows = stmt.query_map([&cid], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        let mut stmt = tx.prepare("SELECT role,content FROM messages WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2")?;
+        let rows = stmt.query_map(params![cid, history_limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut messages = vec![json!({"role": "system", "content": SYSTEM_PROMPT})];
-        for (role, content) in rows.into_iter().rev() {
-            messages.push(json!({"role": role, "content": content}));
-        }
         drop(stmt);
         tx.commit()?;
-        Ok(Some(messages))
+        Ok(Some(rows))
     })();
 
-    let messages = match history_result {
+    let rows = match history_result {
         Ok(Some(items)) => items,
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "Conversation not found."),
         Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    let history: Vec<Value> = rows.into_iter().rev()
+        .map(|(role, content)| json!({"role": role, "content": content}))
+        .collect();
+    let outline = if cfg.send_workspace_outline { state.workspace.outline() } else { None };
+    let packed = context::pack(
+        SYSTEM_PROMPT,
+        outline.as_deref(),
+        &history,
+        cfg.context_budget_tokens,
+        cfg.history_messages,
+    );
 
     let started = Instant::now();
-    match call_router(&state, messages).await {
-        Ok((answer, meta)) => {
+    match call_router(&state, packed.messages).await {
+        Ok((answer, mut meta)) => {
             let now = now_seconds();
             let log_result = (|| -> rusqlite::Result<()> {
                 let conn = open_db(&state.database_path)?;
@@ -550,6 +622,8 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
             if let Err(e) = log_result {
                 return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("AI replied, but saving the response failed: {e}"));
             }
+            meta["context_tokens"] = json!(packed.estimated_tokens);
+            meta["context_trimmed"] = json!(packed.trimmed_messages);
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
         }
         Err(error) => {
@@ -564,23 +638,17 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Choose a process-wide Rustls provider before any TLS client/server builder:
-    // reqwest and axum-server can enable both aws-lc-rs and ring through Cargo
-    // feature unification, and Rustls panics when it cannot infer a provider.
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
-    let args = env::args().skip(1).collect::<Vec<_>>();
-    if args.first().map(String::as_str) == Some("host-token") {
-        let (config_path, _, _) = paths();
-        let token_path = config_path.with_file_name("host-auth.json");
-        let store = host_auth::HostTokenStore::new(token_path);
-        host_auth::run_cli(&args[1..], &store)?;
-        return Ok(());
-    }
+struct Boot {
+    port: u16,
+    gui_mode: bool,
+    server: tokio::task::JoinHandle<Result<(), io::Error>>,
+    remote_task: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+}
 
+/// Bind listeners and start the local UI server plus the optional desktop
+/// host API. Runs before the GUI takes over the main thread.
+async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
     let (config_path, database_path, static_dir) = paths();
     let workspace_state_path = config_path.with_file_name("workspace.json");
     let state = AppState {
@@ -595,6 +663,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_PORT);
     let address = format!("{HOST}:{port}");
     let listener = TcpListener::bind(&address).await?;
+    let router_api = Router::new()
+        .route("/api/router", get(router_status))
+        .route("/api/router/start", post(router_start))
+        .route("/api/router/stop", post(router_stop))
+        .route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        ))
+        .with_state(state.clone());
     let app = Router::new()
         .route("/", get(root))
         .route("/static/*file", get(static_file))
@@ -607,6 +684,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/test", post(test_router))
         .route("/api/chat", post(chat))
         .merge(workspace::router(port))
+        .merge(router_api)
         .layer(middleware::from_fn(local_security_headers))
         .with_state(state.clone());
     let remote_config = host_transport::RemoteListenerConfig::from_env()?;
@@ -655,21 +733,115 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Conversation database: {}", state.database_path.display());
     println!("Static UI directory: {}", state.static_dir.display());
 
-    let signal_tx = shutdown_tx.clone();
-    let local_result = axum::serve(listener, app).with_graceful_shutdown(async move {
+    let ctrl_tx = shutdown_tx.clone();
+    tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
-        let _ = signal_tx.send(true);
-        println!("Stopping Free AI Studio.");
-    }).await;
-    let _ = shutdown_tx.send(true);
+        let _ = ctrl_tx.send(true);
+    });
+    let mut server_shutdown_rx = shutdown_rx.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = server_shutdown_rx.changed().await;
+                println!("Stopping Free AI Studio.");
+            })
+            .await
+    });
+    Ok(Boot { port, gui_mode, server, remote_task, shutdown_tx })
+}
 
-    if let Some(task) = remote_task {
-        match task.await? {
-            Ok(()) => {},
-            Err(message) => return Err(io::Error::other(message).into()),
+async fn wait_for_shutdown(mut rx: tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *rx.borrow() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            return;
         }
     }
-    local_result?;
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Choose a process-wide Rustls provider before any TLS client/server builder:
+    // reqwest and axum-server can enable both aws-lc-rs and ring through Cargo
+    // feature unification, and Rustls panics when it cannot infer a provider.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    match args.first().map(String::as_str) {
+        Some("host-token") => {
+            let (config_path, _, _) = paths();
+            let token_path = config_path.with_file_name("host-auth.json");
+            let store = host_auth::HostTokenStore::new(token_path);
+            host_auth::run_cli(&args[1..], &store)?;
+            return Ok(());
+        }
+        Some("router") => {
+            router::run_cli(&args[1..])?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let wants_browser = args.iter().any(|arg| arg == "--browser");
+    let gui_mode = !wants_browser
+        && !args.iter().any(|arg| arg == "--no-gui" || arg == "--headless")
+        && env::var_os("FREE_AI_STUDIO_NO_GUI").is_none();
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let boot = runtime.block_on(async {
+        if env::var_os("FREE_AI_STUDIO_SKIP_ROUTER").is_none() {
+            let status = router::ensure_started().await;
+            if status.reachable {
+                println!("FreeLLMAPI router is responding at http://127.0.0.1:{}.", status.port);
+            }
+        }
+        bootstrap(gui_mode).await
+    })?;
+
+    if gui_mode {
+        println!("Application window: http://127.0.0.1:{}", boot.port);
+        #[cfg(feature = "gui")]
+        {
+            if let Err(error) = gui::run(boot.port, boot.shutdown_tx.clone(), APP_NAME) {
+                println!("Could not open the application window ({error}).");
+                println!("Continuing headless: open http://127.0.0.1:{} in a browser.", boot.port);
+            }
+        }
+        #[cfg(not(feature = "gui"))]
+        println!("This build has no window support. Open http://127.0.0.1:{} in a browser, or rebuild with the default gui feature.", boot.port);
+    } else if wants_browser {
+        println!("Opening the interface in your browser. Stop with Ctrl+C.");
+        #[cfg(feature = "gui")]
+        gui::open_in_browser(boot.port);
+        #[cfg(not(feature = "gui"))]
+        println!("Open http://127.0.0.1:{} in a browser.", boot.port);
+    } else {
+        println!("Headless mode. Open http://127.0.0.1:{} or stop with Ctrl+C.", boot.port);
+    }
+
+    if gui_mode {
+        // The window closed: run the shared shutdown path now.
+        let _ = boot.shutdown_tx.send(true);
+    } else {
+        runtime.block_on(wait_for_shutdown(boot.shutdown_tx.subscribe()));
+    }
+    runtime.block_on(async move {
+        match boot.server.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => println!("Server stopped with an error: {error}"),
+            Err(error) => println!("Server task failed: {error}"),
+        }
+        if let Some(task) = boot.remote_task {
+            match task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(message)) => println!("Desktop Host API stopped with an error: {message}"),
+                Err(error) => println!("Desktop Host API task failed: {error}"),
+            }
+        }
+        router::shutdown_cleanup().await;
+    });
     Ok(())
 }
 

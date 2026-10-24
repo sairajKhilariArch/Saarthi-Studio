@@ -202,6 +202,49 @@ impl WorkspaceStore {
             .map(|entry| entry.root)
             .ok_or_else(|| conflict("Open a folder first."))
     }
+
+    /// Compact file-tree outline of the open folder: names only, no contents,
+    /// with bulky directories skipped. Used to give the model cheap project
+    /// awareness without sending file contents.
+    pub(crate) fn outline(&self) -> Option<String> {
+        let workspace = self.current()?;
+        let mut lines = vec![format!("{}/", workspace.name)];
+        let mut entries = 0usize;
+        push_outline(&workspace.root, 0, &mut lines, &mut entries);
+        Some(lines.join("\n"))
+    }
+}
+
+const OUTLINE_SKIP_DIRS: [&str; 6] = [".git", "node_modules", "target", "build", "dist", ".gradle"];
+
+fn push_outline(dir: &FsPath, depth: usize, lines: &mut Vec<String>, entries: &mut usize) {
+    if depth > 4 || *entries >= 300 {
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else { return };
+    let mut names: Vec<(String, bool)> = Vec::new();
+    for item in read.flatten() {
+        let name = item.file_name().to_string_lossy().to_string();
+        let is_dir = item.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+            && !item.file_type().map(|kind| kind.is_symlink()).unwrap_or(false);
+        if is_dir && (name.starts_with('.') && name != ".github" || OUTLINE_SKIP_DIRS.contains(&name.as_str())) {
+            continue;
+        }
+        names.push((name, is_dir));
+    }
+    names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    let indent = "  ".repeat(depth);
+    for (name, is_dir) in names {
+        if *entries >= 300 {
+            lines.push(format!("{indent}…"));
+            return;
+        }
+        *entries += 1;
+        lines.push(if is_dir { format!("{indent}{name}/") } else { format!("{indent}{name}") });
+        if is_dir {
+            push_outline(&dir.join(&name), depth + 1, lines, entries);
+        }
+    }
 }
 
 fn canonical_dir(path: &str) -> Option<PathBuf> {
@@ -745,7 +788,7 @@ async fn remove(
 
 /// Blocks cross-site requests and DNS-rebinding: the request must target the
 /// loopback listener by name, and a browser-supplied `Origin` must be loopback.
-async fn guard_local_origin(
+pub(crate) async fn guard_local_origin(
     State(guard): State<LocalOriginGuard>,
     request: Request<Body>,
     next: Next,
@@ -778,11 +821,15 @@ async fn guard_local_origin(
 }
 
 #[derive(Clone)]
-struct LocalOriginGuard {
+pub(crate) struct LocalOriginGuard {
     port: u16,
 }
 
 impl LocalOriginGuard {
+    pub(crate) fn new(port: u16) -> Self {
+        Self { port }
+    }
+
     fn host_names(&self) -> [String; 3] {
         if self.port == 80 {
             [
