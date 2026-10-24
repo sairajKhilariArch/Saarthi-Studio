@@ -1,76 +1,119 @@
 # Changelog
 
-Release **1.19.0** is built by five local commits. Each commit message starts
-with its tag (`v1.19.0-1` … `v1.19.0-5`) and lists the functions it delivers.
-Nothing here has been pushed or published.
+Release **1.19.0** is the current version in `Cargo.toml` and `tauri.conf.json`
+(and Android `versionName 1.19.0`, code `16`). It ships the window shell, the
+token-budgeted context packer, the router lifecycle, the router console, the
+Windows build and the VS Code extension.
 
-## 1.19.0
+Five follow-up commits sit on top of it locally. Each commit message starts
+with its tag and lists exactly what it delivers. **Nothing here has been
+pushed.**
 
-### `v1.19.0-1` — window runtime alignment and platform folder pickers
+## 1.19.0 — the release itself
 
-- `tauri` pinned to `2.12.5` with `serde` `1.0.229`. `tauri` 2.11 compiled
-  against the newer `tauri-runtime` monitor API and failed the build; the whole
-  2.12 line now moves together.
-- The cranelift dev backend is disabled. It aborts with “Rust cannot catch
-  foreign exceptions” while compiling the Tauri/GTK window code, so debug and
-  release builds both use LLVM; mold and nightly's parallel frontend stay on.
-- Windows folder picker (PowerShell `FolderBrowserDialog`) and macOS picker
-  (`osascript`), alongside the existing Linux Zenity/KDialog path. Linux-only
-  linker flags remain scoped so the same `.cargo/config.toml` builds on Windows.
+### Window shell instead of a browser tab
 
-### `v1.19.0-2` — router console bridge, guarded embedding, test router
+- Tauri 2 loads the local UI in the system webview (WebKitGTK on Linux,
+  WebView2 on Windows), so there is no bundled Chromium. `--browser` keeps the
+  browser flow and `--no-gui` runs headless for CI and the extension.
+- Closing the window runs the same shutdown path as Ctrl+C: the local server
+  stops, then the router is brought down if this run started it.
+- `app/icons/` carries the sparkle artwork as PNG and ICO for the window and
+  the Windows exe.
 
-- `app/src/router_console.rs` bridges FreeLLMAPI's dashboard API over loopback:
-  it requests a desktop session, falls back to a cached session or a one-time
-  email/password sign-in, and forwards only an allow-listed set of admin
-  families (`keys`, `models`, `fallback`, `analytics`, `logs`, `free-tier`, …).
-  A stale session is dropped and re-minted exactly once.
-- `/api/router/console/status`, `/api/router/console/login` and an
-  `ANY /api/router/console/*path` passthrough, mounted behind the same loopback
-  origin guard as the rest of the local UI. Paths outside the admin API,
-  traversal, and encoded query strings are refused.
-- `/api/health` reports `embeddable`; framing stays `DENY` unless the app was
-  launched by the VS Code extension (`FREE_AI_STUDIO_EMBED=vscode`), in which
-  case only a `vscode-webview:` frame may load the UI.
-- `scripts/mock-router.py`: dependency-free FreeLLMAPI stand-in (proxy +
-  dashboard halves) so the console can be exercised without Docker.
+### Token-budgeted context (the "fewer tokens like Freebuff" part)
 
-### `v1.19.0-3` — console UI, horizontal message actions, context meter
+- `app/src/context.rs`: 6k default budget (1k–32k ceiling), a newest-N message
+  window (2–24), per-message caps, head/tail cropping that keeps both ends, and
+  one-line markers so attachments from earlier turns are not re-sent.
+- A names-only outline of the open folder goes into the system prompt, never
+  file contents.
+- Settings expose budget, message window and the outline toggle; the composer
+  shows a live `~used / budget` meter and the router's real `context_tokens`
+  after each reply.
 
-- New Router view: router status with start/stop, providers (add, enable,
-  delete), model catalog with “use this model”, routing strategy with the raw
-  settings, analytics summary and by-model table, live logs with clear, and the
-  free-tier budget table.
-- Every message now shows its actions as one horizontal row underneath it
-  (user: Copy, Resend; assistant: Copy reply) instead of a stacked side rail.
-- Composer token meter (`~used / budget`) driven by the new budget settings,
-  and the real `context_tokens` reported by the router after each reply.
-- Settings gained context budget, message window and workspace-outline controls.
+### Router lifecycle — stop only what the app started
 
-### `v1.19.0-4` — VS Code extension with desktop detection and built-in server
+- Studio starts FreeLLMAPI only when its port is not answering, records who
+  started it in `router-owned.json`, and runs `docker compose down` on exit
+  only when it was the one that started it.
+- `free-ai-studio router status|start|stop` exposes the same logic, and the
+  console has Start/Stop/Refresh.
 
-- `vscode-extension/`: probes the desktop app's `/api/health`; when it answers
-  and is embeddable the panel embeds it, otherwise the extension starts its own
-  HTTP server on a random loopback port.
-- The built-in server serves the same UI and API — chat with the same token
-  budget rules, conversations, usage, the router console bridge, and a folder
-  API confined to the workspace VS Code has open.
-- Commands: open chat, ask about selection, attach active file, set router API
-  key (secret storage), show status, restart server, open desktop app.
-- The desktop UI accepts editor selections through a guarded `postMessage`
-  prefill and shows them as a context chip.
-- 13 unit/integration tests cover the packer, store, workspace rules, console
-  path guard, desktop probe and both server surfaces; the packaged `.vsix` is
-  about 57 KB.
+### Router console — FreeLLMAPI dashboard features inside the app
 
-### `v1.19.0-5` — release pipeline for Linux, Windows, Android and VS Code
+- `app/src/router_console.rs` bridges the dashboard API over loopback with a
+  desktop session (falling back to a one-time email/password sign-in), forwards
+  only allow-listed admin families, and re-mints a stale session exactly once.
+- Console tabs: providers (add, enable, delete keys), model catalog with "use
+  this model", routing strategy with raw settings, analytics summary and
+  by-model table, live logs with clear, and the free-tier budget table.
+- `scripts/mock-router.py` is a dependency-free stand-in for the router so the
+  console is testable without Docker.
 
+### Windows + releases
+
+- Portable `free-ai-studio.exe` build on `windows-latest`, Windows/macOS folder
+  pickers, and cargo linker flags scoped to Linux so one config works both
+  places.
 - `Desktop Release` builds and attaches all four platforms to one GitHub
-  release: Linux x86_64 (tarball, `.deb`, AppImage + SHA-256 sums), a Windows
-  x86_64 portable zip from `windows-latest`, the unsigned Android release
+  release: Linux tarball/`.deb`/AppImage, the Windows zip, the unsigned Android
   APK/AAB, and the VS Code `.vsix`.
-- The extension job type-checks and tests before packaging, so a broken
-  extension cannot reach a release.
-- Android version `1.19.0` (code `16`); README documents the window shell,
-  router console, Docker lifecycle, Windows zip and the extension.
-- Version bumped to `1.19.0` in `Cargo.toml` and `tauri.conf.json`.
+
+### VS Code extension
+
+- Probes the desktop app; embeds it when it is running and embeddable,
+  otherwise starts a built-in server inside the extension that serves the same
+  UI and API on a free loopback port, scoped to the open workspace.
+- 13 tests cover the packer, store, workspace rules, console path guard, probe
+  and both server surfaces. The `.vsix` is about 48 KB.
+
+## Follow-up commits
+
+### v1.19.1 — add window icon assets so the Tauri shell can build
+
+`tauri::generate_context!` panicked with "failed to open icon
+`app/icons/icon.png`" because `bundle.icon` named nothing. Adds a 512px PNG and
+a 256px PNG-compressed ICO of the four-point sparkle and lists both in
+`tauri.conf.json`.
+
+### v1.19.2 — never take ownership of a router this app did not start
+
+`router start` claimed ownership even when the router was already answering, so
+app exit could have stopped a router the user launched. `manual_start` now
+leaves the flag alone when the port is already up, matching `ensure_started`;
+the compose-task error mapping in `shutdown_cleanup` is fixed too. Verified
+start/stop/exit against a stub `docker`.
+
+### v1.19.3 — silence the router-console clippy gate
+
+Replaces `assert_eq!(… .is_err(), true)` with `assert!(… .is_err())`, the one
+`-D warnings` failure in the desktop CI gate.
+
+### v1.19.4 — rustfmt the crate and remove two dead code paths
+
+`cargo fmt --all` across the touched files, plus removal of the never-read
+`Boot.gui_mode` field and the unused `context::outline_from_entries` helper
+(the chat path uses `workspace::outline()`), so `cargo clippy --locked
+--all-targets -- -D warnings` passes.
+
+### v1.19.5 — keep the composer token meter in step with its inputs
+
+The meter resets to a cheap estimate while a draft is being written and
+refreshes on every path that attaches or clears a file, so it never shows the
+previous reply's count while you are typing.
+
+### v1.19.6 — this changelog
+
+Documents the release and the follow-up commits above.
+
+## Verification
+
+- `cargo fmt --all --check`, `cargo test --locked` (57/57), `cargo clippy
+  --locked --all-targets -- -D warnings` — all clean.
+- Browser pass against the mock router: console tabs, key add/enable/delete,
+  model select, strategy save, analytics, logs, budget, message actions row,
+  token meter, settings persistence.
+- Router lifecycle: compose up on boot, `docker compose down` on SIGINT, and a
+  router started by the user stays running after exit.
+- Extension: `npm test` (13/13), `tsc --noEmit`, `vsce package`.
