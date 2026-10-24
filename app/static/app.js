@@ -522,6 +522,9 @@ async function sendMessage(preset = null) {
   $("prompt").value = "";
   autoGrow($("prompt"));
   addMessage("user", message, { attachment: context ? (context.scratch ? "Scratch pad attached" : context.path) : null });
+  // Show the estimate again until the router reports the real count.
+  state.lastContextTokens = null;
+  updateContextMeter();
   setBusy(true);
 
   const result = await api("/api/chat", {
@@ -1084,12 +1087,14 @@ function renderContextChip() {
   const chip = $("contextChip");
   if (!state.chatContext) {
     chip.classList.add("hidden");
+    updateContextMeter();
     return;
   }
   chip.classList.remove("hidden");
   const label = state.chatContext.path;
   $("contextLabel").textContent = label.length > 48 ? `…${label.slice(-46)}` : label;
   $("contextLabel").title = label;
+  updateContextMeter();
 }
 
 function attachFromComposer() {
