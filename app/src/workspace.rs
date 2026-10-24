@@ -19,7 +19,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    fs, io,
+    fs,
     path::{Component, Path as FsPath, PathBuf},
     process::Command,
     sync::{Arc, RwLock},
@@ -637,6 +637,7 @@ enum PickerResult {
     Unavailable,
 }
 
+#[cfg(target_os = "linux")]
 fn run_folder_picker() -> PickerResult {
     // Zenity first (GNOME/most desktops), then KDialog. Both are launched with
     // a fixed, user-independent argument list; no shell is involved.
@@ -659,7 +660,7 @@ fn run_folder_picker() -> PickerResult {
             }
             return PickerResult::Cancelled;
         }
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return PickerResult::Unavailable,
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return PickerResult::Unavailable,
         Err(_) => {}
     }
 
@@ -1109,4 +1110,62 @@ mod tests {
             assert_eq!(language_for(FsPath::new(path)), expected, "{path}");
         }
     }
+}
+
+/// Windows folder picker: PowerShell's FolderBrowserDialog ships with every
+/// supported Windows version, so no extra runtime has to be installed. The
+/// script is a fixed string; nothing from the request is interpolated into it.
+#[cfg(target_os = "windows")]
+fn run_folder_picker() -> PickerResult {
+    const SCRIPT: &str = concat!(
+        "Add-Type -AssemblyName System.Windows.Forms; ",
+        "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; ",
+        "$dialog.Description = 'Open a folder in Free AI Studio'; ",
+        "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { ",
+        "[Console]::Out.Write($dialog.SelectedPath) }"
+    );
+    match Command::new("powershell")
+        .args(["-NoProfile", "-STA", "-Command", SCRIPT])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                PickerResult::Cancelled
+            } else {
+                PickerResult::Picked(path)
+            }
+        }
+        Ok(_) => PickerResult::Cancelled,
+        Err(_) => PickerResult::Unavailable,
+    }
+}
+
+/// macOS folder picker via the built-in AppleScript choose-folder dialog.
+#[cfg(target_os = "macos")]
+fn run_folder_picker() -> PickerResult {
+    match Command::new("osascript")
+        .args([
+            "-e",
+            "POSIX path of (choose folder with prompt \"Open a folder in Free AI Studio\")",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                PickerResult::Cancelled
+            } else {
+                PickerResult::Picked(path)
+            }
+        }
+        Ok(_) => PickerResult::Cancelled,
+        Err(_) => PickerResult::Unavailable,
+    }
+}
+
+/// Other platforms fall back to typing a path in the dialog.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn run_folder_picker() -> PickerResult {
+    PickerResult::Unavailable
 }

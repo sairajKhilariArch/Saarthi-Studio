@@ -1,16 +1,16 @@
-# Maximum-speed build tooling. Requires the nightly toolchain (pinned in
-# rust-toolchain.toml), the rustc-codegen-cranelift component, and the mold
+# Fast local builds: mold for linking and nightly's parallel codegen frontend.
+# Requires the nightly toolchain (pinned in rust-toolchain.toml) and the mold
 # linker installed system-wide (`apt install mold`).
 #
-# mold and the cranelift dev backend are Linux-only; the flags are scoped to
-# Linux so the same config file works for Windows builds.
+# The cranelift dev backend is deliberately not enabled: it aborts with
+# "Rust cannot catch foreign exceptions" while compiling the Tauri/GTK window
+# code, so the LLVM backend is used for both debug and release builds.
+#
+# mold and `-Z threads` are Linux-only; the flags are scoped to Linux so the
+# same config file works for Windows builds.
 
 [target.'cfg(all(unix, target_os = "linux"))']
 rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Z", "threads=8"]
 
-[unstable]
-codegen-backend = true
-
 [profile.dev]
-codegen-backend = "cranelift"
 debug = 1

@@ -26,6 +26,7 @@ mod host_transport;
 mod host_security;
 mod workspace;
 mod router;
+mod router_console;
 mod context;
 #[cfg(feature = "gui")]
 mod gui;
@@ -217,16 +218,29 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response<Body> 
 async fn local_security_headers(request: Request<Body>, next: Next) -> Response<Body> {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
-    headers.insert(
-        "content-security-policy",
-        HeaderValue::from_static(
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
-             script-src 'self'; connect-src 'self'; base-uri 'none'",
-        ),
-    );
+    if embed_framing_allowed() {
+        // No X-Frame-Options for an embedded launch: a webview origin is a
+        // different origin, so frame-ancestors has to carry the allow-list.
+        headers.insert(
+            "content-security-policy",
+            HeaderValue::from_static(
+                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+                 script-src 'self'; connect-src 'self'; base-uri 'none'; \
+                 frame-ancestors 'self' vscode-webview:",
+            ),
+        );
+    } else {
+        headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+        headers.insert(
+            "content-security-policy",
+            HeaderValue::from_static(
+                "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+                 script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+            ),
+        );
+    }
     response
 }
 
@@ -521,7 +535,24 @@ async fn usage(State(state): State<AppState>) -> Response<Body> {
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
     let cfg = load_config(&state);
-    Json(json!({"ok": true, "app": APP_NAME, "runtime": "rust", "router": cfg.base_url}))
+    Json(json!({
+        "ok": true,
+        "app": APP_NAME,
+        "runtime": "rust",
+        "router": cfg.base_url,
+        // True only when launched by an embedding host (the VS Code
+        // extension); the extension uses it to decide whether it may frame
+        // this UI or should open it externally.
+        "embeddable": embed_framing_allowed(),
+    }))
+}
+
+/// Set when the app is launched by an embedding host. Framing stays disabled
+/// by default and, when enabled, only a VS Code webview may frame the UI.
+fn embed_framing_allowed() -> bool {
+    std::env::var("FREE_AI_STUDIO_EMBED")
+        .map(|value| value == "vscode")
+        .unwrap_or(false)
 }
 
 async fn test_router(State(state): State<AppState>) -> Response<Body> {
@@ -684,6 +715,7 @@ async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/test", post(test_router))
         .route("/api/chat", post(chat))
         .merge(workspace::router(port))
+        .merge(router_console::router(port))
         .merge(router_api)
         .layer(middleware::from_fn(local_security_headers))
         .with_state(state.clone());

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.19.0 — release packaging and visual parity
+
+### Changed
+- Version: `1.19.0`, version code `16`.
+- The Android client keeps its own FreeLLMAPI/router connection and shared dark
+  palette; the release pipeline now attaches its unsigned APK and AAB to the
+  same GitHub release as the Linux, Windows and VS Code artifacts.
+
+### Notes
+- Android remains a companion client: it connects to a router (or the desktop
+  host API) directly and cannot run Docker or the desktop workspace editor.
+
 ## 1.12.0 — Production release build
 
 ### Added

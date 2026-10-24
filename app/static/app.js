@@ -13,6 +13,8 @@ const state = {
   view: "chat",
   chatContext: null,
   model: "auto",
+  contextBudget: 6000,
+  lastContextTokens: null,
   workspace: null,
   recentFolders: [],
   home: "~",
@@ -271,12 +273,15 @@ function setView(view) {
   $("editorView").classList.toggle("hidden", view !== "editor");
   $("settingsView").classList.toggle("hidden", view !== "settings");
   $("usageView").classList.toggle("hidden", view !== "usage");
+  $("routerView").classList.toggle("hidden", view !== "router");
   $("usageBtn").classList.toggle("active", view === "usage");
   $("settingsBtn").classList.toggle("active", view === "settings");
+  $("routerBtn").classList.toggle("active", view === "router");
   document.body.classList.remove("nav-open");
   $("scrim").classList.add("hidden");
   if (view === "chat") setTimeout(() => $("prompt").focus(), 30);
   if (view === "usage") loadUsage();
+  if (view === "router") loadConsoleStatus();
 }
 
 function activateTab(key) {
@@ -340,16 +345,7 @@ function addMessage(role, content, options = {}) {
     body.innerHTML = renderMarkdown(content);
     row.appendChild(body);
 
-    if (!error) {
-      const tools = document.createElement("div");
-      tools.className = "msg-tools";
-      const copy = document.createElement("button");
-      copy.className = "msg-tool";
-      copy.textContent = "Copy reply";
-      copy.addEventListener("click", () => copyText(content, "Reply copied."));
-      tools.appendChild(copy);
-      row.appendChild(tools);
-    }
+    if (!error) appendMessageActions(row, [{ label: "Copy reply", run: () => copyText(content, "Reply copied.") }]);
   } else {
     const card = document.createElement("div");
     card.className = "msg-card";
@@ -362,10 +358,31 @@ function addMessage(role, content, options = {}) {
       note.querySelector("span").textContent = attachment;
       row.appendChild(note);
     }
+    appendMessageActions(row, [
+      { label: "Copy", run: () => copyText(content, "Message copied.") },
+      { label: "Resend", run: () => sendMessage(content) },
+    ]);
   }
 
   $("messages").appendChild(row);
   scrollChat();
+}
+
+function appendMessageActions(row, actions) {
+  // A single horizontal row of small buttons under the message. Previously
+  // these sat in a separate strip; keeping them in one row means the actions
+  // read left-to-right instead of stacking vertically.
+  const tools = document.createElement("div");
+  tools.className = "msg-actions";
+  actions.forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "msg-action";
+    button.textContent = action.label;
+    button.addEventListener("click", action.run);
+    tools.appendChild(button);
+  });
+  row.appendChild(tools);
 }
 
 function scrollChat() {
@@ -521,6 +538,10 @@ async function sendMessage(preset = null) {
   if (result.ok && result.data.ok) {
     addMessage("assistant", result.data.answer, { meta: result.data.meta });
     setConnection("ok", "Router connected");
+    if (result.data.meta && result.data.meta.context_tokens != null) {
+      state.lastContextTokens = Number(result.data.meta.context_tokens);
+      updateContextMeter();
+    }
   } else {
     addMessage("assistant", result.data.error || "The request failed.", { meta: result.data.meta, error: true });
     setConnection("bad", "Last request failed");
@@ -1137,6 +1158,11 @@ async function loadSettings() {
   $("baseUrl").value = result.data.base_url || "";
   $("model").value = result.data.model || "auto";
   state.model = result.data.model || "auto";
+  state.contextBudget = Number(result.data.context_budget_tokens) || 6000;
+  $("contextBudget").value = state.contextBudget;
+  $("historyMessages").value = Number(result.data.history_messages) || 6;
+  $("sendOutline").checked = result.data.send_workspace_outline !== false;
+  updateContextMeter();
   $("modelChip").textContent = state.model;
   $("apiKey").value = "";
   $("apiKey").placeholder = result.data.has_api_key ? "Saved key (leave blank to keep it)" : "Paste your router API key";
@@ -1156,6 +1182,9 @@ async function saveSettings(event) {
   const payload = {
     base_url: $("baseUrl").value.trim(),
     model: $("model").value.trim() || "auto",
+    context_budget_tokens: Number($("contextBudget").value) || state.contextBudget || 6000,
+    history_messages: Number($("historyMessages").value) || 6,
+    send_workspace_outline: $("sendOutline").checked,
   };
   const key = $("apiKey").value.trim();
   if (key) payload.api_key = key;
@@ -1165,7 +1194,9 @@ async function saveSettings(event) {
     return false;
   }
   state.model = result.data.model || payload.model;
+  state.contextBudget = Number(result.data.context_budget_tokens) || payload.context_budget_tokens;
   $("modelChip").textContent = state.model;
+  updateContextMeter();
   $("apiKey").value = "";
   $("apiKey").placeholder = "Saved key (leave blank to keep it)";
   settingsNotice("Settings saved locally.", true);
@@ -1234,6 +1265,398 @@ async function loadUsage() {
 }
 
 /* ------------------------------------------------------------------ */
+/* context meter                                                       */
+/* ------------------------------------------------------------------ */
+
+function estimateTokensFromCharacters(characters) {
+  return Math.ceil(Math.max(0, characters) / 4);
+}
+
+function updateContextMeter() {
+  const meter = $("contextMeter");
+  if (!meter) return;
+  const budget = Number(state.contextBudget) || 6000;
+  const typed = $("prompt") ? $("prompt").value.length : 0;
+  const attached = state.chatContext ? state.chatContext.content.length : 0;
+  const estimate = estimateTokensFromCharacters(typed + attached);
+  const last = state.lastContextTokens;
+  meter.textContent = last
+    ? `~${formatCount(last)} / ${formatCount(budget)}`
+    : `~${formatCount(estimate)} / ${formatCount(budget)}`;
+  meter.title = last
+    ? "Tokens the router reported for the last request (budget: " + formatCount(budget) + ")"
+    : "Estimated tokens for the next request (budget: " + formatCount(budget) + ")";
+  meter.classList.toggle("over", estimate > budget);
+}
+
+function formatCount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  if (number >= 1000000) return `${(number / 1000000).toFixed(1)}M`;
+  if (number >= 1000) return `${Math.round(number / 100) / 10}k`;
+  return String(Math.round(number));
+}
+
+/* ------------------------------------------------------------------ */
+/* router console                                                      */
+/* ------------------------------------------------------------------ */
+
+const consoleState = {
+  tab: "keys",
+  status: { reachable: false, authenticated: false },
+  keys: [],
+  models: [],
+  routing: {},
+};
+
+function consoleArray(data, keys) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== "object") return [];
+  for (const key of keys) {
+    if (Array.isArray(data[key])) return data[key];
+  }
+  return [];
+}
+
+function consoleText(value) {
+  return value == null ? "" : String(value);
+}
+
+function consoleNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function entryId(entry) {
+  return entry && (entry.id ?? entry._id ?? entry.keyId ?? entry.key_id);
+}
+
+async function consoleApi(path, options = {}) {
+  const result = await api(`/api/router/console/${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (result.status === 401) renderConsoleAuth(false, result.data.error || "Sign in to the router dashboard.");
+  return result;
+}
+
+function renderConsoleAuth(authenticated, message) {
+  $("consoleLogin").classList.toggle("hidden", authenticated);
+  $("consoleDot").classList.toggle("ok", authenticated);
+  $("consoleDot").classList.toggle("bad", !authenticated && consoleState.status.reachable);
+  $("consoleState").textContent = authenticated
+    ? "Console connected"
+    : consoleState.status.reachable
+      ? "Router needs a dashboard sign-in"
+      : "Router is not running";
+  $("consoleMessage").textContent = message || "";
+}
+
+async function loadConsoleStatus() {
+  const result = await api("/api/router/console/status");
+  if (!result.ok) {
+    consoleState.status = { reachable: false, authenticated: false };
+    renderConsoleAuth(false, result.data.error || "Could not read the router status.");
+    return;
+  }
+  consoleState.status = result.data;
+  renderConsoleAuth(Boolean(result.data.authenticated), result.data.message);
+  if (result.data.authenticated) await loadConsolePane(consoleState.tab);
+}
+
+async function loadConsolePane(tab) {
+  consoleState.tab = tab;
+  document.querySelectorAll("[data-console]").forEach((button) => {
+    const active = button.dataset.console === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  ["keys", "models", "routing", "analytics", "logs", "budget"].forEach((name) => {
+    $(`consolePane${name.charAt(0).toUpperCase()}${name.slice(1)}`).classList.toggle("hidden", name !== tab);
+  });
+  if (!consoleState.status.authenticated) return;
+  if (tab === "keys") await loadConsoleKeys();
+  if (tab === "models") await loadConsoleModels();
+  if (tab === "routing") await loadConsoleRouting();
+  if (tab === "analytics") await loadConsoleAnalytics();
+  if (tab === "logs") await loadConsoleLogs();
+  if (tab === "budget") await loadConsoleBudget();
+}
+
+function consoleKeyMessage(message, ok) {
+  const box = $("keyMessage");
+  box.textContent = message;
+  box.className = "notice " + (ok ? "success" : "error");
+}
+
+async function loadConsoleKeys() {
+  const list = $("keyList");
+  const result = await consoleApi("keys");
+  if (!result.ok) {
+    list.innerHTML = `<p class="muted">${escapeHtml(result.data.error || "Could not load provider keys.")}</p>`;
+    return;
+  }
+  const keys = consoleArray(result.data, ["keys", "items", "data", "providers"]);
+  consoleState.keys = keys;
+  if (!keys.length) {
+    list.innerHTML = '<p class="muted">No provider keys yet. Add one above to give the router free-tier capacity.</p>';
+    return;
+  }
+  list.replaceChildren();
+  keys.forEach((entry) => {
+    const id = entryId(entry);
+    const enabled = entry.enabled !== false && entry.disabled !== true;
+    const card = document.createElement("div");
+    card.className = "console-row" + (enabled ? "" : " off");
+    const platform = consoleText(entry.platform || entry.provider || entry.name || "provider");
+    const label = consoleText(entry.label || "");
+    const masked = consoleText(entry.keyPreview || entry.maskedKey || entry.masked || (entry.key ? "••••" : ""));
+    const capParts = [];
+    if (entry.requestCap != null) capParts.push(`${formatCount(entry.requestCap)} req/mo`);
+    if (entry.tokenCap != null) capParts.push(`${formatCount(entry.tokenCap)} tokens/mo`);
+    if (entry.requests != null) capParts.push(`${formatCount(entry.requests)} used`);
+    card.innerHTML =
+      '<div class="console-row-main">' +
+      `<strong>${escapeHtml(platform)}</strong>` +
+      `${label ? `<span class="console-tag">${escapeHtml(label)}</span>` : ""}` +
+      `${masked ? `<code>${escapeHtml(masked)}</code>` : ""}` +
+      `<small>${escapeHtml(capParts.join(" · ") || (enabled ? "enabled" : "disabled"))}</small>` +
+      "</div><div class=\"console-row-actions\"></div>";
+    const actions = card.querySelector(".console-row-actions");
+    if (id != null) {
+      const toggle = document.createElement("button");
+      toggle.className = "btn btn-quiet btn-small";
+      toggle.textContent = enabled ? "Disable" : "Enable";
+      toggle.addEventListener("click", async () => {
+        toggle.disabled = true;
+        const updated = await consoleApi(`keys/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: !enabled }),
+        });
+        if (!updated.ok) consoleKeyMessage(updated.data.error || "Could not update that key.", false);
+        await loadConsoleKeys();
+      });
+      actions.appendChild(toggle);
+
+      const remove = document.createElement("button");
+      remove.className = "btn btn-quiet btn-small danger";
+      remove.textContent = "Delete";
+      remove.addEventListener("click", async () => {
+        if (!confirm(`Delete the ${platform} key? Providers using it will stop working.`)) return;
+        remove.disabled = true;
+        const deleted = await consoleApi(`keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!deleted.ok) consoleKeyMessage(deleted.data.error || "Could not delete that key.", false);
+        await loadConsoleKeys();
+      });
+      actions.appendChild(remove);
+    }
+    list.appendChild(card);
+  });
+}
+
+async function loadConsoleModels() {
+  const result = await consoleApi("models");
+  const list = $("modelList");
+  if (!result.ok) {
+    list.innerHTML = `<p class="muted">${escapeHtml(result.data.error || "Could not load models.")}</p>`;
+    return;
+  }
+  consoleState.models = consoleArray(result.data, ["models", "items", "data"]);
+  renderConsoleModels();
+}
+
+function renderConsoleModels() {
+  const list = $("modelList");
+  const filter = ($("modelSearch").value || "").trim().toLowerCase();
+  const models = consoleState.models.filter((entry) => {
+    const name = consoleText(entry.id || entry.model || entry.name).toLowerCase();
+    const provider = consoleText(entry.platform || entry.provider || entry.owned_by).toLowerCase();
+    return !filter || name.includes(filter) || provider.includes(filter);
+  });
+  if (!models.length) {
+    list.innerHTML = '<p class="muted">No models to show. Add a provider key first, then reload.</p>';
+    return;
+  }
+  list.replaceChildren();
+  models.slice(0, 400).forEach((entry) => {
+    const name = consoleText(entry.id || entry.model || entry.name || "model");
+    const provider = consoleText(entry.platform || entry.provider || entry.owned_by || "");
+    const status = consoleText(entry.execution_status || entry.status || (entry.available === false ? "needsKey" : "ready"));
+    const row = document.createElement("div");
+    row.className = "console-row";
+    row.innerHTML =
+      '<div class="console-row-main">' +
+      `<strong>${escapeHtml(name)}</strong>` +
+      `<small>${escapeHtml(provider)}${status ? ` · ${escapeHtml(status)}` : ""}</small>` +
+      "</div><div class=\"console-row-actions\"></div>";
+    const use = document.createElement("button");
+    use.className = "btn btn-quiet btn-small";
+    use.textContent = state.model === name ? "Current" : "Use";
+    use.disabled = state.model === name;
+    use.addEventListener("click", async () => {
+      const result = await api("/api/config", { method: "POST", body: JSON.stringify({ model: name }) });
+      if (!result.ok) {
+        toast(result.data.error || "Could not set that model.");
+        return;
+      }
+      state.model = name;
+      $("model").value = name;
+      $("modelChip").textContent = name;
+      toast(`${name} is now the default model.`);
+      renderConsoleModels();
+    });
+    row.querySelector(".console-row-actions").appendChild(use);
+    list.appendChild(row);
+  });
+}
+
+async function loadConsoleRouting() {
+  const result = await consoleApi("fallback/routing");
+  const raw = $("routingRaw");
+  if (!result.ok) {
+    raw.textContent = result.data.error || "Could not read routing settings.";
+    return;
+  }
+  consoleState.routing = result.data && typeof result.data === "object" ? result.data : {};
+  const routing = consoleState.routing;
+  const strategy = consoleText(routing.strategy || routing.routingStrategy || "");
+  if (strategy) {
+    const option = [...$("routingStrategy").options].find((item) => item.value === strategy);
+    if (option) $("routingStrategy").value = strategy;
+    else {
+      const custom = document.createElement("option");
+      custom.value = strategy;
+      custom.textContent = strategy;
+      $("routingStrategy").appendChild(custom);
+      $("routingStrategy").value = strategy;
+    }
+  }
+  const chain = consoleArray(routing, ["chain", "models", "order", "fallbackChain", "queue"]);
+  $("routingChain").value = chain
+    .map((entry) => (typeof entry === "string" ? entry : consoleText(entry.model || entry.id || entry.name)))
+    .filter(Boolean)
+    .join(" → ");
+  raw.textContent = JSON.stringify(routing, null, 2);
+}
+
+async function saveConsoleRouting() {
+  const strategy = $("routingStrategy").value;
+  const merged = Object.assign({}, consoleState.routing, { strategy });
+  const result = await consoleApi("fallback/routing", { method: "PUT", body: JSON.stringify(merged) });
+  const box = $("routingMessage");
+  if (!result.ok) {
+    box.textContent = result.data.error || "Could not save the routing strategy.";
+    box.className = "notice error";
+    return;
+  }
+  box.textContent = `Routing strategy saved as ${strategy}.`;
+  box.className = "notice success";
+  await loadConsoleRouting();
+}
+
+async function loadConsoleAnalytics() {
+  const range = $("analyticsRange").value;
+  const summary = await consoleApi(`analytics/summary?range=${encodeURIComponent(range)}`);
+  if (summary.ok) {
+    const data = summary.data || {};
+    const requests = consoleNumber(data.totalRequests ?? data.requests);
+    const rate = data.successRate;
+    $("raRequests").textContent = formatCount(requests);
+    $("raSuccess").textContent =
+      rate == null ? "—" : `${(consoleNumber(rate) <= 1 ? consoleNumber(rate) * 100 : consoleNumber(rate)).toFixed(1)}%`;
+    $("raInput").textContent = formatCount(data.totalInputTokens ?? data.inputTokens);
+    $("raOutput").textContent = formatCount(data.totalOutputTokens ?? data.outputTokens);
+    $("raP95").textContent = data.p95LatencyMs == null ? "—" : `${Math.round(consoleNumber(data.p95LatencyMs))} ms`;
+  }
+
+  const byModel = await consoleApi(`analytics/by-model?range=${encodeURIComponent(range)}`);
+  const body = $("analyticsModels");
+  const rows = byModel.ok ? consoleArray(byModel.data, ["models", "rows", "byModel", "data"]) : [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4" class="muted">No requests in this range.</td></tr>';
+    return;
+  }
+  body.replaceChildren();
+  rows.slice(0, 100).forEach((entry) => {
+    const row = document.createElement("tr");
+    [
+      consoleText(entry.model || entry.name || entry.id),
+      formatCount(entry.requests ?? entry.count),
+      formatCount(entry.failures ?? entry.errors),
+      entry.avgLatencyMs == null ? "—" : `${Math.round(consoleNumber(entry.avgLatencyMs))} ms`,
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value || "—";
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  });
+}
+
+async function loadConsoleLogs() {
+  const level = $("logLevel").value;
+  const query = `logs?limit=150${level ? `&levels=${encodeURIComponent(level)}` : ""}`;
+  const result = await consoleApi(query);
+  const list = $("logList");
+  if (!result.ok) {
+    list.innerHTML = `<p class="muted">${escapeHtml(result.data.error || "Could not load logs.")}</p>`;
+    return;
+  }
+  const entries = consoleArray(result.data, ["entries", "logs", "data"]);
+  if (!entries.length) {
+    list.innerHTML = '<p class="muted">No log entries yet.</p>';
+    return;
+  }
+  list.replaceChildren();
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "log-row";
+    const levelName = consoleText(entry.level || "info").toLowerCase();
+    const when = entry.ts ? new Date(entry.ts).toLocaleTimeString() : "";
+    row.innerHTML =
+      `<span class="log-level ${escapeHtml(levelName)}">${escapeHtml(levelName)}</span>` +
+      `<span class="log-time">${escapeHtml(when)}</span>` +
+      `<span class="log-text">${escapeHtml(consoleText(entry.message || entry.msg || ""))}</span>`;
+    list.appendChild(row);
+  });
+}
+
+async function loadConsoleBudget() {
+  const result = await consoleApi("free-tier");
+  const rows = $("budgetRows");
+  if (!result.ok) {
+    rows.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(result.data.error || "Could not read the free-tier budget.")}</td></tr>`;
+    return;
+  }
+  const summary = result.data.summary || {};
+  $("fbPools").textContent = formatCount(summary.poolCount);
+  $("fbTokens").textContent = formatCount(summary.documentedMonthlyTokens);
+  $("fbCredits").textContent = formatCount(summary.creditsBasedPools);
+  const pools = consoleArray(result.data, ["pools", "data"]);
+  if (!pools.length) {
+    rows.innerHTML = '<tr><td colspan="5" class="muted">No provider pools reported.</td></tr>';
+    return;
+  }
+  rows.replaceChildren();
+  pools.slice(0, 100).forEach((pool) => {
+    const row = document.createElement("tr");
+    const quota = pool.quota || {};
+    [
+      consoleText(pool.platform || pool.poolKey),
+      formatCount(pool.modelCount),
+      formatCount(pool.keyCount),
+      consoleText(pool.bestLabel) || formatCount(pool.documentedBudget),
+      quota.remaining == null ? "—" : formatCount(quota.remaining),
+    ].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value || "—";
+      row.appendChild(cell);
+    });
+    rows.appendChild(row);
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* events + init                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -1261,11 +1684,12 @@ function bindEvents() {
       sendMessage();
     }
   });
-  $("prompt").addEventListener("input", () => autoGrow($("prompt")));
+  $("prompt").addEventListener("input", () => { autoGrow($("prompt")); updateContextMeter(); });
   $("attachContextBtn").addEventListener("click", attachFromComposer);
   $("contextClear").addEventListener("click", () => {
     state.chatContext = null;
     renderContextChip();
+    updateContextMeter();
   });
   document.querySelectorAll("[data-prompt]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1383,6 +1807,75 @@ function bindEvents() {
   $("testConnection").addEventListener("click", testConnection);
   $("openProviderDashboardSettings").addEventListener("click", openProviderDashboard);
 
+  $("routerBtn").addEventListener("click", () => setView("router"));
+  $("consoleRefresh").addEventListener("click", loadConsoleStatus);
+  $("consoleDashboard").addEventListener("click", openProviderDashboard);
+  $("consoleStart").addEventListener("click", async () => {
+    $("consoleState").textContent = "Starting the router…";
+    const result = await api("/api/router/start", { method: "POST", body: "{}" });
+    if (!result.ok) $("consoleMessage").textContent = result.data.error || "Could not start the router.";
+    await loadConsoleStatus();
+  });
+  $("consoleStop").addEventListener("click", async () => {
+    $("consoleState").textContent = "Stopping the router…";
+    const result = await api("/api/router/stop", { method: "POST", body: "{}" });
+    if (!result.ok) $("consoleMessage").textContent = result.data.error || "Could not stop the router.";
+    await loadConsoleStatus();
+  });
+  $("consoleLogin").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const email = $("consoleEmail").value.trim();
+    const password = $("consolePassword").value;
+    if (!email || !password) return;
+    const result = await api("/api/router/console/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    if (!result.ok) {
+      renderConsoleAuth(false, result.data.error || "Sign-in failed.");
+      return;
+    }
+    $("consolePassword").value = "";
+    await loadConsoleStatus();
+  });
+  document.querySelectorAll("[data-console]").forEach((button) => {
+    button.addEventListener("click", () => loadConsolePane(button.dataset.console));
+  });
+  $("keyForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const platform = $("keyPlatform").value.trim();
+    if (!platform) return;
+    const payload = { platform };
+    const key = $("keyValue").value.trim();
+    const label = $("keyLabel").value.trim();
+    if (key) payload.key = key;
+    if (label) payload.label = label;
+    const result = await consoleApi("keys", { method: "POST", body: JSON.stringify(payload) });
+    if (!result.ok) {
+      consoleKeyMessage(result.data.error || "Could not add that key.", false);
+      return;
+    }
+    $("keyValue").value = "";
+    $("keyLabel").value = "";
+    consoleKeyMessage(`${platform} key added.`, true);
+    await loadConsoleKeys();
+  });
+  $("modelSearch").addEventListener("input", renderConsoleModels);
+  $("modelReload").addEventListener("click", loadConsoleModels);
+  $("routingReload").addEventListener("click", loadConsoleRouting);
+  $("routingSave").addEventListener("click", saveConsoleRouting);
+  $("analyticsReload").addEventListener("click", loadConsoleAnalytics);
+  $("analyticsRange").addEventListener("change", loadConsoleAnalytics);
+  $("logsReload").addEventListener("click", loadConsoleLogs);
+  $("logLevel").addEventListener("change", loadConsoleLogs);
+  $("logsClear").addEventListener("click", async () => {
+    if (!confirm("Clear the router log buffer?")) return;
+    const result = await consoleApi("logs/clear", { method: "POST", body: "{}" });
+    if (!result.ok) toast(result.data.error || "Could not clear the logs.");
+    await loadConsoleLogs();
+  });
+  $("budgetReload").addEventListener("click", loadConsoleBudget);
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (!$("promptModal").classList.contains("hidden")) settleName(null);
@@ -1394,6 +1887,30 @@ function bindEvents() {
       event.preventDefault();
       saveActiveFile();
     }
+  });
+
+  // The VS Code extension frames this UI and forwards editor selections into
+  // it. Only accept that message inside a frame, and only from the extension's
+  // own wrapper document.
+  window.addEventListener("message", (event) => {
+    const data = event.data;
+    if (!data || data.type !== "freeai:prefill" || data.source !== "free-ai-studio-extension") return;
+    if (window.parent === window) return;
+    if (data.prompt) {
+      $("prompt").value = String(data.prompt);
+      autoGrow($("prompt"));
+    }
+    if (data.code) {
+      state.chatContext = {
+        path: `selection (${data.language || "text"})`,
+        scratch: true,
+        content: String(data.code),
+        language: String(data.language || "text"),
+      };
+      renderContextChip();
+    }
+    updateContextMeter();
+    $("prompt").focus();
   });
 
   window.addEventListener("beforeunload", (event) => {
@@ -1412,6 +1929,8 @@ function bindEvents() {
   autoGrow($("prompt"));
   renderTabs();
   renderContextChip();
+  state.lastContextTokens = null;
+  setTimeout(updateContextMeter, 50);
   await Promise.all([loadSettings(), loadConversations(), loadWorkspace()]);
   await loadUsage();
   if (state.conversations.length) {

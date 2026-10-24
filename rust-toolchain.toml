@@ -1,6 +1,6 @@
-# Nightly is required by .cargo/config.toml (-Z threads, codegen-backend).
+# Nightly is required by .cargo/config.toml (-Z threads).
 # Pinning here makes plain `cargo` invocations select it automatically and
 # install the components the config needs.
 [toolchain]
 channel = "nightly"
-components = ["clippy", "rustfmt", "rustc-codegen-cranelift"]
+components = ["clippy", "rustfmt"]

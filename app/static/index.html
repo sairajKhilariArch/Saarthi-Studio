@@ -85,6 +85,7 @@
         <span id="connText">Router not tested</span>
       </div>
       <div class="foot-actions">
+        <button id="routerBtn" class="foot-btn"><svg class="icon"><use href="#i-spark"/></svg>Router</button>
         <button id="usageBtn" class="foot-btn"><svg class="icon"><use href="#i-chart"/></svg>Usage</button>
         <button id="settingsBtn" class="foot-btn"><svg class="icon"><use href="#i-gear"/></svg>Settings</button>
       </div>
@@ -153,6 +154,7 @@
               <span class="kbd-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
             </div>
             <div class="composer-right">
+              <span id="contextMeter" class="ctx-meter" title="Estimated tokens sent with the next request">~0 / 6k</span>
               <span id="modelChip" class="model-chip">auto</span>
               <button id="sendBtn" class="btn btn-accent send-btn" title="Send">
                 <span>Send</span><svg class="icon"><use href="#i-arrow"/></svg>
@@ -215,6 +217,23 @@
             <input id="model" type="text" value="auto" placeholder="auto">
             <small>Use <code>auto</code> when the router handles model selection and fallback.</small>
           </label>
+          <div class="form-row">
+            <label class="field">
+              <span>Context budget (tokens)</span>
+              <input id="contextBudget" type="number" min="1000" max="32000" step="500" value="6000">
+              <small>Hard ceiling for each request. Older messages and attachments are trimmed to fit.</small>
+            </label>
+            <label class="field">
+              <span>Messages considered</span>
+              <input id="historyMessages" type="number" min="2" max="24" step="1" value="6">
+              <small>Only the newest messages compete for the budget.</small>
+            </label>
+          </div>
+          <label class="field checkbox-field">
+            <input id="sendOutline" type="checkbox" checked>
+            <span>Send the open folder's file names with each request</span>
+            <small>A names-only outline helps the model navigate the project without sending file contents.</small>
+          </label>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save settings</button>
             <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>
@@ -269,6 +288,198 @@
           </div>
         </div>
         <p class="muted page-note">For provider-level quotas and fallback traces, also check your router dashboard.</p>
+      </div>
+    </section>
+
+    <section id="routerView" class="view page-view hidden" role="tabpanel" aria-label="Router console">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">FreeLLMAPI</p>
+          <h1>Router console</h1>
+          <p>Everything the router dashboard does, inside Studio: provider keys, the model chain, routing strategy, analytics, logs and free-tier budget. Studio signs in over loopback and never stores your provider keys.</p>
+        </header>
+
+        <div class="card console-status">
+          <div class="console-status-main">
+            <span id="consoleDot" class="conn-dot"></span>
+            <div class="console-status-text">
+              <strong id="consoleState">Checking the router…</strong>
+              <small id="consoleMessage">The console talks to the router on this machine only.</small>
+            </div>
+          </div>
+          <div class="console-status-actions">
+            <button id="consoleStart" class="btn btn-quiet btn-small">Start</button>
+            <button id="consoleStop" class="btn btn-quiet btn-small">Stop</button>
+            <button id="consoleRefresh" class="btn btn-quiet btn-small">Refresh</button>
+            <button id="consoleDashboard" class="btn btn-link">Dashboard ↗</button>
+          </div>
+        </div>
+
+        <form id="consoleLogin" class="card form-card hidden">
+          <h2>Sign in to the router dashboard</h2>
+          <p class="muted">A server install of FreeLLMAPI asks for the dashboard account once. The session token is cached locally with owner-only permissions.</p>
+          <div class="form-row">
+            <label class="field">
+              <span>Dashboard email</span>
+              <input id="consoleEmail" type="email" autocomplete="username" placeholder="you@example.com">
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input id="consolePassword" type="password" autocomplete="current-password" placeholder="Dashboard password">
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Sign in</button>
+          </div>
+        </form>
+
+        <div class="segmented console-tabs" role="tablist" aria-label="Router console section">
+          <button class="segmented-btn active" data-console="keys" role="tab" aria-selected="true">Providers</button>
+          <button class="segmented-btn" data-console="models" role="tab" aria-selected="false">Models</button>
+          <button class="segmented-btn" data-console="routing" role="tab" aria-selected="false">Routing</button>
+          <button class="segmented-btn" data-console="analytics" role="tab" aria-selected="false">Analytics</button>
+          <button class="segmented-btn" data-console="logs" role="tab" aria-selected="false">Logs</button>
+          <button class="segmented-btn" data-console="budget" role="tab" aria-selected="false">Budget</button>
+        </div>
+
+        <section id="consolePaneKeys" class="console-pane" aria-label="Providers">
+          <form id="keyForm" class="card form-card compact">
+            <h2>Add a provider key</h2>
+            <div class="form-row">
+              <label class="field">
+                <span>Platform</span>
+                <input id="keyPlatform" type="text" list="platformOptions" placeholder="groq" autocomplete="off" required>
+                <datalist id="platformOptions">
+                  <option value="groq"></option>
+                  <option value="google"></option>
+                  <option value="openrouter"></option>
+                  <option value="cerebras"></option>
+                  <option value="mistral"></option>
+                  <option value="nvidia"></option>
+                  <option value="github"></option>
+                  <option value="ollama"></option>
+                </datalist>
+              </label>
+              <label class="field">
+                <span>Key</span>
+                <input id="keyValue" type="password" autocomplete="off" placeholder="Provider API key (blank for keyless)">
+              </label>
+              <label class="field">
+                <span>Label</span>
+                <input id="keyLabel" type="text" autocomplete="off" placeholder="optional">
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-accent btn-small">Add key</button>
+            </div>
+            <div id="keyMessage" class="notice hidden"></div>
+          </form>
+          <div id="keyList" class="console-list"><p class="muted">Loading providers…</p></div>
+        </section>
+
+        <section id="consolePaneModels" class="console-pane hidden" aria-label="Models">
+          <div class="console-toolbar">
+            <input id="modelSearch" type="search" class="console-search" placeholder="Filter models…" aria-label="Filter models">
+            <button id="modelReload" class="btn btn-quiet btn-small">Reload</button>
+          </div>
+          <div id="modelList" class="console-list"><p class="muted">Loading the model catalog…</p></div>
+        </section>
+
+        <section id="consolePaneRouting" class="console-pane hidden" aria-label="Routing">
+          <div class="card form-card compact">
+            <h2>Fallback strategy</h2>
+            <div class="form-row">
+              <label class="field">
+                <span>Strategy</span>
+                <select id="routingStrategy">
+                  <option value="priority">priority</option>
+                  <option value="balanced">balanced</option>
+                  <option value="smartest">smartest</option>
+                  <option value="fastest">fastest</option>
+                  <option value="reliable">reliable</option>
+                  <option value="custom">custom</option>
+                </select>
+                <small>How the router picks the first model when a request asks for <code>auto</code>.</small>
+              </label>
+              <label class="field">
+                <span>Active chain</span>
+                <input id="routingChain" type="text" readonly>
+                <small>Read from the router; reorder models on the Models tab.</small>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button id="routingSave" class="btn btn-accent btn-small">Save strategy</button>
+              <button id="routingReload" class="btn btn-quiet btn-small">Reload</button>
+            </div>
+            <div id="routingMessage" class="notice hidden"></div>
+          </div>
+          <div class="card">
+            <h2>Raw routing settings</h2>
+            <pre id="routingRaw" class="console-json">Loading…</pre>
+          </div>
+        </section>
+
+        <section id="consolePaneAnalytics" class="console-pane hidden" aria-label="Analytics">
+          <div class="console-toolbar">
+            <select id="analyticsRange" class="console-search">
+              <option value="24h">Last 24 hours</option>
+              <option value="7d" selected>Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+            </select>
+            <button id="analyticsReload" class="btn btn-quiet btn-small">Reload</button>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-card"><span>Requests</span><strong id="raRequests">0</strong></div>
+            <div class="stat-card"><span>Success rate</span><strong id="raSuccess">—</strong></div>
+            <div class="stat-card"><span>Input tokens</span><strong id="raInput">0</strong></div>
+            <div class="stat-card"><span>Output tokens</span><strong id="raOutput">0</strong></div>
+            <div class="stat-card"><span>p95 latency</span><strong id="raP95">—</strong></div>
+          </div>
+          <div class="card table-card">
+            <div class="table-head"><h2>By model</h2></div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Model</th><th>Requests</th><th>Failures</th><th>Avg. latency</th></tr></thead>
+                <tbody id="analyticsModels"><tr><td colspan="4" class="muted">No data.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="consolePaneLogs" class="console-pane hidden" aria-label="Logs">
+          <div class="console-toolbar">
+            <select id="logLevel" class="console-search">
+              <option value="">All levels</option>
+              <option value="error">Errors</option>
+              <option value="warn">Warnings</option>
+              <option value="info">Info</option>
+            </select>
+            <button id="logsReload" class="btn btn-quiet btn-small">Reload</button>
+            <button id="logsClear" class="btn btn-quiet btn-small danger">Clear logs</button>
+          </div>
+          <div id="logList" class="console-list log-list"><p class="muted">Loading router logs…</p></div>
+        </section>
+
+        <section id="consolePaneBudget" class="console-pane hidden" aria-label="Budget">
+          <div class="stats-grid">
+            <div class="stat-card"><span>Provider pools</span><strong id="fbPools">0</strong></div>
+            <div class="stat-card"><span>Documented tokens / month</span><strong id="fbTokens">0</strong></div>
+            <div class="stat-card"><span>Credits-based</span><strong id="fbCredits">0</strong></div>
+          </div>
+          <div class="card table-card">
+            <div class="table-head">
+              <h2>Free-tier pools</h2>
+              <button id="budgetReload" class="btn btn-quiet btn-small">Refresh</button>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Pool</th><th>Models</th><th>Keys</th><th>Budget</th><th>Remaining</th></tr></thead>
+                <tbody id="budgetRows"><tr><td colspan="5" class="muted">No data.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
     </section>
   </main>

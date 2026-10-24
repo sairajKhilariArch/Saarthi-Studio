@@ -1,0 +1,72 @@
+{
+  "name": "free-ai-studio",
+  "displayName": "Free AI Studio",
+  "description": "Chat with your FreeLLMAPI router from VS Code. Uses the desktop app when it is running and starts a built-in local server when it is not.",
+  "version": "1.0.0",
+  "publisher": "saarthi",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["AI", "Machine Learning", "Other"],
+  "keywords": ["ai", "chat", "llm", "freellmapi", "router", "local"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "freeAiStudio.openChat", "title": "Free AI Studio: Open chat" },
+      { "command": "freeAiStudio.askSelection", "title": "Free AI Studio: Ask about the selection" },
+      { "command": "freeAiStudio.attachFile", "title": "Free AI Studio: Attach the active file" },
+      { "command": "freeAiStudio.setApiKey", "title": "Free AI Studio: Set router API key" },
+      { "command": "freeAiStudio.showStatus", "title": "Free AI Studio: Show server status" },
+      { "command": "freeAiStudio.restartServer", "title": "Free AI Studio: Restart the built-in server" },
+      { "command": "freeAiStudio.openInDesktop", "title": "Free AI Studio: Open the desktop app" }
+    ],
+    "configuration": {
+      "title": "Free AI Studio",
+      "properties": {
+        "freeAiStudio.desktopUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "Loopback address of a running Free AI Studio desktop app."
+        },
+        "freeAiStudio.routerBaseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3001/v1",
+          "description": "OpenAI-compatible base URL of your router (FreeLLMAPI by default)."
+        },
+        "freeAiStudio.model": {
+          "type": "string",
+          "default": "auto",
+          "description": "Model the built-in server requests. `auto` lets the router choose and fall back."
+        },
+        "freeAiStudio.contextBudgetTokens": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 1000,
+          "maximum": 32000,
+          "description": "Hard token budget for each request sent by the built-in server."
+        },
+        "freeAiStudio.historyMessages": {
+          "type": "number",
+          "default": 6,
+          "minimum": 2,
+          "maximum": 24,
+          "description": "How many recent messages compete for the token budget."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs --with-tests && node --test test/lib.test.mjs",
+    "package": "npm run build && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.2"
+  }
+}

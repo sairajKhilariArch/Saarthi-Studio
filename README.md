@@ -1,4 +1,4 @@
-# Free AI Suite for Ubuntu — Rust edition
+# Free AI Studio — desktop, Windows, Android and VS Code
 
 A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The browser interface uses HTML, CSS, and JavaScript, served locally by the Rust app: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
@@ -35,11 +35,40 @@ Never share the unified API key, provider keys, or `.env` file in chat or public
 - Markdown replies with code blocks and copy buttons; threads with automatic titles
 - Usage/error log with latency and token counts when the provider reports them
 - Router connection test and saved settings
-- Token-conscious context: stores full local history but sends only the latest four messages plus a short system prompt with each request
+- **Token-budgeted context** sized like a coding agent: a hard per-request ceiling (6k tokens by default), a names-only project outline, old attachments replaced by one-line markers, and head/tail cropping so a long thread never resends itself. The composer shows a live `~used / budget` meter
+- **Router console**: the FreeLLMAPI dashboard's providers, model catalog, routing strategy, analytics, logs and free-tier budget, served from inside the app over loopback
+- **Docker lifecycle**: Studio starts the router only when it is stopped, and stops it on exit only if Studio started it
+- **Native window**: the UI opens in an application window (Tauri 2 + the system webview), not a browser tab; `--browser` keeps the browser flow if you prefer it
 - Binds to `127.0.0.1` only; key is stored on the server side in a `0600` configuration file
 - One-click launcher for the Rust app and FreeLLMAPI Docker service
 
 The editor edits text; it does not execute code or open a terminal. Workspace access is confined to the folder you explicitly open: paths are canonicalised, `..`/absolute escapes and symlinks leaving that folder are rejected, binary and files over 1 MB are refused, and workspace routes reject non-loopback hosts/foreign origins. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
+
+## Runs as an application window, not a browser tab
+
+The desktop binary links Tauri 2 and loads the same local UI in the system webview (WebKitGTK on Linux, WebView2 on Windows). That keeps the download small — no bundled Chromium — and closing the window shuts down the local server, then stops the router if this run started it.
+
+```bash
+free-ai-studio              # application window
+free-ai-studio --browser    # open in your default browser instead
+free-ai-studio --no-gui     # headless server (used by tests and the extension)
+```
+
+Windows users run `free-ai-studio.exe` from the release zip; WebView2 ships with Windows 10/11.
+
+## Router console and Docker lifecycle
+
+Studio reads where FreeLLMAPI is installed from `~/.config/free-ai-suite/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/free-ai-studio/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
+
+```bash
+free-ai-studio router status|start|stop
+```
+
+The console signs in with FreeLLMAPI's loopback desktop session (`POST /api/auth/desktop-session`); a server install can sign in once with its dashboard email/password and the session token is cached in a `0600` file. Everything the console does goes through Studio's local bridge — provider keys are typed into the router, never stored by Studio.
+
+## VS Code extension
+
+`vscode-extension/` packages the same interface as a `.vsix`. It probes `http://127.0.0.1:8765/api/health`; if the desktop app answers it embeds it, and if it does not the extension starts its **own** built-in server (same context budget, same conversation store, same router console bridge) inside VS Code. Editor commands attach the active file or the current selection, and the built-in server's folder API is limited to the workspace VS Code has open.
 
 ## Addresses and local data
 
@@ -66,7 +95,8 @@ FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi
 
 The Rust desktop app remains the **primary product and intended host**. Its existing Rust service and web UI remain at `app/`; the desktop README, build scripts, and data locations remain the root-level source of truth.
 
-- **Desktop host:** `app/` — Rust service and browser UI. Do not move or replace these files as part of Android work.
+- **Desktop + Windows host:** `app/` — Rust service, application window and web UI. Do not move or replace these files as part of Android work.
+- **VS Code extension:** `vscode-extension/` — TypeScript extension, built-in server, and tests.
 - **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI. It shares the desktop UI's dark, accent-led visual language.
 - **Build toolchain:** `.cargo/config.toml` + `rust-toolchain.toml` pin nightly with the cranelift backend and mold linking for fast development builds; both are required (see the file comments). Android requires JDK 17 — newer JDKs can break Gradle 8.9's embedded Kotlin.
 - **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
@@ -84,6 +114,6 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 
 ### Desktop (Rust host)
 - The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
-- Pushing a `v*` tag runs "Desktop Release": Linux x86_64 tarball, `.deb` (cargo-deb), and AppImage, each with SHA-256 checksums, attached to the GitHub release.
+- Pushing a `v*` tag runs "Desktop Release", which builds and attaches every platform: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage with SHA-256 checksums; a Windows x86_64 portable zip built on `windows-latest`; the unsigned Android release APK/AAB; and the VS Code `.vsix`.
 - Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/free-ai-suite/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
 
