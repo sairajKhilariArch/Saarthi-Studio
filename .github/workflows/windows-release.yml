@@ -12,35 +12,53 @@ jobs:
   build:
     name: Build Windows release package
     runs-on: windows-latest
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: pwsh
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
     steps:
+      - name: Cancel in-progress runs
+        if: github.event_name == 'push'
+        uses: styfle/cancel-workflow-action@0.11.0
+
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Set up nightly Rust (see rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@nightly
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Set up cached Rust toolchain
+        uses: actions/cache@v4
         with:
-          workspaces: app
+          path: ~/.cargo/bin/
+          key: windows-cargo-${{ hashFiles('app/Cargo.toml') }}
+          restore-keys: |
+            windows-cargo-
+
+      - name: Install Rust and target for Windows cross-compilation
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          "$env:USERPROFILE\.rustup\bin\rustup.exe" target add x86_64-pc-windows-msvc
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: windows-cargo-registry-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-registry-
 
       - name: Read package version
         id: meta
         run: |
           $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          "$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $version | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8
 
       - name: Build release binary and run tests
         working-directory: app
+        timeout-minutes: 30
         run: |
           cargo build --release --locked
           cargo test --locked
 
       - name: Package portable zip
+        timeout-minutes: 10
         run: |
           $version = "${{ steps.meta.outputs.version }}"
           $stage = "dist/free-ai-suite_${version}_windows-x86_64"

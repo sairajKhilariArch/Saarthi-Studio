@@ -12,23 +12,39 @@ jobs:
   build:
     name: Build Linux release packages
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
     steps:
+      - name: Cancel in-progress runs
+        if: github.event_name == 'push'
+        uses: styfle/cancel-workflow-action@0.11.0
+
       - name: Check out source
         uses: actions/checkout@v5
 
-      - name: Set up nightly Rust (see rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Set up cached Rust toolchain
+        uses: actions/cache@v4
         with:
-          components: rustc-codegen-cranelift
+          path: ~/.cargo/bin/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('app/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Install mold linker
-        run: sudo apt-get update && sudo apt-get install -y mold
+        run: |
+          if ! command -v mold >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y mold
+          fi
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Cache cargo home
+        uses: actions/cache@v4
         with:
-          workspaces: app
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
 
       - name: Read package version
         id: meta
@@ -36,12 +52,14 @@ jobs:
 
       - name: Build release binary and run tests
         working-directory: app
+        timeout-minutes: 30
         run: |
           set -eu
           cargo build --release --locked
           cargo test --locked
 
       - name: Build portable tarball
+        timeout-minutes: 10
         run: |
           set -eu
           VERSION="${{ steps.meta.outputs.version }}"
@@ -55,6 +73,7 @@ jobs:
           rm -rf "dist/$STAGE"
 
       - name: Build .deb package
+        timeout-minutes: 10
         run: |
           set -eu
           cargo install cargo-deb --locked
@@ -63,6 +82,7 @@ jobs:
           cp target/debian/*.deb ../dist/
 
       - name: Build AppImage
+        timeout-minutes: 10
         run: |
           set -eu
           VERSION="${{ steps.meta.outputs.version }}"
@@ -71,8 +91,6 @@ jobs:
           cp app/static/index.html app/static/app.js app/static/styles.css AppDir/usr/share/free-ai-suite/static/
           cp app/packaging/free-ai-suite.desktop AppDir/free-ai-suite.desktop
           cp app/packaging/icons/free-ai-suite.svg AppDir/free-ai-suite.svg
-          # appimagetool does not generate AppRun; provide it explicitly so the
-          # AppImage has an entry point that resolves usr/ relative to itself.
           ln -s usr/bin/free-ai-studio AppDir/AppRun
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
