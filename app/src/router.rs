@@ -43,7 +43,9 @@ fn load_ownership() -> Ownership {
 }
 
 fn save_ownership(ownership: &Ownership) {
-    let Ok(bytes) = serde_json::to_vec(ownership) else { return };
+    let Ok(bytes) = serde_json::to_vec(ownership) else {
+        return;
+    };
     if let Some(parent) = ownership_path().parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -126,7 +128,10 @@ pub(crate) fn stop_compose(dir: &FsPath) -> Result<String, String> {
 
 /// Is the router answering on its port right now?
 pub(crate) async fn reachable(port: u16) -> bool {
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(2)).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
         Ok(client) => client,
         Err(_) => return false,
     };
@@ -164,7 +169,10 @@ pub(crate) async fn status() -> Status {
     let port = router_port();
     let reachable_now = reachable(port).await;
     let dir = compose_dir();
-    let running = dir.as_ref().map(|dir| compose_running(dir)).unwrap_or(false);
+    let running = dir
+        .as_ref()
+        .map(|dir| compose_running(dir))
+        .unwrap_or(false);
     let owned = load_ownership().owned_by_app;
     let message = if reachable_now {
         "Router is responding.".to_string()
@@ -172,12 +180,22 @@ pub(crate) async fn status() -> Status {
         if running {
             "Router containers are up but the API is not answering yet.".to_string()
         } else {
-            format!("Router is stopped. Start it with `free-ai-studio router start` or from {}.", dir.display())
+            format!(
+                "Router is stopped. Start it with `free-ai-studio router start` or from {}.",
+                dir.display()
+            )
         }
     } else {
         "No FreeLLMAPI compose project was found on this machine.".to_string()
     };
-    Status { port, reachable: reachable_now, compose_dir: dir, running, owned_by_app: owned, message }
+    Status {
+        port,
+        reachable: reachable_now,
+        compose_dir: dir,
+        running,
+        owned_by_app: owned,
+        message,
+    }
 }
 
 /// Start the router if it is not already answering. Records ownership so the
@@ -187,12 +205,18 @@ pub(crate) async fn ensure_started() -> Status {
     if reachable(port).await {
         // Already running: never adopt a router the user started.
         if load_ownership().owned_by_app {
-            save_ownership(&Ownership { owned_by_app: false });
+            save_ownership(&Ownership {
+                owned_by_app: false,
+            });
         }
         return status().await;
     }
-    let Some(dir) = compose_dir() else { return status().await };
-    let started = tokio::task::spawn_blocking(move || start_compose(&dir)).await.unwrap_or_else(|error| Err(format!("Router task failed: {error}")));
+    let Some(dir) = compose_dir() else {
+        return status().await;
+    };
+    let started = tokio::task::spawn_blocking(move || start_compose(&dir))
+        .await
+        .unwrap_or_else(|error| Err(format!("Router task failed: {error}")));
     match started {
         Ok(_) => save_ownership(&Ownership { owned_by_app: true }),
         Err(error) => println!("Could not start the router automatically: {error}"),
@@ -206,13 +230,17 @@ pub(crate) async fn shutdown_cleanup() {
         return;
     }
     if let Some(dir) = compose_dir() {
-        let stopped = tokio::task::spawn_blocking(move || stop_compose(&dir)).await.unwrap_or_else(|_| Ok(()));
+        let stopped = tokio::task::spawn_blocking(move || stop_compose(&dir))
+            .await
+            .unwrap_or_else(|error| Err(format!("Router task failed: {error}")));
         match stopped {
             Ok(_) => println!("Stopped the FreeLLMAPI router this app started."),
             Err(error) => println!("Could not stop the router this app started: {error}"),
         }
     }
-    save_ownership(&Ownership { owned_by_app: false });
+    save_ownership(&Ownership {
+        owned_by_app: false,
+    });
 }
 
 /// Explicit start/stop for the CLI and the UI buttons.
@@ -221,7 +249,9 @@ pub(crate) async fn manual_start() -> Result<Status, String> {
         return Err("No FreeLLMAPI compose project was found on this machine.".into());
     };
     if reachable(router_port()).await {
-        save_ownership(&Ownership { owned_by_app: true });
+        // The router is already answering, so this app is not what brings it
+        // up: never adopt it, otherwise closing the app would stop a router the
+        // user started themselves.
         return Ok(status().await);
     }
     tokio::task::spawn_blocking(move || start_compose(&dir))
@@ -238,7 +268,9 @@ pub(crate) async fn manual_stop() -> Result<Status, String> {
     tokio::task::spawn_blocking(move || stop_compose(&dir))
         .await
         .map_err(|error| format!("Router task failed: {error}"))??;
-    save_ownership(&Ownership { owned_by_app: false });
+    save_ownership(&Ownership {
+        owned_by_app: false,
+    });
     Ok(status().await)
 }
 
@@ -249,13 +281,19 @@ pub(crate) fn run_cli(args: &[String]) -> Result<(), Box<dyn std::error::Error>>
     match action {
         "start" => runtime.block_on(async {
             match manual_start().await {
-                Ok(status) => { println!("{}", status.to_json()); Ok(()) }
+                Ok(status) => {
+                    println!("{}", status.to_json());
+                    Ok(())
+                }
                 Err(error) => Err(error.into()),
             }
         }),
         "stop" => runtime.block_on(async {
             match manual_stop().await {
-                Ok(status) => { println!("{}", status.to_json()); Ok(()) }
+                Ok(status) => {
+                    println!("{}", status.to_json());
+                    Ok(())
+                }
                 Err(error) => Err(error.into()),
             }
         }),
