@@ -1,6 +1,6 @@
 # Free AI Studio — desktop, Windows, Android and VS Code
 
-A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The browser interface uses HTML, CSS, and JavaScript, served locally by the Rust app: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
+A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The interface uses HTML, CSS, and JavaScript, served locally by the Rust app and shown in the application window: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
 ## One-command install
 

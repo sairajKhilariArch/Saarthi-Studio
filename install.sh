@@ -164,17 +164,35 @@ STUDIO_URL="http://127.0.0.1:8765"
 studio_is_rust() {
   curl -fsS "$STUDIO_URL/api/health" 2>/dev/null | grep -Eq '"runtime"[[:space:]]*:[[:space:]]*"rust"'
 }
+STARTED_STUDIO=0
 if ! studio_is_rust; then
   # Stop the previous Python backend from the earlier edition if it is still occupying the port.
   if [[ -f "$APP_HOME/server.py" ]]; then pkill -f "$APP_HOME/server.py" >/dev/null 2>&1 || true; sleep 1; fi
+  # Launched with no --browser/--no-gui flag: the binary opens its own
+  # application window (system webview). The suite runs as an application,
+  # not as a browser tab, so nothing here may call xdg-open on the UI.
   FREE_AI_STUDIO_BASE_URL="$API_URL/v1" FREE_AI_STUDIO_PORT=8765 nohup "$APP_HOME/target/release/free-ai-studio" >> "$LOG_HOME/studio.log" 2>&1 </dev/null &
+  STARTED_STUDIO=1
   for _ in $(seq 1 30); do studio_is_rust && break; sleep 1; done
 fi
 if ! studio_is_rust; then
   command -v notify-send >/dev/null 2>&1 && notify-send "Free AI Suite" "Rust Free AI Studio failed to start. See $LOG_HOME/studio.log"
   exit 1
 fi
-xdg-open "$STUDIO_URL" >/dev/null 2>&1 || true
+if [[ "$STARTED_STUDIO" != 1 ]]; then
+  # An instance is already running: raise its window rather than opening the
+  # UI in a browser, which is what this suite explicitly does not do.
+  RAISED=0
+  if command -v wmctrl >/dev/null 2>&1; then
+    if wmctrl -a "Free AI Studio" >/dev/null 2>&1; then RAISED=1; fi
+  fi
+  if [[ "$RAISED" != 1 ]] && command -v xdotool >/dev/null 2>&1; then
+    if xdotool search --name "Free AI Studio" windowactivate >/dev/null 2>&1; then RAISED=1; fi
+  fi
+  if [[ "$RAISED" != 1 ]]; then
+    command -v notify-send >/dev/null 2>&1 && notify-send "Free AI Suite" "Free AI Studio is already running (no window to raise)."
+  fi
+fi
 LAUNCH_SCRIPT_EOF
 chmod 755 "$SUITE_HOME/launch.sh"
 
