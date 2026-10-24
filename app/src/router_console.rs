@@ -175,7 +175,9 @@ pub(crate) fn sanitize_path(raw: &str) -> Result<String, String> {
     }
     let family = segments[0];
     if !ALLOWED_PREFIXES.contains(&family) {
-        return Err(format!("`{family}` is not an admin API family this app manages."));
+        return Err(format!(
+            "`{family}` is not an admin API family this app manages."
+        ));
     }
     Ok(segments.join("/"))
 }
@@ -206,10 +208,14 @@ async fn request_desktop_session() -> Result<String, String> {
         return Ok(token);
     }
     if status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED {
-        return Err("This router build has no desktop session; sign in with its dashboard account.".into());
+        return Err(
+            "This router build has no desktop session; sign in with its dashboard account.".into(),
+        );
     }
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        return Err("The router refused a desktop session; sign in with its dashboard account.".into());
+        return Err(
+            "The router refused a desktop session; sign in with its dashboard account.".into(),
+        );
     }
     Err(format!(
         "The router did not return a session ({}).",
@@ -235,7 +241,10 @@ pub(crate) struct LoginBody {
 
 pub(crate) async fn login(Json(body): Json<LoginBody>) -> Response<Body> {
     if body.email.trim().is_empty() || body.password.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "Enter the router dashboard email and password.");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Enter the router dashboard email and password.",
+        );
     }
     let response = match http()
         .post(format!("{}/api/auth/login", origin()))
@@ -244,7 +253,12 @@ pub(crate) async fn login(Json(body): Json<LoginBody>) -> Response<Body> {
         .await
     {
         Ok(response) => response,
-        Err(error) => return json_error(StatusCode::BAD_GATEWAY, format!("Could not reach the router: {error}")),
+        Err(error) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("Could not reach the router: {error}"),
+            )
+        }
     };
     let status = response.status();
     let payload: Value = response.json().await.unwrap_or(Value::Null);
@@ -311,7 +325,10 @@ pub(crate) async fn proxy(
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
     if !crate::router::reachable(crate::router::router_port()).await {
-        return json_error(StatusCode::SERVICE_UNAVAILABLE, "The router is not running.");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The router is not running.",
+        );
     }
 
     let payload = match axum::body::to_bytes(body, MAX_BODY_BYTES as usize).await {
@@ -352,7 +369,10 @@ pub(crate) async fn proxy(
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
-                return json_error(StatusCode::BAD_GATEWAY, format!("Router request failed: {error}"))
+                return json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("Router request failed: {error}"),
+                )
             }
         };
 
@@ -376,7 +396,10 @@ pub(crate) async fn proxy(
         let bytes = match response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) => {
-                return json_error(StatusCode::BAD_GATEWAY, format!("Router response failed: {error}"))
+                return json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("Router response failed: {error}"),
+                )
             }
         };
         return Response::builder()
@@ -384,12 +407,22 @@ pub(crate) async fn proxy(
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CACHE_CONTROL, "no-store")
             .body(Body::from(bytes))
-            .unwrap_or_else(|_| json_error(StatusCode::BAD_GATEWAY, "Could not read the router response.").into_response());
+            .unwrap_or_else(|_| {
+                json_error(
+                    StatusCode::BAD_GATEWAY,
+                    "Could not read the router response.",
+                )
+                .into_response()
+            });
     }
 }
 
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response<Body> {
-    (status, Json(json!({ "ok": false, "error": message.into() }))).into_response()
+    (
+        status,
+        Json(json!({ "ok": false, "error": message.into() })),
+    )
+        .into_response()
 }
 
 /// Local router for the console endpoints. Mounted behind the same loopback
@@ -412,13 +445,22 @@ mod tests {
 
     #[test]
     fn extracts_tokens_from_known_shapes() {
-        assert_eq!(extract_token(&json!({ "token": "abc" })).as_deref(), Some("abc"));
-        assert_eq!(extract_token(&json!({ "sessionToken": " s1 " })).as_deref(), Some("s1"));
+        assert_eq!(
+            extract_token(&json!({ "token": "abc" })).as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            extract_token(&json!({ "sessionToken": " s1 " })).as_deref(),
+            Some("s1")
+        );
         assert_eq!(
             extract_token(&json!({ "data": { "session": { "access_token": "deep" } } })).as_deref(),
             Some("deep")
         );
-        assert_eq!(extract_token(&json!({ "user": { "email": "a@b.c" } })), None);
+        assert_eq!(
+            extract_token(&json!({ "user": { "email": "a@b.c" } })),
+            None
+        );
         assert_eq!(extract_token(&json!({ "token": "   " })), None);
         assert_eq!(extract_token(&Value::Null), None);
     }
@@ -428,8 +470,11 @@ mod tests {
         assert_eq!(sanitize_path("/api/keys").unwrap(), "keys");
         assert_eq!(sanitize_path("api/keys/12").unwrap(), "keys/12");
         assert_eq!(sanitize_path("models/").unwrap(), "models");
-        assert_eq!(sanitize_path("fallback/routing").unwrap(), "fallback/routing");
-        assert_eq!(sanitize_path("logs?x=1").is_err(), true);
+        assert_eq!(
+            sanitize_path("fallback/routing").unwrap(),
+            "fallback/routing"
+        );
+        assert!(sanitize_path("logs?x=1").is_err());
     }
 
     #[test]
