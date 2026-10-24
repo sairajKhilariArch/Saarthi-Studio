@@ -12,24 +12,23 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    env, fs,
-    io,
+    env, fs, io,
     path::{Component, Path as FsPath, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
-mod host_auth;
-mod host_api;
-mod host_transport;
-mod host_security;
-mod workspace;
-mod router;
-mod router_console;
 mod context;
 #[cfg(feature = "gui")]
 mod gui;
+mod host_api;
+mod host_auth;
+mod host_security;
+mod host_transport;
+mod router;
+mod router_console;
+mod workspace;
 
 const APP_NAME: &str = "Free AI Studio";
 const HOST: &str = "127.0.0.1";
@@ -62,9 +61,15 @@ struct Config {
     send_workspace_outline: bool,
 }
 
-fn default_context_budget_tokens() -> usize { context::DEFAULT_BUDGET_TOKENS }
-fn default_history_messages() -> usize { context::DEFAULT_HISTORY_MESSAGES }
-fn default_outline_enabled() -> bool { true }
+fn default_context_budget_tokens() -> usize {
+    context::DEFAULT_BUDGET_TOKENS
+}
+fn default_history_messages() -> usize {
+    context::DEFAULT_HISTORY_MESSAGES
+}
+fn default_outline_enabled() -> bool {
+    true
+}
 
 impl Config {
     fn defaults() -> Self {
@@ -141,7 +146,10 @@ fn set_private_permissions(path: &FsPath, dir: bool) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(if dir { 0o700 } else { 0o600 }))?;
+        fs::set_permissions(
+            path,
+            fs::Permissions::from_mode(if dir { 0o700 } else { 0o600 }),
+        )?;
     }
     #[cfg(not(unix))]
     let _ = (path, dir);
@@ -219,7 +227,10 @@ async fn local_security_headers(request: Request<Body>, next: Next) -> Response<
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
-    headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
     if embed_framing_allowed() {
         // No X-Frame-Options for an embedded launch: a webview origin is a
         // different origin, so frame-ancestors has to carry the allow-list.
@@ -247,16 +258,28 @@ async fn local_security_headers(request: Request<Body>, next: Next) -> Response<
 fn clean_title(value: &str) -> String {
     let title = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let title = title.chars().take(64).collect::<String>();
-    if title.is_empty() { "New conversation".to_string() } else { title }
+    if title.is_empty() {
+        "New conversation".to_string()
+    } else {
+        title
+    }
 }
 
 fn router_url(cfg: &Config, suffix: &str) -> String {
-    format!("{}/{}", cfg.base_url.trim_end_matches('/'), suffix.trim_start_matches('/'))
+    format!(
+        "{}/{}",
+        cfg.base_url.trim_end_matches('/'),
+        suffix.trim_start_matches('/')
+    )
 }
 
 fn validate_config(mut cfg: Config) -> Result<Config, String> {
     cfg.base_url = cfg.base_url.trim().trim_end_matches('/').to_string();
-    cfg.model = if cfg.model.trim().is_empty() { "auto".to_string() } else { cfg.model.trim().to_string() };
+    cfg.model = if cfg.model.trim().is_empty() {
+        "auto".to_string()
+    } else {
+        cfg.model.trim().to_string()
+    };
     cfg.api_key = cfg.api_key.trim().to_string();
 
     cfg.context_budget_tokens = cfg
@@ -266,14 +289,17 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
         .history_messages
         .clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES);
 
-    let parsed = Url::parse(&cfg.base_url).map_err(|_| "Router URL must start with http:// or https://.".to_string())?;
+    let parsed = Url::parse(&cfg.base_url)
+        .map_err(|_| "Router URL must start with http:// or https://.".to_string())?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("Router URL must start with http:// or https://.".into());
     }
     let host = parsed.host_str().unwrap_or_default();
     let is_local = matches!(host, "localhost" | "127.0.0.1" | "::1");
     if parsed.scheme() != "https" && !is_local {
-        return Err("For a non-local router, use HTTPS so your API key is encrypted in transit.".into());
+        return Err(
+            "For a non-local router, use HTTPS so your API key is encrypted in transit.".into(),
+        );
     }
     Ok(cfg)
 }
@@ -292,7 +318,9 @@ fn response_content(data: &Value) -> String {
             .filter_map(|part| part.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n");
-        if !joined.is_empty() { return joined; }
+        if !joined.is_empty() {
+            return joined;
+        }
     }
     serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
 }
@@ -309,7 +337,8 @@ async fn call_router(state: &AppState, messages: Vec<Value>) -> Result<(String, 
         "stream": false
     });
     let started = Instant::now();
-    let response = state.client
+    let response = state
+        .client
         .post(router_url(&cfg, "chat/completions"))
         .bearer_auth(&cfg.api_key)
         .json(&request_body)
@@ -318,26 +347,42 @@ async fn call_router(state: &AppState, messages: Vec<Value>) -> Result<(String, 
         .map_err(|e| format!("Could not reach router at {}: {}", cfg.base_url, e))?;
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response.text().await.map_err(|e| format!("Could not read router response: {e}"))?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Could not read router response: {e}"))?;
     let latency = started.elapsed().as_millis() as i64;
 
     let parsed: Value = serde_json::from_str(&body)
         .unwrap_or_else(|_| json!({"message": body.chars().take(3000).collect::<String>()}));
     if !status.is_success() {
-        let detail = parsed.pointer("/error/message")
+        let detail = parsed
+            .pointer("/error/message")
             .or_else(|| parsed.get("message"))
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| body.chars().take(3000).collect());
-        return Err(format!("Router returned HTTP {}: {}", status.as_u16(), detail));
+        return Err(format!(
+            "Router returned HTTP {}: {}",
+            status.as_u16(),
+            detail
+        ));
     }
 
     let answer = response_content(&parsed);
     let usage = parsed.get("usage").cloned().unwrap_or_else(|| json!({}));
-    let provider = headers.get("x-routed-via").and_then(|v| v.to_str().ok())
+    let provider = headers
+        .get("x-routed-via")
+        .and_then(|v| v.to_str().ok())
         .unwrap_or("router / provider not reported");
-    let fallback_attempts = headers.get("x-fallback-attempts").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let model = parsed.get("model").and_then(Value::as_str).unwrap_or(&cfg.model);
+    let fallback_attempts = headers
+        .get("x-fallback-attempts")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let model = parsed
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or(&cfg.model);
     let meta = json!({
         "latency_ms": latency,
         "provider": provider,
@@ -360,7 +405,12 @@ async fn static_file(State(state): State<AppState>, Path(file): Path<String>) ->
 
 async fn serve_static(state: AppState, relative: &str) -> Response<Body> {
     let path = FsPath::new(relative);
-    if path.components().any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
+    if path.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
         return json_error(StatusCode::BAD_REQUEST, "Invalid path.");
     }
     let full = state.static_dir.join(path);
@@ -376,9 +426,16 @@ async fn serve_static(state: AppState, relative: &str) -> Response<Body> {
     };
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
     response
 }
 
@@ -414,10 +471,20 @@ async fn router_stop(State(_state): State<AppState>) -> Response<Body> {
 
 async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
     let mut cfg = load_config(&state);
-    let base_url = input.get("base_url").and_then(Value::as_str).unwrap_or(&cfg.base_url).to_string();
-    let model = input.get("model").and_then(Value::as_str).unwrap_or(&cfg.model).to_string();
+    let base_url = input
+        .get("base_url")
+        .and_then(Value::as_str)
+        .unwrap_or(&cfg.base_url)
+        .to_string();
+    let model = input
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or(&cfg.model)
+        .to_string();
     if let Some(key) = input.get("api_key").and_then(Value::as_str) {
-        if !key.trim().is_empty() { cfg.api_key = key.trim().to_string(); }
+        if !key.trim().is_empty() {
+            cfg.api_key = key.trim().to_string();
+        }
     }
     if let Some(budget) = input.get("context_budget_tokens").and_then(Value::as_u64) {
         cfg.context_budget_tokens = budget as usize;
@@ -448,11 +515,13 @@ async fn list_conversations(State(state): State<AppState>) -> Response<Body> {
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message
              FROM conversations v ORDER BY v.updated_at DESC"
         )?;
-        let rows = stmt.query_map([], |row| Ok(json!({
-            "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
-            "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
-            "last_message": row.get::<_, Option<String>>(4)?
-        })))?;
+        let rows = stmt.query_map([], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
+                "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
+                "last_message": row.get::<_, Option<String>>(4)?
+            }))
+        })?;
         rows.collect()
     })();
     match result {
@@ -464,13 +533,21 @@ async fn list_conversations(State(state): State<AppState>) -> Response<Body> {
 async fn get_messages(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
     let result = (|| -> rusqlite::Result<Option<Vec<Value>>> {
         let conn = open_db(&state.database_path)?;
-        let exists = conn.query_row("SELECT id FROM conversations WHERE id=?1", [&id], |r| r.get::<_, String>(0)).optional()?;
-        if exists.is_none() { return Ok(None); }
+        let exists = conn
+            .query_row("SELECT id FROM conversations WHERE id=?1", [&id], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?;
+        if exists.is_none() {
+            return Ok(None);
+        }
         let mut stmt = conn.prepare("SELECT id, role, content, created_at FROM messages WHERE conversation_id=?1 ORDER BY id")?;
-        let rows = stmt.query_map([id], |row| Ok(json!({
-            "id": row.get::<_, i64>(0)?, "role": row.get::<_, String>(1)?,
-            "content": row.get::<_, String>(2)?, "created_at": row.get::<_, f64>(3)?
-        })))?;
+        let rows = stmt.query_map([id], |row| {
+            Ok(json!({
+                "id": row.get::<_, i64>(0)?, "role": row.get::<_, String>(1)?,
+                "content": row.get::<_, String>(2)?, "created_at": row.get::<_, f64>(3)?
+            }))
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map(Some)
     })();
     match result {
@@ -480,21 +557,36 @@ async fn get_messages(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
-async fn create_conversation(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+async fn create_conversation(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
     let id = Uuid::new_v4().to_string();
-    let title = clean_title(input.get("title").and_then(Value::as_str).unwrap_or("New conversation"));
+    let title = clean_title(
+        input
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("New conversation"),
+    );
     let now = now_seconds();
-    match open_db(&state.database_path).and_then(|conn| conn.execute(
-        "INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?1,?2,?3,?4)",
-        params![id, title, now, now],
-    )) {
+    match open_db(&state.database_path).and_then(|conn| {
+        conn.execute(
+            "INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?1,?2,?3,?4)",
+            params![id, title, now, now],
+        )
+    }) {
         Ok(_) => (StatusCode::CREATED, Json(json!({"id": id, "title": title}))).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
-async fn delete_conversation(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
-    match open_db(&state.database_path).and_then(|conn| conn.execute("DELETE FROM conversations WHERE id=?1", [id])) {
+async fn delete_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    match open_db(&state.database_path)
+        .and_then(|conn| conn.execute("DELETE FROM conversations WHERE id=?1", [id]))
+    {
         Ok(_) => Json(json!({"ok": true})).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -558,38 +650,84 @@ fn embed_framing_allowed() -> bool {
 async fn test_router(State(state): State<AppState>) -> Response<Body> {
     let cfg = load_config(&state);
     if cfg.api_key.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "error": "Add the router API key in Settings first."}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": "Add the router API key in Settings first."})),
+        )
+            .into_response();
     }
-    let response = state.client.get(router_url(&cfg, "models")).bearer_auth(&cfg.api_key).send().await;
+    let response = state
+        .client
+        .get(router_url(&cfg, "models"))
+        .bearer_auth(&cfg.api_key)
+        .send()
+        .await;
     match response {
-        Ok(resp) if resp.status().is_success() => {
-            match resp.json::<Value>().await {
-                Ok(result) => {
-                    let count = result.get("data").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
-                    Json(json!({"ok": true, "message": format!("Connected. Router returned {count} model(s).")})).into_response()
-                }
-                Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": format!("Invalid router response: {e}")}))).into_response(),
+        Ok(resp) if resp.status().is_success() => match resp.json::<Value>().await {
+            Ok(result) => {
+                let count = result
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0);
+                Json(json!({"ok": true, "message": format!("Connected. Router returned {count} model(s).")})).into_response()
             }
-        }
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"ok": false, "error": format!("Invalid router response: {e}")})),
+            )
+                .into_response(),
+        },
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": format!("HTTP {}: {}", status.as_u16(), body.chars().take(1500).collect::<String>())}))).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": e.to_string()}))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"ok": false, "error": e.to_string()})),
+        )
+            .into_response(),
     }
 }
 
 async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
-    let cid = input.get("conversation_id").and_then(Value::as_str).unwrap_or("").to_string();
-    let message = input.get("message").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let code: String = input.get("code").and_then(Value::as_str).unwrap_or("").chars().take(50_000).collect();
-    let language: String = input.get("language").and_then(Value::as_str).unwrap_or("text").chars().take(40).collect();
+    let cid = input
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let message = input
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let code: String = input
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(50_000)
+        .collect();
+    let language: String = input
+        .get("language")
+        .and_then(Value::as_str)
+        .unwrap_or("text")
+        .chars()
+        .take(40)
+        .collect();
     if cid.is_empty() || message.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "Choose a conversation and enter a message.");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Choose a conversation and enter a message.",
+        );
     }
     if message.chars().count() > 50_000 {
-        return json_error(StatusCode::BAD_REQUEST, "Message is too long (50,000 characters maximum).");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Message is too long (50,000 characters maximum).",
+        );
     }
 
     let prompt = if code.trim().is_empty() {
@@ -598,21 +736,47 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
         format!("{message}\n\nHere is the code from my editor (language: {language}):\n```{language}\n{code}\n```")
     };
     let cfg = load_config(&state);
-    let history_limit = cfg.history_messages.clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES) as i64;
+    let history_limit =
+        cfg.history_messages
+            .clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES) as i64;
     let history_result = (|| -> rusqlite::Result<Option<Vec<(String, String)>>> {
         let mut conn = open_db(&state.database_path)?;
         let tx = conn.transaction()?;
-        let title = tx.query_row("SELECT title FROM conversations WHERE id=?1", [&cid], |r| r.get::<_, String>(0)).optional()?;
-        if title.is_none() { return Ok(None); }
-        tx.execute("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'user',?2,?3)", params![cid, prompt, now_seconds()])?;
-        let count: i64 = tx.query_row("SELECT COUNT(*) FROM messages WHERE conversation_id=?1", [&cid], |r| r.get(0))?;
-        if count == 1 {
-            tx.execute("UPDATE conversations SET title=?1, updated_at=?2 WHERE id=?3", params![clean_title(&message), now_seconds(), cid])?;
-        } else {
-            tx.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now_seconds(), cid])?;
+        let title = tx
+            .query_row("SELECT title FROM conversations WHERE id=?1", [&cid], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?;
+        if title.is_none() {
+            return Ok(None);
         }
-        let mut stmt = tx.prepare("SELECT role,content FROM messages WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2")?;
-        let rows = stmt.query_map(params![cid, history_limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        tx.execute(
+            "INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'user',?2,?3)",
+            params![cid, prompt, now_seconds()],
+        )?;
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=?1",
+            [&cid],
+            |r| r.get(0),
+        )?;
+        if count == 1 {
+            tx.execute(
+                "UPDATE conversations SET title=?1, updated_at=?2 WHERE id=?3",
+                params![clean_title(&message), now_seconds(), cid],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE conversations SET updated_at=?1 WHERE id=?2",
+                params![now_seconds(), cid],
+            )?;
+        }
+        let mut stmt = tx.prepare(
+            "SELECT role,content FROM messages WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![cid, history_limit], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
         tx.commit()?;
@@ -624,10 +788,16 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
         Ok(None) => return json_error(StatusCode::NOT_FOUND, "Conversation not found."),
         Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    let history: Vec<Value> = rows.into_iter().rev()
+    let history: Vec<Value> = rows
+        .into_iter()
+        .rev()
         .map(|(role, content)| json!({"role": role, "content": content}))
         .collect();
-    let outline = if cfg.send_workspace_outline { state.workspace.outline() } else { None };
+    let outline = if cfg.send_workspace_outline {
+        state.workspace.outline()
+    } else {
+        None
+    };
     let packed = context::pack(
         SYSTEM_PROMPT,
         outline.as_deref(),
@@ -647,11 +817,17 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
                     "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'')",
                     params![now, cid, meta.get("model").and_then(Value::as_str).unwrap_or("auto"), meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"), meta.get("latency_ms").and_then(Value::as_i64), meta.get("prompt_tokens").and_then(Value::as_i64), meta.get("completion_tokens").and_then(Value::as_i64), meta.get("total_tokens").and_then(Value::as_i64), meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or("")],
                 )?;
-                conn.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now, cid])?;
+                conn.execute(
+                    "UPDATE conversations SET updated_at=?1 WHERE id=?2",
+                    params![now, cid],
+                )?;
                 Ok(())
             })();
             if let Err(e) = log_result {
-                return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("AI replied, but saving the response failed: {e}"));
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("AI replied, but saving the response failed: {e}"),
+                );
             }
             meta["context_tokens"] = json!(packed.estimated_tokens);
             meta["context_trimmed"] = json!(packed.trimmed_messages);
@@ -664,14 +840,17 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
                 "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,error) VALUES(?1,?2,?3,'router / unknown','error',?4,?5)",
                 params![now_seconds(), cid, cfg.model, latency, error.chars().take(2500).collect::<String>()],
             ));
-            (StatusCode::BAD_GATEWAY, Json(json!({"ok": false, "error": error, "meta": {"latency_ms": latency}}))).into_response()
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"ok": false, "error": error, "meta": {"latency_ms": latency}})),
+            )
+                .into_response()
         }
     }
 }
 
 struct Boot {
     port: u16,
-    gui_mode: bool,
     server: tokio::task::JoinHandle<Result<(), io::Error>>,
     remote_task: Option<tokio::task::JoinHandle<Result<(), String>>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -679,7 +858,7 @@ struct Boot {
 
 /// Bind listeners and start the local UI server plus the optional desktop
 /// host API. Runs before the GUI takes over the main thread.
-async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
+async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
     let (config_path, database_path, static_dir) = paths();
     let workspace_state_path = config_path.with_file_name("workspace.json");
     let state = AppState {
@@ -687,11 +866,15 @@ async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
         config_path,
         database_path,
         static_dir,
-        client: Client::builder().timeout(Duration::from_secs(120)).build()?,
+        client: Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()?,
     };
     ensure_setup(&state)?;
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_PORT);
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
     let address = format!("{HOST}:{port}");
     let listener = TcpListener::bind(&address).await?;
     let router_api = Router::new()
@@ -707,7 +890,10 @@ async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/", get(root))
         .route("/static/*file", get(static_file))
         .route("/api/config", get(get_config).post(post_config))
-        .route("/api/conversations", get(list_conversations).post(create_conversation))
+        .route(
+            "/api/conversations",
+            get(list_conversations).post(create_conversation),
+        )
         .route("/api/conversations/:id/messages", get(get_messages))
         .route("/api/conversations/:id/delete", post(delete_conversation))
         .route("/api/usage", get(usage))
@@ -731,7 +917,8 @@ async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
         let tls_config = remote.load_tls_config().await?;
         let remote_listener = TcpListener::bind(remote.socket_addr()).await?;
         let remote_std_listener = remote_listener.into_std()?;
-        let remote_router = host_security::harden_router(host_api::build_router(state.clone(), token_store));
+        let remote_router =
+            host_security::harden_router(host_api::build_router(state.clone(), token_store));
         let address = remote.socket_addr();
         let server_handle = axum_server::Handle::new();
         let handle_for_shutdown = server_handle.clone();
@@ -779,7 +966,12 @@ async fn bootstrap(gui_mode: bool) -> Result<Boot, Box<dyn std::error::Error>> {
             })
             .await
     });
-    Ok(Boot { port, gui_mode, server, remote_task, shutdown_tx })
+    Ok(Boot {
+        port,
+        server,
+        remote_task,
+        shutdown_tx,
+    })
 }
 
 async fn wait_for_shutdown(mut rx: tokio::sync::watch::Receiver<bool>) {
@@ -818,7 +1010,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let wants_browser = args.iter().any(|arg| arg == "--browser");
     let gui_mode = !wants_browser
-        && !args.iter().any(|arg| arg == "--no-gui" || arg == "--headless")
+        && !args
+            .iter()
+            .any(|arg| arg == "--no-gui" || arg == "--headless")
         && env::var_os("FREE_AI_STUDIO_NO_GUI").is_none();
 
     let runtime = tokio::runtime::Runtime::new()?;
@@ -826,10 +1020,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if env::var_os("FREE_AI_STUDIO_SKIP_ROUTER").is_none() {
             let status = router::ensure_started().await;
             if status.reachable {
-                println!("FreeLLMAPI router is responding at http://127.0.0.1:{}.", status.port);
+                println!(
+                    "FreeLLMAPI router is responding at http://127.0.0.1:{}.",
+                    status.port
+                );
             }
         }
-        bootstrap(gui_mode).await
+        bootstrap().await
     })?;
 
     if gui_mode {
@@ -838,7 +1035,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             if let Err(error) = gui::run(boot.port, boot.shutdown_tx.clone(), APP_NAME) {
                 println!("Could not open the application window ({error}).");
-                println!("Continuing headless: open http://127.0.0.1:{} in a browser.", boot.port);
+                println!(
+                    "Continuing headless: open http://127.0.0.1:{} in a browser.",
+                    boot.port
+                );
             }
         }
         #[cfg(not(feature = "gui"))]
@@ -850,7 +1050,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(feature = "gui"))]
         println!("Open http://127.0.0.1:{} in a browser.", boot.port);
     } else {
-        println!("Headless mode. Open http://127.0.0.1:{} or stop with Ctrl+C.", boot.port);
+        println!(
+            "Headless mode. Open http://127.0.0.1:{} or stop with Ctrl+C.",
+            boot.port
+        );
     }
 
     if gui_mode {
@@ -893,7 +1096,10 @@ mod tests {
         assert_eq!(candidates[0], env_dir);
         assert_eq!(candidates[1], exe_dir.join("../share/free-ai-suite/static"));
         assert_eq!(candidates[2], exe_dir.join("static"));
-        assert_eq!(candidates[3], PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
+        assert_eq!(
+            candidates[3],
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static")
+        );
     }
 
     #[test]

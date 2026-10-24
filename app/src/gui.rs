@@ -53,9 +53,15 @@ pub(crate) fn open_in_browser(port: u16) {
     #[cfg(target_os = "macos")]
     let program = ("open", vec![url.clone()]);
     #[cfg(target_os = "windows")]
-    let program = ("cmd", vec!["/c".to_string(), "start".to_string(), url.clone()]);
+    let program = (
+        "cmd",
+        vec!["/c".to_string(), "start".to_string(), url.clone()],
+    );
 
-    match std::process::Command::new(program.0).args(program.1).spawn() {
+    match std::process::Command::new(program.0)
+        .args(program.1)
+        .spawn()
+    {
         Ok(_) => println!("Opened {url} in your browser."),
         Err(error) => println!("Could not open a browser ({error}). Visit {url} manually."),
     }

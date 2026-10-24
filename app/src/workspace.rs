@@ -226,13 +226,22 @@ fn push_outline(dir: &FsPath, depth: usize, lines: &mut Vec<String>, entries: &m
     for item in read.flatten() {
         let name = item.file_name().to_string_lossy().to_string();
         let is_dir = item.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
-            && !item.file_type().map(|kind| kind.is_symlink()).unwrap_or(false);
-        if is_dir && (name.starts_with('.') && name != ".github" || OUTLINE_SKIP_DIRS.contains(&name.as_str())) {
+            && !item
+                .file_type()
+                .map(|kind| kind.is_symlink())
+                .unwrap_or(false);
+        if is_dir
+            && (name.starts_with('.') && name != ".github"
+                || OUTLINE_SKIP_DIRS.contains(&name.as_str()))
+        {
             continue;
         }
         names.push((name, is_dir));
     }
-    names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    names.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    });
     let indent = "  ".repeat(depth);
     for (name, is_dir) in names {
         if *entries >= 300 {
@@ -240,7 +249,11 @@ fn push_outline(dir: &FsPath, depth: usize, lines: &mut Vec<String>, entries: &m
             return;
         }
         *entries += 1;
-        lines.push(if is_dir { format!("{indent}{name}/") } else { format!("{indent}{name}") });
+        lines.push(if is_dir {
+            format!("{indent}{name}/")
+        } else {
+            format!("{indent}{name}")
+        });
         if is_dir {
             push_outline(&dir.join(&name), depth + 1, lines, entries);
         }
@@ -660,7 +673,9 @@ fn run_folder_picker() -> PickerResult {
             }
             return PickerResult::Cancelled;
         }
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return PickerResult::Unavailable,
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return PickerResult::Unavailable
+        }
         Err(_) => {}
     }
 

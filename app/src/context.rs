@@ -97,8 +97,16 @@ pub(crate) fn pack(
     let start = history.len() - window;
     for (offset, entry) in history[start..].iter().enumerate() {
         let is_current = offset + 1 == window;
-        let role = entry.get("role").and_then(Value::as_str).unwrap_or("user").to_string();
-        let raw = entry.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+        let role = entry
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .to_string();
+        let raw = entry
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let content = if role == "system" {
             continue;
         } else if is_current {
@@ -122,18 +130,6 @@ pub(crate) fn pack(
     }
 }
 
-/// Compact file-tree outline for the open workspace (names only, no contents).
-pub(crate) fn outline_from_entries(root_name: &str, entries: &[String]) -> String {
-    let mut lines = vec![format!("{root_name}/")];
-    for entry in entries.iter().take(200) {
-        lines.push(entry.clone());
-    }
-    if entries.len() > 200 {
-        lines.push(format!("… and {} more entries", entries.len() - 200));
-    }
-    lines.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,7 +150,10 @@ mod tests {
     fn crops_long_text_keeping_both_ends() {
         let text = "HEAD".to_string() + &"x".repeat(10_000) + "TAIL";
         let cropped = crop(&text, 100);
-        assert!(estimate_tokens(&cropped) <= 130, "crop should stay near the cap");
+        assert!(
+            estimate_tokens(&cropped) <= 130,
+            "crop should stay near the cap"
+        );
         assert!(cropped.starts_with("HEAD"));
         assert!(cropped.ends_with("TAIL"));
         assert!(cropped.contains("characters omitted"));
@@ -184,7 +183,10 @@ mod tests {
         let packed = pack("You are a concise assistant.", None, &history, 1_000, 6);
         assert!(packed.messages.first().unwrap()["role"] == "system");
         // The current message is always the last message sent.
-        assert_eq!(packed.messages.last().unwrap()["content"], "current question");
+        assert_eq!(
+            packed.messages.last().unwrap()["content"],
+            "current question"
+        );
         assert!(packed.estimated_tokens <= 1_000 + CURRENT_MESSAGE_CAP_TOKENS * CHARS_PER_TOKEN);
         assert!(packed.trimmed_messages >= 1);
     }
@@ -192,8 +194,8 @@ mod tests {
     #[test]
     fn pack_includes_the_workspace_outline_in_the_system_prompt() {
         let history = vec![message("user", "hi")];
-        let outline = outline_from_entries("my-project", &["src/".into(), "main.rs".into()]);
-        let packed = pack("System.", Some(&outline), &history, 6_000, 6);
+        let outline = "my-project/\nsrc/\nmain.rs";
+        let packed = pack("System.", Some(outline), &history, 6_000, 6);
         let system = packed.messages[0]["content"].as_str().unwrap();
         assert!(system.contains("Workspace files"));
         assert!(system.contains("main.rs"));
