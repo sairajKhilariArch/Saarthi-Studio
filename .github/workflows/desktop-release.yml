@@ -1,9 +1,10 @@
 name: Desktop Release
 
-# Builds every desktop artifact: Linux x86_64 (portable tarball, .deb package
-# via cargo-deb, AppImage) and Windows x86_64 (portable zip), plus the VS Code
-# extension .vsix. Push a `v*` tag to build and attach all of them to one GitHub
-# release; workflow_dispatch builds and uploads artifacts without a release.
+# Builds every release artifact: Linux x86_64 (portable tarball, .deb package
+# via cargo-deb, AppImage), Windows x86_64 (portable zip), the unsigned Android
+# release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to build and
+# attach all of them to one GitHub release; workflow_dispatch builds and uploads
+# artifacts without a release.
 on:
   workflow_dispatch:
   push:

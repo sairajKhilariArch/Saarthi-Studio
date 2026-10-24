@@ -743,7 +743,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           mode: "embedded",
           embeddable: true,
           workspace: options.workspaceRoot || null,
-          version: "1.0.0",
+          version: "1.19.0",
         });
         return;
       }

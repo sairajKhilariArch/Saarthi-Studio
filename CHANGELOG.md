@@ -5,9 +5,11 @@ Release **1.19.0** is the current version in `Cargo.toml` and `tauri.conf.json`
 token-budgeted context packer, the router lifecycle, the router console, the
 Windows build and the VS Code extension.
 
-Five follow-up commits sit on top of it locally. Each commit message starts
-with its tag and lists exactly what it delivers. **Nothing here has been
-pushed.**
+Seven commits sit on top of the release (v1.19.1–v1.19.7); each message starts
+with its tag and lists exactly what it delivers. v1.19.1–v1.19.6 are already on
+`origin/main` — a push recorded under this checkout's git identity at
+2026-10-24 11:21, after those six commits were made. **v1.19.7 is local and has
+not been pushed.**
 
 ## 1.19.0 — the release itself
 
@@ -66,7 +68,7 @@ pushed.**
   otherwise starts a built-in server inside the extension that serves the same
   UI and API on a free loopback port, scoped to the open workspace.
 - 13 tests cover the packer, store, workspace rules, console path guard, probe
-  and both server surfaces. The `.vsix` is about 48 KB.
+  and both server surfaces. The `.vsix` is about 56 KB.
 
 ## Follow-up commits
 
@@ -107,6 +109,20 @@ previous reply's count while you are typing.
 
 Documents the release and the follow-up commits above.
 
+### v1.19.7 — align every release artifact on 1.19.0
+
+- `README.md` and `android/README.md` still advertised `1.12.0` (version code
+  `15`); both now say `1.19.0` (code `16`), matching `build.gradle.kts` and
+  `tauri.conf.json`.
+- The extension's `package.json` and its embedded-server `/api/health` payload
+  both reported `1.0.0`; both are `1.19.0` now, so the `.vsix`, the desktop
+  binary and the APK report one suite version.
+- The `Desktop Release` header comment now mentions the Android job it was
+  already running, and `/dist/` is git-ignored so a local `vsce package` does
+  not dirty the tree.
+- The release APK/AAB were rebuilt at `1.19.0` (code `16`) — confirmed with
+  `aapt dump badging` — and `vsce package` produced the 56 KB `.vsix`.
+
 ## Verification
 
 - `cargo fmt --all --check`, `cargo test --locked` (57/57), `cargo clippy
@@ -116,4 +132,7 @@ Documents the release and the follow-up commits above.
   token meter, settings persistence.
 - Router lifecycle: compose up on boot, `docker compose down` on SIGINT, and a
   router started by the user stays running after exit.
-- Extension: `npm test` (13/13), `tsc --noEmit`, `vsce package`.
+- Extension: `npm test` (13/13), `tsc --noEmit`, `vsce package` → `dist/
+  free-ai-studio-vscode.vsix` (56 KB).
+- Android: `gradle assembleRelease bundleRelease` succeeds; `aapt dump
+  badging` on the release APK reports `versionCode='16' versionName='1.19.0'`.

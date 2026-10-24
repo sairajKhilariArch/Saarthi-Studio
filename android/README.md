@@ -6,7 +6,7 @@ Saarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This 
 
 > **Monorepo architecture status:** the Rust desktop app is the primary host. This Android source currently connects directly to a configured FreeLLMAPI-compatible endpoint; moving it under `android/` does not yet connect it to the desktop host. Desktop-host pairing and its authenticated network API are a separate implementation milestone. See the repository-root `PLATFORM-ARCHITECTURE.md`.
 
-**v1.12.0 — production release build.** The `release` build type enables R8 minification and resource shrinking, `targetSdk` is 35, and plaintext router endpoints are restricted to loopback/private LAN ranges (public hosts must use HTTPS). Release APK/AAB artifacts are assembled unsigned and signed at distribution time. CI must pass and the physical-device checklist in `UPGRADE-GUIDE-1.11.1.md` must be completed before distribution.
+**v1.19.0 (version code 16) — production release build.** The `release` build type enables R8 minification and resource shrinking, `targetSdk` is 35, and plaintext router endpoints are restricted to loopback/private LAN ranges (public hosts must use HTTPS). Release APK/AAB artifacts are assembled unsigned and signed at distribution time. CI must pass and the physical-device checklist in `UPGRADE-GUIDE-1.11.1.md` must be completed before distribution.
 
 ## Included capabilities
 - OpenAI-compatible FreeLLMAPI chat, model listing, streaming and Stop.

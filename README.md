@@ -107,7 +107,7 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 ## Production Ready - Branch: main
 
 ### Android (companion client)
-- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.12.0` (version code `15`).
+- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.19.0` (version code `16`).
 - The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB (`saarthi-studio-android-release-unsigned`). Sign artifacts with your own keystore at distribution time.
 - Plaintext router endpoints are restricted to loopback/private LAN ranges via `network_security_config.xml`; public hosts must use HTTPS.
 - Local helper: `android/BUILD-APK-UBUNTU.sh` runs unit tests, lint, debug and release assembly.
