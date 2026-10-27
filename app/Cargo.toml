@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.19.0"
+version = "1.20.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -9,8 +9,11 @@ license = "MIT"
 [dependencies]
 axum = "=0.7.9"
 axum-server = { version = "=0.7.3", default-features = false, features = ["tls-rustls"] }
+# Streaming chat: reqwest's byte stream is folded into SSE frames by hand.
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 getrandom = "=0.2.15"
-reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }
