@@ -8,12 +8,19 @@ use axum::{
     Json, Router,
 };
 use reqwest::{Client, Url};
+use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::VecDeque,
     env, fs, io,
     path::{Component, Path as FsPath, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::net::TcpListener;
@@ -28,6 +35,7 @@ mod host_security;
 mod host_transport;
 mod router;
 mod router_console;
+mod skills;
 mod workspace;
 
 const APP_NAME: &str = "Free AI Studio";
@@ -59,6 +67,12 @@ struct Config {
     /// Send a compact file-tree outline of the open folder with each request.
     #[serde(default = "default_outline_enabled")]
     send_workspace_outline: bool,
+    /// Project shown in the UI and used to scope sessions.
+    #[serde(default)]
+    active_project: String,
+    /// Skills the user switched off; everything discovered is on by default.
+    #[serde(default)]
+    disabled_skills: Vec<String>,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -81,6 +95,8 @@ impl Config {
             context_budget_tokens: default_context_budget_tokens(),
             history_messages: default_history_messages(),
             send_workspace_outline: true,
+            active_project: String::new(),
+            disabled_skills: Vec::new(),
         }
     }
 }
@@ -165,7 +181,11 @@ fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
 fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let conn = open_db(path)?;
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS conversations (
+        "CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, folder_path TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL, updated_at REAL NOT NULL, archived_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -180,7 +200,112 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
             latency_ms INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER,
             total_tokens INTEGER, fallback_attempts TEXT, error TEXT
         );",
-    )
+    )?;
+    migrate_projects(&conn)
+}
+
+/// Give a pre-projects database its `project_id` column, a first project, and
+/// backfill every existing conversation into it, so nothing is orphaned by the
+/// upgrade and switching projects never shows an empty history.
+fn migrate_projects(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(conversations)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "project_id")
+    };
+    if !has_column {
+        conn.execute_batch(
+            "ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE;",
+        )?;
+    }
+    let now = now_seconds();
+    let existing = conn
+        .query_row(
+            "SELECT id FROM projects ORDER BY created_at LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let fallback = match existing {
+        Some(id) => id,
+        None => {
+            let id = Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO projects(id,name,folder_path,created_at,updated_at) VALUES(?1,'Default','',?2,?2)",
+                params![id, now],
+            )?;
+            id
+        }
+    };
+    conn.execute(
+        "UPDATE conversations SET project_id=?1 WHERE project_id IS NULL OR project_id=''",
+        params![fallback],
+    )?;
+    Ok(())
+}
+
+/// The project new sessions belong to. Repairs an empty or stale pointer
+/// (a deleted or archived project) instead of failing the request.
+fn active_project_id(state: &AppState) -> String {
+    let conn = match open_db(&state.database_path) {
+        Ok(conn) => conn,
+        Err(_) => return String::new(),
+    };
+    let mut cfg = load_config(state);
+    let current = cfg.active_project.clone();
+    let usable = conn
+        .query_row(
+            "SELECT id FROM projects WHERE id=?1 AND archived_at IS NULL",
+            [&current],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    if let Some(id) = usable {
+        return id;
+    }
+    let replacement = conn
+        .query_row(
+            "SELECT id FROM projects WHERE archived_at IS NULL ORDER BY created_at LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let id = match replacement {
+        Some(id) => id,
+        None => {
+            let id = Uuid::new_v4().to_string();
+            let now = now_seconds();
+            let _ = conn.execute(
+                "INSERT INTO projects(id,name,folder_path,created_at,updated_at) VALUES(?1,'Default','',?2,?2)",
+                params![id, now],
+            );
+            id
+        }
+    };
+    cfg.active_project = id.clone();
+    let _ = save_config_file(&state.config_path, &cfg);
+    id
+}
+
+/// Remember which folder the active project works in, so switching projects
+/// restores its files instead of only relabelling the sidebar.
+fn record_project_folder(state: &AppState, folder: &str) {
+    let project = active_project_id(state);
+    if project.is_empty() {
+        return;
+    }
+    let _ = open_db(&state.database_path).and_then(|conn| {
+        conn.execute(
+            "UPDATE projects SET folder_path=?1, updated_at=?2 WHERE id=?3",
+            params![folder, now_seconds(), project],
+        )
+    });
 }
 
 fn ensure_setup(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
@@ -196,6 +321,8 @@ fn ensure_setup(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
         save_config_file(&state.config_path, &Config::defaults())?;
     }
     initialize_database(&state.database_path)?;
+    // Warm the active-project pointer (also creates the first project).
+    active_project_id(state);
     Ok(())
 }
 
@@ -507,15 +634,197 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline})).into_response()
 }
 
+async fn list_projects(State(state): State<AppState>) -> Response<Body> {
+    let active = active_project_id(&state);
+    let result = (|| -> rusqlite::Result<Vec<Value>> {
+        let conn = open_db(&state.database_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, folder_path, created_at, updated_at, archived_at FROM projects
+             ORDER BY (archived_at IS NOT NULL), created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "name": row.get::<_, String>(1)?,
+                "folder": row.get::<_, String>(2)?,
+                "created_at": row.get::<_, f64>(3)?,
+                "updated_at": row.get::<_, f64>(4)?,
+                "archived": row.get::<_, Option<f64>>(5)?.is_some(),
+            }))
+        })?;
+        rows.collect()
+    })();
+    match result {
+        Ok(projects) => Json(json!({ "ok": true, "active": active, "projects": projects })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+fn project_name(input: &Value) -> String {
+    clean_title(input.get("name").and_then(Value::as_str).unwrap_or(""))
+}
+
+async fn create_project(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let name = project_name(&input);
+    if name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "A project needs a name.");
+    }
+    let folder = input
+        .get("folder")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(4000)
+        .collect::<String>();
+    let id = Uuid::new_v4().to_string();
+    let now = now_seconds();
+    match open_db(&state.database_path).and_then(|conn| {
+        conn.execute(
+            "INSERT INTO projects(id,name,folder_path,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)",
+            params![id, name, folder, now],
+        )
+    }) {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(json!({ "ok": true, "id": id, "name": name })),
+        )
+            .into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+async fn update_project(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let conn = match open_db(&state.database_path) {
+        Ok(conn) => conn,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let exists = conn
+        .query_row("SELECT id FROM projects WHERE id=?1", [&id], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional();
+    match exists {
+        Ok(Some(_)) => {}
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "No such project."),
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+
+    if let Some(name) = input.get("name").and_then(Value::as_str) {
+        let name = clean_title(name);
+        if !name.is_empty() {
+            if let Err(e) = conn.execute(
+                "UPDATE projects SET name=?1, updated_at=?2 WHERE id=?3",
+                params![name, now_seconds(), id],
+            ) {
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+        }
+    }
+    if let Some(folder) = input.get("folder").and_then(Value::as_str) {
+        let folder: String = folder.chars().take(4000).collect();
+        if let Err(e) = conn.execute(
+            "UPDATE projects SET folder_path=?1, updated_at=?2 WHERE id=?3",
+            params![folder, now_seconds(), id],
+        ) {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    if let Some(archived) = input.get("archived").and_then(Value::as_bool) {
+        let stamp: Option<f64> = if archived { Some(now_seconds()) } else { None };
+        if let Err(e) = conn.execute(
+            "UPDATE projects SET archived_at=?1, updated_at=?2 WHERE id=?3",
+            params![stamp, now_seconds(), id],
+        ) {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+        // Never leave the UI pointed at an archived project.
+        if archived {
+            let mut cfg = load_config(&state);
+            if cfg.active_project == id {
+                cfg.active_project.clear();
+                let _ = save_config_file(&state.config_path, &cfg);
+                active_project_id(&state);
+            }
+        }
+    }
+    Json(json!({ "ok": true, "id": id })).into_response()
+}
+
+async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
+    // Conversations cascade (FK ON DELETE CASCADE), so threads and messages
+    // leave with the project instead of reappearing under another one.
+    match open_db(&state.database_path).and_then(|conn| {
+        conn.execute("DELETE FROM projects WHERE id=?1", [&id])
+    }) {
+        Ok(0) => json_error(StatusCode::NOT_FOUND, "No such project."),
+        Ok(_) => {
+            let mut cfg = load_config(&state);
+            if cfg.active_project == id {
+                cfg.active_project.clear();
+                let _ = save_config_file(&state.config_path, &cfg);
+                active_project_id(&state);
+            }
+            Json(json!({ "ok": true, "active": active_project_id(&state) })).into_response()
+        }
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Point the UI at a project and open the folder it remembers. A folder that
+/// no longer exists does not fail the switch; the project still becomes
+/// active and the file pane simply reports nothing open.
+async fn activate_project(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
+    let stored = open_db(&state.database_path).and_then(|conn| {
+        conn.query_row(
+            "SELECT name, folder_path FROM projects WHERE id=?1",
+            [&id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+    });
+    let (name, folder) = match stored {
+        Ok(row) => row,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return json_error(StatusCode::NOT_FOUND, "No such project.")
+        }
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+
+    let mut cfg = load_config(&state);
+    cfg.active_project = id.clone();
+    if let Err(e) = save_config_file(&state.config_path, &cfg) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+
+    let workspace = if folder.trim().is_empty() {
+        state.workspace.close();
+        json!({ "open": false })
+    } else {
+        match state.workspace.open(&folder) {
+            Ok(opened) => json!({
+                "open": true,
+                "name": opened.name,
+                "path": crate::workspace::display_path(&opened.root),
+            }),
+            Err(error) => json!({ "open": false, "message": error.message() }),
+        }
+    };
+    Json(json!({ "ok": true, "id": id, "name": name, "workspace": workspace })).into_response()
+}
+
 async fn list_conversations(State(state): State<AppState>) -> Response<Body> {
+    let project = active_project_id(&state);
     let result = (|| -> rusqlite::Result<Vec<Value>> {
         let conn = open_db(&state.database_path)?;
         let mut stmt = conn.prepare(
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message
-             FROM conversations v ORDER BY v.updated_at DESC"
+             FROM conversations v WHERE v.project_id=?1 ORDER BY v.updated_at DESC"
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([project], |row| {
             Ok(json!({
                 "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
                 "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
@@ -569,10 +878,11 @@ async fn create_conversation(
             .unwrap_or("New conversation"),
     );
     let now = now_seconds();
+    let project = active_project_id(&state);
     match open_db(&state.database_path).and_then(|conn| {
         conn.execute(
-            "INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?1,?2,?3,?4)",
-            params![id, title, now, now],
+            "INSERT INTO conversations(id,title,project_id,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)",
+            params![id, title, project, now],
         )
     }) {
         Ok(_) => (StatusCode::CREATED, Json(json!({"id": id, "title": title}))).into_response(),
@@ -691,7 +1001,18 @@ async fn test_router(State(state): State<AppState>) -> Response<Body> {
     }
 }
 
-async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+/// Everything both chat handlers need before the router is called: the
+/// validated conversation, the loaded config, and the packed request. Shared
+/// so the buffered and streaming paths can never drift apart.
+struct ChatPrep {
+    cid: String,
+    cfg: Config,
+    packed: context::PackedRequest,
+}
+
+/// Validate a chat payload, persist the user's message, and pack the context
+/// under the token budget. Returns a ready-to-send error response on failure.
+fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Response> {
     let cid = input
         .get("conversation_id")
         .and_then(Value::as_str)
@@ -718,24 +1039,40 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
         .take(40)
         .collect();
     if cid.is_empty() || message.is_empty() {
-        return json_error(
+        return Err(json_error(
             StatusCode::BAD_REQUEST,
             "Choose a conversation and enter a message.",
-        );
+        ));
     }
     if message.chars().count() > 50_000 {
-        return json_error(
+        return Err(json_error(
             StatusCode::BAD_REQUEST,
             "Message is too long (50,000 characters maximum).",
-        );
+        ));
     }
 
-    let prompt = if code.trim().is_empty() {
+    let mut prompt = if code.trim().is_empty() {
         message.clone()
     } else {
         format!("{message}\n\nHere is the code from my editor (language: {language}):\n```{language}\n{code}\n```")
     };
-    let cfg = load_config(&state);
+
+    // Skills: the system prompt carries one line per enabled skill, and the
+    // picked skill's instructions ride with this message only.
+    let workspace_root = state.workspace.current_root();
+    let available = skills::discover(&skills::roots(&state.static_dir, workspace_root.as_deref()));
+    let cfg = load_config(state);
+    if let Some(skill_id) = input.get("skill").and_then(Value::as_str) {
+        if let Some(skill) = skills::instructions_for(skill_id, &available) {
+            if skill.error.is_none() {
+                prompt = format!(
+                    "Follow the skill \"{}\" for this message:\n\n{}\n\n---\n\n{}",
+                    skill.name, skill.body, prompt
+                );
+            }
+        }
+    }
+
     let history_limit =
         cfg.history_messages
             .clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES) as i64;
@@ -785,8 +1122,10 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
 
     let rows = match history_result {
         Ok(Some(items)) => items,
-        Ok(None) => return json_error(StatusCode::NOT_FOUND, "Conversation not found."),
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Ok(None) => return Err(json_error(StatusCode::NOT_FOUND, "Conversation not found.")),
+        Err(e) => {
+            return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        }
     };
     let history: Vec<Value> = rows
         .into_iter()
@@ -798,13 +1137,36 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
     } else {
         None
     };
+    let mut system = SYSTEM_PROMPT.to_string();
+    if let Some(index) = skills::index_text(&cfg.disabled_skills, &available) {
+        system.push_str("\n\n");
+        system.push_str(&index);
+    }
     let packed = context::pack(
-        SYSTEM_PROMPT,
+        &system,
         outline.as_deref(),
         &history,
         cfg.context_budget_tokens,
         cfg.history_messages,
     );
+    Ok(ChatPrep { cid, cfg, packed })
+}
+
+/// Record a failed router call so the usage page reflects it.
+fn log_router_error(state: &AppState, cid: &str, error: &str, latency: i64, model: &str) {
+    let _ = open_db(&state.database_path).and_then(|conn| conn.execute(
+        "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,error) VALUES(?1,?2,?3,'router / unknown','error',?4,?5)",
+        params![now_seconds(), cid, model, latency, error.chars().take(2500).collect::<String>()],
+    ));
+}
+
+async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
+        Ok(prep) => prep,
+        Err(response) => return response,
+    };
+    let context_tokens = packed.estimated_tokens;
+    let context_trimmed = packed.trimmed_messages;
 
     let started = Instant::now();
     match call_router(&state, packed.messages).await {
@@ -829,17 +1191,13 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
                     format!("AI replied, but saving the response failed: {e}"),
                 );
             }
-            meta["context_tokens"] = json!(packed.estimated_tokens);
-            meta["context_trimmed"] = json!(packed.trimmed_messages);
+            meta["context_tokens"] = json!(context_tokens);
+            meta["context_trimmed"] = json!(context_trimmed);
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
         }
         Err(error) => {
             let latency = started.elapsed().as_millis() as i64;
-            let cfg = load_config(&state);
-            let _ = open_db(&state.database_path).and_then(|conn| conn.execute(
-                "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,error) VALUES(?1,?2,?3,'router / unknown','error',?4,?5)",
-                params![now_seconds(), cid, cfg.model, latency, error.chars().take(2500).collect::<String>()],
-            ));
+            log_router_error(&state, &cid, &error, latency, &cfg.model);
             (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({"ok": false, "error": error, "meta": {"latency_ms": latency}})),
@@ -847,6 +1205,328 @@ async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
                 .into_response()
         }
     }
+}
+
+/// One parsed `data:` payload from an OpenAI-style completion stream.
+#[derive(Debug, Default, PartialEq)]
+struct StreamEvent {
+    delta: Option<String>,
+    usage: Option<Value>,
+    done: bool,
+    error: Option<String>,
+}
+
+/// Parse one SSE payload from the router: text deltas, the final usage block,
+/// `[DONE]`, or an inline error. Kept pure so it can be tested directly.
+fn parse_stream_payload(payload: &str) -> StreamEvent {
+    let payload = payload.trim();
+    if payload.is_empty() {
+        return StreamEvent::default();
+    }
+    if payload == "[DONE]" {
+        return StreamEvent {
+            done: true,
+            ..StreamEvent::default()
+        };
+    }
+    let Ok(value) = serde_json::from_str::<Value>(payload) else {
+        return StreamEvent::default();
+    };
+    if let Some(error) = value.pointer("/error/message").and_then(Value::as_str) {
+        return StreamEvent {
+            error: Some(error.to_string()),
+            done: true,
+            ..StreamEvent::default()
+        };
+    }
+    let delta = value
+        .pointer("/choices/0/delta/content")
+        .or_else(|| value.pointer("/choices/0/message/content"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.is_empty());
+    let usage = value.get("usage").filter(|u| !u.is_null()).cloned();
+    StreamEvent {
+        delta,
+        usage,
+        done: false,
+        error: None,
+    }
+}
+
+/// Saves the streamed reply exactly once — when the stream ends, errors, or
+/// the client walks away mid-answer — so a stopped request is never lost.
+struct ReplyRecorder {
+    database_path: PathBuf,
+    conversation_id: String,
+    text: Arc<Mutex<String>>,
+    meta: Arc<Mutex<Value>>,
+    started: Instant,
+    saved: Arc<AtomicBool>,
+}
+
+impl ReplyRecorder {
+    fn new(database_path: PathBuf, conversation_id: String, context_tokens: usize) -> Self {
+        Self {
+            database_path,
+            conversation_id,
+            text: Arc::new(Mutex::new(String::new())),
+            meta: Arc::new(Mutex::new(json!({ "context_tokens": context_tokens }))),
+            started: Instant::now(),
+            saved: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn save(&self) {
+        if self.saved.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let text = self.text.lock().map(|guard| guard.clone()).unwrap_or_default();
+        let meta = self
+            .meta
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| json!({}));
+        let latency = self.started.elapsed().as_millis() as i64;
+        let _ = open_db(&self.database_path).and_then(|conn| {
+            let now = now_seconds();
+            if !text.trim().is_empty() {
+                conn.execute("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'assistant',?2,?3)", params![self.conversation_id, text, now])?;
+            }
+            conn.execute(
+                "UPDATE conversations SET updated_at=?1 WHERE id=?2",
+                params![now, self.conversation_id],
+            )?;
+            conn.execute(
+                "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'')",
+                params![now, self.conversation_id,
+                    meta.get("model").and_then(Value::as_str).unwrap_or("auto"),
+                    meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"),
+                    latency,
+                    meta.get("prompt_tokens").and_then(Value::as_i64),
+                    meta.get("completion_tokens").and_then(Value::as_i64),
+                    meta.get("total_tokens").and_then(Value::as_i64),
+                    meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or("")],
+            )?;
+            Ok(())
+        });
+    }
+}
+
+impl Drop for ReplyRecorder {
+    fn drop(&mut self) {
+        self.save();
+    }
+}
+
+fn sse_frame(value: &Value) -> String {
+    format!("data: {value}\n\n")
+}
+
+struct StreamState {
+    bytes: BoxStream<'static, Result<bytes::Bytes, reqwest::Error>>,
+    leftover: String,
+    pending: VecDeque<String>,
+    recorder: ReplyRecorder,
+    finished: bool,
+}
+
+/// Wrap a state machine in the SSE response the browser reads.
+fn sse_response(state: StreamState) -> Response<Body> {
+    let body = futures_util::stream::unfold(state, |mut st| async move {
+        loop {
+            if let Some(frame) = st.pending.pop_front() {
+                return Some((Ok::<String, std::io::Error>(frame), st));
+            }
+            if st.finished {
+                return None; // dropping the state runs the recorder's Drop
+            }
+            match st.bytes.next().await {
+                Some(Ok(chunk)) => st.ingest(&String::from_utf8_lossy(&chunk)),
+                Some(Err(error)) => {
+                    st.push(json!({ "error": format!("The stream from the router failed: {error}") }));
+                    st.finished = true;
+                }
+                None => st.finish(),
+            }
+        }
+    });
+    let mut response = Response::new(Body::from_stream(body));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response
+}
+
+impl StreamState {
+    fn push(&mut self, value: Value) {
+        self.pending.push_back(sse_frame(&value));
+    }
+
+    /// Feed one router chunk: split complete SSE events off the buffer and
+    /// turn them into client frames.
+    fn ingest(&mut self, chunk: &str) {
+        self.leftover.push_str(chunk);
+        while let Some(index) = self.leftover.find("\n\n") {
+            let event: String = self.leftover.drain(..index + 2).collect();
+            for line in event.lines() {
+                let Some(payload) = line.strip_prefix("data:") else { continue };
+                let parsed = parse_stream_payload(payload);
+                if let Some(text) = parsed.delta {
+                    if let Ok(mut held) = self.recorder.text.lock() {
+                        held.push_str(&text);
+                    }
+                    self.push(json!({ "delta": text }));
+                }
+                if let Some(usage) = parsed.usage {
+                    if let Ok(mut held) = self.recorder.meta.lock() {
+                        held["prompt_tokens"] = usage.get("prompt_tokens").cloned().unwrap_or(Value::Null);
+                        held["completion_tokens"] = usage.get("completion_tokens").cloned().unwrap_or(Value::Null);
+                        held["total_tokens"] = usage.get("total_tokens").cloned().unwrap_or(Value::Null);
+                    }
+                }
+                if let Some(error) = parsed.error {
+                    self.push(json!({ "error": error }));
+                    self.finished = true;
+                    return;
+                }
+                if parsed.done {
+                    self.finish();
+                    return;
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let meta = self
+            .recorder
+            .meta
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| json!({}));
+        self.push(json!({ "done": true, "meta": meta }));
+    }
+}
+
+/// Stream the router's answer token by token. The client aborting the fetch
+/// drops this body, which drops the byte stream and runs the recorder's
+/// `Drop`, so whatever was answered so far is still stored.
+async fn chat_stream(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
+        Ok(prep) => prep,
+        Err(response) => return response,
+    };
+    let context_tokens = packed.estimated_tokens;
+
+    if cfg.api_key.trim().is_empty() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Add your router's unified API key in Settings first.",
+        );
+    }
+
+    let request_body = json!({
+        "model": if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() },
+        "messages": packed.messages,
+        "stream": true
+    });
+    let upstream = state
+        .client
+        .post(router_url(&cfg, "chat/completions"))
+        .bearer_auth(&cfg.api_key)
+        .header("accept", "text/event-stream")
+        .json(&request_body)
+        .send()
+        .await;
+
+    let response = match upstream {
+        Ok(response) => response,
+        Err(error) => {
+            let message = format!("Could not reach router at {}: {error}", cfg.base_url);
+            log_router_error(&state, &cid, &message, 0, &cfg.model);
+            return json_error(StatusCode::BAD_GATEWAY, message);
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| body.chars().take(3000).collect());
+        let message = format!("Router returned HTTP {}: {}", status.as_u16(), detail);
+        log_router_error(&state, &cid, &message, 0, &cfg.model);
+        return json_error(StatusCode::BAD_GATEWAY, message);
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens);
+    if let Ok(mut held) = recorder.meta.lock() {
+        held["model"] = json!(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
+    }
+    let mut pending: VecDeque<String> = VecDeque::new();
+    pending.push_back(sse_frame(&json!({ "ready": true })));
+
+    // A router that ignores `stream` and answers with plain JSON still gets a
+    // one-shot stream, so the UI's stop/retry path works either way.
+    if !content_type.contains("event-stream") {
+        let body = response.text().await.unwrap_or_default();
+        let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let answer = response_content(&parsed);
+        let usage = parsed.get("usage").cloned().unwrap_or_else(|| json!({}));
+        if let Ok(mut held) = recorder.meta.lock() {
+            for key in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+                held[key] = usage.get(key).cloned().unwrap_or(Value::Null);
+            }
+            if let Some(model) = parsed.get("model").and_then(Value::as_str) {
+                held["model"] = json!(model);
+            }
+        }
+        if let Ok(mut held) = recorder.text.lock() {
+            held.push_str(&answer);
+        }
+        pending.push_back(sse_frame(&json!({ "delta": answer })));
+        let meta = recorder
+            .meta
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| json!({}));
+        pending.push_back(sse_frame(&json!({ "done": true, "meta": meta })));
+        return sse_response(StreamState {
+            bytes: futures_util::stream::empty().boxed(),
+            leftover: String::new(),
+            pending,
+            recorder,
+            finished: false,
+        });
+    }
+
+    sse_response(StreamState {
+        bytes: response.bytes_stream().boxed(),
+        leftover: String::new(),
+        pending,
+        recorder,
+        finished: false,
+    })
 }
 
 struct Boot {
@@ -900,6 +1580,17 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/health", get(health))
         .route("/api/test", post(test_router))
         .route("/api/chat", post(chat))
+        .route("/api/chat/stream", post(chat_stream))
+        .route("/api/projects", get(list_projects).post(create_project))
+        .route("/api/projects/:id/update", post(update_project))
+        .route("/api/projects/:id/delete", post(delete_project))
+        .route("/api/projects/:id/activate", post(activate_project))
+        .merge(
+            skills::router().route_layer(middleware::from_fn_with_state(
+                workspace::LocalOriginGuard::new(port),
+                workspace::guard_local_origin,
+            )),
+        )
         .merge(workspace::router(port))
         .merge(router_console::router(port))
         .merge(router_api)
@@ -1107,5 +1798,83 @@ mod tests {
         let candidates = static_dir_candidates(None, None);
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].join("index.html").is_file());
+    }
+
+    #[test]
+    fn parses_router_stream_payloads() {
+        let delta = parse_stream_payload(r#"{"choices":[{"delta":{"content":"Hello"}}]}"#);
+        assert_eq!(delta.delta.as_deref(), Some("Hello"));
+        assert!(!delta.done);
+
+        let done = parse_stream_payload("[DONE]");
+        assert!(done.done);
+        assert!(done.delta.is_none());
+
+        let usage =
+            parse_stream_payload(r#"{"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}"#);
+        assert_eq!(
+            usage
+                .usage
+                .as_ref()
+                .and_then(|value| value.get("total_tokens"))
+                .and_then(Value::as_i64),
+            Some(16)
+        );
+
+        let failure = parse_stream_payload(r#"{"error":{"message":"quota exceeded"}}"#);
+        assert_eq!(failure.error.as_deref(), Some("quota exceeded"));
+        assert!(failure.done);
+
+        assert_eq!(parse_stream_payload(""), StreamEvent::default());
+        assert_eq!(parse_stream_payload("not json"), StreamEvent::default());
+    }
+
+    #[test]
+    fn migrates_a_pre_projects_database() {
+        let path = scratch("migrate.sqlite3");
+        let _ = fs::remove_file(&path);
+        {
+            // The schema as it shipped before projects existed.
+            let conn = open_db(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL
+                );",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversations(id,title,created_at,updated_at) VALUES('c1','Old thread',1,1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        initialize_database(&path).unwrap();
+
+        let conn = open_db(&path).unwrap();
+        let project: String = conn
+            .query_row(
+                "SELECT project_id FROM conversations WHERE id='c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("existing conversation backfilled into a project");
+        assert!(!project.is_empty());
+        let projects: i64 = conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(projects, 1);
+
+        // Running the migration again must be a no-op.
+        initialize_database(&path).unwrap();
+        let again: i64 = conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(again, 1);
     }
 }

@@ -49,6 +49,10 @@ impl WorkspaceError {
             message: message.into(),
         }
     }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl IntoResponse for WorkspaceError {
@@ -82,9 +86,9 @@ fn internal(error: impl std::fmt::Display) -> WorkspaceError {
 }
 
 #[derive(Clone, Debug)]
-struct OpenedWorkspace {
-    root: PathBuf,
-    name: String,
+pub(crate) struct OpenedWorkspace {
+    pub(crate) root: PathBuf,
+    pub(crate) name: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -141,6 +145,12 @@ impl WorkspaceStore {
         self.opened.read().ok().and_then(|guard| guard.clone())
     }
 
+    /// Absolute path of the folder currently open, if any. Used to discover
+    /// the active project's own `skills/` folder.
+    pub(crate) fn current_root(&self) -> Option<PathBuf> {
+        self.current().map(|workspace| workspace.root)
+    }
+
     fn recent(&self) -> Vec<String> {
         self.recent
             .read()
@@ -148,7 +158,7 @@ impl WorkspaceStore {
             .unwrap_or_default()
     }
 
-    fn open(&self, path: &str) -> Result<OpenedWorkspace, WorkspaceError> {
+    pub(crate) fn open(&self, path: &str) -> Result<OpenedWorkspace, WorkspaceError> {
         let root = canonical_dir(path).ok_or_else(|| {
             bad_request("That folder does not exist or cannot be opened. Use an absolute path.")
         })?;
@@ -169,7 +179,7 @@ impl WorkspaceStore {
         Ok(opened)
     }
 
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         if let Ok(mut guard) = self.opened.write() {
             *guard = None;
         }
@@ -287,7 +297,7 @@ fn display_name(root: &FsPath) -> String {
 }
 
 /// Keep HOME collapsed to `~` so the recent list stays readable.
-fn display_path(root: &FsPath) -> String {
+pub(crate) fn display_path(root: &FsPath) -> String {
     let home = home_dir();
     match root.strip_prefix(&home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
@@ -625,22 +635,28 @@ async fn open_workspace(State(state): State<AppState>, Json(input): Json<Value>)
         return json_error(StatusCode::BAD_REQUEST, "Provide a folder path to open.");
     };
     match state.workspace.open(path) {
-        Ok(entry) => Json(json!({
-            "ok": true,
-            "workspace": {
-                "path": display_path(&entry.root),
-                "absolute_path": entry.root.display().to_string(),
-                "name": entry.name,
-            },
-            "recent": state.workspace.recent(),
-        }))
-        .into_response(),
+        Ok(entry) => {
+            // The folder that is open belongs to the active project, so a
+            // project switch restores it later.
+            crate::record_project_folder(&state, &entry.root.display().to_string());
+            Json(json!({
+                "ok": true,
+                "workspace": {
+                    "path": display_path(&entry.root),
+                    "absolute_path": entry.root.display().to_string(),
+                    "name": entry.name,
+                },
+                "recent": state.workspace.recent(),
+            }))
+            .into_response()
+        }
         Err(error) => error.into_response(),
     }
 }
 
 async fn close_workspace(State(state): State<AppState>) -> Json<Value> {
     state.workspace.close();
+    crate::record_project_folder(&state, "");
     Json(json!({ "ok": true }))
 }
 
@@ -700,17 +716,20 @@ fn run_folder_picker() -> PickerResult {
 async fn pick_folder(State(state): State<AppState>) -> Response<Body> {
     match tokio::task::spawn_blocking(run_folder_picker).await {
         Ok(PickerResult::Picked(path)) => match state.workspace.open(&path) {
-            Ok(entry) => Json(json!({
-                "ok": true,
-                "picked": true,
-                "workspace": {
-                    "path": display_path(&entry.root),
-                    "absolute_path": entry.root.display().to_string(),
-                    "name": entry.name,
-                },
-                "recent": state.workspace.recent(),
-            }))
-            .into_response(),
+            Ok(entry) => {
+                crate::record_project_folder(&state, &entry.root.display().to_string());
+                Json(json!({
+                    "ok": true,
+                    "picked": true,
+                    "workspace": {
+                        "path": display_path(&entry.root),
+                        "absolute_path": entry.root.display().to_string(),
+                        "name": entry.name,
+                    },
+                    "recent": state.workspace.recent(),
+                }))
+                .into_response()
+            }
             Err(error) => error.into_response(),
         },
         Ok(PickerResult::Cancelled) => Json(json!({ "ok": true, "picked": false })).into_response(),
