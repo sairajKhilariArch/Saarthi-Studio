@@ -228,6 +228,8 @@ async function loadSkills() {
   state.skills = Array.isArray(payload) ? payload : [];
   renderSkills();
   renderSkillsOverview();
+  if ($("skillMenu") && !$("skillMenu").classList.contains("hidden")) renderSkillMenu();
+  renderSkillChip();
 }
 
 function skillById(id) {
@@ -377,6 +379,11 @@ const state = {
   /* skills: local SKILL.md folders served by /api/skills. */
   skills: [],
   openSkillId: null,
+  /* activeSkillId: a skill the user picked in the composer. suggestedSkillId
+     is a keyword match the composer offers when nothing was picked; either
+     one rides with the next request as `skill`. */
+  activeSkillId: null,
+  suggestedSkillId: null,
   workspace: null,
   recentFolders: [],
   home: "~",
@@ -629,23 +636,39 @@ function renderTabs() {
   });
 }
 
+const VIEWS = [
+  "chat",
+  "editor",
+  "settings",
+  "usage",
+  "router",
+  "skills",
+  "workspaces",
+  "agents",
+  "integrations",
+  "artifacts",
+  "automation",
+];
+
 function setView(view) {
   state.view = view;
-  $("chatView").classList.toggle("hidden", view !== "chat");
-  $("editorView").classList.toggle("hidden", view !== "editor");
-  $("settingsView").classList.toggle("hidden", view !== "settings");
-  $("usageView").classList.toggle("hidden", view !== "usage");
-  $("routerView").classList.toggle("hidden", view !== "router");
-  $("skillsView").classList.toggle("hidden", view !== "skills");
-  $("usageBtn").classList.toggle("active", view === "usage");
-  $("settingsBtn").classList.toggle("active", view === "settings");
-  $("routerBtn").classList.toggle("active", view === "router");
+  VIEWS.forEach((name) => {
+    const section = $(`${name}View`);
+    if (section) section.classList.toggle("hidden", view !== name);
+    const button = $(`${name}Btn`);
+    if (button) button.classList.toggle("active", view === name);
+  });
   document.body.classList.remove("nav-open");
   $("scrim").classList.add("hidden");
   if (view === "chat") setTimeout(() => $("prompt").focus(), 30);
   if (view === "usage") loadUsage();
   if (view === "router") loadConsoleStatus();
   if (view === "skills") renderSkillsOverview();
+  if (view === "workspaces") renderWorkspaces();
+  if (view === "agents") renderAgents();
+  if (view === "integrations") loadIntegrations();
+  if (view === "artifacts") renderArtifacts();
+  if (view === "automation") loadWorkflows();
 }
 
 function activateTab(key) {
@@ -885,6 +908,11 @@ async function sendMessage(preset = null) {
   }
 
   const context = state.chatContext;
+  const skillId = effectiveSkillId();
+  // A suggestion is per-message: it is consumed by this send. An explicit
+  // pick stays until the user clears it.
+  state.suggestedSkillId = null;
+  renderSkillChip();
   $("prompt").value = "";
   autoGrow($("prompt"));
   addMessage("user", message, { attachment: context ? (context.scratch ? "Scratch pad attached" : context.path) : null });
@@ -908,6 +936,7 @@ async function sendMessage(preset = null) {
         message,
         code: context ? context.content : "",
         language: context ? context.language : "text",
+        skill: skillId,
       }),
       signal: controller.signal,
     });
@@ -1570,6 +1599,119 @@ function renderContextChip() {
   updateContextMeter();
 }
 
+/* The skill attached to the next message: an explicit pick wins, otherwise
+   the keyword suggestion. Shows as a chip so it can be cleared before send. */
+function effectiveSkillId() {
+  return state.activeSkillId || state.suggestedSkillId || "";
+}
+
+function renderSkillChip() {
+  const chip = $("skillChip");
+  if (!chip) return;
+  const id = effectiveSkillId();
+  if (!id) {
+    chip.classList.add("hidden");
+    return;
+  }
+  const skill = skillById(id);
+  chip.classList.remove("hidden");
+  $("skillChipLabel").textContent = state.activeSkillId
+    ? `skill: ${skill ? skill.name : id}`
+    : `suggested: ${skill ? skill.name : id}`;
+}
+
+function closeSkillMenu() {
+  const menu = $("skillMenu");
+  if (!menu) return;
+  menu.classList.add("hidden");
+  $("skillPickerBtn").setAttribute("aria-expanded", "false");
+}
+
+function renderSkillMenu() {
+  const list = $("skillMenuList");
+  if (!list) return;
+  list.replaceChildren();
+  const usable = state.skills.filter((skill) => !skill.error && skill.enabled !== false);
+
+  if (!usable.length) {
+    const empty = document.createElement("p");
+    empty.className = "skill-menu-empty";
+    empty.textContent =
+      "No skills yet. Add a SKILL.md folder to this project, your config folder, or ~/.agents/skills.";
+    list.appendChild(empty);
+    return;
+  }
+
+  const head = document.createElement("p");
+  head.className = "skill-menu-head";
+  head.textContent = "Attach a skill to this message";
+  list.appendChild(head);
+
+  const rows = [{ id: "", name: "No skill", description: "" }, ...usable];
+  rows.forEach((skill) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className =
+      "skill-menu-item" + (effectiveSkillId() === skill.id ? " active" : "");
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(effectiveSkillId() === skill.id));
+    const text = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = skill.name || skill.id || "No skill";
+    text.appendChild(strong);
+    if (skill.description) {
+      const small = document.createElement("small");
+      small.textContent = skill.description;
+      small.title = skill.description;
+      text.appendChild(small);
+    }
+    row.appendChild(text);
+    row.addEventListener("click", () => {
+      state.activeSkillId = skill.id || null;
+      state.suggestedSkillId = null;
+      renderSkillChip();
+      renderSkillMenu();
+      closeSkillMenu();
+      $("prompt").focus();
+    });
+    list.appendChild(row);
+  });
+}
+
+function toggleSkillMenu() {
+  const menu = $("skillMenu");
+  if (!menu) return;
+  if (menu.classList.contains("hidden")) {
+    renderSkillMenu();
+    menu.classList.remove("hidden");
+    $("skillPickerBtn").setAttribute("aria-expanded", "true");
+  } else {
+    closeSkillMenu();
+  }
+}
+
+/* Keyword auto-suggest: one pass over the enabled skills' names and
+   descriptions, first match wins. Deliberately dumb — no scoring, no model. */
+function suggestSkill(message) {
+  if (state.activeSkillId) return;
+  const text = message.toLowerCase();
+  if (!text.trim()) {
+    state.suggestedSkillId = null;
+    renderSkillChip();
+    return;
+  }
+  const match = state.skills.find((skill) => {
+    if (skill.error || skill.enabled === false || !skill.description) return false;
+    const haystack = `${skill.id} ${skill.name} ${skill.description}`.toLowerCase();
+    return haystack.split(/[^\w+-]+/).some((word) => word.length >= 5 && text.includes(word));
+  });
+  const next = match ? match.id : null;
+  if (next !== state.suggestedSkillId) {
+    state.suggestedSkillId = next;
+    renderSkillChip();
+  }
+}
+
 function attachFromComposer() {
   const file = activeFile();
   if (file) {
@@ -1696,8 +1838,352 @@ async function testConnection() {
   }
 }
 
+/* Report the router's real state at launch. GET /api/router answers from the
+   server's own probe, so a slow or missing upstream never blocks first paint. */
+async function probeRouter() {
+  const result = await api("/api/router");
+  if (!result.ok) {
+    setConnection("bad", "Router unreachable");
+    return;
+  }
+  const status = result.data || {};
+  if (status.reachable) {
+    setConnection("ok", "Router connected");
+  } else {
+    setConnection("bad", "Router not running");
+  }
+}
+
 function openProviderDashboard() {
   window.open("http://127.0.0.1:3001", "_blank", "noopener,noreferrer");
+}
+
+/* ------------------------------------------------------------------ */
+/* extension pages: workspaces, agents, integrations, artifacts, automation */
+/* ------------------------------------------------------------------ */
+
+function pageNote(message) {
+  const note = document.createElement("p");
+  note.className = "state";
+  note.textContent = message;
+  return note;
+}
+
+function rowButton(label, handler, dangerClass = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `tree-tool ${dangerClass}`.trim();
+  button.textContent = label;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+/* Workspaces: the same server-backed project list the switcher uses, with
+   the open-folder controls from the Files pane collected in one place. */
+async function renderWorkspaces() {
+  const host = $("workspaceProjects");
+  if (!host) return;
+  host.replaceChildren();
+  const result = await api("/api/projects");
+  if (!result.ok) {
+    host.appendChild(pageNote(result.data.error || "Projects unavailable."));
+    return;
+  }
+  const projects = Array.isArray(result.data.projects) ? result.data.projects : [];
+  if (!projects.length) {
+    host.appendChild(pageNote("No projects yet. Create one and its contents are scoped server-side."));
+  }
+  projects.forEach((project) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item" + (project.id === state.activeProjectId ? " active" : "");
+    const main = document.createElement("span");
+    main.className = "project-menu-main";
+    const strong = document.createElement("strong");
+    strong.textContent = project.name + (project.archived ? " (archived)" : "");
+    main.appendChild(strong);
+    const small = document.createElement("small");
+    small.textContent = project.folder || "no folder";
+    main.appendChild(small);
+    row.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "project-menu-actions-row";
+    if (!project.archived) actions.appendChild(rowButton("Switch", () => switchProject(project.id)));
+    actions.appendChild(rowButton("Rename", () => renameProject(project)));
+    actions.appendChild(rowButton(project.archived ? "Unarchive" : "Archive", () => updateProject(project, { archived: !project.archived })));
+    actions.appendChild(rowButton("Delete", () => deleteProject(project), "danger"));
+    row.appendChild(actions);
+    host.appendChild(row);
+  });
+
+  const openHost = $("workspaceOpen");
+  if (!openHost) return;
+  openHost.replaceChildren();
+  const openFolderRow = document.createElement("div");
+  openFolderRow.className = "project-menu-item";
+  const openMain = document.createElement("span");
+  openMain.className = "project-menu-main";
+  const openStrong = document.createElement("strong");
+  openStrong.textContent = state.workspace ? state.workspace.name : "No folder open";
+  openMain.appendChild(openStrong);
+  const openSmall = document.createElement("small");
+  openSmall.textContent = state.workspace ? state.workspace.path : "Browse recent folders to reopen one.";
+  openMain.appendChild(openSmall);
+  openFolderRow.appendChild(openMain);
+  const openActions = document.createElement("span");
+  openActions.className = "project-menu-actions-row";
+  openActions.appendChild(rowButton("Open folder…", openFolderDialog));
+  if (state.workspace) openActions.appendChild(rowButton("Close", closeWorkspace, "danger"));
+  openFolderRow.appendChild(openActions);
+  openHost.appendChild(openFolderRow);
+  state.recentFolders.slice(0, 5).forEach((path) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item";
+    row.innerHTML = `<span class="project-menu-main"><small title="${path}">${path}</small></span>`;
+    row.appendChild(rowButton("Open", () => openWorkspacePath(path)));
+    openHost.appendChild(row);
+  });
+}
+
+/* Agents: the enabled skills as runnable agents. Attaching flips the same
+   `activeSkillId` state the composer chip reads, so chat and this page agree. */
+function renderAgents() {
+  const host = $("agentsList");
+  if (!host) return;
+  host.replaceChildren();
+  const usable = state.skills.filter((skill) => !skill.error && skill.enabled !== false);
+  if (!usable.length) {
+    host.appendChild(pageNote("No enabled skills. Add a SKILL.md folder to this project, your config folder, or ~/.agents/skills, then enable it on the Skills page."));
+    return;
+  }
+  usable.forEach((skill) => {
+    const row = document.createElement("div");
+    row.className = "skill-row" + (effectiveSkillId() === skill.id ? " active" : "");
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = (skill.name || skill.id) + (effectiveSkillId() === skill.id ? " — attached" : "");
+    main.appendChild(strong);
+    const desc = document.createElement("p");
+    desc.textContent = skill.summary || skill.description || "No description in SKILL.md.";
+    main.appendChild(desc);
+    const path = document.createElement("small");
+    path.className = "skill-path";
+    path.textContent = skill.path || "";
+    main.appendChild(path);
+    row.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "project-menu-actions-row";
+    actions.appendChild(rowButton("Inspect", () => openSkillDetail(skill.id)));
+    actions.appendChild(rowButton(
+      effectiveSkillId() === skill.id ? "Detach" : "Attach",
+      () => {
+        state.activeSkillId = effectiveSkillId() === skill.id ? null : skill.id;
+        state.suggestedSkillId = null;
+        renderSkillChip();
+        renderAgents();
+        toast(state.activeSkillId ? `${skill.name || skill.id} attached to your next message.` : "Skill detached.");
+        setView("chat");
+      },
+    ));
+    row.appendChild(actions);
+    host.appendChild(row);
+  });
+}
+
+/* Integrations: live status of everything Studio talks to, one tester per card. */
+function integrationCard(title, status, note, onTest) {
+  const card = document.createElement("div");
+  card.className = "project-menu-item";
+  const main = document.createElement("span");
+  main.className = "project-menu-main";
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  main.appendChild(strong);
+  const small = document.createElement("small");
+  small.className = status === "ok" ? "ok" : "err";
+  small.textContent = note;
+  main.appendChild(small);
+  card.appendChild(main);
+  card.appendChild(rowButton("Test", onTest));
+  return card;
+}
+
+async function loadIntegrations() {
+  const host = $("integrationsList");
+  if (!host) return;
+  host.replaceChildren();
+  const router = await api("/api/router");
+  const reachable = router.ok && router.data.reachable;
+  host.appendChild(integrationCard(
+    "FreeLLMAPI (chat router)",
+    reachable ? "ok" : "err",
+    reachable ? "reachable" : `${router.data ? router.data.detail || "not running" : "status call failed"}`,
+    async () => {
+      const probe = await api("/api/router");
+      toast(probe.ok && probe.data.reachable ? "Router is answering." : probe.ok ? `Router not running: ${probe.data.detail || "unknown reason"}` : "Could not query router status.");
+      loadIntegrations();
+    },
+  ));
+  host.appendChild(integrationCard(
+    "Workspace filesystem",
+    state.workspace ? "ok" : "err",
+    state.workspace ? `open: ${state.workspace.path}` : "no folder open",
+    () => toast(state.workspace ? `Workspace open at ${state.workspace.path}.` : "Open a folder from the Files page first."),
+  ));
+  const test = await api("/api/test", { method: "POST", body: "{}" });
+  host.appendChild(integrationCard(
+    "Chat completion round-trip",
+    test.ok && test.data.ok ? "ok" : "err",
+    test.ok && test.data.ok ? test.data.message || "round-trip succeeded" : test.data.error || "test failed",
+    testConnection,
+  ));
+}
+
+/* Artifacts: flat file list of the open folder, grouped by extension. */
+async function renderArtifacts() {
+  const host = $("artifactsList");
+  if (!host) return;
+  host.replaceChildren();
+  if (!state.workspace) {
+    host.appendChild(pageNote("Open a folder on the Files page to list its files here."));
+    return;
+  }
+  const result = await api("/api/workspace/files");
+  if (!result.ok) {
+    host.appendChild(pageNote(result.data.error || "File listing failed."));
+    return;
+  }
+  const groups = new Map();
+  (result.data.files || []).forEach((file) => {
+    const key = file.ext || "(no extension)";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(file);
+  });
+  if (!groups.size) {
+    host.appendChild(pageNote("No readable files in the open folder."));
+    return;
+  }
+  [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([ext, files]) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item";
+    const main = document.createElement("span");
+    main.className = "project-menu-main";
+    const strong = document.createElement("strong");
+    strong.textContent = ext;
+    main.appendChild(strong);
+    const small = document.createElement("small");
+    small.textContent = `${files.length} file${files.length === 1 ? "" : "s"}`;
+    main.appendChild(small);
+    row.appendChild(main);
+    files.forEach((file) => {
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "tree-tool";
+      openButton.textContent = file.path;
+      openButton.title = `${file.path} (${file.size} bytes)`;
+      openButton.addEventListener("click", () => openFile(file.path, { switchTo: true }));
+      row.appendChild(openButton);
+    });
+    host.appendChild(row);
+  });
+  if (result.data.truncated) {
+    const note = pageNote("Listing was cut at the entry limit — use the Files tree for the full picture.");
+    host.appendChild(note);
+  }
+}
+
+/* Automation: CRUD on saved workflows plus a one-button run that loads the
+   prompt and optional skill into a fresh chat round. */
+function renderWorkflows(workflows) {
+  const host = $("automationList");
+  if (!host) return;
+  host.replaceChildren();
+  if (!workflows.length) {
+    host.appendChild(pageNote("No workflows saved yet. Save your first recipe with the button below."));
+    return;
+  }
+  workflows.forEach((workflow) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item";
+    const main = document.createElement("span");
+    main.className = "project-menu-main";
+    const strong = document.createElement("strong");
+    strong.textContent = workflow.name;
+    main.appendChild(strong);
+    const small = document.createElement("small");
+    small.textContent = workflow.prompt;
+    small.title = workflow.prompt;
+    main.appendChild(small);
+    row.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "project-menu-actions-row";
+    actions.appendChild(rowButton("Run", () => runWorkflow(workflow)));
+    if (workflow.skill) actions.appendChild(rowButton("Detach skill", () => editWorkflow(workflow, { skill: "" })));
+    actions.appendChild(rowButton("Edit", () => editWorkflow(workflow)));
+    actions.appendChild(rowButton("Delete", () => deleteWorkflow(workflow), "danger"));
+    row.appendChild(actions);
+    host.appendChild(row);
+  });
+}
+
+async function loadWorkflows() {
+  const host = $("automationList");
+  if (!host) return;
+  const result = await api("/api/workflows");
+  if (!result.ok) {
+    host.replaceChildren();
+    host.appendChild(pageNote(result.data.error || "Could not load workflows."));
+    return;
+  }
+  renderWorkflows(Array.isArray(result.data.workflows) ? result.data.workflows : []);
+}
+
+function fillSkillOptions(selectedId) {
+  const select = $("workflowSkill");
+  if (!select) return;
+  select.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "No skill";
+  select.appendChild(blank);
+  state.skills.filter((skill) => !skill.error && skill.enabled !== false).forEach((skill) => {
+    const option = document.createElement("option");
+    option.value = skill.id;
+    option.textContent = skill.name || skill.id;
+    if (skill.id === selectedId) option.selected = true;
+    select.appendChild(option);
+  });
+}
+
+function editWorkflow(workflow, override = {}) {
+  $("workflowName").value = workflow.name || "";
+  $("workflowPrompt").value = workflow.prompt || "";
+  fillSkillOptions(override.skill != null ? override.skill : workflow.skill || "");
+  $("workflowForm").dataset.editing = workflow.id || "";
+  $("workflowForm").classList.remove("hidden");
+  $("workflowName").focus();
+}
+
+async function deleteWorkflow(workflow) {
+  if (!confirm(`Delete the workflow "${workflow.name}"?`)) return;
+  const result = await api(`/api/workflows/${encodeURIComponent(workflow.id)}/delete`, { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not delete that workflow.");
+    return;
+  }
+  toast("Workflow deleted.");
+  loadWorkflows();
+}
+
+async function runWorkflow(workflow) {
+  state.activeSkillId = workflow.skill || null;
+  state.suggestedSkillId = null;
+  renderSkillChip();
+  $("prompt").value = workflow.prompt;
+  autoGrow($("prompt"));
+  setView("chat");
+  $("prompt").focus();
+  toast(`${workflow.name} loaded — send when ready.`);
 }
 
 async function loadUsage() {
@@ -2184,8 +2670,24 @@ function bindEvents() {
       sendMessage();
     }
   });
-  $("prompt").addEventListener("input", () => { autoGrow($("prompt")); updateContextMeter(); });
+  $("prompt").addEventListener("input", () => {
+    autoGrow($("prompt"));
+    updateContextMeter();
+    suggestSkill($("prompt").value);
+  });
   $("attachContextBtn").addEventListener("click", attachFromComposer);
+  $("skillPickerBtn").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleSkillMenu();
+  });
+  $("skillMenu").addEventListener("click", (event) => event.stopPropagation());
+  $("skillChipClear").addEventListener("click", () => {
+    state.activeSkillId = null;
+    state.suggestedSkillId = null;
+    renderSkillChip();
+    if ($("skillMenu") && !$("skillMenu").classList.contains("hidden")) renderSkillMenu();
+  });
+  document.addEventListener("click", closeSkillMenu);
   $("contextClear").addEventListener("click", () => {
     state.chatContext = null;
     renderContextChip();
@@ -2303,11 +2805,42 @@ function bindEvents() {
     }
   });
 
+  $("workflowNew").addEventListener("click", () => {
+    $("workflowForm").dataset.editing = "";
+    $("workflowName").value = "";
+    $("workflowPrompt").value = "";
+    fillSkillOptions("");
+    $("workflowForm").classList.remove("hidden");
+    $("workflowName").focus();
+  });
+  $("workflowCancel").addEventListener("click", () => $("workflowForm").classList.add("hidden"));
+  $("workflowForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = {
+      id: $("workflowForm").dataset.editing || "",
+      name: $("workflowName").value.trim(),
+      prompt: $("workflowPrompt").value.trim(),
+      skill: $("workflowSkill") ? $("workflowSkill").value : "",
+    };
+    const result = await api("/api/workflows", { method: "POST", body: JSON.stringify(payload) });
+    if (!result.ok) {
+      toast(result.data.error || "Could not save that workflow.");
+      return;
+    }
+    $("workflowForm").classList.add("hidden");
+    toast("Workflow saved.");
+    loadWorkflows();
+  });
+
   $("settingsForm").addEventListener("submit", saveSettings);
   $("testConnection").addEventListener("click", testConnection);
   $("openProviderDashboardSettings").addEventListener("click", openProviderDashboard);
 
   $("routerBtn").addEventListener("click", () => setView("router"));
+  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"]].forEach(([id, view]) => {
+
+    $(id).addEventListener("click", () => setView(view));
+  });
   $("consoleRefresh").addEventListener("click", loadConsoleStatus);
   $("consoleDashboard").addEventListener("click", openProviderDashboard);
   $("consoleStart").addEventListener("click", async () => {
@@ -2431,10 +2964,12 @@ function bindEvents() {
   autoGrow($("prompt"));
   renderTabs();
   renderContextChip();
+  renderSkillChip();
   state.lastContextTokens = null;
   setTimeout(updateContextMeter, 50);
   await Promise.all([loadSettings(), loadProjects(), loadConversations(), loadWorkspace()]);
   await Promise.all([loadUsage(), loadSkills()]);
+  probeRouter();
   if (state.conversations.length) {
     await openConversation(state.conversations[0].id);
   }

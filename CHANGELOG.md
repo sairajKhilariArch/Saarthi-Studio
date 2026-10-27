@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.20.5
+
+### Always-on skills from `~/.agents/skills`
+
+- A third discovery root reads every `SKILL.md` pack under `~/.agents/skills`
+  alongside the project folder and the user config dir.
+- YAML descriptions written as folded blocks (`description: >` or `|`) now
+  parse to their real text instead of a stray `" > "`, so auto-suggest matches
+  on the whole summary.
+
+### Composer skill picker and auto-suggest
+
+- The composer gains a "Skill" picker, an attached-skill chip and a keyword
+  auto-suggest: the first enabled skill whose id/name/description contains a
+  five-letter-plus word of the draft message is offered and can be cleared
+  before sending. The request body now passes `skill` through to the router.
+
+### Five new views
+
+- **Workspaces** — the server-backed project list with switch/rename/archive/
+  delete and the open-folder controls collected on one page.
+- **Agents** — every enabled skill as a runnable agent; Attach flips the same
+  `activeSkillId` state the composer chip reads.
+- **Integrations** — live cards for the router, the workspace and a chat
+  round-trip, each with its own Test button.
+- **Artifacts** — a depth- and count-bounded flat file listing of the open
+  folder, grouped by extension (`/api/workspace/files`).
+- **Automation** — saved prompt recipes with an optional skill, persisted in
+  `~/.config/free-ai-studio/workflows.json`; running one loads the prompt and
+  skill into a fresh chat round.
+
+### Honest router pill
+
+- On launch the status pill asks the server for the router's real state
+  (`GET /api/router`) instead of forever showing "not tested".
+
 Release **1.19.0** is the current version in `Cargo.toml` and `tauri.conf.json`
 (and Android `versionName 1.19.0`, code `16`). It ships the window shell, the
 token-budgeted context packer, the router lifecycle, the router console, the

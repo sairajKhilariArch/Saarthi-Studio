@@ -42,7 +42,9 @@ Never share the unified API key, provider keys, or `.env` file in chat or public
 ## Features
 
 - **Projects**: multiple projects with real server-side scoping — every thread list is filtered by the active project; create, rename, archive or delete from the sidebar switcher, and opening a project reopens its folder. Pre-existing threads are migrated into a Default project automatically
-- **Skills**: local `SKILL.md` packs discovered from the opened project, the user config dir and a bundled set; enable/disable, inspect content, and enabled skills are injected into the chat system prompt
+- **Skills**: local `SKILL.md` packs discovered from the opened project, the user config dir, `~/.agents/skills` and a bundled set; enable/disable, inspect content, and enabled skills are injected into the chat system prompt
+- **Skill picker in the composer**: attach a skill to one message with a chip, or let keyword auto-suggest propose one from your draft; the request carries the chosen skill to the router
+- **Agent pages**: Workspaces (projects + open folder), Agents (skills as runnable agents), Integrations (live router/workspace/round-trip status with testers), Artifacts (flat, extension-grouped file list of the open folder) and Automation (saved prompt recipes that load into a fresh chat round)
 - **Streaming chat**: replies stream in live with a caret and a working **Stop** button (the partial answer is saved); light and dark themes with a switcher that persists
 - Rust HTTP backend and OpenAI-compatible router client
 - Persistent conversations and message history (SQLite)

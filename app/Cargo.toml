@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.20.0"
+version = "1.20.5"
 edition = "2021"
 rust-version = "1.75"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"

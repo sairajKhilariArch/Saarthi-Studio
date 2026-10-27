@@ -8,7 +8,8 @@
 //! 1. `FREE_AI_STUDIO_SKILLS_DIR` (tests and packagers), when set,
 //! 2. the app's bundled `static/skills/`, next to the UI it already serves,
 //! 3. `skills/` inside the folder the user opened (project skills),
-//! 4. `~/.config/free-ai-studio/skills/` (user skills).
+//! 4. `~/.config/free-ai-studio/skills/` (user skills),
+//! 5. `~/.agents/skills/` (the agent skill packs installed on this machine).
 //!
 //! Front matter is a small `key: value` block between `---` fences:
 //!
@@ -72,6 +73,10 @@ pub(crate) fn roots(
         "user".to_string(),
         home_dir().join(".config/free-ai-studio/skills"),
     ));
+    roots.push((
+        "agents".to_string(),
+        home_dir().join(".agents/skills"),
+    ));
     roots
 }
 
@@ -115,6 +120,7 @@ fn parse_manifest(manifest: &FsPath, source: &str) -> Skill {
         source: match source {
             "project" => "project",
             "user" => "user",
+            "agents" => "agents",
             _ => "built-in",
         },
         error: None,
@@ -130,15 +136,43 @@ fn parse_manifest(manifest: &FsPath, source: &str) -> Skill {
     let (front, body) = split_front_matter(&text);
     skill.body = body.trim().to_string();
 
-    for line in front.lines() {
-        let Some((key, value)) = line.split_once(':') else { continue };
-        let value = value.trim().trim_matches('"').trim();
-        match key.trim() {
-            "name" if !value.is_empty() => {
-                skill.id = value.to_string();
-                skill.name = value.to_string();
+    let mut lines = front.lines().peekable();
+    while let Some(line) = lines.next() {
+        let Some((key, raw)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let mut value = raw.trim().trim_matches('"').trim().to_string();
+
+        // `description: >` / `|` (folded or literal block): the value is the
+        // indented lines that follow, not the indicator itself.
+        if matches!(value.as_str(), ">" | ">-" | ">+" | "|" | "|-" | "|+") {
+            let mut block = Vec::new();
+            while let Some(next) = lines.peek() {
+                if next.trim().is_empty() {
+                    block.push(String::new());
+                    lines.next();
+                    continue;
+                }
+                if next.starts_with(' ') || next.starts_with('\t') {
+                    block.push(lines.next().unwrap().trim().to_string());
+                } else {
+                    break;
+                }
             }
-            "description" if !value.is_empty() => skill.description = value.to_string(),
+            while block.last().is_some_and(|line| line.is_empty()) {
+                block.pop();
+            }
+            value = block.join(" ");
+        }
+
+        match key {
+            "name" if !value.is_empty() => {
+                skill.id = value.clone();
+                skill.name = value;
+            }
+
+            "description" if !value.is_empty() => skill.description = value,
             _ => {}
         }
     }
@@ -341,6 +375,37 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("no instructions"));
+    }
+
+    #[test]
+    fn agents_root_is_labelled_agents() {
+        let root = scratch("agents-source");
+        write_skill(
+            &root,
+            "ponytail",
+            "---\nname: ponytail\ndescription: Lazy senior dev mode.\n---\nBe lazy.\n",
+        );
+        let skills = discover(&[("agents".into(), root)]);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].source, "agents");
+        assert_eq!(skills[0].id, "ponytail");
+    }
+
+    #[test]
+    fn folds_a_block_scalar_description() {
+        let root = scratch("block-description");
+        write_skill(
+            &root,
+            "folded",
+            "---\nname: folded\ndescription: >\n  Lazy senior dev mode: the smallest change\n  that fully solves the task.\n---\nDo the small thing.\n",
+        );
+        let skills = discover(&[("agents".into(), root)]);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(
+            skills[0].description,
+            "Lazy senior dev mode: the smallest change that fully solves the task."
+        );
+        assert_eq!(skills[0].body, "Do the small thing.");
     }
 
     #[test]

@@ -116,12 +116,19 @@
     <footer class="sidebar-foot">
       <div class="conn-row">
         <span id="connDot" class="conn-dot"></span>
-        <span id="connText">Router not tested</span>
+        <span id="connText">Checking router…</span>
       </div>
       <div class="foot-actions">
         <button id="routerBtn" class="foot-btn"><svg class="icon"><use href="#i-spark"/></svg>Router</button>
         <button id="usageBtn" class="foot-btn"><svg class="icon"><use href="#i-chart"/></svg>Usage</button>
         <button id="settingsBtn" class="foot-btn"><svg class="icon"><use href="#i-gear"/></svg>Settings</button>
+      </div>
+      <div class="foot-actions">
+        <button id="workspacesBtn" class="foot-btn"><svg class="icon"><use href="#i-layers"/></svg>Spaces</button>
+        <button id="agentsBtn" class="foot-btn"><svg class="icon"><use href="#i-user"/></svg>Agents</button>
+        <button id="integrationsBtn" class="foot-btn"><svg class="icon"><use href="#i-cube"/></svg>Links</button>
+        <button id="artifactsBtn" class="foot-btn"><svg class="icon"><use href="#i-file"/></svg>Files</button>
+        <button id="automationBtn" class="foot-btn"><svg class="icon"><use href="#i-undo"/></svg>Auto</button>
       </div>
       <p class="foot-note">Chats stay in local SQLite. Files stay on this computer.</p>
     </footer>
@@ -136,7 +143,7 @@
       </button>
       <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
       <div class="tabbar-tools">
-        <span id="connPill" class="status-pill"><span class="conn-dot"></span><span id="connPillText">not tested</span></span>
+        <span id="connPill" class="status-pill"><span class="conn-dot"></span><span id="connPillText">checking…</span></span>
         <button id="themeToggle" class="icon-btn" title="Switch light / dark theme" aria-label="Switch light or dark theme">
           <svg class="icon"><use href="#i-moon"/></svg>
         </button>
@@ -185,12 +192,27 @@
               <svg class="icon"><use href="#i-close"/></svg>
             </button>
           </div>
+          <div id="skillChip" class="context-chip skill-chip hidden">
+            <svg class="icon"><use href="#i-spark"/></svg>
+            <span id="skillChipLabel">skill</span>
+            <button id="skillChipClear" class="chip-close" title="Remove the skill from this message" aria-label="Remove the skill from this message">
+              <svg class="icon"><use href="#i-close"/></svg>
+            </button>
+          </div>
           <textarea id="prompt" rows="2" placeholder="Ask anything — paste an error, describe a change, or reference an open file…"></textarea>
           <div class="composer-bar">
             <div class="composer-left">
               <button id="attachContextBtn" class="btn btn-quiet btn-small" title="Attach the active file as context">
                 <svg class="icon"><use href="#i-plus"/></svg>Context
               </button>
+              <div class="skill-picker-wrap">
+                <button id="skillPickerBtn" class="btn btn-quiet btn-small" title="Attach a skill to this message" aria-haspopup="listbox" aria-expanded="false">
+                  <svg class="icon"><use href="#i-spark"/></svg>Skill
+                </button>
+                <div id="skillMenu" class="skill-menu hidden" role="listbox" aria-label="Skills">
+                  <div id="skillMenuList" class="skill-menu-list"></div>
+                </div>
+              </div>
               <span class="kbd-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
             </div>
             <div class="composer-right">
@@ -214,6 +236,84 @@
         </header>
         <div id="skillsOverview" class="skills-overview"></div>
         <pre id="skillsRaw" class="console-json hidden"></pre>
+      </div>
+    </section>
+
+    <section id="workspacesView" class="view page-view hidden" role="tabpanel" aria-label="Workspaces">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Projects and folders</p>
+          <h1>Workspaces</h1>
+          <p>Every project carries its own threads, files and settings. Switching project changes what the server serves — the list below is the real server-side state.</p>
+        </header>
+        <div id="workspaceProjects" class="list-block"></div>
+        <h2 class="section-title">Open folder</h2>
+        <div id="workspaceOpen" class="list-block"></div>
+      </div>
+    </section>
+
+    <section id="agentsView" class="view page-view hidden" role="tabpanel" aria-label="Agents">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Runnable skills</p>
+          <h1>Agents</h1>
+          <p>Each enabled skill is a focused agent: pick one and it attaches to your next message, so the model follows that pack's instructions. Disabled skills stay installed but are never sent.</p>
+        </header>
+        <div id="agentsList" class="skill-list"></div>
+      </div>
+    </section>
+
+    <section id="integrationsView" class="view page-view hidden" role="tabpanel" aria-label="Integrations">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Router, host API, console</p>
+          <h1>Integrations</h1>
+          <p>What Studio is talking to right now. Every status here comes from a live call you can repeat with the button beside it.</p>
+        </header>
+        <div id="integrationsList" class="list-block"></div>
+      </div>
+    </section>
+
+    <section id="artifactsView" class="view page-view hidden" role="tabpanel" aria-label="Artifacts">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Files in the open folder</p>
+          <h1>Artifacts</h1>
+          <p>Everything in the workspace you opened, grouped by type. Click a file to open it in the editor.</p>
+        </header>
+        <div id="artifactsList" class="list-block"></div>
+      </div>
+    </section>
+
+    <section id="automationView" class="view page-view hidden" role="tabpanel" aria-label="Automation">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Saved prompt recipes</p>
+          <h1>Automation</h1>
+          <p>A workflow stores a prompt and an optional skill. Running one opens a fresh thread with both loaded — no template engine, no background jobs.</p>
+        </header>
+        <div id="automationList" class="list-block"></div>
+        <button id="workflowNew" class="btn btn-quiet btn-small">
+          <svg class="icon"><use href="#i-plus"/></svg>New workflow
+        </button>
+        <form id="workflowForm" class="card form-card hidden">
+          <label class="field">
+            <span>Name</span>
+            <input id="workflowName" type="text" placeholder="Review a changed file" required maxlength="64">
+          </label>
+          <label class="field">
+            <span>Prompt</span>
+            <textarea id="workflowPrompt" rows="4" placeholder="Review the attached file for bugs, security and readability." required></textarea>
+          </label>
+          <label class="field">
+            <span>Skill (optional)</span>
+            <select id="workflowSkill"><option value="">No skill</option></select>
+          </label>
+          <div class="form-actions">
+            <button type="button" id="workflowCancel" class="btn btn-quiet btn-small">Cancel</button>
+            <button type="submit" class="btn btn-accent btn-small">Save workflow</button>
+          </div>
+        </form>
       </div>
     </section>
 

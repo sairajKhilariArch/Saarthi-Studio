@@ -35,6 +35,9 @@ const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// Largest directory listing returned in one response.
 const MAX_ENTRIES: usize = 2000;
 const MAX_RECENT_FOLDERS: usize = 6;
+/// Artifacts view: how deep and how many files one recursive listing may walk.
+const MAX_ARTIFACT_DEPTH: usize = 6;
+const MAX_ARTIFACTS: usize = 500;
 
 #[derive(Debug)]
 pub(crate) struct WorkspaceError {
@@ -495,6 +498,14 @@ struct DirEntry {
     size: u64,
 }
 
+#[derive(serde::Serialize)]
+struct ArtifactEntry {
+    name: String,
+    path: String,
+    size: u64,
+    ext: String,
+}
+
 fn list_directory(root: &FsPath, relative: &str) -> Result<(Vec<DirEntry>, bool), WorkspaceError> {
     let dir = resolve_inside(root, relative)?;
     let meta = fs::metadata(&dir).map_err(|_| not_found("That folder does not exist."))?;
@@ -756,6 +767,81 @@ async fn list_entries(
     })))
 }
 
+/// Flat list of every file under the open folder, bounded by depth and count
+/// so a huge tree can never stall the Artifacts view.
+fn collect_files(
+    dir: &FsPath,
+    depth: usize,
+    base: &str,
+    out: &mut Vec<ArtifactEntry>,
+    truncated: &mut bool,
+) {
+    if out.len() >= MAX_ARTIFACTS {
+        *truncated = true;
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for item in read.flatten() {
+        if out.len() >= MAX_ARTIFACTS {
+            *truncated = true;
+            return;
+        }
+        let name = item.file_name().to_string_lossy().to_string();
+        let path = if base.is_empty() {
+            name.clone()
+        } else {
+            format!("{base}/{name}")
+        };
+        let Ok(file_type) = item.file_type() else {
+            continue;
+        };
+        // Symlinks are skipped: a link could point outside the folder, and the
+        // Artifacts view only promises files the editor may already open.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let full = dir.join(&name);
+        if file_type.is_dir() {
+            if depth < MAX_ARTIFACT_DEPTH {
+                collect_files(&full, depth + 1, &path, out, truncated);
+            } else {
+                *truncated = true;
+            }
+            continue;
+        }
+        let size = item.metadata().map(|meta| meta.len()).unwrap_or(0);
+        let ext = FsPath::new(&name)
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        out.push(ArtifactEntry {
+            name,
+            path,
+            size,
+            ext,
+        });
+    }
+}
+
+async fn list_artifacts(State(state): State<AppState>) -> Result<Json<Value>, WorkspaceError> {
+    let root = state.workspace.root()?;
+    let mut files = Vec::new();
+    let mut truncated = false;
+    collect_files(&root, 0, "", &mut files, &mut truncated);
+    files.sort_by(|a, b| {
+        a.ext
+            .cmp(&b.ext)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(Json(json!({
+        "files": files,
+        "truncated": truncated,
+        "count": files.len(),
+    })))
+}
+
 async fn read_file(
     State(state): State<AppState>,
     Query(query): Query<PathQuery>,
@@ -903,6 +989,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/workspace/pick", post(pick_folder))
         .route("/api/workspace/close", post(close_workspace))
         .route("/api/workspace/entries", get(list_entries))
+        .route("/api/workspace/files", get(list_artifacts))
         .route("/api/workspace/file", get(read_file).put(write_file))
         .route("/api/workspace/create", post(create))
         .route("/api/workspace/rename", post(rename))

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Path as AxumPath, State},
     http::{header, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -632,6 +632,99 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline})).into_response()
+}
+
+/* Workflows: saved prompt recipes. They live in a small JSON file next to
+   the config — no schema migration, and they are machine-global by nature. */
+#[derive(Clone, Serialize, Deserialize)]
+struct Workflow {
+    id: String,
+    name: String,
+    prompt: String,
+    #[serde(default)]
+    skill: String,
+}
+
+fn workflows_path(state: &AppState) -> PathBuf {
+    state.config_path.with_file_name("workflows.json")
+}
+
+fn load_workflows(state: &AppState) -> Vec<Workflow> {
+    fs::read(workflows_path(state))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<Workflow>>(&bytes).ok())
+        .unwrap_or_default()
+        // Drop malformed entries instead of failing the whole list.
+        .into_iter()
+        .filter(|w| !w.id.is_empty() && !w.name.is_empty())
+        .collect()
+}
+
+fn save_workflows(state: &AppState, workflows: &[Workflow]) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(workflows).map_err(|e| e.to_string())?;
+    let temp = workflows_path(state).with_extension("tmp");
+    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+    set_private_permissions(&temp, false).map_err(|e| e.to_string())?;
+    fs::rename(&temp, workflows_path(state)).map_err(|e| e.to_string())
+}
+
+async fn list_workflows(State(state): State<AppState>) -> Response<Body> {
+    Json(json!({ "ok": true, "workflows": load_workflows(&state) })).into_response()
+}
+
+fn clipped_string(value: Option<&str>, max: usize) -> String {
+    value.unwrap_or("").chars().take(max).collect::<String>()
+}
+
+async fn save_workflow(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let name = clean_title(input.get("name").and_then(Value::as_str).unwrap_or(""));
+    let prompt = clipped_string(input.get("prompt").and_then(Value::as_str), 4000);
+    let skill = clipped_string(input.get("skill").and_then(Value::as_str), 160);
+    if name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "A workflow needs a name.");
+    }
+    if prompt.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "A workflow needs a prompt.");
+    }
+
+    let mut workflows = load_workflows(&state);
+    // Existing id means update; anything else is a new recipe.
+    let requested_id = input.get("id").and_then(Value::as_str).unwrap_or("");
+    let known = workflows
+        .iter()
+        .any(|w| !requested_id.is_empty() && w.id == requested_id);
+    let id = if known {
+        requested_id.to_string()
+    } else {
+        Uuid::new_v4().to_string()
+    };
+    workflows.retain(|w| w.id != id);
+    workflows.push(Workflow {
+        id: id.clone(),
+        name,
+        prompt,
+        skill,
+    });
+    workflows.sort_by_key(|workfluff| workfluff.name.to_lowercase());
+    if let Err(e) = save_workflows(&state, &workflows) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true, "id": id })).into_response()
+}
+
+async fn delete_workflow(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response<Body> {    let mut workflows = load_workflows(&state);
+    let before = workflows.len();
+    workflows.retain(|w| w.id != id);
+    if workflows.len() == before {
+        return json_error(StatusCode::NOT_FOUND, "No such workflow.");
+    }
+    if let Err(e) = save_workflows(&state, &workflows) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
 }
 
 async fn list_projects(State(state): State<AppState>) -> Response<Body> {
@@ -1595,6 +1688,8 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/projects/:id/update", post(update_project))
         .route("/api/projects/:id/delete", post(delete_project))
         .route("/api/projects/:id/activate", post(activate_project))
+        .route("/api/workflows", get(list_workflows).post(save_workflow))
+        .route("/api/workflows/:id/delete", post(delete_workflow))
         .merge(
             skills::router().route_layer(middleware::from_fn_with_state(
                 workspace::LocalOriginGuard::new(port),
