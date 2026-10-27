@@ -25,9 +25,11 @@ async function copyUi() {
   const target = join(here, "media", "ui");
   await rm(target, { recursive: true, force: true });
   await mkdir(target, { recursive: true });
-  for (const name of await readdir(source)) {
-    if (name.endsWith(".map")) continue;
-    await cp(join(source, name), join(target, name));
+  for (const name of await readdir(source, { withFileTypes: true })) {
+    if (name.name.endsWith(".map")) continue;
+    await cp(join(source, name.name), join(target, name.name), {
+      recursive: true,
+    });
   }
 }
 
