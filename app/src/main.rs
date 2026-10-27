@@ -444,6 +444,19 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     Ok(cfg)
 }
 
+/// When the only thing wrong is that a self-hosted gateway is not running,
+/// say exactly how to start it instead of a bare "could not reach" line.
+fn reach_error(base_url: &str, detail: String) -> String {
+    let prefix = "Could not reach router at ".to_string();
+    let mut message = format!("{prefix}{base_url}: {detail}");
+    if base_url.contains("localhost:20128") {
+        message += "\n\nOmniRoute (port 20128) is not running. Start it in the Integrations view, or install it once with `npm i -g omniroute`.";
+    } else if base_url.contains("localhost:3001") {
+        message += "\n\nFreeLLMAPI (port 3001) is not running. Start the Docker Compose router (`cd ~/freellmapi && sudo docker compose up -d`), then try again.";
+    }
+    message
+}
+
 fn response_content(data: &Value) -> String {
     let content = match data.pointer("/choices/0/message/content") {
         Some(value) => value,
@@ -484,7 +497,7 @@ async fn call_router(state: &AppState, messages: Vec<Value>) -> Result<(String, 
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Could not reach router at {}: {}", cfg.base_url, e))?;
+        .map_err(|e| reach_error(&cfg.base_url, e.to_string()))?;
     let status = response.status();
     let headers = response.headers().clone();
     let body = response
@@ -1715,7 +1728,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
     let response = match upstream {
         Ok(response) => response,
         Err(error) => {
-            let message = format!("Could not reach router at {}: {error}", cfg.base_url);
+            let message = reach_error(&cfg.base_url, error.to_string());
             log_router_error(&state, &cid, &message, 0, &cfg.model);
             return json_error(StatusCode::BAD_GATEWAY, message);
         }

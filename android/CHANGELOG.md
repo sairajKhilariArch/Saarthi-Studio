@@ -1,11 +1,21 @@
 # Changelog
 
+## 1.21.1 — installable signed APK
+
+### Fixed
+- Release APK/AAB are now signed with the Android Gradle plugin's
+  auto-generated debug keystore instead of being shipped unsigned — Android
+  used to reject the unsigned APK with "App not installed".
+- Version `1.21.1`, version code `17`.
+- Caveat: the signing key is CI-runner generated, so upgrading a previously
+  installed release may require uninstalling it first.
+
 ## 1.19.0 — release packaging and visual parity
 
 ### Changed
 - Version: `1.19.0`, version code `16`.
 - The Android client keeps its own FreeLLMAPI/router connection and shared dark
-  palette; the release pipeline now attaches its unsigned APK and AAB to the
+  palette; the release pipeline now attaches its APK and AAB to the
   same GitHub release as the Linux, Windows and VS Code artifacts.
 
 ### Notes

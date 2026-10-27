@@ -213,7 +213,7 @@ jobs:
           files: dist/free-ai-studio-vscode.vsix
 
   android:
-    name: Build Android release APK and AAB (unsigned)
+    name: Build Android release APK and AAB (signed)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -239,9 +239,9 @@ jobs:
       - name: Install Android SDK components
         run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      # No signing key is committed, so these artifacts are unsigned and are
-      # signed by the distributor before publishing to a store.
-      - name: Assemble release APK and AAB (R8, unsigned)
+      # Releases sign with the Android Gradle plugin's auto-created debug
+      # keystore so the APK installs on a device without committing a secret.
+      - name: Assemble release APK and AAB (R8, debug-signed)
         working-directory: android
         run: gradle --no-daemon --stacktrace assembleRelease bundleRelease
 
@@ -249,16 +249,16 @@ jobs:
         run: |
           set -eu
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release-unsigned.apk dist/free-ai-studio-android-unsigned.apk
-          cp android/app/build/outputs/bundle/release/app-release.aab dist/free-ai-studio-android-unsigned.aab
+          cp android/app/build/outputs/apk/release/app-release*.apk dist/free-ai-studio-android.apk
+          cp android/app/build/outputs/bundle/release/app-release*.aab dist/free-ai-studio-android.aab
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
           name: free-ai-studio-android
           path: |
-            dist/free-ai-studio-android-unsigned.apk
-            dist/free-ai-studio-android-unsigned.aab
+            dist/free-ai-studio-android.apk
+            dist/free-ai-studio-android.aab
           if-no-files-found: error
           retention-days: 30
 
@@ -267,5 +267,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/free-ai-studio-android-unsigned.apk
-            dist/free-ai-studio-android-unsigned.aab
+            dist/free-ai-studio-android.apk
+            dist/free-ai-studio-android.aab

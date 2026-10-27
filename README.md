@@ -39,6 +39,29 @@ When the app opens, choose **Provider setup** to open FreeLLMAPI. Configure the 
 
 Never share the unified API key, provider keys, or `.env` file in chat or public logs.
 
+## Open it as a website (hosted mode)
+
+The app is a local web service — the window and the website are the same UI. After launch, open the site directly at:
+
+```text
+http://127.0.0.1:8765
+```
+
+Everything works in the browser: chat with Deep search, files, skills, settings. Run it without a window when you want it as a hosted service:
+
+```bash
+FREE_AI_STUDIO_NO_GUI=1 ./target/release/free-ai-studio     # serve the website only
+FREE_AI_STUDIO_PORT=9000 ./target/release/free-ai-studio   # choose your port
+```
+
+Use it from a phone or another computer on your network — the site binds to `127.0.0.1` only, so reach it through an SSH tunnel rather than exposing a port:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@machine      # then open http://127.0.0.1:8765 there
+```
+
+The **Android companion app** connects to this machine through the desktop Host API instead of the browser: enable it with `FREE_AI_STUDIO_HOST_API_ENABLED=true`, `FREE_AI_STUDIO_HOST_API_BIND=<LAN IP>`, a TLS cert/key (`FREE_AI_STUDIO_HOST_API_TLS_CERT` / `..._KEY`), then create a pairing token with `free-ai-studio host-token create`. See `PLATFORM-ARCHITECTURE.md` for the security model.
+
 ## Features
 
 - **Projects**: multiple projects with real server-side scoping — every thread list is filtered by the active project; create, rename, archive or delete from the sidebar switcher, and opening a project reopens its folder. Pre-existing threads are migrated into a Default project automatically

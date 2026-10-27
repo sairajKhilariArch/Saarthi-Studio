@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.21.1
+
+### Fixed: "no reply" from the Linux app
+
+- The real cause: picking the OmniRoute backend preset rewrote the router URL
+  to `localhost:20128` — and with OmniRoute not installed, every request
+  failed. Selecting the OmniRoute preset now checks the gateway and offers a
+  one-click start; when a self-hosted gateway is unreachable, the error says
+  exactly how to start it (OmniRoute or the FreeLLMAPI Docker chain).
+- The stored router URL was restored to `http://localhost:3001/v1`.
+
+### Android: installable APK
+
+- Release APK/AAB are signed with the auto-generated debug keystore instead of
+  shipping unsigned (Android refuses unsigned APKs). Assets renamed
+  `free-ai-studio-android.apk` / `.aab`.
+
+### Docs: hosted website
+
+- README gains an "Open it as a website (hosted mode)" section: the site URL,
+  headless/port flags, phone access via SSH tunnel, and the Android Host API
+  pairing steps.
+
 ## 1.21.0
 
 ### Twelve backend presets and OmniRoute control

@@ -9,21 +9,23 @@ android {
         applicationId = "com.saarthi.studio"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.19.0"
+        versionCode = 17
+        versionName = "1.21.1"
     }
 
     buildTypes {
         release {
-            // Production release build: R8 code shrinking/obfuscation plus
-            // resource shrinking. No signing config is committed; release
-            // artifacts are assembled unsigned and signed at distribution time.
+            // Distributable builds must be signed or Android refuses to
+            // install them ("App not installed"). Sign releases with the
+            // Android Gradle plugin's auto-generated debug keystore so the
+            // release artifacts work without committing any secret.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

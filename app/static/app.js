@@ -2042,6 +2042,17 @@ function applyBackendPreset(id) {
   markActivePreset();
   if (preset.baseUrl) $("apiKey").focus();
   else $("baseUrl").focus();
+  if (id === "omniroute") offerOmnirouteStart();
+}
+
+/* Picking OmniRoute changes the router URL to localhost:20128, so if its
+   gateway is not up, chats would all fail. Offer the one-click start. */
+async function offerOmnirouteStart() {
+  const status = await api("/api/omniroute");
+  if (!status.ok || status.data.running) return;
+  if (!confirm("OmniRoute is not running on port 20128. Start its gateway now? (Install once with `npm i -g omniroute`.)")) return;
+  const started = await api("/api/omniroute/start", { method: "POST", body: "{}" });
+  toast(started.ok ? started.data.message || "OmniRoute start requested." : started.data.error || "Could not start OmniRoute — see the Integrations view.");
 }
 
 async function loadSettings() {
