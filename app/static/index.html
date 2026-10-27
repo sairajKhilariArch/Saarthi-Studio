@@ -143,6 +143,9 @@
       </button>
       <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
       <div class="tabbar-tools">
+        <button id="newChatTop" class="icon-btn" title="New thread" aria-label="New thread">
+          <svg class="icon"><use href="#i-plus"/></svg>
+        </button>
         <span id="connPill" class="status-pill"><span class="conn-dot"></span><span id="connPillText">checking…</span></span>
         <button id="themeToggle" class="icon-btn" title="Switch light / dark theme" aria-label="Switch light or dark theme">
           <svg class="icon"><use href="#i-moon"/></svg>
@@ -204,6 +207,9 @@
             <div class="composer-left">
               <button id="attachContextBtn" class="btn btn-quiet btn-small" title="Attach the active file as context">
                 <svg class="icon"><use href="#i-plus"/></svg>Context
+              </button>
+              <button id="deepToggle" class="btn btn-quiet btn-small" title="Deep search: research the question on the web with visible steps and cited sources" aria-pressed="false">
+                <svg class="icon"><use href="#i-search"/></svg>Deep
               </button>
               <div class="skill-picker-wrap">
                 <button id="skillPickerBtn" class="btn btn-quiet btn-small" title="Attach a skill to this message" aria-haspopup="listbox" aria-expanded="false">
@@ -354,6 +360,13 @@
           <p>Point Studio at FreeLLMAPI, OmniRoute, or any OpenAI-compatible router. Provider keys belong in the router, not here.</p>
         </header>
         <form id="settingsForm" class="card form-card">
+          <h2 class="form-group-title">Connection</h2>
+          <div class="field preset-field">
+            <span>Backend platform</span>
+            <div id="backendPresets" class="preset-grid" role="listbox" aria-label="Backend presets"></div>
+            <small id="presetNote">Pick a platform to fill the fields below, or type any OpenAI-compatible URL yourself.</small>
+            <a id="presetKeyLink" class="preset-keylink hidden" target="_blank" rel="noopener noreferrer">Get a key ↗</a>
+          </div>
           <label class="field">
             <span>Router base URL</span>
             <input id="baseUrl" type="url" placeholder="http://localhost:3001/v1" required>
@@ -369,6 +382,7 @@
             <input id="model" type="text" value="auto" placeholder="auto">
             <small>Use <code>auto</code> when the router handles model selection and fallback.</small>
           </label>
+          <h2 class="form-group-title">Chat context</h2>
           <div class="form-row">
             <label class="field">
               <span>Context budget (tokens)</span>
@@ -386,6 +400,26 @@
             <span>Send the open folder's file names with each request</span>
             <small>A names-only outline helps the model navigate the project without sending file contents.</small>
           </label>
+          <h2 class="form-group-title">Deep search</h2>
+          <div class="field deep-field">
+            <span>Deep search</span>
+            <div class="form-row">
+              <label class="field">
+                <span>Search provider</span>
+                <select id="searchProvider">
+                  <option value="">None (direct provider tools only)</option>
+                  <option value="exa">Exa</option>
+                  <option value="tavily">Tavily</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Search API key</span>
+                <input id="searchApiKey" type="password" placeholder="Paste an Exa or Tavily key" autocomplete="new-password">
+                <small id="searchKeyStatus">Stored locally with the router key.</small>
+              </label>
+            </div>
+            <small>Runs up to 3 web queries, then answers with cited <code>[1]</code> sources. Direct Gemini/OpenAI backends use their built-in web tools without a search key.</small>
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save settings</button>
             <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>

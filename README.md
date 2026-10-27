@@ -46,6 +46,8 @@ Never share the unified API key, provider keys, or `.env` file in chat or public
 - **Skill picker in the composer**: attach a skill to one message with a chip, or let keyword auto-suggest propose one from your draft; the request carries the chosen skill to the router
 - **Agent pages**: Workspaces (projects + open folder), Agents (skills as runnable agents), Integrations (live router/workspace/round-trip status with testers), Artifacts (flat, extension-grouped file list of the open folder) and Automation (saved prompt recipes that load into a fresh chat round)
 - **Streaming chat**: replies stream in live with a caret and a working **Stop** button (the partial answer is saved); light and dark themes with a switcher that persists
+- **Backend presets**: twelve OpenAI-compatible platforms (FreeLLMAPI, OmniRoute, Hugging Face, Groq, Cerebras, Gemini, OpenAI, OpenRouter, Mistral, Cloudflare, Together, Novita) pickable in Settings; OmniRoute additionally has start/stop lifecycle control in Integrations
+- **Deep search**: a composer toggle that researches the question with planned web queries (Exa/Tavily) or a provider's built-in web tools (Gemini grounding, OpenAI web_search), streams each step, and replies with cited sources
 - Rust HTTP backend and OpenAI-compatible router client
 - Persistent conversations and message history (SQLite)
 - Workspace explorer: open any local folder, browse the tree, and edit files in tabs

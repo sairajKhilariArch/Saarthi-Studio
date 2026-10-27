@@ -2,7 +2,7 @@
   "name": "free-ai-studio",
   "displayName": "Free AI Studio",
   "description": "Chat with your FreeLLMAPI router from VS Code. Uses the desktop app when it is running and starts a built-in local server when it is not.",
-  "version": "1.20.5",
+  "version": "1.21.0",
   "publisher": "saarthi",
   "license": "MIT",
   "engines": {

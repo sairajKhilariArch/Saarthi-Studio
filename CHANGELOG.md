@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.21.0
+
+### Twelve backend presets and OmniRoute control
+
+- Settings offers a backend preset grid: FreeLLMAPI, OmniRoute, Hugging Face,
+  Groq, Cerebras, Gemini, OpenAI, OpenRouter, Mistral, Cloudflare Workers AI,
+  Together and Novita — picking one fills the URL, model and key hint, and
+  links to that platform's key page.
+- OmniRoute joins FreeLLMAPI as a managed backend: the Integrations view can
+  start/stop it (`npm i -g omniroute`, gateway on `localhost:20128`), app-owned
+  processes are shut down at exit, and its status card shows whether the app
+  or the user started it.
+
+### Deep search
+
+- The composer gains a **Deep** toggle: research mode runs up to 3 planned web
+  queries (Exa or Tavily keys in Settings → Deep search) and answers with
+  cited `[1]` sources listed under the reply. Every step — planning, each
+  query, each source — streams in as a live checklist next to the answer.
+- Direct Gemini and OpenAI backends use their built-in web tools
+  (`google_search` grounding, Responses `web_search`) with no search key.
+- Hard-bounded: 3 queries, 6 results each, 12 sources, capped evidence.
+
+### Freebuff-style shell
+
+- Settings is grouped into Connection / Chat context / Deep search sections.
+- User messages render as filled bubbles; thread rows show relative
+  timestamps; the top bar carries a New-thread button.
+
+### Fixes
+
+- The VS Code extension build recurses into the shared UI tree so bundled
+  skills land in the VSIX.
+
 ## 1.20.5
 
 ### Always-on skills from `~/.agents/skills`

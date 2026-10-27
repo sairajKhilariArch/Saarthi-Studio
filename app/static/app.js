@@ -810,6 +810,18 @@ async function loadConversations() {
   renderConversations();
 }
 
+/* "3m ago" style badge for thread rows. Unknown timestamps stay blank. */
+function relativeTime(epoch, now = Date.now() / 1000) {
+  const seconds = Number(epoch);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const delta = Math.max(0, now - seconds);
+  if (delta < 60) return "just now";
+  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+  if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+  if (delta < 7 * 86400) return `${Math.floor(delta / 86400)}d ago`;
+  return new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function renderConversations() {
   const box = $("conversationList");
   box.replaceChildren();
@@ -824,9 +836,11 @@ function renderConversations() {
     const item = document.createElement("div");
     item.className = "thread-item" + (conversation.id === state.currentId ? " active" : "");
     item.innerHTML = `${icon("chat", "thread-icon")}<span class="thread-title"></span>` +
-      `<button class="thread-delete" title="Delete thread" aria-label="Delete thread">${icon("close")}</button>`;
+      `<button class="thread-delete" title="Delete thread" aria-label="Delete thread">${icon("close")}</button>` +
+      `<span class="thread-time"></span>`;
     item.querySelector(".thread-title").textContent = conversation.title;
-    item.title = conversation.title;
+    item.querySelector(".thread-time").textContent = relativeTime(conversation.updated_at);
+    item.title = `${conversation.title} — ${relativeTime(conversation.updated_at)}`;
     item.addEventListener("click", (event) => {
       if (event.target.closest(".thread-delete")) return;
       openConversation(conversation.id);
@@ -889,6 +903,18 @@ async function newConversation() {
 
 /* Streaming chat: one AbortController per request. Stop aborts the fetch —
    the server's ReplyRecorder saves the partial reply, so nothing is lost. */
+
+/* Deep search toggle: researches the next message on the web with visible
+   steps and cited sources. Sticky in localStorage, like a mode switch. */
+function setDeepSearch(on) {
+  state.deepSearch = Boolean(on);
+  try { localStorage.setItem("deepSearch", String(state.deepSearch)); } catch { /* private mode */ }
+  $("deepToggle").classList.toggle("active", state.deepSearch);
+  $("deepToggle").setAttribute("aria-pressed", String(state.deepSearch));
+}
+
+try { setDeepSearch(localStorage.getItem("deepSearch") === "true"); } catch { /* private mode */ }
+
 async function sendMessage(preset = null) {
   if (state.busy) return;
   const message = String(preset ?? $("prompt").value).trim();
@@ -921,6 +947,10 @@ async function sendMessage(preset = null) {
   updateContextMeter();
   setBusy(true);
 
+  // Deep-search steps and sources stream in before the answer; they render
+  // as a live checklist under the reply header.
+  const deepSteps = [];
+  const deepSources = [];
   const controller = new AbortController();
   state.abort = controller;
   addStreamRow();
@@ -937,6 +967,7 @@ async function sendMessage(preset = null) {
         code: context ? context.content : "",
         language: context ? context.language : "text",
         skill: skillId,
+        deepsearch: Boolean(state.deepSearch),
       }),
       signal: controller.signal,
     });
@@ -945,6 +976,16 @@ async function sendMessage(preset = null) {
       failed = data.error || `Request failed (HTTP ${response.status})`;
     } else {
       await consumeStream(response.body, (frame) => {
+        if (frame.type === "status") {
+          deepSteps.push({ type: "status", text: frame.message || "" });
+          renderDeepSteps(deepSteps, deepSources);
+        } else if (frame.type === "query") {
+          deepSteps.push({ type: "query", text: frame.text || "" });
+          renderDeepSteps(deepSteps, deepSources);
+        } else if (frame.type === "source") {
+          deepSources.push({ title: frame.title || "Untitled", url: frame.url || "" });
+          renderDeepSteps(deepSteps, deepSources);
+        }
         if (frame.delta) {
           answer += frame.delta;
           appendStreamText(answer);
@@ -952,14 +993,14 @@ async function sendMessage(preset = null) {
         if (frame.error) failed = frame.error;
         if (frame.done && frame.meta) {
           if (frame.meta.context_tokens != null) state.lastContextTokens = Number(frame.meta.context_tokens);
-          applyStreamMeta(frame.meta);
+          applyStreamMeta({ ...frame.meta, deepsearch: frame.meta.deepsearch || Boolean(state.deepSearch) });
         }
       });
     }
   } catch (error) {
     if (error && error.name !== "AbortError") failed = error.message || "The request failed.";
   }
-  finishStreamRow(answer, failed);
+  finishStreamRow(answer, failed, deepSources);
   state.abort = null;
   state.busy = false;
   $("sendBtn").disabled = false;
@@ -971,6 +1012,45 @@ async function sendMessage(preset = null) {
   await loadConversations();
   await loadUsage();
   syncCurrentTitle();
+}
+
+/* Live deep-search checklist inside the streaming row: each emitted status,
+   query and source line. Built with the DOM so the text is never injected. */
+function renderDeepSteps(steps, sources) {
+  if (!streamRow) return;
+  let card = streamRow.querySelector(".deep-steps");
+  const body = streamRow.querySelector(".msg-body");
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "deep-steps";
+    if (body) streamRow.insertBefore(card, body);
+    else streamRow.appendChild(card);
+  }
+  card.replaceChildren();
+  const title = document.createElement("span");
+  title.className = "deep-title";
+  title.textContent = "Deep search";
+  card.appendChild(title);
+  const list = document.createElement("ul");
+  for (const step of steps) {
+    const item = document.createElement("li");
+    item.className = step.type === "query" ? "deep-query" : "deep-status";
+    item.textContent = step.type === "query" ? `searched: ${step.text}` : step.text;
+    list.appendChild(item);
+  }
+  for (const [index, source] of sources.entries()) {
+    const item = document.createElement("li");
+    item.className = "deep-source-line";
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `[${index + 1}] ${source.title}`;
+    item.appendChild(link);
+    list.appendChild(item);
+  }
+  card.appendChild(list);
+  scrollChat();
 }
 
 /* Parse an SSE body into frames and run callback for each. Plainly reads
@@ -1022,6 +1102,7 @@ function applyStreamMeta(meta) {
   const head = streamRow.querySelector(".msg-meta");
   if (!head) return;
   const parts = [];
+  if (meta.deepsearch) parts.push("deep search");
   if (meta.model) parts.push(meta.model);
   if (meta.provider) parts.push(meta.provider);
   if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
@@ -1029,7 +1110,7 @@ function applyStreamMeta(meta) {
   head.textContent = parts.join(" · ");
 }
 
-function finishStreamRow(answer, failure) {
+function finishStreamRow(answer, failure, deepSources = []) {
   if (!streamRow) return;
   const row = streamRow;
   streamRow = null;
@@ -1041,8 +1122,27 @@ function finishStreamRow(answer, failure) {
     if (body) body.innerHTML = renderMarkdown(answer ? `${answer}\n\n**${failure}**` : failure);
   } else if (!answer.trim()) {
     row.remove();
-  } else if (body) {
-    body.innerHTML = renderMarkdown(answer);
+  } else {
+    if (body) body.innerHTML = renderMarkdown(answer);
+    if (deepSources.length) {
+      const list = document.createElement("div");
+      list.className = "deep-sources";
+      const label = document.createElement("span");
+      label.textContent = "Sources";
+      list.appendChild(label);
+      const buttons = deepSources.map((source, i) => {
+        const link = document.createElement("a");
+        link.className = "deep-source";
+        link.href = source.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = `[${i + 1}] ${source.title}`;
+        link.title = source.url;
+        return link;
+      });
+      list.append(...buttons);
+      row.appendChild(list);
+    }
     appendMessageActions(row, [{ label: "Copy reply", run: () => copyText(answer, "Reply copied.") }]);
   }
   scrollChat();
@@ -1772,6 +1872,178 @@ function settleName(value) {
 /* settings + usage                                                    */
 /* ------------------------------------------------------------------ */
 
+/* Backend presets: platforms Studio can point at. Self-hosted gateways first,
+   then free/freemium hosted APIs, then paid ones for completeness — each card
+   carries an honest free-tier note from that platform's own pricing docs. */
+const BACKEND_PRESETS = [
+  {
+    id: "freellmapi",
+    name: "FreeLLMAPI",
+    baseUrl: "http://localhost:3001/v1",
+    model: "auto",
+    note: "Self-hosted FreeLLMAPI router — free to run; it aggregates provider keys you add in its dashboard.",
+    keyUrl: "",
+  },
+  {
+    id: "omniroute",
+    name: "OmniRoute",
+    baseUrl: "http://localhost:20128/v1",
+    model: "auto",
+    note: "Self-hosted OmniRoute gateway — free to run (npm i -g omniroute or Docker); you bring provider keys.",
+    keyUrl: "https://github.com/cheaper-inference/OmniRoute",
+  },
+  {
+    id: "groq",
+    name: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile",
+    note: "Free rate-limited tier — per-model RPM/day caps shown in your Groq console.",
+    keyUrl: "https://console.groq.com/keys",
+  },
+  {
+    id: "gemini",
+    name: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    model: "gemini-2.5-flash",
+    note: "Free tier on selected models (rate-capped; content may be used to improve Google products).",
+    keyUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "auto",
+    note: "50 free-model requests/day (1,000/day after $10 of credit).",
+    keyUrl: "https://openrouter.ai/settings/keys",
+  },
+  {
+    id: "mistral",
+    name: "Mistral",
+    baseUrl: "https://api.mistral.ai/v1",
+    model: "mistral-small-latest",
+    note: "Studio free mode with API access, no card required; usage limits apply.",
+    keyUrl: "https://console.mistral.ai/api-keys",
+  },
+  {
+    id: "cloudflare",
+    name: "Cloudflare Workers AI",
+    baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+    model: "",
+    note: "10,000 Neurons/day free — replace {account_id} in the URL with your Cloudflare account id.",
+    keyUrl: "https://dash.cloudflare.com/profile/api-tokens",
+  },
+  {
+    id: "huggingface",
+    name: "Hugging Face",
+    baseUrl: "https://router.huggingface.co/v1",
+    model: "",
+    note: "Works with an HF token — free accounts get no included inference credits (PRO gets $2/mo).",
+    keyUrl: "https://huggingface.co/settings/tokens",
+  },
+  {
+    id: "cerebras",
+    name: "Cerebras",
+    baseUrl: "https://api.cerebras.ai/v1",
+    model: "llama-3.3-70b",
+    note: "$5 trial credits after adding a payment method — they expire after 30 days.",
+    keyUrl: "https://cloud.cerebras.ai/",
+  },
+  {
+    id: "novita",
+    name: "Novita AI",
+    baseUrl: "https://api.novita.ai/openai/v1",
+    model: "",
+    note: "The $100 promo is sandbox-only — check your actual credit balance in the dashboard.",
+    keyUrl: "https://novita.ai/",
+  },
+  {
+    id: "together",
+    name: "Together AI",
+    baseUrl: "https://api.together.ai/v1",
+    model: "",
+    note: "No free tier (initial credit purchase starts at $15) — listed for completeness.",
+    keyUrl: "https://api.together.ai/settings/api-keys",
+  },
+  {
+    id: "deepinfra",
+    name: "DeepInfra",
+    baseUrl: "https://api.deepinfra.com/v1/openai",
+    model: "",
+    note: "OpenAI-compatible and cheap, but no verified free tier.",
+    keyUrl: "https://deepinfra.com/",
+  },
+  {
+    id: "custom",
+    name: "Custom URL",
+    baseUrl: "",
+    model: "",
+    note: "Type any OpenAI-compatible base URL below (HTTPS required off-machine).",
+    keyUrl: "",
+  },
+];
+
+function renderBackendPresets() {
+  const host = $("backendPresets");
+  if (!host) return;
+  host.replaceChildren();
+  BACKEND_PRESETS.forEach((preset) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "preset-chip";
+    button.textContent = preset.name;
+    button.dataset.preset = preset.id;
+    button.setAttribute("role", "option");
+    button.addEventListener("click", () => applyBackendPreset(preset.id));
+    host.appendChild(button);
+  });
+  markActivePreset();
+}
+
+function presetForBaseUrl(url) {
+  return BACKEND_PRESETS.find((preset) => preset.baseUrl && preset.baseUrl === url) || null;
+}
+
+function markActivePreset() {
+  const host = $("backendPresets");
+  if (!host) return;
+  const active = presetForBaseUrl($("baseUrl").value.trim());
+  host.querySelectorAll(".preset-chip").forEach((chip) => {
+    const on = Boolean(active) && chip.dataset.preset === active.id;
+    chip.classList.toggle("active", on);
+    chip.setAttribute("aria-selected", String(on));
+  });
+  const note = $("presetNote");
+  const link = $("presetKeyLink");
+  if (active) {
+    note.textContent = active.note;
+    if (active.keyUrl) {
+      link.href = active.keyUrl;
+      link.classList.remove("hidden");
+    } else {
+      link.classList.add("hidden");
+    }
+  } else {
+    note.textContent =
+      "Custom URL — type any OpenAI-compatible base URL (HTTPS required off-machine).";
+    link.classList.add("hidden");
+  }
+}
+
+function applyBackendPreset(id) {
+  const preset = BACKEND_PRESETS.find((entry) => entry.id === id);
+  if (!preset) return;
+  $("baseUrl").value = preset.baseUrl;
+  if (preset.model) {
+    $("model").value = preset.model;
+    $("model").placeholder = preset.model;
+  } else if (id !== "custom") {
+    $("model").value = "auto";
+  }
+  markActivePreset();
+  if (preset.baseUrl) $("apiKey").focus();
+  else $("baseUrl").focus();
+}
+
 async function loadSettings() {
   const result = await api("/api/config");
   if (!result.ok) return;
@@ -1782,6 +2054,12 @@ async function loadSettings() {
   $("contextBudget").value = state.contextBudget;
   $("historyMessages").value = Number(result.data.history_messages) || 6;
   $("sendOutline").checked = result.data.send_workspace_outline !== false;
+  $("searchProvider").value = result.data.search_provider || "";
+  $("searchApiKey").value = "";
+  $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
+  $("searchKeyStatus").textContent = result.data.has_search_key
+    ? "A search key is saved. Leave the field blank to keep it."
+    : "Needed for Deep search with Exa or Tavily.";
   updateContextMeter();
   $("modelChip").textContent = state.model;
   $("apiKey").value = "";
@@ -1789,6 +2067,7 @@ async function loadSettings() {
   $("keyStatus").textContent = result.data.has_api_key
     ? "A key is saved locally. Leave the field blank to keep it, or enter a new key to replace it."
     : "No key saved yet. It is stored in a permission-restricted local config file.";
+  renderBackendPresets();
 }
 
 function settingsNotice(message, ok) {
@@ -1805,9 +2084,12 @@ async function saveSettings(event) {
     context_budget_tokens: Number($("contextBudget").value) || state.contextBudget || 6000,
     history_messages: Number($("historyMessages").value) || 6,
     send_workspace_outline: $("sendOutline").checked,
+    search_provider: $("searchProvider").value,
   };
   const key = $("apiKey").value.trim();
   if (key) payload.api_key = key;
+  const searchKey = $("searchApiKey").value.trim();
+  if (searchKey) payload.search_api_key = searchKey;
   const result = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
   if (!result.ok) {
     settingsNotice(result.data.error || "Could not save settings.", false);
@@ -1819,6 +2101,11 @@ async function saveSettings(event) {
   updateContextMeter();
   $("apiKey").value = "";
   $("apiKey").placeholder = "Saved key (leave blank to keep it)";
+  if ($("searchApiKey").value.trim()) {
+    $("searchApiKey").value = "";
+    $("searchApiKey").placeholder = "Saved key (leave blank to keep it)";
+    $("searchKeyStatus").textContent = "A search key is saved. Leave the field blank to keep it.";
+  }
   settingsNotice("Settings saved locally.", true);
   setConnection("ok", "Settings saved");
   return true;
@@ -1991,7 +2278,8 @@ function renderAgents() {
 }
 
 /* Integrations: live status of everything Studio talks to, one tester per card. */
-function integrationCard(title, status, note, onTest) {
+/* Each card: title, status note, then one or more actions (Test, Start, Stop). */
+function integrationCard(title, status, note, actions = []) {
   const card = document.createElement("div");
   card.className = "project-menu-item";
   const main = document.createElement("span");
@@ -2004,38 +2292,77 @@ function integrationCard(title, status, note, onTest) {
   small.textContent = note;
   main.appendChild(small);
   card.appendChild(main);
-  card.appendChild(rowButton("Test", onTest));
+  const row = document.createElement("span");
+  row.className = "project-menu-actions-row";
+  actions.forEach(([label, handler]) => row.appendChild(rowButton(label, handler)));
+  card.appendChild(row);
   return card;
+}
+
+function activeBackendName() {
+  const preset = presetForBaseUrl($("baseUrl").value.trim());
+  return preset ? preset.name : "Custom backend";
 }
 
 async function loadIntegrations() {
   const host = $("integrationsList");
   if (!host) return;
   host.replaceChildren();
+
   const router = await api("/api/router");
   const reachable = router.ok && router.data.reachable;
+  const routerActions = [["Test", () => loadIntegrations()]];
+  if (!reachable && router.ok && router.data.compose_dir) {
+    routerActions.push(["Start", async () => {
+      const started = await api("/api/router/start", { method: "POST", body: "{}" });
+      toast(started.ok ? "Starting FreeLLMAPI…" : started.data.error || "Could not start.");
+      setTimeout(loadIntegrations, 2500);
+    }]);
+  }
   host.appendChild(integrationCard(
-    "FreeLLMAPI (chat router)",
+    `${activeBackendName()} (active backend)`,
     reachable ? "ok" : "err",
-    reachable ? "reachable" : `${router.data ? router.data.detail || "not running" : "status call failed"}`,
-    async () => {
-      const probe = await api("/api/router");
-      toast(probe.ok && probe.data.reachable ? "Router is answering." : probe.ok ? `Router not running: ${probe.data.detail || "unknown reason"}` : "Could not query router status.");
-      loadIntegrations();
-    },
+    reachable ? router.data.message || "reachable" : (router.ok ? router.data.message || "not running" : "status call failed"),
+    routerActions,
   ));
+
+  const omni = await api("/api/omniroute");
+  const omniUp = omni.ok && omni.data.reachable;
+  const omniActions = [];
+  if (omni.ok && !omniUp) {
+    omniActions.push(["Start", async () => {
+      const started = await api("/api/omniroute/start", { method: "POST", body: "{}" });
+      toast(started.ok ? "Starting OmniRoute…" : started.data.error || "Could not start OmniRoute.");
+      setTimeout(loadIntegrations, 2500);
+    }]);
+  }
+  if (omni.ok && omni.data.owned_by_app) {
+    omniActions.push(["Stop", async () => {
+      const stopped = await api("/api/omniroute/stop", { method: "POST", body: "{}" });
+      toast(stopped.ok ? "Stopping OmniRoute…" : stopped.data.error || "Could not stop OmniRoute.");
+      setTimeout(loadIntegrations, 2500);
+    }]);
+  }
+  omniActions.push(["Test", () => loadIntegrations()]);
+  host.appendChild(integrationCard(
+    "OmniRoute",
+    omniUp ? "ok" : "err",
+    omni.ok ? omni.data.message || (omniUp ? "reachable" : "not running") : "status call failed",
+    omniActions,
+  ));
+
   host.appendChild(integrationCard(
     "Workspace filesystem",
     state.workspace ? "ok" : "err",
     state.workspace ? `open: ${state.workspace.path}` : "no folder open",
-    () => toast(state.workspace ? `Workspace open at ${state.workspace.path}.` : "Open a folder from the Files page first."),
+    [["Test", () => toast(state.workspace ? `Workspace open at ${state.workspace.path}.` : "Open a folder from the Files page first.")]],
   ));
   const test = await api("/api/test", { method: "POST", body: "{}" });
   host.appendChild(integrationCard(
     "Chat completion round-trip",
     test.ok && test.data.ok ? "ok" : "err",
     test.ok && test.data.ok ? test.data.message || "round-trip succeeded" : test.data.error || "test failed",
-    testConnection,
+    [["Test", testConnection]],
   ));
 }
 
@@ -2629,6 +2956,7 @@ function bindEvents() {
   $("modeFiles").addEventListener("click", () => setSidebarMode("files"));
   $("modeSkills").addEventListener("click", () => { setSidebarMode("skills"); loadSkills(); });
   $("newChat").addEventListener("click", newConversation);
+  $("newChatTop").addEventListener("click", newConversation);
   $("projectSwitcher").addEventListener("click", (event) => {
     event.stopPropagation();
     if ($("projectMenu").classList.contains("hidden")) openProjectMenu();
@@ -2676,6 +3004,7 @@ function bindEvents() {
     suggestSkill($("prompt").value);
   });
   $("attachContextBtn").addEventListener("click", attachFromComposer);
+  $("deepToggle").addEventListener("click", () => setDeepSearch(!state.deepSearch));
   $("skillPickerBtn").addEventListener("click", (event) => {
     event.stopPropagation();
     toggleSkillMenu();
@@ -2832,6 +3161,7 @@ function bindEvents() {
     loadWorkflows();
   });
 
+  $("baseUrl").addEventListener("input", markActivePreset);
   $("settingsForm").addEventListener("submit", saveSettings);
   $("testConnection").addEventListener("click", testConnection);
   $("openProviderDashboardSettings").addEventListener("click", openProviderDashboard);
@@ -2965,6 +3295,7 @@ function bindEvents() {
   renderTabs();
   renderContextChip();
   renderSkillChip();
+  renderBackendPresets();
   state.lastContextTokens = null;
   setTimeout(updateContextMeter, 50);
   await Promise.all([loadSettings(), loadProjects(), loadConversations(), loadWorkspace()]);

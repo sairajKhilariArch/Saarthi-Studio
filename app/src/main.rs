@@ -27,6 +27,7 @@ use tokio::net::TcpListener;
 use uuid::Uuid;
 
 mod context;
+mod deepsearch;
 #[cfg(feature = "gui")]
 mod gui;
 mod host_api;
@@ -73,6 +74,12 @@ struct Config {
     /// Skills the user switched off; everything discovered is on by default.
     #[serde(default)]
     disabled_skills: Vec<String>,
+    /// Deep-search backend: "", "exa" or "tavily".
+    #[serde(default)]
+    search_provider: String,
+    /// Search API key for the deep-search loop (server-side only).
+    #[serde(default)]
+    search_api_key: String,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -97,6 +104,8 @@ impl Config {
             send_workspace_outline: true,
             active_project: String::new(),
             disabled_skills: Vec::new(),
+            search_provider: String::new(),
+            search_api_key: String::new(),
         }
     }
 }
@@ -408,6 +417,10 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
         cfg.model.trim().to_string()
     };
     cfg.api_key = cfg.api_key.trim().to_string();
+    cfg.search_provider = match cfg.search_provider.to_lowercase().as_str() {
+        "exa" | "tavily" => cfg.search_provider.to_lowercase(),
+        _ => String::new(),
+    };
 
     cfg.context_budget_tokens = cfg
         .context_budget_tokens
@@ -575,6 +588,8 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "context_budget_tokens": cfg.context_budget_tokens,
         "history_messages": cfg.history_messages,
         "send_workspace_outline": cfg.send_workspace_outline,
+        "search_provider": cfg.search_provider,
+        "has_search_key": !cfg.search_api_key.is_empty(),
     }))
 }
 
@@ -591,6 +606,24 @@ async fn router_start(State(_state): State<AppState>) -> Response<Body> {
 
 async fn router_stop(State(_state): State<AppState>) -> Response<Body> {
     match router::manual_stop().await {
+        Ok(status) => Json(status.to_json()).into_response(),
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+async fn omniroute_status(State(_state): State<AppState>) -> Json<Value> {
+    Json(router::omniroute_status().await.to_json())
+}
+
+async fn omniroute_start(State(_state): State<AppState>) -> Response<Body> {
+    match router::omniroute_start().await {
+        Ok(status) => Json(status.to_json()).into_response(),
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+async fn omniroute_stop(State(_state): State<AppState>) -> Response<Body> {
+    match router::omniroute_stop().await {
         Ok(status) => Json(status.to_json()).into_response(),
         Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
     }
@@ -621,6 +654,14 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     }
     if let Some(outline) = input.get("send_workspace_outline").and_then(Value::as_bool) {
         cfg.send_workspace_outline = outline;
+    }
+    if let Some(provider) = input.get("search_provider").and_then(Value::as_str) {
+        cfg.search_provider = provider.trim().to_lowercase();
+    }
+    if let Some(key) = input.get("search_api_key").and_then(Value::as_str) {
+        if !key.trim().is_empty() {
+            cfg.search_api_key = key.trim().to_string();
+        }
     }
     cfg.base_url = base_url;
     cfg.model = model;
@@ -1263,13 +1304,94 @@ fn log_router_error(state: &AppState, cid: &str, error: &str, latency: i64, mode
     ));
 }
 
-async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+/// Deep-search pre-flight, shared by `chat` and `chat_stream`. When the
+/// request asked for it: runs provider tools or the bounded search loop,
+/// pushes step/source events into `events`, and either returns a finished
+/// native answer or rewrites `input.message` with the evidence block.
+async fn deepsearch_phase(
+    state: &AppState,
+    input: &mut Value,
+    events: &mut Vec<Value>,
+) -> Result<(Option<String>, Vec<Value>), String> {
+    if !input.get("deepsearch").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok((None, Vec::new()));
+    }
+    let question = input
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if question.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let cfg = load_config(state);
+    let outcome = deepsearch::run(
+        &state.client,
+        &deepsearch::Config {
+            base_url: &cfg.base_url,
+            api_key: &cfg.api_key,
+            model: &cfg.model,
+            search_provider: &cfg.search_provider,
+            search_api_key: &cfg.search_api_key,
+        },
+        &question,
+        &mut |event| events.push(event),
+    )
+    .await?;
+    let sources = outcome.sources;
+    if let Some(answer) = outcome.answer {
+        return Ok((Some(answer), sources));
+    }
+    if let Some(augmented) = outcome.augmented {
+        input["message"] = json!(augmented);
+    }
+    Ok((None, sources))
+}
+
+async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Response<Body> {
+    let mut ds_events = Vec::new();
+    let ds_answer = match deepsearch_phase(&state, &mut input, &mut ds_events).await {
+        Ok((answer, _sources)) => answer,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
     let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
+
+    // A native provider already answered during the deep-search phase.
+    if let Some(answer) = ds_answer {
+        let now = now_seconds();
+        let log_result = (|| -> rusqlite::Result<()> {
+            let conn = open_db(&state.database_path)?;
+            conn.execute("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'assistant',?2,?3)", params![cid, answer, now])?;
+            conn.execute(
+                "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,'deepsearch','ok',?4,NULL,NULL,NULL,'','')",
+                params![now, cid, cfg.model],
+            )?;
+            conn.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now, cid])?;
+            Ok(())
+        })();
+        if let Err(e) = log_result {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("AI replied, but saving the response failed: {e}"),
+            );
+        }
+        let mut meta = json!({ "model": cfg.model, "deepsearch": true });
+        meta["context_tokens"] = json!(context_tokens);
+        meta["context_trimmed"] = json!(context_trimmed);
+        return Json(json!({
+            "ok": true,
+            "answer": answer,
+            "meta": meta,
+            "sources": ds_events.into_iter().filter(|e| e["type"] == "source").collect::<Vec<_>>(),
+        }))
+        .into_response();
+    }
 
     let started = Instant::now();
     match call_router(&state, packed.messages).await {
@@ -1523,18 +1645,57 @@ impl StreamState {
 /// Stream the router's answer token by token. The client aborting the fetch
 /// drops this body, which drops the byte stream and runs the recorder's
 /// `Drop`, so whatever was answered so far is still stored.
-async fn chat_stream(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>) -> Response<Body> {
+    let mut ds_frames: VecDeque<String> = VecDeque::new();
+    let mut ds_events: Vec<Value> = Vec::new();
+    let ds_answer = match deepsearch_phase(&state, &mut input, &mut ds_events).await {
+        Ok((answer, _sources)) => answer,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    for event in ds_events {
+        ds_frames.push_back(sse_frame(&event));
+    }
+
     let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
     let context_tokens = packed.estimated_tokens;
 
-    if cfg.api_key.trim().is_empty() {
+    if ds_answer.is_none() && cfg.api_key.trim().is_empty() {
         return json_error(
             StatusCode::BAD_REQUEST,
             "Add your router's unified API key in Settings first.",
         );
+    }
+
+    // Deep search already answered through a native provider: stream the
+    // finished text as one frame set instead of calling the router.
+    if let Some(answer) = ds_answer {
+        let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens);
+        if let Ok(mut held) = recorder.meta.lock() {
+            held["model"] = json!(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
+            held["deepsearch"] = json!(true);
+        }
+        if let Ok(mut held) = recorder.text.lock() {
+            held.push_str(&answer);
+        }
+        let mut pending = ds_frames;
+        pending.push_back(sse_frame(&json!({ "ready": true })));
+        pending.push_back(sse_frame(&json!({ "delta": answer })));
+        let meta = recorder
+            .meta
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| json!({}));
+        pending.push_back(sse_frame(&json!({ "done": true, "meta": meta })));
+        return sse_response(StreamState {
+            bytes: futures_util::stream::empty().boxed(),
+            leftover: String::new(),
+            pending,
+            recorder,
+            finished: false,
+        });
     }
 
     let request_body = json!({
@@ -1586,7 +1747,7 @@ async fn chat_stream(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
     }
-    let mut pending: VecDeque<String> = VecDeque::new();
+    let mut pending: VecDeque<String> = ds_frames;
     pending.push_back(sse_frame(&json!({ "ready": true })));
 
     // A router that ignores `stream` and answers with plain JSON still gets a
@@ -1664,6 +1825,9 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/router", get(router_status))
         .route("/api/router/start", post(router_start))
         .route("/api/router/stop", post(router_stop))
+        .route("/api/omniroute", get(omniroute_status))
+        .route("/api/omniroute/start", post(omniroute_start))
+        .route("/api/omniroute/stop", post(omniroute_stop))
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
@@ -1801,6 +1965,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             router::run_cli(&args[1..])?;
             return Ok(());
         }
+        Some("omniroute") => {
+            router::run_omniroute_cli(&args[1..])?;
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -1872,6 +2040,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         router::shutdown_cleanup().await;
+        router::omniroute_shutdown_cleanup().await;
     });
     Ok(())
 }
