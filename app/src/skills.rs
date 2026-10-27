@@ -96,7 +96,7 @@ pub(crate) fn discover(roots: &[(String, PathBuf)]) -> Vec<Skill> {
             found.push(skill);
         }
     }
-    found.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    found.sort_by_key(|a| a.name.to_lowercase());
     found
 }
 

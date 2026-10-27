@@ -1012,7 +1012,9 @@ struct ChatPrep {
 
 /// Validate a chat payload, persist the user's message, and pack the context
 /// under the token budget. Returns a ready-to-send error response on failure.
-fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Response> {
+/// The error response is boxed to keep the `Result` small (clippy
+/// result_large_err); errors never occur in bulk on hot paths.
+fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Response>> {
     let cid = input
         .get("conversation_id")
         .and_then(Value::as_str)
@@ -1039,16 +1041,16 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Response> {
         .take(40)
         .collect();
     if cid.is_empty() || message.is_empty() {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::BAD_REQUEST,
             "Choose a conversation and enter a message.",
-        ));
+        )));
     }
     if message.chars().count() > 50_000 {
-        return Err(json_error(
+        return Err(Box::new(json_error(
             StatusCode::BAD_REQUEST,
             "Message is too long (50,000 characters maximum).",
-        ));
+        )));
     }
 
     let mut prompt = if code.trim().is_empty() {
@@ -1122,9 +1124,17 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Response> {
 
     let rows = match history_result {
         Ok(Some(items)) => items,
-        Ok(None) => return Err(json_error(StatusCode::NOT_FOUND, "Conversation not found.")),
+        Ok(None) => {
+            return Err(Box::new(json_error(
+                StatusCode::NOT_FOUND,
+                "Conversation not found.",
+            )))
+        }
         Err(e) => {
-            return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+            return Err(Box::new(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            )))
         }
     };
     let history: Vec<Value> = rows
@@ -1163,7 +1173,7 @@ fn log_router_error(state: &AppState, cid: &str, error: &str, latency: i64, mode
 async fn chat(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
     let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
@@ -1423,7 +1433,7 @@ impl StreamState {
 async fn chat_stream(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
     let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let context_tokens = packed.estimated_tokens;
 
