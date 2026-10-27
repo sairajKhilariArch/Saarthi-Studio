@@ -9,6 +9,11 @@
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+  <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.6l1.9 6.2a3.4 3.4 0 0 0 1.3 1.3l6.2 1.9-6.2 1.9a3.4 3.4 0 0 0-1.3 1.3L12 21.4l-1.9-6.2a3.4 3.4 0 0 0-1.3-1.3L2.6 12l6.2-1.9a3.4 3.4 0 0 0 1.3-1.3z"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-5 4z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
@@ -37,9 +42,23 @@
       </div>
     </div>
 
+    <button id="projectSwitcher" class="project-switcher" title="Switch project" aria-haspopup="listbox" aria-expanded="false">
+      <svg class="icon"><use href="#i-layers"/></svg>
+      <span class="project-switcher-text">
+        <small>Project</small>
+        <strong id="projectName">Loading…</strong>
+      </span>
+      <svg class="icon project-switcher-chevron"><use href="#i-chevron"/></svg>
+    </button>
+    <div id="projectMenu" class="project-menu hidden" role="listbox" aria-label="Projects">
+      <div id="projectList" class="project-menu-items"></div>
+      <button id="projectNew" class="project-menu-new"><svg class="icon"><use href="#i-plus"/></svg><span>New project…</span></button>
+    </div>
+
     <div class="segmented" role="tablist" aria-label="Sidebar view">
       <button id="modeThreads" class="segmented-btn active" role="tab" aria-selected="true">Threads</button>
       <button id="modeFiles" class="segmented-btn" role="tab" aria-selected="false">Files</button>
+      <button id="modeSkills" class="segmented-btn" role="tab" aria-selected="false">Skills</button>
     </div>
 
     <section id="threadsPane" class="pane">
@@ -49,6 +68,21 @@
       <p class="pane-label">Recent</p>
       <div id="conversationList" class="thread-list">
         <p class="empty-note">Loading history…</p>
+      </div>
+    </section>
+
+    <section id="skillsPane" class="pane hidden">
+      <button id="skillsOpenFolder" class="btn btn-quiet btn-small btn-block" title="Open this project's skills folder">Skills folder…</button>
+      <p class="pane-label">Available in this project</p>
+      <div id="skillList" class="skill-list">
+        <p class="empty-note">Loading skills…</p>
+      </div>
+      <div id="skillDetail" class="skill-detail hidden">
+        <div class="skill-detail-head">
+          <button id="skillBack" class="icon-btn tiny" aria-label="Back to the skill list"><svg class="icon"><use href="#i-chevron"/></svg></button>
+          <strong id="skillDetailName">Skill</strong>
+        </div>
+        <div id="skillDetailBody" class="skill-detail-body"></div>
       </div>
     </section>
 
@@ -103,6 +137,9 @@
       <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
       <div class="tabbar-tools">
         <span id="connPill" class="status-pill"><span class="conn-dot"></span><span id="connPillText">not tested</span></span>
+        <button id="themeToggle" class="icon-btn" title="Switch light / dark theme" aria-label="Switch light or dark theme">
+          <svg class="icon"><use href="#i-moon"/></svg>
+        </button>
       </div>
     </div>
 
@@ -134,6 +171,9 @@
           </div>
           <div id="messages" class="messages" aria-live="polite"></div>
           <div id="thinking" class="thinking hidden"><span class="spinner"></span><span>Thinking with your router…</span></div>
+          <div id="streamIndicator" class="thinking hidden"><button id="stopStream" class="btn btn-quiet btn-small danger">
+            <svg class="icon"><use href="#i-stop"/></svg><span>Stop</span>
+          </button></div>
         </div>
       </div>
       <div class="composer-shell">
@@ -162,6 +202,18 @@
             </div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section id="skillsView" class="view page-view hidden" role="tabpanel" aria-label="Skills">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Local SKILL.md folders</p>
+          <h1>Skills</h1>
+          <p>Skills are local Markdown instruction packs that guide the model. Enable the ones a thread should follow; disabled ones stay installed but are never mentioned to the router.</p>
+        </header>
+        <div id="skillsOverview" class="skills-overview"></div>
+        <pre id="skillsRaw" class="console-json hidden"></pre>
       </div>
     </section>
 

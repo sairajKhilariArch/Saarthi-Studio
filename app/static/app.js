@@ -4,6 +4,360 @@
 
 const $ = (id) => document.getElementById(id);
 
+/* ------------------------------------------------------------------ */
+/* theme: persisted with the profile config so it survives restarts    */
+/* ------------------------------------------------------------------ */
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("freeai-theme", theme);
+}
+
+async function loadTheme() {
+  const stored = localStorage.getItem("freeai-theme");
+  let theme = stored === "light" || stored === "dark" ? stored : null;
+  if (!theme) {
+    theme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  applyTheme(theme);
+}
+
+function setupThemeToggle() {
+  $("themeToggle").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    applyTheme(next);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* projects: server-backed switching                                    */
+/* ------------------------------------------------------------------ */
+
+async function loadProjects() {
+  const result = await api("/api/projects");
+  if (!result.ok) {
+    $("projectName").textContent = "Projects unavailable";
+    return;
+  }
+  state.projects = Array.isArray(result.data.projects) ? result.data.projects : [];
+  state.activeProjectId = result.data.active || null;
+  if (state.activeProjectId) {
+    const match = state.projects.find((project) => project.id === state.activeProjectId);
+    state.activeProject = match || null;
+  } else {
+    state.activeProject = null;
+  }
+  renderProjectSwitcher();
+}
+
+function activeProjectName() {
+  if (!state.activeProject) return "Default project";
+  return state.activeProject.name;
+}
+
+function renderProjectSwitcher() {
+  $("projectName").textContent = activeProjectName();
+  const list = $("projectList");
+  list.replaceChildren();
+  if (!state.projects.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No projects yet.";
+    list.appendChild(note);
+    return;
+  }
+  state.projects.forEach((project) => {
+    const item = document.createElement("div");
+    item.className = "project-menu-item" + (project.id === state.activeProjectId ? " active" : "");
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(project.id === state.activeProjectId));
+    item.innerHTML = `<span class="project-menu-main"><strong></strong><small></small></span>` +
+      `<span class="project-menu-actions-row"></span>`;
+    item.querySelector("strong").textContent = project.name;
+    item.querySelector("small").textContent = project.folder_path || "no folder";
+    item.title = project.folder_path || project.name;
+    const actions = document.createElement("span");
+    actions.className = "project-menu-actions-row";
+    const rename = document.createElement("button");
+    rename.className = "tree-tool";
+    rename.textContent = "Rename";
+    rename.addEventListener("click", (event) => {
+      event.stopPropagation();
+      renameProject(project);
+    });
+    const archive = document.createElement("button");
+    archive.className = "tree-tool";
+    archive.textContent = project.archived_at ? "Unarchive" : "Archive";
+    archive.addEventListener("click", (event) => {
+      event.stopPropagation();
+      updateProject(project, { archived: !project.archived_at });
+    });
+    const remove = document.createElement("button");
+    remove.className = "tree-tool danger";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteProject(project);
+    });
+    actions.append(rename, archive, remove);
+    item.appendChild(actions);
+    list.appendChild(item);
+  });
+}
+
+function openProjectMenu() {
+  $("projectMenu").classList.remove("hidden");
+  $("projectSwitcher").setAttribute("aria-expanded", "true");
+}
+
+function closeProjectMenu() {
+  $("projectMenu").classList.add("hidden");
+  $("projectSwitcher").setAttribute("aria-expanded", "false");
+}
+
+async function switchProject(id) {
+  closeProjectMenu();
+  const result = await api(`/api/projects/${encodeURIComponent(id)}/activate`, { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not switch projects.");
+    return;
+  }
+  await applyProjectSwitch({ id: result.data.id, name: result.data.name });
+}
+
+/* After the server activates a project, everything it scopes reloads: the
+   conversation list comes from the NEW selection, so history really changes. */
+async function applyProjectSwitch(project) {
+  state.activeProject = project;
+  state.activeProjectId = project ? project.id : null;
+  // Close local chat state the old project owns.
+  state.currentId = null;
+  state.currentTitle = "New thread";
+  $("messages").replaceChildren();
+  $("welcome").classList.remove("hidden");
+  closeAllFileTabs(true);
+  state.chatContext = null;
+  renderProjectSwitcher();
+  await loadConversations();
+  if (state.conversations.length) {
+    await openConversation(state.conversations[0].id);
+  }
+  activateTab(chatTabKey());
+  toast(`Switched to ${activeProjectName()}.`);
+}
+
+async function createProject() {
+  const folder = state.workspace ? state.workspace.absolute_path : "";
+  const name = await askName({
+    title: "New project",
+    label: "Project name",
+    placeholder: "portfolio-relaunch",
+    submitLabel: "Create",
+  });
+  if (!name) return;
+  const result = await api("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ name, folder_path: folder }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not create that project.");
+    return;
+  }
+  await loadProjects();
+  if (result.data.project) await applyProjectSwitch(result.data.project);
+}
+
+async function renameProject(project) {
+  const name = await askName({
+    title: "Rename project",
+    label: "New name",
+    value: project.name,
+    submitLabel: "Rename",
+  });
+  if (!name || name === project.name) return;
+  await updateProject(project, { name });
+}
+
+async function updateProject(project, patch) {
+  const result = await api(`/api/projects/${encodeURIComponent(project.id)}/update`, {
+    method: "POST",
+    body: JSON.stringify(patch),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not update that project.");
+    return;
+  }
+  await loadProjects();
+  if (state.activeProjectId === project.id) {
+    state.activeProject = state.projects.find((item) => item.id === project.id) || null;
+    renderProjectSwitcher();
+  }
+}
+
+async function deleteProject(project) {
+  const name = project.name || "this project";
+  if (!confirm(`Delete the project "${name}"? Its threads are deleted with it. Files on disk are not touched.`)) return;
+  const result = await api(`/api/projects/${encodeURIComponent(project.id)}/delete`, { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not delete that project.");
+    return;
+  }
+  if (state.activeProjectId === project.id) {
+    await applyProjectSwitch(result.data.project ? result.data.project : null);
+  }
+  await loadProjects();
+  renderProjectSwitcher();
+}
+
+/* ------------------------------------------------------------------ */
+/* skills: local SKILL.md folders                                        */
+/* ------------------------------------------------------------------ */
+
+async function loadSkills() {
+  const box = $("skillList");
+  const result = await api("/api/skills");
+  if (!result.ok) {
+    box.replaceChildren();
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = result.data.error || "Skills folder not readable.";
+    box.appendChild(note);
+    return;
+  }
+  const payload = result.data.skills || result.data;
+  state.skills = Array.isArray(payload) ? payload : [];
+  renderSkills();
+  renderSkillsOverview();
+}
+
+function skillById(id) {
+  return state.skills.find((skill) => skill.id === id) || null;
+}
+
+function renderSkills() {
+  const box = $("skillList");
+  if (state.openSkillId) {
+    renderSkillDetail();
+    return;
+  }
+  box.replaceChildren();
+  $("skillBack").parentElement.parentElement.classList.add("hidden");
+  box.classList.remove("hidden");
+  if (!state.skills.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No skills found. Add SKILL.md folders in this project, or on the current computer, and they appear here.";
+    box.appendChild(note);
+    return;
+  }
+  state.skills.forEach((skill) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "skill-card" + (skill.enabled ? "" : " off") + (skill.last_error ? " broken" : "");
+    card.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-cube"/></svg>' +
+      '<span class="skill-card-text"><strong></strong><small></small></span>';
+    card.querySelector("strong").textContent = skill.name || skill.id;
+    card.querySelector("small").textContent = skill.summary || (skill.last_error ? "Load error" : "SKILL.md");
+    card.title = skill.path || skill.id;
+    card.addEventListener("click", () => openSkillDetail(skill.id));
+    box.appendChild(card);
+  });
+}
+
+function openSkillDetail(id) {
+  state.openSkillId = id;
+  renderSkillDetail();
+}
+
+function renderSkillDetail() {
+  const box = $("skillList");
+  const detail = $("skillDetail");
+  const skill = skillById(state.openSkillId);
+  if (!skill) {
+    state.openSkillId = null;
+    renderSkills();
+    return;
+  }
+  box.classList.add("hidden");
+  detail.classList.remove("hidden");
+  $("skillDetailName").textContent = skill.name || skill.id;
+  const body = $("skillDetailBody");
+  body.replaceChildren();
+  if (skill.last_error) {
+    const err = document.createElement("p");
+    err.className = "state error";
+    err.textContent = skill.last_error;
+    body.appendChild(err);
+  }
+  const meta = document.createElement("p");
+  meta.textContent = (skill.enabled ? "Enabled — " : "Disabled — ") + (skill.path || "");
+  body.appendChild(meta);
+  if (skill.description) {
+    const desc = document.createElement("p");
+    desc.textContent = skill.description;
+    body.appendChild(desc);
+  }
+}
+
+function renderSkillsOverview() {
+  const host = $("skillsOverview");
+  if (!host) return;
+  host.replaceChildren();
+  if (!state.skills.length) {
+    const note = document.createElement("p");
+    note.className = "state";
+    note.textContent = "No skills on this computer yet. Create a folder with a SKILL.md file to add one.";
+    host.appendChild(note);
+  }
+  state.skills.forEach((skill) => {
+    const row = document.createElement("div");
+    row.className = "skill-row" + (skill.enabled ? "" : " off") + (skill.last_error ? " broken" : "");
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = skill.name || skill.id;
+    main.appendChild(strong);
+    const desc = document.createElement("p");
+    desc.textContent = skill.last_error || skill.summary || skill.description || "No description in SKILL.md.";
+    main.appendChild(desc);
+    const path = document.createElement("small");
+    path.className = "skill-path";
+    path.textContent = skill.path || "";
+    main.appendChild(path);
+    row.appendChild(main);
+    const side = document.createElement("div");
+    side.className = "skill-side";
+    if (!skill.last_error) {
+      const badge = document.createElement("span");
+      badge.className = "badge" + (skill.enabled ? " on" : "");
+      badge.textContent = skill.enabled ? "Enabled" : "Disabled";
+      side.appendChild(badge);
+    } else {
+      const badge = document.createElement("span");
+      badge.className = "badge broken";
+      badge.textContent = "Failed to load";
+      side.appendChild(badge);
+    }
+    if (!skill.last_error) {
+      const toggle = document.createElement("button");
+      toggle.className = "btn btn-quiet btn-small";
+      toggle.textContent = skill.enabled ? "Disable" : "Enable";
+      toggle.addEventListener("click", async () => {
+        toggle.disabled = true;
+        const result = await api(`/api/skills/${encodeURIComponent(skill.id)}/state`, {
+          method: "POST",
+          body: JSON.stringify({ enabled: !skill.enabled }),
+        });
+        if (!result.ok) toast(result.data.error || "Could not change that skill.");
+        await loadSkills();
+      });
+      side.appendChild(toggle);
+    }
+    row.appendChild(side);
+    host.appendChild(row);
+  });
+}
+
 const state = {
   conversations: [],
   currentId: null,
@@ -15,6 +369,14 @@ const state = {
   model: "auto",
   contextBudget: 6000,
   lastContextTokens: null,
+  /* projects: real server-side scoping — the active project filters every
+     conversation list, so switching changes which history the server serves. */
+  projects: [],
+  activeProject: null,
+  activeProjectId: null,
+  /* skills: local SKILL.md folders served by /api/skills. */
+  skills: [],
+  openSkillId: null,
   workspace: null,
   recentFolders: [],
   home: "~",
@@ -274,6 +636,7 @@ function setView(view) {
   $("settingsView").classList.toggle("hidden", view !== "settings");
   $("usageView").classList.toggle("hidden", view !== "usage");
   $("routerView").classList.toggle("hidden", view !== "router");
+  $("skillsView").classList.toggle("hidden", view !== "skills");
   $("usageBtn").classList.toggle("active", view === "usage");
   $("settingsBtn").classList.toggle("active", view === "settings");
   $("routerBtn").classList.toggle("active", view === "router");
@@ -282,6 +645,7 @@ function setView(view) {
   if (view === "chat") setTimeout(() => $("prompt").focus(), 30);
   if (view === "usage") loadUsage();
   if (view === "router") loadConsoleStatus();
+  if (view === "skills") renderSkillsOverview();
 }
 
 function activateTab(key) {
@@ -500,6 +864,8 @@ async function newConversation() {
   $("prompt").focus();
 }
 
+/* Streaming chat: one AbortController per request. Stop aborts the fetch —
+   the server's ReplyRecorder saves the partial reply, so nothing is lost. */
 async function sendMessage(preset = null) {
   if (state.busy) return;
   const message = String(preset ?? $("prompt").value).trim();
@@ -527,31 +893,134 @@ async function sendMessage(preset = null) {
   updateContextMeter();
   setBusy(true);
 
-  const result = await api("/api/chat", {
-    method: "POST",
-    body: JSON.stringify({
-      conversation_id: state.currentId,
-      message,
-      code: context ? context.content : "",
-      language: context ? context.language : "text",
-    }),
-  });
+  const controller = new AbortController();
+  state.abort = controller;
+  addStreamRow();
 
-  setBusy(false);
-  if (result.ok && result.data.ok) {
-    addMessage("assistant", result.data.answer, { meta: result.data.meta });
-    setConnection("ok", "Router connected");
-    if (result.data.meta && result.data.meta.context_tokens != null) {
-      state.lastContextTokens = Number(result.data.meta.context_tokens);
-      updateContextMeter();
+  let answer = "";
+  let failed = null;
+  try {
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_id: state.currentId,
+        message,
+        code: context ? context.content : "",
+        language: context ? context.language : "text",
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      failed = data.error || `Request failed (HTTP ${response.status})`;
+    } else {
+      await consumeStream(response.body, (frame) => {
+        if (frame.delta) {
+          answer += frame.delta;
+          appendStreamText(answer);
+        }
+        if (frame.error) failed = frame.error;
+        if (frame.done && frame.meta) {
+          if (frame.meta.context_tokens != null) state.lastContextTokens = Number(frame.meta.context_tokens);
+          applyStreamMeta(frame.meta);
+        }
+      });
     }
-  } else {
-    addMessage("assistant", result.data.error || "The request failed.", { meta: result.data.meta, error: true });
-    setConnection("bad", "Last request failed");
+  } catch (error) {
+    if (error && error.name !== "AbortError") failed = error.message || "The request failed.";
   }
+  finishStreamRow(answer, failed);
+  state.abort = null;
+  state.busy = false;
+  $("sendBtn").disabled = false;
+  $("attachContextBtn").disabled = false;
+  $("thinking").classList.add("hidden");
+  $("streamIndicator").classList.add("hidden");
+  setConnection(failed ? "bad" : "ok", failed ? "Last request failed" : "Router connected");
+  updateContextMeter();
   await loadConversations();
   await loadUsage();
   syncCurrentTitle();
+}
+
+/* Parse an SSE body into frames and run callback for each. Plainly reads
+   "data: {...}\n\n" events — the only content type this server emits. */
+async function consumeStream(body, onFrame) {
+  if (!body) return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const emit = () => {
+    let index;
+    while ((index = buffer.indexOf("\n\n")) !== -1) {
+      const event = buffer.slice(0, index);
+      buffer = buffer.slice(index + 2);
+      const payloadLine = event.split("\n").find((line) => line.startsWith("data:"));
+      if (!payloadLine) continue;
+      let frame;
+      try { frame = JSON.parse(payloadLine.slice(5).trim()); } catch { continue; }
+      onFrame(frame);
+    }
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    emit();
+  }
+  buffer += decoder.decode();
+  emit();
+}
+
+let streamRow = null;
+
+function addStreamRow() {
+  streamRow = addMessage("assistant", "", { streaming: true });
+}
+
+function appendStreamText(answer) {
+  if (!streamRow) return;
+  const body = streamRow.querySelector(".msg-body");
+  if (body) {
+    body.innerHTML = renderMarkdown(answer) + '<span class="stream-caret" aria-hidden="true"></span>';
+    scrollChat();
+  }
+}
+
+function applyStreamMeta(meta) {
+  if (!streamRow || !meta) return;
+  const head = streamRow.querySelector(".msg-meta");
+  if (!head) return;
+  const parts = [];
+  if (meta.model) parts.push(meta.model);
+  if (meta.provider) parts.push(meta.provider);
+  if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
+  if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
+  head.textContent = parts.join(" · ");
+}
+
+function finishStreamRow(answer, failure) {
+  if (!streamRow) return;
+  const row = streamRow;
+  streamRow = null;
+  const body = row.querySelector(".msg-body");
+  const caret = row.querySelector(".stream-caret");
+  if (caret) caret.remove();
+  if (failure) {
+    row.classList.add("error");
+    if (body) body.innerHTML = renderMarkdown(answer ? `${answer}\n\n**${failure}**` : failure);
+  } else if (!answer.trim()) {
+    row.remove();
+  } else if (body) {
+    body.innerHTML = renderMarkdown(answer);
+    appendMessageActions(row, [{ label: "Copy reply", run: () => copyText(answer, "Reply copied.") }]);
+  }
+  scrollChat();
+}
+
+function stopStream() {
+  if (state.abort) state.abort.abort();
 }
 
 function syncCurrentTitle() {
@@ -566,12 +1035,16 @@ function syncCurrentTitle() {
 
 function setSidebarMode(mode) {
   state.sidebarMode = mode;
-  $("modeThreads").classList.toggle("active", mode === "threads");
-  $("modeFiles").classList.toggle("active", mode === "files");
-  $("modeThreads").setAttribute("aria-selected", String(mode === "threads"));
-  $("modeFiles").setAttribute("aria-selected", String(mode === "files"));
+  ["threads", "files", "skills"].forEach((name) => {
+    const button = $(`mode${name.charAt(0).toUpperCase()}${name.slice(1)}`);
+    if (!button) return;
+    const active = mode === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
   $("threadsPane").classList.toggle("hidden", mode !== "threads");
   $("filesPane").classList.toggle("hidden", mode !== "files");
+  if ($("skillsPane")) $("skillsPane").classList.toggle("hidden", mode !== "skills");
 }
 
 async function loadWorkspace() {
@@ -1668,7 +2141,28 @@ async function loadConsoleBudget() {
 function bindEvents() {
   $("modeThreads").addEventListener("click", () => setSidebarMode("threads"));
   $("modeFiles").addEventListener("click", () => setSidebarMode("files"));
+  $("modeSkills").addEventListener("click", () => { setSidebarMode("skills"); loadSkills(); });
   $("newChat").addEventListener("click", newConversation);
+  $("projectSwitcher").addEventListener("click", (event) => {
+    event.stopPropagation();
+    if ($("projectMenu").classList.contains("hidden")) openProjectMenu();
+    else closeProjectMenu();
+  });
+  $("projectNew").addEventListener("click", () => {
+    closeProjectMenu();
+    createProject();
+  });
+  $("skillsOpenFolder").addEventListener("click", () => setView("skills"));
+  $("skillBack").addEventListener("click", () => {
+    state.openSkillId = null;
+    renderSkills();
+  });
+  document.addEventListener("click", (event) => {
+    // Close the project menu on any outside click (the switcher stops its own).
+    if (!$("projectMenu").classList.contains("hidden") && !$("projectMenu").contains(event.target)) {
+      closeProjectMenu();
+    }
+  });
   $("usageBtn").addEventListener("click", () => setView("usage"));
   $("settingsBtn").addEventListener("click", () => setView("settings"));
   $("refreshUsage").addEventListener("click", loadUsage);
@@ -1683,6 +2177,7 @@ function bindEvents() {
   });
 
   $("sendBtn").addEventListener("click", () => sendMessage());
+  $("stopStream").addEventListener("click", stopStream);
   $("prompt").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -1928,6 +2423,8 @@ function bindEvents() {
 }
 
 (async function init() {
+  loadTheme();
+  setupThemeToggle();
   bindEvents();
   setSidebarMode("threads");
   setView("chat");
@@ -1936,8 +2433,8 @@ function bindEvents() {
   renderContextChip();
   state.lastContextTokens = null;
   setTimeout(updateContextMeter, 50);
-  await Promise.all([loadSettings(), loadConversations(), loadWorkspace()]);
-  await loadUsage();
+  await Promise.all([loadSettings(), loadProjects(), loadConversations(), loadWorkspace()]);
+  await Promise.all([loadUsage(), loadSkills()]);
   if (state.conversations.length) {
     await openConversation(state.conversations[0].id);
   }
