@@ -2,7 +2,22 @@
 
 A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The interface uses HTML, CSS, and JavaScript, served locally by the Rust app and shown in the application window: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
-## One-command install
+## Install a release (downloaded artifacts)
+
+Pushing a `v*` tag (e.g. `v1.20.0`) to GitHub Actions attaches every release file to that tag's release page:
+
+| Platform | Artifact | Install & run |
+| --- | --- | --- |
+| Linux (deb) | `free-ai-suite_<version>_amd64.deb` | `sudo dpkg -i free-ai-suite_*_amd64.deb`, then launch **Free AI Suite** from the menu or run `free-ai-studio` |
+| Linux (AppImage) | `free-ai-suite_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
+| Linux (portable) | `free-ai-suite_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./free-ai-studio` (run `./install-and-run.sh` for the full source-build install instead) |
+| Windows | `free-ai-suite_<version>_windows-x86_64.zip` | Extract, run `free-ai-studio.exe` (WebView2 ships with Windows 10/11) |
+| Android | `free-ai-suite_<version>_android-release-unsigned.apk` | Enable **Install unknown apps** for your file manager, open the APK; an AAB is also attached for Play-style signing |
+| VS Code | `free-ai-studio-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension free-ai-studio-vscode.vsix` |
+
+Every artifact ships a `SHA256SUMS.txt`; verify before installing. All creatives talk to your router on `127.0.0.1` only — nothing is uploaded anywhere except the request you send.
+
+## One-command install (from source)
 
 1. Extract `free-ai-suite-rust-ubuntu.zip`.
 2. Open a terminal inside the extracted `free-ai-suite-rust-ubuntu` folder.
@@ -26,6 +41,9 @@ Never share the unified API key, provider keys, or `.env` file in chat or public
 
 ## Features
 
+- **Projects**: multiple projects with real server-side scoping — every thread list is filtered by the active project; create, rename, archive or delete from the sidebar switcher, and opening a project reopens its folder. Pre-existing threads are migrated into a Default project automatically
+- **Skills**: local `SKILL.md` packs discovered from the opened project, the user config dir and a bundled set; enable/disable, inspect content, and enabled skills are injected into the chat system prompt
+- **Streaming chat**: replies stream in live with a caret and a working **Stop** button (the partial answer is saved); light and dark themes with a switcher that persists
 - Rust HTTP backend and OpenAI-compatible router client
 - Persistent conversations and message history (SQLite)
 - Workspace explorer: open any local folder, browse the tree, and edit files in tabs
