@@ -349,6 +349,33 @@ body.no-bottom { --bottom-h: 0px; }
 .thread-item:hover .thread-delete, .thread-item.active .thread-delete { opacity: 1; }
 .thread-delete:hover { background: var(--surface-3); color: var(--danger); }
 .thread-delete .icon { width: 13px; height: 13px; }
+
+/* Thread pane head: names the project (or "all projects") and flips scope. */
+.pane-head { display: flex; align-items: center; gap: 8px; }
+.pane-head .pane-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tiny-toggle {
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 600; color: var(--mute);
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 999px;
+  padding: 3px 9px; cursor: pointer; white-space: nowrap;
+}
+.tiny-toggle:hover { color: var(--text); border-color: var(--accent); }
+
+/* Per-row project label ("all projects" scope) and open-thread marker. */
+.thread-project {
+  flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; font-weight: 600; letter-spacing: .02em;
+  color: var(--accent); background: rgba(120,150,255,.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  padding: 1px 7px; border-radius: 999px;
+}
+.thread-open {
+  flex: 0 0 auto; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--accent); background: rgba(120,150,255,.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding: 1px 6px; border-radius: 999px;
+}
+
 .empty-note { font-size: 12px; color: var(--mute); padding: 10px 6px; line-height: 1.6; margin: 0; }
 
 .sidebar-foot { border-top: 1px solid var(--line-soft); padding-top: 10px; margin-top: 10px; }

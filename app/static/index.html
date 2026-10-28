@@ -69,7 +69,10 @@
       <button id="newChat" class="btn btn-accent btn-block">
         <svg class="icon"><use href="#i-plus"/></svg><span>New thread</span>
       </button>
-      <p class="pane-label">Recent</p>
+      <div class="pane-head">
+        <p class="pane-label" id="threadPaneLabel">Recent</p>
+        <button id="threadScopeBtn" class="tiny-toggle" title="Show recent threads from every project">All projects</button>
+      </div>
       <div id="conversationList" class="thread-list">
         <p class="empty-note">Loading history…</p>
       </div>
