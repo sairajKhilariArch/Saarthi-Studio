@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.21.1"
+version = "1.22.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -22,6 +22,8 @@ sha2 = "=0.10.9"
 subtle = "=2.6.1"
 tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
+# Real PTY terminals for the bottom panel (ConPTY on Windows, unix pty).
+portable-pty = "0.9"
 # Desktop application window (Tauri v2). Disable with --no-default-features
 # for a headless server-only build.
 # Pinned: tauri 2.11 builds against an older tauri-runtime monitor API and
@@ -41,19 +43,32 @@ strip = "symbols"
 # Packaging metadata for `cargo deb` (used by the desktop release workflow).
 # The binary locates its UI via <exe dir>/../share/free-ai-suite/static at
 # runtime, so the deb asset paths below are load-bearing.
+#
+# The released deb is built on ubuntu-22.04 with `cargo build
+# --no-default-features` first (headless: no GTK/webkit deps, glibc 2.35),
+# then `cargo deb --no-build` packages that binary — so $auto resolves to
+# bare-minimum libc and installs on 22.04+. The desktop entry launches the
+# headless binary with --browser; windowed builds ship as the tarball and
+# AppImage from the same release. User data lives in ~/.config and
+# ~/.local/share (never package paths), so per-user data survive updates.
 [package.metadata.deb]
 maintainer = "SAIRAJ KHILARI <sairajkhilari191918110+github1@gmail.com>"
 section = "utils"
 priority = "optional"
 depends = "$auto"
-extended-description = """Free AI Suite is a local-first AI chat and coding workspace. It runs a
-loopback-only HTTP service that serves a browser UI and routes chat requests
-to a self-hosted FreeLLMAPI endpoint."""
+extended-description = """Saarthi Studio is a local-first AI chat and coding workspace. It runs a
+loopback-only HTTP service that serves a browser UI (opened automatically by
+this package's launcher) and routes chat requests to a self-hosted FreeLLMAPI
+endpoint. Upgrades replace only the binaries and UI under /usr; conversations,
+projects, settings and credentials in the user's home are preserved."""
 assets = [
     ["target/release/free-ai-studio", "usr/bin/free-ai-studio", "755"],
     ["static/index.html", "usr/share/free-ai-suite/static/index.html", "644"],
     ["static/app.js", "usr/share/free-ai-suite/static/app.js", "644"],
     ["static/styles.css", "usr/share/free-ai-suite/static/styles.css", "644"],
+    ["static/skills/code-review/SKILL.md", "usr/share/free-ai-suite/static/skills/code-review/SKILL.md", "644"],
+    ["static/skills/debug/SKILL.md", "usr/share/free-ai-suite/static/skills/debug/SKILL.md", "644"],
+    ["static/skills/tests/SKILL.md", "usr/share/free-ai-suite/static/skills/tests/SKILL.md", "644"],
     ["packaging/free-ai-suite.desktop", "usr/share/applications/free-ai-suite.desktop", "644"],
     ["packaging/icons/free-ai-suite.svg", "usr/share/icons/hicolor/scalable/apps/free-ai-suite.svg", "644"],
 ]

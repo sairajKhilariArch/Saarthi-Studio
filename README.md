@@ -1,4 +1,4 @@
-# Free AI Studio — desktop, Windows, Android and VS Code
+# Saarthi Studio — desktop, Windows, macOS, Android and VS Code
 
 A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The interface uses HTML, CSS, and JavaScript, served locally by the Rust app and shown in the application window: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
@@ -8,10 +8,11 @@ Pushing a `v*` tag (e.g. `v1.20.0`) to GitHub Actions attaches every release fil
 
 | Platform | Artifact | Install & run |
 | --- | --- | --- |
-| Linux (deb) | `free-ai-suite_<version>_amd64.deb` | `sudo dpkg -i free-ai-suite_*_amd64.deb`, then launch **Free AI Suite** from the menu or run `free-ai-studio` |
+| Linux (deb) | `free-ai-suite_<version>_amd64.deb` | `sudo dpkg -i free-ai-suite_*_amd64.deb`, then launch **Saarthi Studio** from the menu or run `free-ai-studio` |
 | Linux (AppImage) | `free-ai-suite_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
 | Linux (portable) | `free-ai-suite_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./free-ai-studio` (run `./install-and-run.sh` for the full source-build install instead) |
 | Windows | `free-ai-suite_<version>_windows-x86_64.zip` | Extract, run `free-ai-studio.exe` (WebView2 ships with Windows 10/11) |
+| macOS (arm64) | `free-ai-suite_<version>_macos-arm64.tar.gz` | Extract and run `./free-ai-studio`. **Unsigned build**: on first launch right-click the binary → Open (Gatekeeper otherwise blocks it). No notarization yet. |
 | Android | `free-ai-suite_<version>_android-release-unsigned.apk` | Enable **Install unknown apps** for your file manager, open the APK; an AAB is also attached for Play-style signing |
 | VS Code | `free-ai-studio-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension free-ai-studio-vscode.vsix` |
 
@@ -115,6 +116,12 @@ The console signs in with FreeLLMAPI's loopback desktop session (`POST /api/auth
 
 `vscode-extension/` packages the same interface as a `.vsix`. It probes `http://127.0.0.1:8765/api/health`; if the desktop app answers it embeds it, and if it does not the extension starts its **own** built-in server (same context budget, same conversation store, same router console bridge) inside VS Code. Editor commands attach the active file or the current selection, and the built-in server's folder API is limited to the workspace VS Code has open.
 
+The built-in server now implements the desktop API surface the UI uses — streaming chat (`/api/chat/stream`), skills, projects, workflows, the model catalog, usage pagination/sorting/charts, and opening URLs. Known limitations of the built-in server (it is a plain Node process inside the extension host):
+
+- **No terminal panel.** There is no PTY in the extension host; `/api/terminal/*` answers `501` with that message. Use VS Code's own terminal or the desktop app.
+- **No process supervision.** Starting/stopping the FreeLLMAPI or OmniRoute gateways lives in the desktop binary; the built-in server answers with an instruction to start them yourself.
+- **Folder scope.** Projects and the file/artifact APIs are limited to the folder VS Code has open; opening another folder means File → Open Folder.
+
 ## Addresses and local data
 
 - AI Studio: `http://127.0.0.1:8765`
@@ -159,6 +166,6 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 
 ### Desktop (Rust host)
 - The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
-- Pushing a `v*` tag runs "Desktop Release", which builds and attaches every platform: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage with SHA-256 checksums; a Windows x86_64 portable zip built on `windows-latest`; the unsigned Android release APK/AAB; and the VS Code `.vsix`.
+- Pushing a `v*` tag runs "Desktop Release", which builds and attaches every platform: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage with SHA-256 checksums; a Windows x86_64 portable zip built on `windows-latest`; a macOS arm64 portable tarball (unsigned) built on `macos-latest`; the unsigned Android release APK/AAB; and the VS Code `.vsix`.
 - Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/free-ai-suite/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
 

@@ -1,7 +1,8 @@
 name: Desktop Release
 
 # Builds every release artifact: Linux x86_64 (portable tarball, .deb package
-# via cargo-deb, AppImage), Windows x86_64 (portable zip), the unsigned Android
+# via cargo-deb, AppImage), Windows x86_64 (portable zip), macOS arm64
+# (portable tarball, unsigned), the unsigned Android
 # release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to build and
 # attach all of them to one GitHub release; workflow_dispatch builds and uploads
 # artifacts without a release.
@@ -15,6 +16,68 @@ permissions:
   contents: write
 
 jobs:
+  deb:
+    # The .deb is built headless (--no-default-features: no Tauri/GTK links)
+    # on ubuntu-22.04, so cargo-deb's $auto resolves to glibc 2.35 and the
+    # package installs on Ubuntu 22.04/Debian 12 — it refused with a 2.39
+    # dependency when it was built from the GUI tree on ubuntu-latest. The
+    # deb's desktop entry runs the server plus browser (no window needed);
+    # windowed binaries ship as the tarball and AppImage below.
+    name: Build portable .deb (Ubuntu 22.04+)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up nightly Rust (see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Build headless binary and run tests
+        working-directory: app
+        run: |
+          set -eu
+          cargo build --release --locked --no-default-features
+          cargo test --locked --no-default-features
+
+      - name: Build .deb package
+        run: |
+          set -eu
+          cargo install cargo-deb --locked
+          cd app
+          cargo deb --locked --no-build
+          mkdir -p ../dist
+          cp target/debian/*.deb ../dist/
+
+      - name: Static-check the package (no GUI deps, full UI inside)
+        run: |
+          set -eu
+          DEB=$(ls dist/*.deb | head -n1)
+          depends=$(dpkg-deb -f "$DEB" Depends)
+          echo "Depends: $depends"
+          echo "$depends" | grep -Eq 'gtk|webkit' && { echo "ERROR: GUI dependency leaked into the headless deb"; exit 1; }
+          dpkg-deb -c "$DEB" | grep -q usr/share/free-ai-suite/static/skills/debug/SKILL.md || { echo "ERROR: bundled skills missing from the deb"; exit 1; }
+          dpkg-deb -c "$DEB"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-ai-studio-deb
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach .deb to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+
   release:
     name: Build Linux release packages
     runs-on: ubuntu-latest
@@ -60,7 +123,9 @@ jobs:
           STAGE="free-ai-suite_${VERSION}_linux-x86_64"
           mkdir -p "dist/$STAGE/static"
           cp app/target/release/free-ai-studio "dist/$STAGE/free-ai-studio"
-          cp app/static/index.html app/static/app.js app/static/styles.css "dist/$STAGE/static/"
+          # Ship the whole static tree (UI + bundled skills); a 3-file copy
+          # silently dropped the skills from every installed release.
+          cp -r app/static/. "dist/$STAGE/static/"
           cp README.md "dist/$STAGE/"
           cp app/LICENSE "dist/$STAGE/LICENSE"
           tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
@@ -80,7 +145,7 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           mkdir -p AppDir/usr/bin AppDir/usr/share/free-ai-suite/static
           cp app/target/release/free-ai-studio AppDir/usr/bin/
-          cp app/static/index.html app/static/app.js app/static/styles.css AppDir/usr/share/free-ai-suite/static/
+          cp -r app/static/. AppDir/usr/share/free-ai-suite/static/
           cp app/packaging/free-ai-suite.desktop AppDir/free-ai-suite.desktop
           cp app/packaging/icons/free-ai-suite.svg AppDir/free-ai-suite.svg
           # appimagetool does not generate AppRun; provide it explicitly so the
@@ -154,7 +219,7 @@ jobs:
           $stage = "dist/free-ai-suite_${version}_windows-x86_64"
           New-Item -ItemType Directory -Force -Path "$stage/static" | Out-Null
           Copy-Item app/target/release/free-ai-studio.exe "$stage/free-ai-studio.exe"
-          Copy-Item app/static/index.html, app/static/app.js, app/static/styles.css "$stage/static/"
+          Copy-Item app/static/* "$stage/static/" -Recurse -Force
           Copy-Item README.md, app/LICENSE "$stage/"
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/free-ai-suite_${version}_windows-x86_64.zip" -Force
           Remove-Item -Recurse -Force $stage
@@ -172,6 +237,65 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
+
+  macos:
+    # macOS has no packaging pipeline yet: this ships a portable, UNSIGNED
+    # arm64 tarball (binary + full static tree + license). No codesign or
+    # notarization, so Gatekeeper asks the user to right-click → Open on first
+    # launch — documented in README. Same runtime layout as the Linux tarball,
+    # so the binary resolves its UI from static/ next to itself.
+    name: Build macOS release package (arm64, unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up nightly Rust (see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Read package version
+        id: meta
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1)" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary and run tests
+        working-directory: app
+        run: |
+          set -eu
+          cargo build --release --locked
+          cargo test --locked
+
+      - name: Package portable tarball
+        run: |
+          set -eu
+          VERSION="${{ steps.meta.outputs.version }}"
+          STAGE="free-ai-suite_${VERSION}_macos-arm64"
+          mkdir -p "dist/$STAGE/static"
+          cp app/target/release/free-ai-studio "dist/$STAGE/free-ai-studio"
+          cp -r app/static/. "dist/$STAGE/static/"
+          cp README.md "dist/$STAGE/"
+          cp app/LICENSE "dist/$STAGE/LICENSE"
+          tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
+          rm -rf "dist/$STAGE"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-ai-suite-macos-${{ steps.meta.outputs.version }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach macOS artifact to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
 
   vscode-extension:
     name: Build VS Code extension (.vsix)

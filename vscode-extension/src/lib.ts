@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 /* ------------------------------------------------------------------ */
@@ -151,6 +152,8 @@ export interface Conversation {
   title: string;
   created_at: number;
   updated_at: number;
+  /** Owning project (desktop parity); absent on threads stored before projects existed. */
+  project_id?: string;
 }
 
 export interface StoredMessage {
@@ -209,17 +212,20 @@ export class ConversationStore {
     fs.renameSync(temp, this.file);
   }
 
-  list(): Conversation[] {
-    return [...this.data.conversations].sort((a, b) => b.updated_at - a.updated_at);
+  list(projectId?: string | null): Conversation[] {
+    return [...this.data.conversations]
+      .filter((entry) => !projectId || entry.project_id === projectId)
+      .sort((a, b) => b.updated_at - a.updated_at);
   }
 
-  create(title: string): Conversation {
+  create(title: string, projectId?: string | null): Conversation {
     const now = Date.now() / 1000;
     const conversation: Conversation = {
       id: randomUUID(),
       title: cleanTitle(title) || "New thread",
       created_at: now,
       updated_at: now,
+      ...(projectId ? { project_id: projectId } : {}),
     };
     this.data.conversations.push(conversation);
     this.save();
@@ -256,35 +262,326 @@ export class ConversationStore {
     return true;
   }
 
+  /** Delete every thread owned by a project (mirrors the desktop's cascade). */
+  removeProject(projectId: string): number {
+    const before = this.data.conversations.length;
+    const doomed = new Set(
+      this.data.conversations.filter((entry) => entry.project_id === projectId).map((entry) => entry.id),
+    );
+    this.data.conversations = this.data.conversations.filter((entry) => entry.project_id !== projectId);
+    this.data.messages = this.data.messages.filter((entry) => !doomed.has(entry.conversation_id));
+    const removed = before - this.data.conversations.length;
+    if (removed) this.save();
+    return removed;
+  }
+
   logRequest(entry: RequestLogEntry): void {
     this.data.requests.push(entry);
     if (this.data.requests.length > 500) this.data.requests = this.data.requests.slice(-500);
     this.save();
   }
 
-  usage(): { summary: Record<string, number>; requests: RequestLogEntry[] } {
-    const requests = [...this.data.requests].reverse();
-    const total = requests.length;
-    const ok = requests.filter((entry) => entry.status === "ok").length;
-    const tokens = requests.reduce((sum, entry) => sum + (entry.total_tokens || 0), 0);
-    const latencies = requests.filter((entry) => entry.latency_ms > 0).map((entry) => entry.latency_ms);
+  /** Paginated, sorted, filtered view of the request log (desktop parity). */
+  usage(params: URLSearchParams = new URLSearchParams()): {
+    summary: Record<string, number>;
+    total: number;
+    page: number;
+    page_size: number;
+    pages: number;
+    requests: RequestLogEntry[];
+    series: Array<Record<string, number>>;
+    by_model: Array<Record<string, unknown>>;
+  } {
+    const pageSize = Math.min(200, Math.max(5, Number(params.get("page_size")) || 10));
+    const sort = params.get("sort") || "created_at";
+    const dir = params.get("dir") === "asc" ? 1 : -1;
+    const modelFilter = (params.get("model") || "").toLowerCase();
+    const providerFilter = (params.get("provider") || "").toLowerCase();
+    const from = Number(params.get("from")) || 0;
+    const to = Number(params.get("to")) || 0;
+
+    let rows = [...this.data.requests].reverse();
+    if (modelFilter) rows = rows.filter((row) => (row.model || "").toLowerCase().includes(modelFilter));
+    if (providerFilter) rows = rows.filter((row) => (row.provider || "").toLowerCase().includes(providerFilter));
+    if (from) rows = rows.filter((row) => row.created_at >= from);
+    if (to) rows = rows.filter((row) => row.created_at <= to);
+
+    const value = (row: RequestLogEntry): string | number => {
+      switch (sort) {
+        case "latency": return row.latency_ms || -1;
+        case "tokens": return row.total_tokens ?? -1;
+        case "status": return row.status;
+        case "detail": return row.error || "";
+        case "model": return row.model || "";
+        case "provider": return row.provider || "";
+        default: return row.created_at;
+      }
+    };
+    rows.sort((a, b) => {
+      const left = value(a);
+      const right = value(b);
+      if (left === right) return 0;
+      return (left > right ? 1 : -1) * dir;
+    });
+
+    const total = rows.length;
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(Math.max(1, Number(params.get("page")) || 1), pages);
+
+    const okCount = rows.filter((row) => row.status === "ok").length;
+    const tokens = rows.reduce((sum, row) => sum + (row.total_tokens || 0), 0);
+    const latencies = rows.filter((row) => row.latency_ms > 0).map((row) => row.latency_ms);
+    const summary = {
+      requests: total,
+      successful: okCount,
+      failed: total - okCount,
+      total_tokens: tokens,
+      avg_latency_ms: latencies.length
+        ? Math.round(latencies.reduce((sum, value_) => sum + value_, 0) / latencies.length)
+        : 0,
+    };
+
+    // Daily buckets (UTC day, oldest first) for the requests-per-day chart.
+    const buckets = new Map<number, { requests: number; ok: number; tokens: number; latencySum: number; latencyCount: number }>();
+    for (const row of rows) {
+      const day = Math.floor(row.created_at / 86400) * 86400;
+      const bucket = buckets.get(day) || { requests: 0, ok: 0, tokens: 0, latencySum: 0, latencyCount: 0 };
+      bucket.requests += 1;
+      if (row.status === "ok") bucket.ok += 1;
+      bucket.tokens += row.total_tokens || 0;
+      if (row.latency_ms > 0) { bucket.latencySum += row.latency_ms; bucket.latencyCount += 1; }
+      buckets.set(day, bucket);
+    }
+    const series = [...buckets.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([day, bucket]) => ({
+        day,
+        requests: bucket.requests,
+        ok: bucket.ok,
+        tokens: bucket.tokens,
+        avg_latency_ms: bucket.latencyCount ? Math.round(bucket.latencySum / bucket.latencyCount) : 0,
+      }));
+
+    const groups = new Map<string, { provider: string; requests: number; ok: number; tokens: number; latencySum: number; latencyCount: number }>();
+    for (const row of rows) {
+      const key = row.model || "(unknown)";
+      const group = groups.get(key) || { provider: row.provider || "(unknown)", requests: 0, ok: 0, tokens: 0, latencySum: 0, latencyCount: 0 };
+      group.requests += 1;
+      if (row.status === "ok") group.ok += 1;
+      group.tokens += row.total_tokens || 0;
+      if (row.latency_ms > 0) { group.latencySum += row.latency_ms; group.latencyCount += 1; }
+      groups.set(key, group);
+    }
+    const by_model = [...groups.entries()]
+      .map(([model, group]) => ({
+        model,
+        provider: group.provider,
+        requests: group.requests,
+        ok: group.ok,
+        tokens: group.tokens,
+        avg_latency_ms: group.latencyCount ? Math.round(group.latencySum / group.latencyCount) : 0,
+      }))
+      .sort((a, b) => b.requests - a.requests)
+      .slice(0, 20);
+
     return {
-      summary: {
-        requests: total,
-        successful: ok,
-        failed: total - ok,
-        total_tokens: tokens,
-        avg_latency_ms: latencies.length
-          ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length)
-          : 0,
-      },
-      requests,
+      summary,
+      total,
+      page,
+      page_size: pageSize,
+      pages,
+      requests: rows.slice((page - 1) * pageSize, page * pageSize),
+      series,
+      by_model,
     };
   }
 }
 
 export function cleanTitle(value: string): string {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+/* ------------------------------------------------------------------ */
+/* small JSON file stores (projects, workflows, skill state)          */
+/* ------------------------------------------------------------------ */
+
+class JsonFileStore<T> {
+  private value: T;
+  constructor(private readonly file: string, fallback: T) {
+    this.value = fallback;
+    try {
+      this.value = JSON.parse(fs.readFileSync(file, "utf8")) as T;
+    } catch {
+      this.value = fallback;
+    }
+  }
+  read(): T {
+    return this.value;
+  }
+  write(next: T): void {
+    this.value = next;
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+      const temp = `${this.file}.tmp`;
+      fs.writeFileSync(temp, JSON.stringify(next, null, 2), { mode: 0o600 });
+      fs.renameSync(temp, this.file);
+    } catch {
+      // A failed write only means the next start starts fresh again.
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* skills discovery (desktop skills.rs parity, smaller parser)         */
+/* ------------------------------------------------------------------ */
+
+export interface DiscoveredSkill {
+  id: string;
+  name: string;
+  description: string;
+  body: string;
+  path: string;
+  source: string;
+  error: string | null;
+}
+
+function homeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || "";
+}
+
+/** YAML-ish frontmatter: `key: value` lines, folded and literal scalars kept readable. */
+function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
+  const meta: Record<string, string> = {};
+  let body = raw;
+  if (raw.startsWith("---")) {
+    const end = raw.indexOf("\n---", 3);
+    if (end > 0) {
+      const block = raw.slice(3, end).replace(/^\r?\n/, "");
+      body = raw.slice(raw.indexOf("\n", end + 4) + 1);
+      let key = "";
+      for (const line of block.split("\n")) {
+        const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+        if (match) {
+          key = match[1];
+          meta[key] = match[2].replace(/^['\"]|['\"]$/g, "").trim();
+        } else if (key && /^\s+/.test(line)) {
+          meta[key] = `${meta[key]} ${line.trim()}`.trim();
+        }
+      }
+    }
+  }
+  return { meta, body };
+}
+
+function skillIdFor(dirName: string): string {
+  return dirName.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+export function discoverSkills(roots: Array<{ source: string; dir: string }>): DiscoveredSkill[] {
+  const seen = new Set<string>();
+  const skills: DiscoveredSkill[] = [];
+  for (const root of roots) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(root.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillFile = path.join(root.dir, entry.name, "SKILL.md");
+      if (!fs.existsSync(skillFile)) continue;
+      const id = skillIdFor(entry.name);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      try {
+        const raw = fs.readFileSync(skillFile, "utf8");
+        const { meta, body } = parseFrontmatter(raw);
+        skills.push({
+          id,
+          name: meta.name || entry.name,
+          description: meta.description || "",
+          body,
+          path: skillFile,
+          source: root.source,
+          error: null,
+        });
+      } catch (error) {
+        skills.push({
+          id,
+          name: entry.name,
+          description: "",
+          body: "",
+          path: skillFile,
+          source: root.source,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+  return skills;
+}
+
+/** Bound walk of every file under `root` for the Artifacts view. */
+export function listArtifacts(root: string): {
+  files: Array<{ name: string; path: string; size: number; ext: string }>;
+  truncated: boolean;
+  count: number;
+} {
+  const files: Array<{ name: string; path: string; size: number; ext: string }> = [];
+  let truncated = false;
+  const skip = new Set(["node_modules", ".git", "target", "dist", "build", ".next"]);
+  const walk = (dir: string, depth: number) => {
+    if (files.length >= 2000 || depth > 8) { truncated = true; return; }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= 2000) { truncated = true; return; }
+      if (skip.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const stat = fs.statSync(full);
+        const name = entry.name;
+        const dot = name.lastIndexOf(".");
+        files.push({
+          name,
+          path: path.relative(root, full).split(path.sep).join("/"),
+          size: stat.size,
+          ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : "",
+        });
+      } catch {
+        // Unreadable file: skip it rather than failing the whole listing.
+      }
+    }
+  };
+  walk(root, 0);
+  files.sort((a, b) => a.ext.localeCompare(b.ext) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  return { files, truncated, count: files.length };
+}
+
+/** Open a URL in the platform default browser (desktop browser.rs parity). */
+export function openInSystemBrowser(url: string): void {
+  const [command, args] =
+    process.platform === "darwin"
+      ? ["open", [url]]
+      : process.platform === "win32"
+        ? ["cmd", ["/c", "start", "", url]]
+        : ["xdg-open", [url]];
+  try {
+    spawn(command, args, { stdio: "ignore", detached: true }).unref();
+  } catch {
+    // The caller reports the failure to the UI.
+    throw new WorkspaceError(500, "Could not launch the default browser.");
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -300,8 +597,10 @@ export async function callRouter(
   config: StudioConfig,
   messages: ChatMessage[],
   fetchImpl: typeof fetch,
+  modelOverride?: string,
 ): Promise<RouterReply> {
   const base = normalizeBaseUrl(config.routerBaseUrl);
+  const model = modelOverride || config.model || "auto";
   const started = Date.now();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
@@ -310,7 +609,7 @@ export async function callRouter(
     response = await fetchImpl(`${base}/chat/completions`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model: config.model || "auto", messages, stream: false }),
+      body: JSON.stringify({ model, messages, stream: false }),
       signal: AbortSignal.timeout(120_000),
     });
   } catch (error) {
@@ -333,7 +632,7 @@ export async function callRouter(
   return {
     answer,
     meta: {
-      model: (body.model as string) || config.model,
+      model: (body.model as string) || model,
       provider: (body.provider as string) || "router",
       latency_ms: latency,
       prompt_tokens: usage.prompt_tokens ?? null,
@@ -620,6 +919,44 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   const sessionFile = path.join(path.dirname(options.storeFile), "router-session.json");
   let consoleToken: string | null = readSessionToken(sessionFile);
 
+  /* Project / skill / workflow state mirrors the desktop's SQLite tables in
+     small JSON files beside the conversation store: same routes, same shapes,
+     no schema migration. Conversations carry an optional project_id so the
+     active project filters threads exactly like the desktop does. */
+  interface ProjectRecord {
+    id: string;
+    name: string;
+    folder: string;
+    folder_path?: string;
+    created_at: number;
+    updated_at: number;
+    archived: boolean;
+  }
+  const projectsStore = new JsonFileStore<{ projects: ProjectRecord[]; active: string }>(
+    path.join(path.dirname(options.storeFile), "projects.json"),
+    { projects: [], active: "" },
+  );
+  const skillsState = new JsonFileStore<{ disabled: string[] }>(
+    path.join(path.dirname(options.storeFile), "skills-state.json"),
+    { disabled: [] },
+  );
+  const workflowsStore = new JsonFileStore<{ workflows: Array<{ id: string; name: string; prompt: string; skill: string }> }>(
+    path.join(path.dirname(options.storeFile), "workflows.json"),
+    { workflows: [] },
+  );
+  const activeProject = (): string | null => projectsStore.read().active || null;
+
+  function skillRoots(): Array<{ source: string; dir: string }> {
+    const roots = [{ source: "built-in", dir: path.join(options.uiDir, "skills") }];
+    if (options.workspaceRoot) roots.push({ source: "project", dir: path.join(options.workspaceRoot, "skills") });
+    const home = homeDir();
+    if (home) {
+      roots.push({ source: "user", dir: path.join(home, ".config", "free-ai-studio", "skills") });
+      roots.push({ source: "agents", dir: path.join(home, ".agents", "skills") });
+    }
+    return roots;
+  }
+
   const routerPort = () => options.routerPort || 3001;
   const routerOrigin = () => `http://127.0.0.1:${routerPort()}`;
 
@@ -718,6 +1055,95 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     }
   }
 
+  /* One chat turn: persist the user message, run the selected skill/mode
+     through the packed context, call the router (honouring a per-message
+     model override), persist the reply, log usage. Throws with `status` and
+     `meta` so both chat routes can render their own response shape. */
+  async function runChatTurn(body: Record<string, unknown>): Promise<{ answer: string; meta: Record<string, unknown> }> {
+    const conversationId = String(body.conversation_id || "");
+    const message = String(body.message || "").trim();
+    const code = String(body.code || "").slice(0, 50_000);
+    const language = String(body.language || "text").slice(0, 40);
+    const fail = (status: number, reason: string): never => {
+      const error = new Error(reason) as Error & { status?: number };
+      error.status = status;
+      throw error;
+    };
+    if (!conversationId || !message) fail(400, "Choose a conversation and enter a message.");
+    if (!store.has(conversationId)) fail(404, "Conversation not found.");
+
+    let prompt = code.trim()
+      ? `${message}\n\nHere is the code from my editor (language: ${language}):\n\`\`\`${language}\n${code}\n\`\`\``
+      : message;
+
+    // The picked skill rides with this message only (desktop prepare_chat parity).
+    const skillId = String(body.skill || "").trim();
+    if (skillId) {
+      const skill = discoverSkills(skillRoots()).find((entry) => entry.id === skillId);
+      if (skill && !skill.error && skill.body.trim()) {
+        prompt = `Follow the skill "${skill.name}" for this message:\n\n${skill.body}\n\n---\n\n${prompt}`;
+      }
+    }
+    // Plan mode: reply with a plan, change nothing.
+    if (String(body.mode || "") === "plan") {
+      prompt = `Plan mode: do not make changes this reply. Answer with a short,\nordered implementation plan (files, steps, risks) the user can approve\nbefore anything is built.\n\n---\n\n${prompt}`;
+    }
+
+    store.append(conversationId, "user", prompt);
+    const config = options.getConfig();
+    const history = store
+      .messages(conversationId)
+      .slice(-Math.max(config.historyMessages, 2))
+      .map(({ role, content }) => ({ role, content }));
+    const outline = options.workspaceRoot && config.sendWorkspaceOutline ? workspaceOutline(options.workspaceRoot) : null;
+    const packed = packMessages({
+      system: SYSTEM_PROMPT,
+      outline,
+      history,
+      budgetTokens: config.contextBudgetTokens,
+      historyMessages: config.historyMessages,
+    });
+    const modelOverride = String(body.model || "").trim();
+    try {
+      const reply = await callRouter(config, packed.messages, fetchImpl, modelOverride || undefined);
+      store.append(conversationId, "assistant", reply.answer);
+      store.logRequest({
+        created_at: Date.now() / 1000,
+        conversation_id: conversationId,
+        model: String(reply.meta.model || modelOverride || config.model),
+        provider: String(reply.meta.provider || "router"),
+        status: "ok",
+        latency_ms: Number(reply.meta.latency_ms || 0),
+        prompt_tokens: (reply.meta.prompt_tokens as number) ?? null,
+        completion_tokens: (reply.meta.completion_tokens as number) ?? null,
+        total_tokens: (reply.meta.total_tokens as number) ?? null,
+        error: "",
+      });
+      return {
+        answer: reply.answer,
+        meta: { ...reply.meta, context_tokens: packed.estimatedTokens, context_trimmed: packed.trimmedMessages },
+      };
+    } catch (error) {
+      const failure = error as Error & { latency?: number };
+      store.logRequest({
+        created_at: Date.now() / 1000,
+        conversation_id: conversationId,
+        model: modelOverride || config.model,
+        provider: "router / unknown",
+        status: "error",
+        latency_ms: failure.latency || 0,
+        prompt_tokens: null,
+        completion_tokens: null,
+        total_tokens: null,
+        error: failure.message.slice(0, 500),
+      });
+      const wrapped = new Error(failure.message) as Error & { status?: number; meta?: Record<string, unknown> };
+      wrapped.status = 502;
+      wrapped.meta = { latency_ms: failure.latency || 0 };
+      throw wrapped;
+    }
+  }
+
   const handler = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     const method = (request.method || "GET").toUpperCase();
@@ -767,12 +1193,12 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       }
 
       if (routePath === "/api/conversations" && method === "GET") {
-        sendJson(response, 200, store.list());
+        sendJson(response, 200, store.list(activeProject()));
         return;
       }
       if (routePath === "/api/conversations" && method === "POST") {
         const body = await readBody(request);
-        sendJson(response, 200, store.create(String(body.title || "New thread")));
+        sendJson(response, 200, store.create(String(body.title || "New thread"), activeProject()));
         return;
       }
 
@@ -795,7 +1221,281 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       }
 
       if (routePath === "/api/usage" && method === "GET") {
-        sendJson(response, 200, store.usage());
+        sendJson(response, 200, store.usage(url.searchParams));
+        return;
+      }
+
+      /* skills ---------------------------------------------------- */
+      if (routePath === "/api/skills" && method === "GET") {
+        const disabled = new Set(skillsState.read().disabled);
+        const skills = discoverSkills(skillRoots()).map(({ id, name, description, path: skillPath, source, error }) => ({
+          id,
+          name,
+          description,
+          path: skillPath,
+          source,
+          error,
+          enabled: !disabled.has(id),
+        }));
+        sendJson(response, 200, { ok: true, skills });
+        return;
+      }
+
+      const skillStateMatch = routePath.match(/^\/api\/skills\/([^/]+)\/state$/);
+      if (skillStateMatch && method === "POST") {
+        const body = await readBody(request);
+        const id = decodeURIComponent(skillStateMatch[1]);
+        const enabled = body.enabled !== false;
+        const state = skillsState.read();
+        const disabled = new Set(state.disabled);
+        if (enabled) disabled.delete(id);
+        else disabled.add(id);
+        skillsState.write({ disabled: [...disabled] });
+        sendJson(response, 200, { ok: true, id, enabled });
+        return;
+      }
+
+      const skillMatch = routePath.match(/^\/api\/skills\/([^/]+)$/);
+      if (skillMatch && method === "GET") {
+        const id = decodeURIComponent(skillMatch[1]);
+        const skill = discoverSkills(skillRoots()).find((entry) => entry.id === id);
+        if (!skill) {
+          sendJson(response, 404, { ok: false, error: "No such skill." });
+          return;
+        }
+        const enabled = !skillsState.read().disabled.includes(id);
+        if (skill.error) {
+          sendJson(response, 422, { ok: false, error: skill.error });
+          return;
+        }
+        sendJson(response, 200, {
+          ok: true,
+          skill: { id, name: skill.name, description: skill.description, body: skill.body, path: skill.path, source: skill.source, enabled },
+        });
+        return;
+      }
+
+      /* projects (desktop parity; JSON file instead of SQLite) ------- */
+      if (routePath === "/api/projects" && method === "GET") {
+        sendJson(response, 200, { ok: true, active: activeProject(), projects: projectsStore.read().projects });
+        return;
+      }
+      if (routePath === "/api/projects" && method === "POST") {
+        const body = await readBody(request);
+        const name = cleanTitle(String(body.name || ""));
+        if (!name) {
+          sendJson(response, 400, { ok: false, error: "A project needs a name." });
+          return;
+        }
+        const folder = String(body.folder ?? body.folder_path ?? "").slice(0, 4000);
+        const now = Date.now() / 1000;
+        const project: ProjectRecord = {
+          id: randomUUID(), name, folder, folder_path: folder,
+          created_at: now, updated_at: now, archived: false,
+        };
+        const data = projectsStore.read();
+        data.projects.push(project);
+        if (!data.active) data.active = project.id;
+        projectsStore.write(data);
+        sendJson(response, 201, { ok: true, id: project.id, name, project });
+        return;
+      }
+
+      const projectActivate = routePath.match(/^\/api\/projects\/([^/]+)\/activate$/);
+      if (projectActivate && method === "POST") {
+        const id = decodeURIComponent(projectActivate[1]);
+        const data = projectsStore.read();
+        const project = data.projects.find((entry) => entry.id === id);
+        if (!project) {
+          sendJson(response, 404, { ok: false, error: "No such project." });
+          return;
+        }
+        data.active = id;
+        projectsStore.write(data);
+        // The folder still belongs to VS Code's own open folder.
+        const workspace = project.folder && options.workspaceRoot && path.resolve(project.folder) === path.resolve(options.workspaceRoot)
+          ? { open: true, name: path.basename(options.workspaceRoot), path: options.workspaceRoot }
+          : { open: false };
+        sendJson(response, 200, { ok: true, id, name: project.name, workspace });
+        return;
+      }
+
+      const projectUpdate = routePath.match(/^\/api\/projects\/([^/]+)\/update$/);
+      if (projectUpdate && method === "POST") {
+        const id = decodeURIComponent(projectUpdate[1]);
+        const body = await readBody(request);
+        const data = projectsStore.read();
+        const project = data.projects.find((entry) => entry.id === id);
+        if (!project) {
+          sendJson(response, 404, { ok: false, error: "No such project." });
+          return;
+        }
+        if (typeof body.name === "string" && cleanTitle(body.name)) project.name = cleanTitle(body.name);
+        if (typeof body.folder === "string") { project.folder = body.folder.slice(0, 4000); project.folder_path = project.folder; }
+        if (typeof body.folder_path === "string") { project.folder = body.folder_path.slice(0, 4000); project.folder_path = project.folder; }
+        if (typeof body.archived === "boolean") {
+          project.archived = body.archived;
+          // Never leave the UI pointed at an archived project.
+          if (body.archived && data.active === id) data.active = "";
+        }
+        project.updated_at = Date.now() / 1000;
+        projectsStore.write(data);
+        sendJson(response, 200, { ok: true, id });
+        return;
+      }
+
+      const projectDelete = routePath.match(/^\/api\/projects\/([^/]+)\/delete$/);
+      if (projectDelete && method === "POST") {
+        const id = decodeURIComponent(projectDelete[1]);
+        const data = projectsStore.read();
+        const before = data.projects.length;
+        data.projects = data.projects.filter((entry) => entry.id !== id);
+        if (data.projects.length === before) {
+          sendJson(response, 404, { ok: false, error: "No such project." });
+          return;
+        }
+        if (data.active === id) data.active = "";
+        projectsStore.write(data);
+        // Threads cascade with their project, like the desktop's foreign key.
+        store.removeProject(id);
+        sendJson(response, 200, { ok: true, active: activeProject() });
+        return;
+      }
+
+      /* workflows --------------------------------------------------- */
+      if (routePath === "/api/workflows" && method === "GET") {
+        sendJson(response, 200, { ok: true, workflows: workflowsStore.read().workflows });
+        return;
+      }
+      if (routePath === "/api/workflows" && method === "POST") {
+        const body = await readBody(request);
+        const name = cleanTitle(String(body.name || ""));
+        const prompt = String(body.prompt || "").slice(0, 4000);
+        const skill = String(body.skill || "").slice(0, 160);
+        if (!name || !prompt) {
+          sendJson(response, 400, { ok: false, error: "A workflow needs a name and a prompt." });
+          return;
+        }
+        const data = workflowsStore.read();
+        const requestedId = String(body.id || "");
+        const known = requestedId && data.workflows.some((entry) => entry.id === requestedId);
+        const id = known ? requestedId : randomUUID();
+        data.workflows = data.workflows.filter((entry) => entry.id !== id);
+        data.workflows.push({ id, name, prompt, skill });
+        data.workflows.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        workflowsStore.write(data);
+        sendJson(response, 200, { ok: true, id });
+        return;
+      }
+      const workflowDelete = routePath.match(/^\/api\/workflows\/([^/]+)\/delete$/);
+      if (workflowDelete && method === "POST") {
+        const id = decodeURIComponent(workflowDelete[1]);
+        const data = workflowsStore.read();
+        const before = data.workflows.length;
+        data.workflows = data.workflows.filter((entry) => entry.id !== id);
+        if (data.workflows.length === before) {
+          sendJson(response, 404, { ok: false, error: "No such workflow." });
+          return;
+        }
+        workflowsStore.write(data);
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      /* model catalog ------------------------------------------------ */
+      if (routePath === "/api/models" && method === "GET") {
+        const config = options.getConfig();
+        const base = normalizeBaseUrl(config.routerBaseUrl);
+        try {
+          const headers: Record<string, string> = {};
+          if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+          const listResponse = await fetchImpl(`${base}/models`, {
+            headers,
+            signal: AbortSignal.timeout(10_000),
+          });
+          const text = await listResponse.text();
+          if (!listResponse.ok) {
+            sendJson(response, 200, {
+              ok: false,
+              error: `Router returned HTTP ${listResponse.status} for /models. Saving an API key may unlock the catalog.`,
+              models: [],
+            });
+            return;
+          }
+          const parsed = JSON.parse(text) as { data?: unknown[] } | unknown[];
+          const rows = (Array.isArray(parsed) ? parsed : parsed.data) || [];
+          const models = rows
+            .filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"))
+            .map((row) => ({
+              id: String(row.id || ""),
+              owner: String(row.owned_by || ""),
+              context_window:
+                Number(
+                  row.context_length ??
+                    row.context_window ??
+                    row.max_input_tokens ??
+                    (row.top_provider as { context_length?: number } | undefined)?.context_length ??
+                    0,
+                ) || 0,
+            }))
+            .filter((row) => row.id);
+          sendJson(response, 200, { ok: true, error: null, models });
+        } catch (error) {
+          sendJson(response, 200, { ok: false, error: `Router not reachable: ${(error as Error).message}`, models: [] });
+        }
+        return;
+      }
+
+      /* router / gateway lifecycle ---------------------------------- */
+      if (routePath === "/api/router" && method === "GET") {
+        let reachable = false;
+        try {
+          const ping = await fetchImpl(`${routerOrigin()}/api/ping`, { signal: AbortSignal.timeout(1500) });
+          reachable = ping.ok;
+        } catch {
+          reachable = false;
+        }
+        sendJson(response, 200, { reachable, running: reachable, port: routerPort(), managed_by: "desktop" });
+        return;
+      }
+      if (
+        (routePath === "/api/router/start" || routePath === "/api/router/stop" ||
+          routePath === "/api/omniroute" || routePath === "/api/omniroute/start" || routePath === "/api/omniroute/stop") &&
+        method === "POST"
+      ) {
+        // Honest refusal: process supervision lives in the desktop binary.
+        sendJson(response, 400, {
+          ok: false,
+          error: "Start or stop the gateway from the Saarthi Studio desktop app, or run it yourself in a terminal — the VS Code built-in server does not manage background processes.",
+        });
+        return;
+      }
+
+      /* open a URL in the platform browser --------------------------- */
+      if (routePath === "/api/open" && method === "POST") {
+        const body = await readBody(request);
+        const target = String(body.url || "");
+        if (!target.startsWith("http://127.0.0.1:") && !target.startsWith("http://localhost:") && !target.startsWith("https://")) {
+          sendJson(response, 400, { ok: false, error: "Only http(s) URLs can be opened." });
+          return;
+        }
+        openInSystemBrowser(target);
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      /* artifacts: every readable file in the open folder -------------- */
+      if (routePath === "/api/workspace/files" && method === "GET") {
+        sendJson(response, 200, listArtifacts(requireRoot(options)));
+        return;
+      }
+
+      /* terminal: no PTY in the extension host — fail loudly, not silently */
+      if (routePath.startsWith("/api/terminal/")) {
+        sendJson(response, 501, {
+          ok: false,
+          error: "The built-in terminal is not available in VS Code's built-in server. Use VS Code's own terminal, or the Saarthi Studio desktop app for the project terminal.",
+        });
         return;
       }
 
@@ -817,73 +1517,44 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         return;
       }
 
+      /* chat: one shared turn runner; /api/chat answers JSON, /api/chat/stream
+         (the UI's default) answers SSE frames with the same result. */
       if (routePath === "/api/chat" && method === "POST") {
         const body = await readBody(request);
-        const conversationId = String(body.conversation_id || "");
-        const message = String(body.message || "").trim();
-        const code = String(body.code || "").slice(0, 50_000);
-        const language = String(body.language || "text").slice(0, 40);
-        if (!conversationId || !message) {
-          sendJson(response, 400, { ok: false, error: "Choose a conversation and enter a message." });
-          return;
-        }
-        if (!store.has(conversationId)) {
-          sendJson(response, 404, { ok: false, error: "Conversation not found." });
-          return;
-        }
-        const prompt = code.trim()
-          ? `${message}\n\nHere is the code from my editor (language: ${language}):\n\`\`\`${language}\n${code}\n\`\`\``
-          : message;
-        store.append(conversationId, "user", prompt);
-        const config = options.getConfig();
-        const history = store
-          .messages(conversationId)
-          .slice(-Math.max(config.historyMessages, 2))
-          .map(({ role, content }) => ({ role, content }));
-        const outline = options.workspaceRoot && config.sendWorkspaceOutline ? workspaceOutline(options.workspaceRoot) : null;
-        const packed = packMessages({
-          system: SYSTEM_PROMPT,
-          outline,
-          history,
-          budgetTokens: config.contextBudgetTokens,
-          historyMessages: config.historyMessages,
-        });
         try {
-          const reply = await callRouter(config, packed.messages, fetchImpl);
-          store.append(conversationId, "assistant", reply.answer);
-          store.logRequest({
-            created_at: Date.now() / 1000,
-            conversation_id: conversationId,
-            model: String(reply.meta.model || config.model),
-            provider: String(reply.meta.provider || "router"),
-            status: "ok",
-            latency_ms: Number(reply.meta.latency_ms || 0),
-            prompt_tokens: (reply.meta.prompt_tokens as number) ?? null,
-            completion_tokens: (reply.meta.completion_tokens as number) ?? null,
-            total_tokens: (reply.meta.total_tokens as number) ?? null,
-            error: "",
-          });
-          sendJson(response, 200, {
-            ok: true,
-            answer: reply.answer,
-            meta: { ...reply.meta, context_tokens: packed.estimatedTokens, context_trimmed: packed.trimmedMessages },
-          });
+          const result = await runChatTurn(body);
+          sendJson(response, 200, { ok: true, answer: result.answer, meta: result.meta });
         } catch (error) {
-          const failure = error as Error & { latency?: number };
-          store.logRequest({
-            created_at: Date.now() / 1000,
-            conversation_id: conversationId,
-            model: config.model,
-            provider: "router / unknown",
-            status: "error",
-            latency_ms: failure.latency || 0,
-            prompt_tokens: null,
-            completion_tokens: null,
-            total_tokens: null,
-            error: failure.message.slice(0, 500),
+          const failure = error as Error & { status?: number; meta?: Record<string, unknown> };
+          sendJson(response, failure.status || 502, {
+            ok: false,
+            error: failure.message,
+            meta: failure.meta || {},
           });
-          sendJson(response, 502, { ok: false, error: failure.message, meta: { latency_ms: failure.latency || 0 } });
         }
+        return;
+      }
+
+      if (routePath === "/api/chat/stream" && method === "POST") {
+        const body = await readBody(request);
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        });
+        const frame = (payload: Record<string, unknown>) => {
+          response.write(`data: ${JSON.stringify(payload)}\n\n`);
+        };
+        try {
+          const result = await runChatTurn(body);
+          if (result.answer) frame({ delta: result.answer });
+          frame({ done: true, meta: result.meta });
+        } catch (error) {
+          const failure = error as Error & { meta?: Record<string, unknown> };
+          frame({ error: failure.message, meta: failure.meta || {} });
+          frame({ done: true });
+        }
+        response.end();
         return;
       }
 

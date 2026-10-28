@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Path as AxumPath, State},
+    extract::{Path, Path as AxumPath, Query as AxumQuery, State},
     http::{header, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -14,7 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     env, fs, io,
     path::{Component, Path as FsPath, PathBuf},
     sync::{
@@ -26,6 +26,7 @@ use std::{
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+mod browser;
 mod context;
 mod deepsearch;
 #[cfg(feature = "gui")]
@@ -37,9 +38,10 @@ mod host_transport;
 mod router;
 mod router_console;
 mod skills;
+mod terminal;
 mod workspace;
 
-const APP_NAME: &str = "Free AI Studio";
+const APP_NAME: &str = "Saarthi Studio";
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8765;
 const SYSTEM_PROMPT: &str = "You are a concise, helpful AI coding assistant. Be accurate and safe; never claim to run code unless you did.";
@@ -51,6 +53,9 @@ struct AppState {
     static_dir: PathBuf,
     workspace: workspace::WorkspaceStore,
     client: Client,
+    terminal: terminal::Hub,
+    /// One-minute /models cache keyed by "base|has-key".
+    models_cache: Arc<Mutex<HashMap<String, (std::time::Instant, Value)>>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -126,7 +131,11 @@ fn home_dir() -> PathBuf {
 }
 
 fn paths() -> (PathBuf, PathBuf, PathBuf) {
-    let home = home_dir();
+    // One override keeps tests and sandboxed runs off the real user data:
+    // both config and database live under this root, like a fake home.
+    let home = env::var_os("FREE_AI_STUDIO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(home_dir);
     (
         home.join(".config/free-ai-studio/config.json"),
         home.join(".local/share/free-ai-studio/history.sqlite3"),
@@ -478,14 +487,18 @@ fn response_content(data: &Value) -> String {
     serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
 }
 
-async fn call_router(state: &AppState, messages: Vec<Value>) -> Result<(String, Value), String> {
+async fn call_router(state: &AppState, messages: Vec<Value>, model_override: Option<&str>) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     if cfg.api_key.trim().is_empty() {
         return Err("Add your router's unified API key in Settings first.".into());
     }
 
+    let chosen = model_override
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
     let request_body = json!({
-        "model": if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() },
+        "model": chosen,
         "messages": messages,
         "stream": false
     });
@@ -686,6 +699,109 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline})).into_response()
+}
+
+/* Model catalog: fetched live from the configured router's /models so nothing
+   is mirrored by hand, cached for a minute (cheap rate limits). Each entry
+   carries any context-window metadata the router publishes, which powers the
+   composer's context meter. */
+async fn models(
+    State(state): State<AppState>,
+    AxumQuery(params): AxumQuery<HashMap<String, String>>,
+) -> Response<Body> {
+    let cfg = load_config(&state);
+    let cache_key = format!("{}|{}", cfg.base_url.trim_end_matches('/'), !cfg.api_key.is_empty());
+    let refresh = params.contains_key("refresh");
+    if !refresh {
+        if let Some((at, cached)) = state.models_cache.lock().unwrap().get(&cache_key) {
+            if at.elapsed() < Duration::from_secs(60) {
+                return (
+                    StatusCode::OK,
+                    [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+                    Json(json!({ "ok": true, "cached": true, "models": cached })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    let catalog = fetch_models(&state, &cfg).await;
+    let (ok, error, models) = match catalog {
+        Ok(list) => (true, serde_json::Value::Null, json!(list)),
+        Err(e) => (false, json!(e), json!([])),
+    };
+    if ok {
+        state.models_cache.lock().unwrap().insert(
+            cache_key,
+            (std::time::Instant::now(), models.clone()),
+        );
+    }
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        Json(json!({ "ok": ok, "error": error, "models": models })),
+    )
+        .into_response()
+}
+
+/// One walk of the router's /models. `data[]` is the OpenAI shape; context
+/// limits ride under whichever key the router uses.
+async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, String> {
+    let url = router_url(cfg, "models");
+    let mut request = state.client.get(&url);
+    if !cfg.api_key.trim().is_empty() {
+        request = request.bearer_auth(cfg.api_key.trim());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Router not reachable ({url}): {e}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("Could not read the router response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Router returned HTTP {} for /models. {}",
+            status.as_u16(),
+            if cfg.api_key.trim().is_empty() {
+                "Saving an API key may unlock the catalog."
+            } else {
+                "The key may lack the models.list permission."
+            }
+        ));
+    }
+    let parsed: Value = serde_json::from_str(&body)
+        .map_err(|_| "Router answered /models with something that is not JSON.".to_string())?;
+    let rows = parsed
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| parsed.as_array().cloned())
+        .unwrap_or_default();
+    let mut models = Vec::new();
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else { continue };
+        let context_window = ["context_length", "context_window", "max_input_tokens", "top_provider::context_length"]
+            .iter()
+            .find_map(|key| row.get(key).and_then(Value::as_i64))
+            .or_else(|| {
+                // OpenRouter nests limits under top_provider.
+                row.pointer("/top_provider/context_length")
+                    .and_then(Value::as_i64)
+            })
+            .unwrap_or(0);
+        models.push(json!({
+            "id": id,
+            "owner": row.get("owned_by").and_then(Value::as_str).unwrap_or(""),
+            "context_window": context_window,
+        }));
+    }
+    models.sort_by(|a, b| {
+        a.get("id").and_then(Value::as_str).unwrap_or("")
+            .cmp(b.get("id").and_then(Value::as_str).unwrap_or(""))
+    });
+    Ok(models)
 }
 
 /* Workflows: saved prompt recipes. They live in a small JSON file next to
@@ -1049,37 +1165,172 @@ async fn delete_conversation(
     }
 }
 
-async fn usage(State(state): State<AppState>) -> Response<Body> {
+async fn usage(
+    AxumQuery(params): AxumQuery<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Response<Body> {
+    // Server-side paging, sorting and filtering so the Usage view can page
+    // through the full log; the WHERE is shared by every aggregate below.
+    let page_size = params
+        .get("page_size")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(10)
+        .clamp(5, 200);
+    let page = params
+        .get("page")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let sort_column = match params.get("sort").map(String::as_str) {
+        Some("latency") => "COALESCE(latency_ms, -1)",
+        Some("tokens") => "COALESCE(total_tokens, -1)",
+        Some("status") => "status",
+        Some("detail") => "COALESCE(error, '')",
+        Some("model") => "COALESCE(model, '')",
+        Some("provider") => "COALESCE(provider, '')",
+        _ => "created_at",
+    };
+    let desc = params
+        .get("dir")
+        .map(String::as_str)
+        .map(|v| v != "asc")
+        .unwrap_or(true);
+
+    let mut where_sql = String::from(" WHERE 1=1");
+    let mut args: Vec<String> = Vec::new();
+    for (column, key) in [("model", "model"), ("provider", "provider")] {
+        let value = params.get(key).map(|v| v.trim()).filter(|v| !v.is_empty());
+        if let Some(value) = value {
+            where_sql.push_str(&format!(" AND COALESCE({column},'') LIKE ?"));
+            args.push(format!("%{value}%"));
+        }
+    }
+    for (clause, key) in [(" AND created_at >= ?", "from"), (" AND created_at <= ?", "to")] {
+        let value = params
+            .get(key)
+            .and_then(|v| v.parse::<f64>().ok());
+        if let Some(value) = value {
+            where_sql.push_str(clause);
+            args.push(value.to_string());
+        }
+    }
+    let order = format!(" ORDER BY {sort_column} {}, id {}", if desc { "DESC" } else { "ASC" }, if desc { "DESC" } else { "ASC" });
+
     let result = (|| -> rusqlite::Result<Value> {
         let conn = open_db(&state.database_path)?;
-        let summary = conn.query_row(
-            "SELECT COUNT(*) AS requests,
-             SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) AS successful,
-             SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END) AS failed,
-             COALESCE(SUM(total_tokens),0) AS total_tokens,
-             COALESCE(AVG(latency_ms),0) AS avg_latency_ms FROM request_log",
-            [],
-            |r| Ok(json!({
-                "requests": r.get::<_, i64>(0)?, "successful": r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                "failed": r.get::<_, Option<i64>>(2)?.unwrap_or(0), "total_tokens": r.get::<_, i64>(3)?,
-                "avg_latency_ms": r.get::<_, f64>(4)?
-            })),
-        )?;
-        let mut stmt = conn.prepare("SELECT id, created_at, conversation_id, model, provider, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, fallback_attempts, error FROM request_log ORDER BY id DESC LIMIT 50")?;
-        let requests = stmt.query_map([], |r| Ok(json!({
-            "id": r.get::<_, i64>(0)?, "created_at": r.get::<_, f64>(1)?,
-            "conversation_id": r.get::<_, Option<String>>(2)?, "model": r.get::<_, Option<String>>(3)?,
-            "provider": r.get::<_, Option<String>>(4)?, "status": r.get::<_, String>(5)?,
-            "latency_ms": r.get::<_, Option<i64>>(6)?, "prompt_tokens": r.get::<_, Option<i64>>(7)?,
-            "completion_tokens": r.get::<_, Option<i64>>(8)?, "total_tokens": r.get::<_, Option<i64>>(9)?,
-            "fallback_attempts": r.get::<_, Option<String>>(10)?, "error": r.get::<_, Option<String>>(11)?
-        })))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(json!({"summary": summary, "requests": requests}))
+        let summary_sql = format!(
+            "SELECT COUNT(*) AS requests,\
+             SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) AS successful,\
+             SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END) AS failed,\
+             COALESCE(SUM(total_tokens),0) AS total_tokens,\
+             COALESCE(AVG(latency_ms),0) AS avg_latency_ms FROM request_log{where_sql}",
+        );
+        let summary = conn
+            .prepare(&summary_sql)?
+            .query_row(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(json!({
+                    "requests": r.get::<_, i64>(0)?,
+                    "successful": r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    "failed": r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    "total_tokens": r.get::<_, i64>(3)?,
+                    "avg_latency_ms": r.get::<_, f64>(4)?
+                }))
+            })?;
+        let total: i64 = summary.get("requests").and_then(Value::as_i64).unwrap_or(0);
+        let pages = ((total + page_size - 1) / page_size).max(1);
+
+        let sql = format!(
+            "SELECT id, created_at, conversation_id, model, provider, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, fallback_attempts, error \
+             FROM request_log{where_sql}{order} LIMIT ? OFFSET ?",
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut row_args = args.clone();
+        row_args.push((page_size).to_string());
+        row_args.push(((page - 1) * page_size).to_string());
+        let requests = stmt
+            .query_map(
+                rusqlite::params_from_iter(row_args.iter()),
+                |r| {
+                    Ok(json!({
+                        "id": r.get::<_, i64>(0)?, "created_at": r.get::<_, f64>(1)?,
+                        "conversation_id": r.get::<_, Option<String>>(2)?, "model": r.get::<_, Option<String>>(3)?,
+                        "provider": r.get::<_, Option<String>>(4)?, "status": r.get::<_, String>(5)?,
+                        "latency_ms": r.get::<_, Option<i64>>(6)?, "prompt_tokens": r.get::<_, Option<i64>>(7)?,
+                        "completion_tokens": r.get::<_, Option<i64>>(8)?, "total_tokens": r.get::<_, Option<i64>>(9)?,
+                        "fallback_attempts": r.get::<_, Option<String>>(10)?, "error": r.get::<_, Option<String>>(11)?
+                    }))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Daily buckets (requests / failures / tokens / latency) from the
+        // filtered set, oldest first — the chart's whole data source.
+        let series_sql = format!(
+            "SELECT CAST(CAST(created_at AS INTEGER) / 86400 AS INTEGER) * 86400 AS day,\
+             COUNT(*), SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),\
+             COALESCE(SUM(total_tokens),0), COALESCE(AVG(latency_ms),0)\
+             FROM request_log{where_sql} GROUP BY day ORDER BY day ASC LIMIT 60",
+        );
+        let mut series_stmt = conn.prepare(&series_sql)?;
+        let series = series_stmt
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(json!({
+                    "day": r.get::<_, i64>(0)?, "requests": r.get::<_, i64>(1)?,
+                    "ok": r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    "tokens": r.get::<_, i64>(3)?, "avg_latency_ms": r.get::<_, f64>(4)?
+                }))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let by_sql = format!(
+            "SELECT COALESCE(model,'(unknown)') AS model, COALESCE(MAX(provider),'(unknown)') AS provider,\
+             COUNT(*), SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),\
+             COALESCE(SUM(total_tokens),0), COALESCE(AVG(latency_ms),0)\
+             FROM request_log{where_sql} GROUP BY model, provider ORDER BY COUNT(*) DESC LIMIT 20",
+        );
+        let mut by_stmt = conn.prepare(&by_sql)?;
+        let by_model = by_stmt
+            .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+                Ok(json!({
+                    "model": r.get::<_, String>(0)?, "provider": r.get::<_, String>(1)?,
+                    "requests": r.get::<_, i64>(2)?, "ok": r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    "tokens": r.get::<_, i64>(4)?, "avg_latency_ms": r.get::<_, f64>(5)?
+                }))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(json!({
+            "summary": summary,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": pages,
+            "requests": requests,
+            "series": series,
+            "by_model": by_model,
+        }))
     })();
     match result {
         Ok(data) => Json(data).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// Ask the server process to open a URL in the OS default browser. Only the
+/// loopback origin UI may call this (same LocalOriginGuard family as the other
+/// session routes), and only http(s) URLs are accepted.
+async fn open_url(Json(input): Json<Value>) -> Response<Body> {
+    let Some(url) = input.get("url").and_then(Value::as_str) else {
+        return json_error(StatusCode::BAD_REQUEST, "Provide a url.");
+    };
+    if !(url.starts_with("http://127.0.0.1:")
+        || url.starts_with("http://localhost:")
+        || url.starts_with("https://"))
+    {
+        return json_error(StatusCode::BAD_REQUEST, "Only http(s) URLs can be opened.");
+    }
+    browser::open_url(url);
+    Json(json!({"ok": true})).into_response()
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
@@ -1155,6 +1406,8 @@ struct ChatPrep {
     cid: String,
     cfg: Config,
     packed: context::PackedRequest,
+    /// Per-message model override from the composer's model picker.
+    model: Option<String>,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -1221,6 +1474,19 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             }
         }
     }
+    // Mode rides with the message too: plan first, build second.
+    if input.get("mode").and_then(Value::as_str) == Some("plan") {
+        prompt = format!(
+            "Plan mode: do not make changes this reply. Answer with a short,\nordered implementation plan (files, steps, risks) the user can approve\nbefore anything is built.\n\n---\n\n{}",
+            prompt
+        );
+    }
+    let model = input
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
 
     let history_limit =
         cfg.history_messages
@@ -1306,7 +1572,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         cfg.context_budget_tokens,
         cfg.history_messages,
     );
-    Ok(ChatPrep { cid, cfg, packed })
+    Ok(ChatPrep { cid, cfg, packed, model })
 }
 
 /// Record a failed router call so the usage page reflects it.
@@ -1368,12 +1634,19 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         Ok((answer, _sources)) => answer,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
     };
-    let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
+    let ChatPrep { cid, cfg, packed, model } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
+    // The composer's model wins when present; config's model is the default.
+    let chosen_model = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| if cfg.model.trim().is_empty() { "auto".to_string() } else { cfg.model.clone() });
 
     // A native provider already answered during the deep-search phase.
     if let Some(answer) = ds_answer {
@@ -1407,7 +1680,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
     }
 
     let started = Instant::now();
-    match call_router(&state, packed.messages).await {
+    match call_router(&state, packed.messages, Some(&chosen_model)).await {
         Ok((answer, mut meta)) => {
             let now = now_seconds();
             let log_result = (|| -> rusqlite::Result<()> {
@@ -1669,7 +1942,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         ds_frames.push_back(sse_frame(&event));
     }
 
-    let ChatPrep { cid, cfg, packed } = match prepare_chat(&state, &input) {
+    let ChatPrep { cid, cfg, packed, model } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
@@ -1681,13 +1954,19 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
             "Add your router's unified API key in Settings first.",
         );
     }
+    let chosen_model = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| if cfg.model.trim().is_empty() { "auto".to_string() } else { cfg.model.clone() });
 
     // Deep search already answered through a native provider: stream the
     // finished text as one frame set instead of calling the router.
     if let Some(answer) = ds_answer {
         let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens);
         if let Ok(mut held) = recorder.meta.lock() {
-            held["model"] = json!(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
+            held["model"] = json!(&chosen_model);
             held["deepsearch"] = json!(true);
         }
         if let Ok(mut held) = recorder.text.lock() {
@@ -1712,7 +1991,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
     }
 
     let request_body = json!({
-        "model": if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() },
+        "model": &chosen_model,
         "messages": packed.messages,
         "stream": true
     });
@@ -1758,7 +2037,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         .to_ascii_lowercase();
     let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens);
     if let Ok(mut held) = recorder.meta.lock() {
-        held["model"] = json!(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
+        held["model"] = json!(&chosen_model);
     }
     let mut pending: VecDeque<String> = ds_frames;
     pending.push_back(sse_frame(&json!({ "ready": true })));
@@ -1826,6 +2105,8 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         client: Client::builder()
             .timeout(Duration::from_secs(120))
             .build()?,
+        terminal: terminal::hub(),
+        models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     ensure_setup(&state)?;
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
@@ -1857,8 +2138,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/conversations/:id/messages", get(get_messages))
         .route("/api/conversations/:id/delete", post(delete_conversation))
         .route("/api/usage", get(usage))
+        .route("/api/open", post(open_url))
         .route("/api/health", get(health))
         .route("/api/test", post(test_router))
+        .route("/api/models", get(models))
         .route("/api/chat", post(chat))
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -1874,6 +2157,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             )),
         )
         .merge(workspace::router(port))
+        .merge(terminal::router(port))
         .merge(router_console::router(port))
         .merge(router_api)
         .layer(middleware::from_fn(local_security_headers))
@@ -1935,7 +2219,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
                 let _ = server_shutdown_rx.changed().await;
-                println!("Stopping Free AI Studio.");
+                println!("Stopping {APP_NAME}.");
             })
             .await
     });
@@ -2011,9 +2295,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "gui")]
         {
             if let Err(error) = gui::run(boot.port, boot.shutdown_tx.clone(), APP_NAME) {
-                println!("Could not open the application window ({error}).");
                 println!(
-                    "Continuing headless: open http://127.0.0.1:{} in a browser.",
+                    "Could not open the application window ({error})."
+                );
+                println!(
+                    "Continuing headless: falling back to your browser."
+                );
+                browser::open(boot.port);
+                println!(
+                    "Or open http://127.0.0.1:{} manually.",
                     boot.port
                 );
             }
@@ -2022,10 +2312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("This build has no window support. Open http://127.0.0.1:{} in a browser, or rebuild with the default gui feature.", boot.port);
     } else if wants_browser {
         println!("Opening the interface in your browser. Stop with Ctrl+C.");
-        #[cfg(feature = "gui")]
-        gui::open_in_browser(boot.port);
-        #[cfg(not(feature = "gui"))]
-        println!("Open http://127.0.0.1:{} in a browser.", boot.port);
+        browser::open(boot.port);
     } else {
         println!(
             "Headless mode. Open http://127.0.0.1:{} or stop with Ctrl+C.",

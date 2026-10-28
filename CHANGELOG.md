@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.22.0
+
+### Usage page: full analytics
+
+- The request log is now served with server-side pagination (10 per page,
+  numbered pager over the whole history, not a 50-row cap), column sorting
+  (time, status, provider, model, latency, tokens, details) and filters
+  (model, provider, date range) that keep their state across pages.
+- New charts computed from real data: requests per day (ok/failed stacked) and
+  requests/tokens/latency by model. Stat cards follow the active filter.
+- The VS Code built-in server implements the same query shape from its store.
+
+### Agents page
+
+- Search box, configurable page size (10/25/50, remembered) and numbered
+  pagination; ten agents per page by default.
+
+### Model, mode and skill controls actually reach the backend
+
+- The composer's Build/Plan toggle and per-message model picker now bind,
+  restore their saved choice at startup, and ride with every request; the
+  backend honours `model` and `mode` (plan) in both chat routes.
+- Saving Settings reloads the model catalog, so a changed endpoint shows up
+  without restarting.
+
+### Dashboard button
+
+- The OpenRouter/router dashboard button derives its URL from the active
+  backend (OpenRouter's own settings page, the gateway root for self-hosted
+  presets) and falls back to asking the server to open it when the window
+  blocks popups.
+
+### Cross-platform
+
+- New macOS job in Desktop Release: arm64 portable tarball (unsigned —
+  documented in README with the Gatekeeper workaround).
+- The VS Code extension's built-in server gains parity with the desktop API:
+  streaming chat, skills (list/detail/enable), projects (create, rename,
+  archive, activate, cascade-delete threads), workflows, model catalog,
+  usage pagination, artifacts listing and URL opening. Known gaps (no PTY
+  terminal, no gateway process supervision, folder scoped to VS Code's open
+  workspace) are documented in README and answered with honest errors.
+
+### Spaces and Connections copy
+
+- The "Spaces" page now says what a space is; the "Links" entry is renamed
+  "Connections" with a description of what its status rows show.
+
+### Branding
+
+- Every user-facing string says **Saarthi Studio** (window title, page title,
+  folder pickers, VS Code display name and command titles, README). Internal
+  identifiers (`free-ai-studio`, `free-ai-suite`) stay unchanged so existing
+  installs and data keep working.
+
 ## 1.21.1
 
 ### Fixed: "no reply" from the Linux app

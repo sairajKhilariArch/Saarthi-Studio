@@ -208,6 +208,10 @@ mod tests {
                     .timeout(Duration::from_secs(2))
                     .build()
                     .expect("build test HTTP client"),
+                terminal: crate::terminal::hub(),
+                models_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
             };
             super::super::ensure_setup(&state).expect("initialize fixture config and database");
             let token_store = HostTokenStore::new(root.join("host-auth.json"));

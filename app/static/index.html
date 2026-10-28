@@ -4,11 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Free AI Studio</title>
+  <title>Saarthi Studio</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-panel-left" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/><path d="M6.5 9.5H7.5"/></symbol>
+  <symbol id="i-panel-right" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15"/><path d="M16.5 9.5H17.5"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7 9.5l3.5 3L7 15.5M13 15.5h4.5"/></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
   <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></symbol>
@@ -37,7 +40,7 @@
     <div class="brand">
       <div class="brand-mark"><svg class="icon"><use href="#i-spark"/></svg></div>
       <div class="brand-text">
-        <strong>Free AI Studio</strong>
+        <strong>Saarthi Studio</strong>
         <span>local coding agent</span>
       </div>
     </div>
@@ -126,7 +129,7 @@
       <div class="foot-actions">
         <button id="workspacesBtn" class="foot-btn"><svg class="icon"><use href="#i-layers"/></svg>Spaces</button>
         <button id="agentsBtn" class="foot-btn"><svg class="icon"><use href="#i-user"/></svg>Agents</button>
-        <button id="integrationsBtn" class="foot-btn"><svg class="icon"><use href="#i-cube"/></svg>Links</button>
+        <button id="integrationsBtn" class="foot-btn"><svg class="icon"><use href="#i-cube"/></svg>Connections</button>
         <button id="artifactsBtn" class="foot-btn"><svg class="icon"><use href="#i-file"/></svg>Files</button>
         <button id="automationBtn" class="foot-btn"><svg class="icon"><use href="#i-undo"/></svg>Auto</button>
       </div>
@@ -147,6 +150,17 @@
           <svg class="icon"><use href="#i-plus"/></svg>
         </button>
         <span id="connPill" class="status-pill"><span class="conn-dot"></span><span id="connPillText">checking…</span></span>
+        <span class="panel-toggles" role="group" aria-label="Panels">
+          <button id="leftPanelToggle" class="icon-btn panel-toggle" title="Left panel: threads, files, skills" aria-label="Toggle left panel" aria-pressed="false">
+            <svg class="icon"><use href="#i-panel-left"/></svg>
+          </button>
+          <button id="rightPanelToggle" class="icon-btn panel-toggle" title="Right panel: router status and usage" aria-label="Toggle right panel" aria-pressed="false">
+            <svg class="icon"><use href="#i-panel-right"/></svg>
+          </button>
+          <button id="bottomPanelToggle" class="icon-btn panel-toggle" title="Bottom panel: terminal in the project folder" aria-label="Toggle bottom panel" aria-pressed="false">
+            <svg class="icon"><use href="#i-terminal"/></svg>
+          </button>
+        </span>
         <button id="themeToggle" class="icon-btn" title="Switch light / dark theme" aria-label="Switch light or dark theme">
           <svg class="icon"><use href="#i-moon"/></svg>
         </button>
@@ -222,8 +236,20 @@
               <span class="kbd-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline</span>
             </div>
             <div class="composer-right">
+              <div id="modePicker" class="mode-picker" role="group" aria-label="Thread mode">
+                <button id="modeBuild" class="mode-btn active" title="Build: answer and make changes" aria-pressed="true">Build</button>
+                <button id="modePlan" class="mode-btn" title="Plan: reply with an implementation plan, no changes" aria-pressed="false">Plan</button>
+              </div>
               <span id="contextMeter" class="ctx-meter" title="Estimated tokens sent with the next request">~0 / 6k</span>
-              <span id="modelChip" class="model-chip">auto</span>
+              <div class="model-picker-wrap">
+                <button id="modelChip" class="model-chip" title="Model for this message" aria-haspopup="listbox" aria-expanded="false">auto</button>
+                <div id="modelMenu" class="skill-menu model-menu hidden" role="listbox" aria-label="Models">
+                  <label class="field model-filter-field">
+                    <input id="modelFilter" type="text" placeholder="Search models…" autocomplete="off">
+                  </label>
+                  <div id="modelMenuList" class="skill-menu-list"></div>
+                </div>
+              </div>
               <button id="sendBtn" class="btn btn-accent send-btn" title="Send">
                 <span>Send</span><svg class="icon"><use href="#i-arrow"/></svg>
               </button>
@@ -248,9 +274,9 @@
     <section id="workspacesView" class="view page-view hidden" role="tabpanel" aria-label="Workspaces">
       <div class="page">
         <header class="page-head">
-          <p class="eyebrow">Projects and folders</p>
-          <h1>Workspaces</h1>
-          <p>Every project carries its own threads, files and settings. Switching project changes what the server serves — the list below is the real server-side state.</p>
+          <p class="eyebrow">Projects, folders and threads</p>
+          <h1>Spaces</h1>
+          <p>A space is a project: one folder on disk with its own threads, files and settings. Pick a space in the sidebar to switch everything below, or open a folder to work outside any project. The lists show real server-side state — nothing here is a mockup.</p>
         </header>
         <div id="workspaceProjects" class="list-block"></div>
         <h2 class="section-title">Open folder</h2>
@@ -272,9 +298,9 @@
     <section id="integrationsView" class="view page-view hidden" role="tabpanel" aria-label="Integrations">
       <div class="page">
         <header class="page-head">
-          <p class="eyebrow">Router, host API, console</p>
-          <h1>Integrations</h1>
-          <p>What Studio is talking to right now. Every status here comes from a live call you can repeat with the button beside it.</p>
+          <p class="eyebrow">What Studio is talking to right now</p>
+          <h1>Connections</h1>
+          <p>One row per backend connection — the AI router, OmniRoute, the remote host and this machine's status — with a live Test button beside each so the answer is always fresh. If a connector is red, start it there.</p>
         </header>
         <div id="integrationsList" class="list-block"></div>
       </div>
@@ -355,11 +381,19 @@
     <section id="settingsView" class="view page-view hidden" role="tabpanel" aria-label="Settings">
       <div class="page">
         <header class="page-head">
-          <p class="eyebrow">Connection</p>
-          <h1>Router settings</h1>
-          <p>Point Studio at FreeLLMAPI, OmniRoute, or any OpenAI-compatible router. Provider keys belong in the router, not here.</p>
+          <p class="eyebrow">Preferences</p>
+          <h1>Settings</h1>
+          <p>Connection, appearance, chat context, deep search and privacy — one place, saved to this computer.</p>
         </header>
-        <form id="settingsForm" class="card form-card">
+        <nav id="settingsNav" class="settings-nav" role="tablist" aria-label="Settings sections">
+          <button type="button" data-settings-section="connection" class="active" aria-selected="true">Connection</button>
+          <button type="button" data-settings-section="appearance" aria-selected="false">Appearance</button>
+          <button type="button" data-settings-section="context" aria-selected="false">Chat context</button>
+          <button type="button" data-settings-section="search" aria-selected="false">Deep search</button>
+          <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
+        </nav>
+        <form id="settingsForm" class="form-card">
+          <section id="settings-connection" class="settings-section card form-card-inner">
           <h2 class="form-group-title">Connection</h2>
           <div class="field preset-field">
             <span>Backend platform</span>
@@ -382,6 +416,34 @@
             <input id="model" type="text" value="auto" placeholder="auto">
             <small>Use <code>auto</code> when the router handles model selection and fallback.</small>
           </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Save settings</button>
+            <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>
+            <button type="button" id="openProviderDashboardSettings" class="btn btn-link">Open router dashboard ↗</button>
+          </div>
+          </section>
+
+          <section id="settings-appearance" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">Appearance</h2>
+          <div class="field">
+            <span>Theme</span>
+            <div class="choice-row" role="group" aria-label="Theme">
+              <button type="button" id="themeLightBtn" class="choice-btn">Light</button>
+              <button type="button" id="themeDarkBtn" class="choice-btn">Dark</button>
+            </div>
+            <small>The toolbar moon button toggles the same setting whenever you need it.</small>
+          </div>
+          <div class="field">
+            <span>Accent colour</span>
+            <div id="accentPicker" class="choice-row" role="listbox" aria-label="Accent colour"></div>
+            <small>Applied across buttons, links, focus rings and active states. Black and white adapt so they stay readable in either theme. Status colours (success, warning, error) never change.</small>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Save all settings</button>
+          </div>
+          </section>
+
+          <section id="settings-context" class="settings-section card form-card-inner hidden">
           <h2 class="form-group-title">Chat context</h2>
           <div class="form-row">
             <label class="field">
@@ -400,6 +462,12 @@
             <span>Send the open folder's file names with each request</span>
             <small>A names-only outline helps the model navigate the project without sending file contents.</small>
           </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Save all settings</button>
+          </div>
+          </section>
+
+          <section id="settings-search" class="settings-section card form-card-inner hidden">
           <h2 class="form-group-title">Deep search</h2>
           <div class="field deep-field">
             <span>Deep search</span>
@@ -421,29 +489,34 @@
             <small>Runs up to 3 web queries, then answers with cited <code>[1]</code> sources. Direct Gemini/OpenAI backends use their built-in web tools without a search key.</small>
           </div>
           <div class="form-actions">
-            <button type="submit" class="btn btn-accent">Save settings</button>
-            <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>
-            <button type="button" id="openProviderDashboardSettings" class="btn btn-link">Open router dashboard ↗</button>
+            <button type="submit" class="btn btn-accent">Save all settings</button>
           </div>
           <div id="settingsMessage" class="notice hidden"></div>
+          </section>
+
+          <section id="settings-about" class="settings-section hidden">
+          <div class="card info-card">
+            <h2>One-time router setup</h2>
+            <ol>
+              <li>Open your router dashboard (FreeLLMAPI usually runs on <code>http://localhost:3001</code>).</li>
+              <li>Add free-tier provider credentials in its Keys / Providers page.</li>
+              <li>Enable and order a fallback chain.</li>
+              <li>Copy the router's unified API key into the field above, then test the connection.</li>
+            </ol>
+            <p class="muted">Free tiers have provider-defined quotas. Fallback only works while another enabled provider has capacity and the router recognises the error as retryable.</p>
+          </div>
+
+          <div class="card info-card">
+            <h2>Workspace &amp; privacy</h2>
+            <p>Studio reads and writes only inside the folder you explicitly open, keeps chats in local SQLite at <code>~/.local/share/saarthi-studio</code>, and never uploads files anywhere else. Code is sent to your configured router only when you attach it to a message.</p>
+            <p class="muted">The editor does not run code, open a terminal, or touch files outside the open folder.</p>
+          </div>
+          <div class="card info-card">
+            <h2>About</h2>
+            <p><strong id="aboutAppName">Saarthi Studio</strong> — a local-first coding assistant. Threads, projects and settings stay in <code>~/.local/share/saarthi-studio</code> and <code>~/.config/saarthi-studio</code>. The interface server is the same one that opens in your browser at <code>http://127.0.0.1:8666</code>.</p>
+          </div>
+          </section>
         </form>
-
-        <div class="card info-card">
-          <h2>One-time router setup</h2>
-          <ol>
-            <li>Open your router dashboard (FreeLLMAPI usually runs on <code>http://localhost:3001</code>).</li>
-            <li>Add free-tier provider credentials in its Keys / Providers page.</li>
-            <li>Enable and order a fallback chain.</li>
-            <li>Copy the router's unified API key into the field above, then test the connection.</li>
-          </ol>
-          <p class="muted">Free tiers have provider-defined quotas. Fallback only works while another enabled provider has capacity and the router recognises the error as retryable.</p>
-        </div>
-
-        <div class="card info-card">
-          <h2>Workspace &amp; privacy</h2>
-          <p>Studio reads and writes only inside the folder you explicitly open, keeps chats in local SQLite at <code>~/.local/share/free-ai-studio</code>, and never uploads files anywhere else. Code is sent to your configured router only when you attach it to a message.</p>
-          <p class="muted">The editor does not run code, open a terminal, or touch files outside the open folder.</p>
-        </div>
       </div>
     </section>
 
@@ -452,10 +525,18 @@
         <header class="page-head">
           <p class="eyebrow">Observability</p>
           <h1>Usage &amp; errors</h1>
-          <p>Local request history from this app. Providers do not report token usage for every request.</p>
+          <p>Local request history from this app, newest first. Sort any column, filter by model, provider or date, and page through the full log.</p>
         </header>
+        <div id="usageFilters" class="usage-filters">
+          <label class="usage-filter"><span>Model</span><input id="usageModelFilter" type="search" placeholder="e.g. llama" aria-label="Filter by model"></label>
+          <label class="usage-filter"><span>Provider</span><input id="usageProviderFilter" type="search" placeholder="e.g. groq" aria-label="Filter by provider"></label>
+          <label class="usage-filter"><span>From</span><input id="usageFrom" type="date" aria-label="From date"></label>
+          <label class="usage-filter"><span>To</span><input id="usageTo" type="date" aria-label="To date"></label>
+          <button id="usageApply" class="btn btn-small">Apply</button>
+          <button id="usageReset" class="btn btn-quiet btn-small">Clear</button>
+        </div>
         <div class="stats-grid">
-          <div class="stat-card"><span>Requests</span><strong id="statRequests">0</strong></div>
+          <div class="stat-card"><span>Requests (filtered)</span><strong id="statRequests">0</strong></div>
           <div class="stat-card"><span>Succeeded</span><strong id="statSuccess">0</strong></div>
           <div class="stat-card"><span>Errors</span><strong id="statErrors">0</strong></div>
           <div class="stat-card"><span>Reported tokens</span><strong id="statTokens">0</strong></div>
@@ -463,14 +544,33 @@
         </div>
         <div class="card table-card">
           <div class="table-head">
-            <h2>Recent requests</h2>
+            <h2>Requests</h2>
             <button id="refreshUsage" class="btn btn-quiet btn-small">Refresh</button>
           </div>
           <div class="table-scroll">
             <table>
-              <thead><tr><th>Time</th><th>Status</th><th>Provider / model</th><th>Latency</th><th>Tokens</th><th>Details</th></tr></thead>
-              <tbody id="usageRows"><tr><td colspan="6" class="muted">No requests yet.</td></tr></tbody>
+              <thead id="usageHead"><tr>
+                <th data-sort="created_at">Time</th>
+                <th data-sort="status">Status</th>
+                <th data-sort="provider">Provider</th>
+                <th data-sort="model">Model</th>
+                <th data-sort="latency">Latency</th>
+                <th data-sort="tokens">Tokens</th>
+                <th data-sort="detail">Details</th>
+              </tr></thead>
+              <tbody id="usageRows"><tr><td colspan="7" class="muted">No requests yet.</td></tr></tbody>
             </table>
+          </div>
+          <div id="usagePager" class="usage-pager"></div>
+        </div>
+        <div class="usage-charts">
+          <div class="card usage-chart-card">
+            <div class="table-head"><h2>Requests per day</h2><small class="muted">ok · failed, last days of activity</small></div>
+            <div id="usageSeries" class="usage-series"></div>
+          </div>
+          <div class="card usage-chart-card">
+            <div class="table-head"><h2>By model</h2><small class="muted">requests · tokens · avg latency</small></div>
+            <div id="usageByModel" class="usage-bymodel"></div>
           </div>
         </div>
         <p class="muted page-note">For provider-level quotas and fallback traces, also check your router dashboard.</p>
@@ -669,6 +769,38 @@
       </div>
     </section>
   </main>
+
+  <aside id="rightPanel" class="right-panel panel" aria-label="Router status and usage">
+    <div class="panel-handle" data-drag="right" aria-hidden="true"></div>
+    <header class="panel-head">
+      <span class="panel-title">Router &amp; usage</span>
+    </header>
+    <div id="rightBody" class="right-body">
+      <dl class="panel-grid">
+        <div class="panel-stat"><dt>Model</dt><dd id="rightModel">—</dd></div>
+        <div class="panel-stat"><dt>Provider</dt><dd id="rightProvider">—</dd></div>
+        <div class="panel-stat"><dt>Requests</dt><dd id="rightRequests">—</dd></div>
+        <div class="panel-stat"><dt>Tokens</dt><dd id="rightTokens">—</dd></div>
+        <div class="panel-stat" style="grid-column: 1 / 3"><dt>Average latency</dt><dd id="rightLatency">—</dd></div>
+      </dl>
+      <h3 class="pane-label">Recent requests</h3>
+      <div id="rightRecent" class="panel-recent">
+        <span class="empty-note">No requests yet today.</span>
+      </div>
+    </div>
+  </aside>
+
+  <section id="bottomPanel" class="bottom-panel panel" aria-label="Terminal">
+    <div class="panel-handle" data-drag="bottom" aria-hidden="true"></div>
+    <header class="panel-head">
+      <span class="panel-title">Terminal</span>
+      <span id="terminalFolder" class="status-pill">"></span>
+      <button id="terminalRestart" class="icon-btn" title="Restart terminal in the project folder" aria-label="Restart terminal">
+        <svg class="icon"><use href="#i-arrow"/></svg>
+      </button>
+    </header>
+    <div id="terminalHost" class="terminal-host"></div>
+  </section>
 </div>
 
 <div id="folderModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folderModalTitle">

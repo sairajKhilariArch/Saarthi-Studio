@@ -44,25 +44,3 @@ pub(crate) fn run(
     });
     Ok(())
 }
-
-/// Open the local UI in the platform default browser. Used by `--browser`.
-pub(crate) fn open_in_browser(port: u16) {
-    let url = format!("http://127.0.0.1:{port}");
-    #[cfg(target_os = "linux")]
-    let program = ("xdg-open", vec![url.clone()]);
-    #[cfg(target_os = "macos")]
-    let program = ("open", vec![url.clone()]);
-    #[cfg(target_os = "windows")]
-    let program = (
-        "cmd",
-        vec!["/c".to_string(), "start".to_string(), url.clone()],
-    );
-
-    match std::process::Command::new(program.0)
-        .args(program.1)
-        .spawn()
-    {
-        Ok(_) => println!("Opened {url} in your browser."),
-        Err(error) => println!("Could not open a browser ({error}). Visit {url} manually."),
-    }
-}

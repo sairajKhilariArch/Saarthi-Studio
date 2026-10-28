@@ -685,7 +685,7 @@ fn run_folder_picker() -> PickerResult {
         .args([
             "--file-selection",
             "--directory",
-            "--title=Open a folder in Free AI Studio",
+            "--title=Open a folder in Saarthi Studio",
         ])
         .output();
     match zenity {
@@ -1241,7 +1241,7 @@ fn run_folder_picker() -> PickerResult {
     const SCRIPT: &str = concat!(
         "Add-Type -AssemblyName System.Windows.Forms; ",
         "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; ",
-        "$dialog.Description = 'Open a folder in Free AI Studio'; ",
+        "$dialog.Description = 'Open a folder in Saarthi Studio'; ",
         "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { ",
         "[Console]::Out.Write($dialog.SelectedPath) }"
     );
@@ -1268,7 +1268,7 @@ fn run_folder_picker() -> PickerResult {
     match Command::new("osascript")
         .args([
             "-e",
-            "POSIX path of (choose folder with prompt \"Open a folder in Free AI Studio\")",
+            "POSIX path of (choose folder with prompt \"Open a folder in Saarthi Studio\")",
         ])
         .output()
     {

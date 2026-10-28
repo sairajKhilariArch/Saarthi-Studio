@@ -1,6 +1,6 @@
 "use strict";
 
-/* Free AI Studio — local-first coding agent UI. */
+/* Saarthi Studio — local-first coding agent UI. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +27,90 @@ function setupThemeToggle() {
     const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
     applyTheme(next);
   });
+}
+
+/* ---- settings: section navigation + appearance ------------------- */
+
+function setSettingsSection(name) {
+  let found = false;
+  document.querySelectorAll(".settings-section").forEach((section) => {
+    const active = section.id === `settings-${name}`;
+    section.classList.toggle("hidden", !active);
+    if (active) found = true;
+  });
+  if (!found) return;
+  $("settingsNav").querySelectorAll("button").forEach((button) => {
+    const active = button.dataset.settingsSection === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
+}
+
+const ACCENTS = [
+  { id: "classic", label: "Classic orange", color: "#ff8b3d" },
+  { id: "black", label: "Black", color: "#e6e6ee" },
+  { id: "blue", label: "Blue", color: "#4f8cff" },
+  { id: "green", label: "Green", color: "#34d399" },
+  { id: "red", label: "Red", color: "#ff5d5d" },
+  { id: "white", label: "White", color: "#f4f4f8" },
+];
+
+function applyAccent(name) {
+  const swatch = ACCENTS.find((a) => a.id === name);
+  if (name === "classic" || !swatch) {
+    delete document.documentElement.dataset.accent;
+    try { localStorage.setItem("freeai-accent", ""); } catch { /* private mode */ }
+    return;
+  }
+  document.documentElement.dataset.accent = name;
+  try { localStorage.setItem("freeai-accent", name); } catch { /* private mode */ }
+}
+
+function renderAccentPicker() {
+  const host = $("accentPicker");
+  if (!host) return;
+  host.replaceChildren();
+  const current = localStorage.getItem("freeai-accent") || "classic";
+  ACCENTS.forEach((accent) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "choice-btn accent-swatch";
+    button.dataset.accent = accent.id;
+    button.setAttribute("role", "option");
+    button.title = accent.label;
+    button.setAttribute("aria-selected", String(current === accent.id));
+    const dot = document.createElement("span");
+    dot.className = "accent-dot";
+    dot.style.background = accent.color;
+    const label = document.createElement("span");
+    label.textContent = accent.label;
+    button.append(dot, label);
+    button.classList.toggle("active", current === accent.id);
+    button.addEventListener("click", () => applyAccent(accent.id));
+    host.appendChild(button);
+  });
+}
+
+function setupSettingsNav() {
+  $("settingsNav").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-settings-section]");
+    if (button) setSettingsSection(button.dataset.settingsSection);
+  });
+  $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
+  $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
+  // The theme buttons reflect the live theme without a re-render: listening on
+  // the theme manager's storage key would be enough, but a MutationObserver
+  // on <html data-theme> is the one-liner that covers every writer.
+  new MutationObserver(() => {
+    const theme = document.documentElement.dataset.theme;
+    $("themeLightBtn").classList.toggle("active", theme === "light");
+    $("themeDarkBtn").classList.toggle("active", theme === "dark");
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  // applyAccent mutates data-accent, which the accent buttons mirror below.
+  new MutationObserver(() => renderAccentPicker()).observe(
+    document.documentElement, { attributes: true, attributeFilter: ["data-accent"] }
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,6 +185,15 @@ function renderProjectSwitcher() {
     });
     actions.append(rename, archive, remove);
     item.appendChild(actions);
+    // The item itself switches the project — previously only the action
+    // buttons worked, so the picker looked broken.
+    item.addEventListener("click", () => {
+      if (project.id === state.activeProjectId) {
+        closeProjectMenu();
+        return;
+      }
+      switchProject(project.id);
+    });
     list.appendChild(item);
   });
 }
@@ -138,6 +231,19 @@ async function applyProjectSwitch(project) {
   closeAllFileTabs(true);
   state.chatContext = null;
   renderProjectSwitcher();
+  // The file tree and terminal follow the project's own folder, so operations
+  // never touch one project's files while another's chat is open.
+  if (project && project.folder_path && (!state.workspace || state.workspace.absolute_path !== project.folder_path)) {
+    const opened = await api("/api/workspace/open", {
+      method: "POST",
+      body: JSON.stringify({ path: project.folder_path }),
+    });
+    if (opened.ok && opened.data.ok) {
+      await loadWorkspace();
+    } else {
+      toast(opened.data.error || "Could not open that project's folder.");
+    }
+  }
   await loadConversations();
   if (state.conversations.length) {
     await openConversation(state.conversations[0].id);
@@ -387,6 +493,9 @@ const state = {
   workspace: null,
   recentFolders: [],
   home: "~",
+  usageQuery: { page: 1, sort: "created_at", dir: "desc", model: "", provider: "", from: "", to: "" },
+  usageMeta: null,
+  usageRows: [],
   tree: { dirs: new Map(), open: new Set(), selected: null, rootLoaded: false },
   files: new Map(), // path -> { path, name, content, original, language, size, scratch }
   openTabs: [], // "chat" | "file:<path>" | "scratch"
@@ -712,7 +821,7 @@ function addMessage(role, content, options = {}) {
   head.className = "msg-head";
   head.innerHTML = `<span class="msg-avatar ${role === "assistant" ? "assistant" : ""}">` +
     `${role === "assistant" ? icon("spark") : icon("user")}</span>` +
-    `<span class="msg-author">${role === "assistant" ? "Free AI Studio" : "You"}</span>` +
+    `<span class="msg-author">${role === "assistant" ? "Saarthi Studio" : "You"}</span>` +
     `<span class="msg-meta"></span>`;
   if (meta) {
     const parts = [];
@@ -753,6 +862,9 @@ function addMessage(role, content, options = {}) {
 
   $("messages").appendChild(row);
   scrollChat();
+  // Callers (the live stream row above all) keep updating the row after it
+  // is added; without this they silently get undefined.
+  return row;
 }
 
 function appendMessageActions(row, actions) {
@@ -872,10 +984,14 @@ async function openConversation(id) {
   state.currentId = id;
   const match = state.conversations.find((entry) => entry.id === id);
   state.currentTitle = match ? match.title : "Thread";
+  // A live streaming row for this thread keeps its place across re-renders:
+  // switching away and back must not hide the in-flight reply.
+  const liveRow = state.busy && streamRow && streamRow.isConnected && streamTargetId === id ? streamRow : null;
   $("messages").replaceChildren();
   const messages = Array.isArray(result.data) ? result.data : [];
-  $("welcome").classList.toggle("hidden", messages.length > 0);
+  $("welcome").classList.toggle("hidden", messages.length > 0 || Boolean(liveRow));
   messages.forEach((message) => addMessage(message.role === "assistant" ? "assistant" : "user", message.content));
+  if (liveRow) $("messages").appendChild(liveRow);
   scrollChat();
   renderConversations();
   renderTabs();
@@ -946,9 +1062,7 @@ async function sendMessage(preset = null) {
   state.lastContextTokens = null;
   updateContextMeter();
   setBusy(true);
-
-  // Deep-search steps and sources stream in before the answer; they render
-  // as a live checklist under the reply header.
+  streamTargetId = state.currentId;
   const deepSteps = [];
   const deepSources = [];
   const controller = new AbortController();
@@ -957,6 +1071,7 @@ async function sendMessage(preset = null) {
 
   let answer = "";
   let failed = null;
+  let aborted = false;
   try {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
@@ -968,6 +1083,8 @@ async function sendMessage(preset = null) {
         language: context ? context.language : "text",
         skill: skillId,
         deepsearch: Boolean(state.deepSearch),
+        model: state.chatModel || undefined,
+        mode: state.chatMode === "plan" ? "plan" : undefined,
       }),
       signal: controller.signal,
     });
@@ -976,6 +1093,9 @@ async function sendMessage(preset = null) {
       failed = data.error || `Request failed (HTTP ${response.status})`;
     } else {
       await consumeStream(response.body, (frame) => {
+        if (frame.type === "status" || frame.type === "query" || frame.type === "source") {
+          setStreamStatus("searching");
+        }
         if (frame.type === "status") {
           deepSteps.push({ type: "status", text: frame.message || "" });
           renderDeepSteps(deepSteps, deepSources);
@@ -987,6 +1107,7 @@ async function sendMessage(preset = null) {
           renderDeepSteps(deepSteps, deepSources);
         }
         if (frame.delta) {
+          if (!answer) setStreamStatus("responding");
           answer += frame.delta;
           appendStreamText(answer);
         }
@@ -998,9 +1119,11 @@ async function sendMessage(preset = null) {
       });
     }
   } catch (error) {
-    if (error && error.name !== "AbortError") failed = error.message || "The request failed.";
+    if (error && error.name === "AbortError") aborted = true;
+    else if (error) failed = error.message || "The request failed.";
   }
-  finishStreamRow(answer, failed, deepSources);
+  finishStreamRow(answer, failed, deepSources, aborted);
+  streamTargetId = null;
   state.abort = null;
   state.busy = false;
   $("sendBtn").disabled = false;
@@ -1083,9 +1206,28 @@ async function consumeStream(body, onFrame) {
 }
 
 let streamRow = null;
+let streamTargetId = null;
 
 function addStreamRow() {
   streamRow = addMessage("assistant", "", { streaming: true });
+  const head = streamRow ? streamRow.querySelector(".msg-meta") : null;
+  if (head && !head.querySelector(".stream-status")) {
+    const chip = document.createElement("span");
+    chip.className = "stream-status";
+    chip.textContent = "sending";
+    head.appendChild(chip);
+  }
+}
+
+/* Execution status: what the request is doing right now, next to the meta. */
+function setStreamStatus(text) {
+  const chip = streamRow ? streamRow.querySelector(".stream-status") : null;
+  if (chip && text) chip.textContent = text;
+}
+
+function clearStreamStatus() {
+  const chip = streamRow ? streamRow.querySelector(".stream-status") : null;
+  if (chip) chip.remove();
 }
 
 function appendStreamText(answer) {
@@ -1107,11 +1249,14 @@ function applyStreamMeta(meta) {
   if (meta.provider) parts.push(meta.provider);
   if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
   if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
+  const chip = head.querySelector(".stream-status");
   head.textContent = parts.join(" · ");
+  if (chip) head.appendChild(chip);
 }
 
-function finishStreamRow(answer, failure, deepSources = []) {
+function finishStreamRow(answer, failure, deepSources = [], aborted = false) {
   if (!streamRow) return;
+  clearStreamStatus();
   const row = streamRow;
   streamRow = null;
   const body = row.querySelector(".msg-body");
@@ -1121,7 +1266,17 @@ function finishStreamRow(answer, failure, deepSources = []) {
     row.classList.add("error");
     if (body) body.innerHTML = renderMarkdown(answer ? `${answer}\n\n**${failure}**` : failure);
   } else if (!answer.trim()) {
-    row.remove();
+    // Never drop the row silently: an empty reply is a state the user must
+    // see, not something to pretend never happened.
+    if (body) {
+      if (aborted) {
+        row.classList.add("stopped");
+        body.textContent = "Stopped. The request was cancelled before any reply arrived.";
+      } else {
+        row.classList.add("error");
+        body.textContent = "The model returned an empty response. Try again or pick a different model.";
+      }
+    }
   } else {
     if (body) body.innerHTML = renderMarkdown(answer);
     if (deepSources.length) {
@@ -1152,10 +1307,140 @@ function stopStream() {
   if (state.abort) state.abort.abort();
 }
 
+/* Re-sync when connectivity or focus changes: the open thread re-fetches from
+   the server (replaceChildren, so reloading never duplicates messages).
+   Skipped mid-stream — the in-flight request owns the view until it ends. */
+async function resyncCurrentThread() {
+  if (state.busy || !state.currentId) return;
+  await openConversation(state.currentId);
+  await loadConversations();
+}
+
+window.addEventListener("online", () => { void resyncCurrentThread(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void resyncCurrentThread();
+});
+
 function syncCurrentTitle() {
   const match = state.conversations.find((entry) => entry.id === state.currentId);
   if (match) state.currentTitle = match.title;
   renderTabs();
+}
+
+/* ---- panel layout helpers ---------------------------------------- */
+
+/* Values are px numbers written straight into custom properties; the grid and
+   media queries in styles.css translate them. Min/max clamp both directions
+   so panels can never cover the composer or swallow the workspace. */
+let PANEL_MIN = null;
+let PANEL_MAX = null;
+const PANEL_VAR = { left: "--sidebar-w", right: "--right-w", bottom: "--bottom-h" };
+const PANEL_DEFAULT_W = { left: 286, right: 300, bottom: 240 };
+
+function writePanelVars() {
+  const root = document.documentElement.style;
+  for (const [name, size] of Object.entries({ ...PANEL_DEFAULT_W, ...state.panelSize })) {
+    root.setProperty(PANEL_VAR[name], `${size}px`);
+  }
+  PANEL_MIN = PANEL_MIN || { left: 212, right: 240, bottom: 120 };
+  PANEL_MAX = PANEL_MAX || { left: 560, right: 640, bottom: 520 };
+}
+
+function applyPanels() {
+  document.body.classList.toggle("no-left", !state.panelShow.left);
+  document.body.classList.toggle("no-right", !state.panelShow.right);
+  document.body.classList.toggle("no-bottom", !state.panelShow.bottom);
+  for (const name of ["left", "right", "bottom"]) {
+    const button = $(`${name}PanelToggle`);
+    if (!button) continue;
+    button.setAttribute("aria-pressed", String(state.panelShow[name]));
+    button.classList.toggle("active", state.panelShow[name]);
+  }
+  if ($("rightPanel")) $("rightPanel").classList.toggle("hidden", !state.panelShow.right);
+  if ($("bottomPanel")) $("bottomPanel").classList.toggle("hidden", !state.panelShow.bottom);
+}
+
+function togglePanel(name) {
+  state.panelShow[name] = !state.panelShow[name];
+  try { localStorage.setItem("freeai-panel-show", JSON.stringify(state.panelShow)); } catch { /* private mode */ }
+  applyPanels();
+  if (name === "bottom" && state.panelShow.bottom) showTerminalPanel();
+  if (name === "right" && state.panelShow.right) refreshRightPanel();
+}
+
+function startPanelDrag(event) {
+  const side = event.currentTarget.dataset.drag;
+  const prop = side === "right" ? "width" : "height";
+  const start = side === "right" ? event.clientX : event.clientY;
+  let currentPx = getComputedStyle(document.documentElement).getPropertyValue(PANEL_VAR[side]).trim();
+  let value = Math.max(PANEL_MIN[side], Math.min(PANEL_MAX[side], parseFloat(currentPx) || PANEL_DEFAULT_W[side]));
+  event.currentTarget.setPointerCapture(event.pointerId);
+
+  const onMove = (moveEvent) => {
+    moveEvent.preventDefault();
+    const delta = side === "right" ? start - moveEvent.clientX : start - moveEvent.clientY;
+    value = Math.max(PANEL_MIN[side], Math.min(PANEL_MAX[side], Math.round(value + delta)));
+    state.panelSize[side] = value;
+    document.documentElement.style.setProperty(PANEL_VAR[side], `${value}px`);
+    if (side === "bottom" && terminalFit) terminalFit();
+  };
+  const onUp = () => {
+    document.documentElement.removeEventListener("pointermove", onMove);
+    document.documentElement.removeEventListener("pointerup", onUp);
+    document.documentElement.removeEventListener("pointercancel", onUp);
+    try { localStorage.setItem("freeai-panel-size", JSON.stringify(state.panelSize)); } catch { /* private mode */ }
+    if (side === "bottom" && terminalFit) terminalFit();
+  };
+  document.documentElement.addEventListener("pointermove", onMove);
+  document.documentElement.addEventListener("pointerup", onUp);
+  document.documentElement.addEventListener("pointercancel", onUp);
+}
+
+/* Right panel content: a glance at the router plus the last requests. Rendered
+   from the same /api/usage data the Usage page already loads. */
+let rightPanelTimer = null;
+
+async function refreshRightPanel() {
+  if (!state.panelShow.right) return;
+  const result = await api("/api/usage");
+  if (!result.ok) return;
+  const summary = result.data.summary || {};
+  const rows = Array.isArray(result.data.requests) ? result.data.requests : [];
+  const lastOk = rows.find((row) => row.status === "ok");
+  $("rightModel").textContent = lastOk?.model || state.model || "—";
+  $("rightProvider").textContent = lastOk?.provider || "—";
+  $("rightRequests").textContent = String(summary.requests ?? "—");
+  $("rightTokens").textContent = formatCount(Number(summary.total_tokens) || 0);
+  const latency = Math.round(Number(summary.avg_latency_ms) || 0);
+  $("rightLatency").textContent = summary.requests ? `${latency} ms` : "—";
+  const box = $("rightRecent");
+  box.replaceChildren();
+  if (!rows.length) {
+    const note = document.createElement("span");
+    note.className = "empty-note";
+    note.textContent = "No requests yet today.";
+    box.appendChild(note);
+  } else {
+    rows.slice(0, 8).forEach((row) => {
+      const line = document.createElement("div");
+      line.className = "panel-recent-item";
+      const label = document.createElement("span");
+      label.textContent = row.status === "ok"
+        ? `${row.model || "model"} — ${formatCount(Number(row.total_tokens) || 0)} tok`
+        : `failed — ${(row.error || "request failed").slice(0, 46)}`;
+      const when = document.createElement("small");
+      when.textContent = relativeTime(row.created_at);
+      line.append(label, when);
+      box.appendChild(line);
+    });
+  }
+  }
+
+function scheduleRightPanelTimer() {
+  if (rightPanelTimer) clearInterval(rightPanelTimer);
+  rightPanelTimer = setInterval(() => {
+    if (state.panelShow.right && !document.hidden) void refreshRightPanel();
+  }, 15000);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1189,6 +1474,7 @@ async function loadWorkspace() {
     state.tree = { dirs: new Map(), open: new Set(), selected: null, rootLoaded: false };
     renderTree();
   }
+  terminalFollowWorkspace();
 }
 
 function renderWorkspaceHeader() {
@@ -1915,6 +2201,7 @@ const BACKEND_PRESETS = [
     model: "auto",
     note: "50 free-model requests/day (1,000/day after $10 of credit).",
     keyUrl: "https://openrouter.ai/settings/keys",
+    dashboardUrl: "https://openrouter.ai/settings/keys",
   },
   {
     id: "mistral",
@@ -2055,6 +2342,186 @@ async function offerOmnirouteStart() {
   toast(started.ok ? started.data.message || "OmniRoute start requested." : started.data.error || "Could not start OmniRoute — see the Integrations view.");
 }
 
+/* ------------------------------------------------------------------ */
+/* model + mode pickers (composer)                                      */
+/* ------------------------------------------------------------------ */
+
+const PROVIDER_NAMES = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  claude: "Anthropic",
+  gemini: "Google",
+  google: "Google",
+  "meta-llama": "Meta",
+  llama: "Meta",
+  mistralai: "Mistral",
+  mistral: "Mistral",
+  deepseek: "DeepSeek",
+  qwen: "Qwen",
+  groq: "Groq",
+  openrouter: "OpenRouter",
+  nvidia: "NVIDIA",
+  nousresearch: "Nous",
+  together: "Together",
+  moonshotai: "Moonshot",
+  "x-ai": "xAI",
+  meta: "Meta",
+  microsoft: "Microsoft",
+  cohere: "Cohere",
+  ai21: "AI21",
+  perplexity: "Perplexity",
+};
+
+function providerOfModel(id) {
+  if (!id || id === "auto") return "router";
+  const head = id.split(/[/:@]/)[0].toLowerCase();
+  return PROVIDER_NAMES[head] || (head ? head : "router");
+}
+
+function providerBadge(name) {
+  const letter = (name || "?").charAt(0).toUpperCase();
+  let hash = 0;
+  for (const ch of name || "") hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  const span = document.createElement("span");
+  span.className = `pbadge pbadge-${hash % 6}`;
+  span.textContent = letter;
+  span.title = name || "provider";
+  return span;
+}
+
+/* Per-model "today" usage, from a dedicated fetch of today's rows (the
+   Usage view's own page slice is too small to count from). Refreshed each
+   time the model drawer opens. */
+async function refreshModelDailyUsage() {
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const params = new URLSearchParams({
+    from: String(dayStart.getTime() / 1000),
+    page_size: "200",
+    sort: "created_at",
+    dir: "desc",
+  });
+  const result = await api(`/api/usage?${params}`);
+  if (!result.ok || !Array.isArray(result.data.requests)) return;
+  const map = new Map();
+  for (const row of result.data.requests) {
+    const key = row.model || "";
+    const entry = map.get(key) || { count: 0, tokens: 0 };
+    entry.count += 1;
+    entry.tokens += Number(row.total_tokens) || 0;
+    map.set(key, entry);
+  }
+  state.modelDaily = map;
+  if (!$("modelMenu").classList.contains("hidden")) renderModelMenu();
+}
+
+function modelDailyUsage(id) {
+  if (state.modelDaily instanceof Map) {
+    const entry = state.modelDaily.get(id);
+    if (!entry) return null;
+    return `${entry.count} req today · ${formatCount(entry.tokens)} tok`;
+  }
+  return null;
+}
+
+async function loadModels() {
+  const result = await api("/api/models");
+  state.models = result.ok && Array.isArray(result.data.models) ? result.data.models : null;
+  state.modelsError = result.ok ? (result.data.error || "") : `Endpoint unavailable (HTTP ${result.status ?? "?"})`;
+  renderModelChipLabel();
+}
+
+function renderModelChipLabel() {
+  const chip = $("modelChip");
+  if (!chip) return;
+  chip.textContent = state.chatModel || state.model || "auto";
+  chip.title = state.chatModel || state.model || "auto";
+}
+
+function toggleModelMenu(force) {
+  const menu = $("modelMenu");
+  const show = force != null ? force : menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !show);
+  $("modelChip").setAttribute("aria-expanded", String(show));
+  if (show) {
+    $("modelFilter").value = "";
+    renderModelMenu();
+    $("modelFilter").focus();
+    void refreshModelDailyUsage();
+  }
+}
+
+function renderModelMenu() {
+  const list = $("modelMenuList");
+  list.replaceChildren();
+  const filter = $("modelFilter").value.trim().toLowerCase();
+
+  // The config's own default model, by contract always first.
+  list.appendChild(modelMenuItem({
+    id: state.model || "auto",
+    label: `Default — ${state.model || "auto"}`,
+    chosen: !state.chatModel,
+    onPick: () => { state.chatModel = null; },
+  }));
+
+  const note = document.createElement("p");
+  note.className = "model-note";
+  if (state.models && state.models.length) {
+    const matches = state.models.filter((m) => (m.id || "").toLowerCase().includes(filter));
+    if (!matches.length) {
+      note.textContent = `No model matches "${$("modelFilter").value.trim()}".`;
+      list.appendChild(note);
+      return;
+    }
+    matches.slice(0, 200).forEach((model) => {
+      list.appendChild(modelMenuItem({
+        id: model.id,
+        context: model.context_window || 0,
+        chosen: state.chatModel === model.id,
+        onPick: () => { state.chatModel = model.id; },
+      }));
+    });
+  } else {
+    note.textContent = state.modelsError || "Load the catalog from the router to pick a model.";
+    list.appendChild(note);
+  }
+}
+
+function modelMenuItem({ id, label, context, chosen, onPick }) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = "skill-menu-item model-item" + (chosen ? " active" : "");
+  item.setAttribute("role", "option");
+  item.setAttribute("aria-selected", String(chosen));
+  const provider = providerOfModel(id);
+  item.appendChild(providerBadge(provider));
+  const main = document.createElement("span");
+  main.className = "model-item-main";
+  main.textContent = label || id;
+  item.appendChild(main);
+  const side = document.createElement("small");
+  const ctx = context ? formatCount(context) : "";
+  side.textContent = [ctx, modelDailyUsage(id)].filter(Boolean).join(" · ");
+  if (side.textContent) item.appendChild(side);
+  item.addEventListener("click", () => {
+    onPick();
+    try { localStorage.setItem("freeai-chat-model", state.chatModel || ""); } catch { /* private mode */ }
+    toggleModelMenu(false);
+    renderModelChipLabel();
+  });
+  return item;
+}
+
+function setChatMode(mode) {
+  state.chatMode = mode;
+  try { localStorage.setItem("freeai-chat-mode", mode); } catch { /* private mode */ }
+  const build = mode !== "plan";
+  $("modeBuild").classList.toggle("active", build);
+  $("modeBuild").setAttribute("aria-pressed", String(build));
+  $("modePlan").classList.toggle("active", !build);
+  $("modePlan").setAttribute("aria-pressed", String(!build));
+}
+
 async function loadSettings() {
   const result = await api("/api/config");
   if (!result.ok) return;
@@ -2063,6 +2530,8 @@ async function loadSettings() {
   state.model = result.data.model || "auto";
   state.contextBudget = Number(result.data.context_budget_tokens) || 6000;
   $("contextBudget").value = state.contextBudget;
+  renderModelChipLabel();
+  loadModels();
   $("historyMessages").value = Number(result.data.history_messages) || 6;
   $("sendOutline").checked = result.data.send_workspace_outline !== false;
   $("searchProvider").value = result.data.search_provider || "";
@@ -2119,6 +2588,7 @@ async function saveSettings(event) {
   }
   settingsNotice("Settings saved locally.", true);
   setConnection("ok", "Settings saved");
+  void loadModels();
   return true;
 }
 
@@ -2152,8 +2622,31 @@ async function probeRouter() {
   }
 }
 
-function openProviderDashboard() {
-  window.open("http://127.0.0.1:3001", "_blank", "noopener,noreferrer");
+/* Dashboard URL comes from the active preset: hosted providers have a known
+   dashboard; self-hosted gateways (FreeLLMAPI, OmniRoute) host theirs at the
+   gateway root (base URL without /v1). */
+function providerDashboardUrl() {
+  const baseUrl = $("baseUrl") ? $("baseUrl").value.trim() : "";
+  const preset = presetForBaseUrl(baseUrl);
+  if (preset && preset.dashboardUrl) return preset.dashboardUrl;
+  if (preset || /:\d+\/v1\/?$/.test(baseUrl)) return baseUrl.replace(/\/v1\/?$/, "");
+  if (/localhost|127\.0\.0\.1/.test(baseUrl)) return baseUrl.replace(/\/v1\/?$/, "");
+  return null;
+}
+
+async function openProviderDashboard() {
+  const url = providerDashboardUrl();
+  if (!url) {
+    toast("Pick a backend with a dashboard first (Settings → Connection).");
+    return;
+  }
+  // window.open works in the browser UI; the desktop window can block popups,
+  // so fall back to asking the server to open it.
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    const result = await api("/api/open", { method: "POST", body: JSON.stringify({ url }) });
+    if (!result.ok) toast(result.data.error || "Could not open the dashboard.");
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -2249,11 +2742,80 @@ function renderAgents() {
   if (!host) return;
   host.replaceChildren();
   const usable = state.skills.filter((skill) => !skill.error && skill.enabled !== false);
-  if (!usable.length) {
-    host.appendChild(pageNote("No enabled skills. Add a SKILL.md folder to this project, your config folder, or ~/.agents/skills, then enable it on the Skills page."));
+
+  // Controls: search box + per-page count, above the list, survive page and
+  // query changes for this session via state.agentsQuery.
+  if (state.agentsQuery == null) {
+    let perPage = 10;
+    try { perPage = Number(localStorage.getItem("freeai-agents-per-page")) || 10; } catch { /* private mode */ }
+    state.agentsQuery = { query: "", page: 1, perPage: Math.min(Math.max(perPage, 1), 50) };
+  }
+  if (!host.querySelector(".agents-controls")) {
+    const controls = document.createElement("div");
+    controls.className = "agents-controls";
+    const search = document.createElement("input");
+    search.type = "search";
+    search.className = "agents-search";
+    search.placeholder = "Search agents by name or description…";
+    search.value = state.agentsQuery.query;
+    search.setAttribute("aria-label", "Search agents");
+    search.addEventListener("input", () => {
+      state.agentsQuery.query = search.value.trim().toLowerCase();
+      state.agentsQuery.page = 1;
+      renderAgents();
+      // Keep typing focus sticky despite the re-render.
+      const next = host.querySelector(".agents-search");
+      if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+    });
+    const per = document.createElement("label");
+    per.className = "agents-per-page";
+    per.textContent = "Per page";
+    const select = document.createElement("select");
+    for (const count of [10, 25, 50]) {
+      const option = document.createElement("option");
+      option.value = String(count);
+      option.textContent = count;
+      select.appendChild(option);
+    }
+    select.value = String(state.agentsQuery.perPage);
+    select.addEventListener("change", () => {
+      state.agentsQuery.perPage = Number(select.value) || 10;
+      state.agentsQuery.page = 1;
+      try { localStorage.setItem("freeai-agents-per-page", String(select.value)); } catch { /* private mode */ }
+      renderAgents();
+    });
+    per.appendChild(select);
+    controls.appendChild(search);
+    controls.appendChild(per);
+    host.appendChild(controls);
+  }
+
+  const filtered = usable.filter((skill) => {
+    if (!state.agentsQuery.query) return true;
+    const haystack = `${skill.id} ${skill.name || ""} ${skill.summary || ""} ${skill.description || ""}`.toLowerCase();
+    return haystack.includes(state.agentsQuery.query);
+  });
+  const pages = Math.ceil(filtered.length / state.agentsQuery.perPage) || 1;
+  const page = Math.min(state.agentsQuery.page, pages);
+  state.agentsQuery.page = page;
+  const slice = filtered.slice((page - 1) * state.agentsQuery.perPage, page * state.agentsQuery.perPage);
+  const count = document.createElement("p");
+  count.className = "muted agents-count";
+  count.textContent = `${filtered.length} agent${filtered.length === 1 ? "" : "s"}`;
+  host.appendChild(count);
+
+  if (!filtered.length) {
+    host.appendChild(pageNote(state.agentsQuery.query
+      ? `No agent matches "${state.agentsQuery.query}".`
+      : "No enabled skills. Add a SKILL.md folder to this project, your config folder, or ~/.agents/skills, then enable it on the Skills page."));
+    const pager = renderAgentsPager(pages, page, host);
+    host.appendChild(pager);
     return;
   }
-  usable.forEach((skill) => {
+  const list = document.createElement("div");
+  list.className = "skill-list";
+  host.appendChild(list);
+  slice.forEach((skill) => {
     const row = document.createElement("div");
     row.className = "skill-row" + (effectiveSkillId() === skill.id ? " active" : "");
     const main = document.createElement("div");
@@ -2284,8 +2846,45 @@ function renderAgents() {
       },
     ));
     row.appendChild(actions);
-    host.appendChild(row);
+    list.appendChild(row);
   });
+  host.appendChild(renderAgentsPager(pages, page, host));
+}
+
+function renderAgentsPager(pages, page, host) {
+  const pager = document.createElement("div");
+  pager.className = "usage-pager";
+  const goto = (target) => { state.agentsQuery.page = target; renderAgents(); host.scrollIntoView({ block: "start" }); };
+  const prev = document.createElement("button");
+  prev.className = "pager-btn";
+  prev.textContent = "‹ Prev";
+  prev.disabled = page <= 1;
+  prev.addEventListener("click", () => goto(page - 1));
+  pager.appendChild(prev);
+  const windowed = new Set([1, pages, page - 1, page, page + 1].filter((n) => n >= 1 && n <= pages));
+  let last = 0;
+  for (let number = 1; number <= pages; number++) {
+    if (!windowed.has(number)) continue;
+    if (last && number - last > 1) {
+      const gap = document.createElement("span");
+      gap.className = "pager-gap";
+      gap.textContent = "…";
+      pager.appendChild(gap);
+    }
+    const button = document.createElement("button");
+    button.className = "pager-btn" + (number === page ? " active" : "");
+    button.textContent = number;
+    button.addEventListener("click", () => goto(number));
+    pager.appendChild(button);
+    last = number;
+  }
+  const next = document.createElement("button");
+  next.className = "pager-btn";
+  next.textContent = "Next ›";
+  next.disabled = page >= pages;
+  next.addEventListener("click", () => goto(page + 1));
+  pager.appendChild(next);
+  return pager;
 }
 
 /* Integrations: live status of everything Studio talks to, one tester per card. */
@@ -2525,8 +3124,22 @@ async function runWorkflow(workflow) {
 }
 
 async function loadUsage() {
-  const result = await api("/api/usage");
-  if (!result.ok) return;
+  const query = state.usageQuery;
+  const params = new URLSearchParams();
+  params.set("page", query.page);
+  params.set("page_size", "10");
+  params.set("sort", query.sort);
+  params.set("dir", query.dir);
+  for (const key of ["model", "provider"]) if (query[key]) params.set(key, query[key]);
+  // Date inputs are day-granular: from includes its whole day, to ends at 23:59:59.
+  if (query.from) params.set("from", Date.parse(`${query.from}T00:00:00`) / 1000);
+  if (query.to) params.set("to", (Date.parse(`${query.to}T23:59:59`) / 1000) || "");
+  const result = await api(`/api/usage?${params}`);
+  if (!result.ok) {
+    const body = $("usageRows");
+    if (body) body.innerHTML = '<tr><td colspan="7" class="muted">Could not load usage records.</td></tr>';
+    return;
+  }
   const summary = result.data.summary || {};
   $("statRequests").textContent = summary.requests || 0;
   $("statSuccess").textContent = summary.successful || 0;
@@ -2535,39 +3148,184 @@ async function loadUsage() {
   $("statLatency").textContent = summary.avg_latency_ms
     ? `${Math.round(summary.avg_latency_ms)} ms`
     : "—";
-
-  const body = $("usageRows");
-  body.replaceChildren();
+  state.usageMeta = result.data;
   const requests = Array.isArray(result.data.requests) ? result.data.requests : [];
+  state.usageRows = requests;
+  renderUsageTable();
+  renderUsagePager(result.data);
+  renderUsageSeries(Array.isArray(result.data.series) ? result.data.series : []);
+  renderUsageByModel(Array.isArray(result.data.by_model) ? result.data.by_model : []);
+  renderUsageHead();
+}
+
+function renderUsageTable() {
+  const body = $("usageRows");
+  if (!body) return;
+  body.replaceChildren();
+  const requests = state.usageRows;
   if (!requests.length) {
-    body.innerHTML = '<tr><td colspan="6" class="muted">No requests yet. Send a message to start recording usage.</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="muted">No requests match. Send a message to start recording usage, or clear the filters.</td></tr>';
     return;
   }
   requests.forEach((request) => {
     const row = document.createElement("tr");
-    const when = new Date(request.created_at * 1000).toLocaleString();
+    const provider = request.provider || "unknown";
+    const model = request.model || "";
     const tokens = request.total_tokens == null ? "not reported" : Number(request.total_tokens).toLocaleString();
     const detail = request.status === "ok"
       ? (request.fallback_attempts ? `Fallback attempts: ${request.fallback_attempts}` : "Completed")
       : (request.error || "Request failed");
-    [when,
+    const cells = [
+      new Date(request.created_at * 1000).toLocaleString(),
       request.status,
-      `${request.provider || "unknown"}${request.model ? ` · ${request.model}` : ""}`,
+      provider,
+      model,
       request.latency_ms == null ? "—" : `${request.latency_ms} ms`,
       tokens,
-      detail].forEach((value, index) => {
+      detail,
+    ];
+    cells.forEach((value, index) => {
       const cell = document.createElement("td");
       cell.textContent = value || "—";
       if (index === 1) cell.className = request.status === "ok" ? "status-ok" : "status-error";
-      if (index === 5) cell.className = "detail-cell";
+      if (index === 6) cell.className = "detail-cell";
       row.appendChild(cell);
     });
     body.appendChild(row);
   });
 }
 
+function renderUsageHead() {
+  const head = $("usageHead");
+  if (!head) return;
+  const query = state.usageQuery;
+  head.querySelectorAll("th[data-sort]").forEach((th) => {
+    const key = th.dataset.sort;
+    const active = query.sort === key;
+    th.classList.toggle("sorted", active);
+    th.setAttribute("aria-sort", active ? (query.dir === "asc" ? "ascending" : "descending") : "none");
+    th.textContent = th.textContent.replace(/ [▲▼]$/, "");
+    if (active) th.textContent += query.dir === "asc" ? " ▲" : " ▼";
+    th.title = "Sort by " + th.textContent.replace(/ [▲▼]$/, "");
+  });
+}
+
+/* Numbered pager: 1 … around current … last, prev/next always present. */
+function renderUsagePager(meta) {
+  const host = $("usagePager");
+  if (!host) return;
+  host.replaceChildren();
+  const pages = meta.pages || 1;
+  const page = Math.min(meta.page || 1, pages);
+  const goto = (target) => {
+    state.usageQuery.page = Math.min(Math.max(target, 1), pages);
+    loadUsage();
+  };
+  const prev = document.createElement("button");
+  prev.className = "pager-btn";
+  prev.textContent = "‹ Prev";
+  prev.disabled = page <= 1;
+  prev.addEventListener("click", () => goto(page - 1));
+  host.appendChild(prev);
+  const windowed = new Set([1, pages, page - 1, page, page + 1].filter((n) => n >= 1 && n <= pages));
+  let last = 0;
+  for (let number = 1; number <= pages; number++) {
+    if (!windowed.has(number)) continue;
+    if (last && number - last > 1) {
+      const gap = document.createElement("span");
+      gap.className = "pager-gap";
+      gap.textContent = "…";
+      host.appendChild(gap);
+    }
+    const button = document.createElement("button");
+    button.className = "pager-btn" + (number === page ? " active" : "");
+    button.textContent = number;
+    button.addEventListener("click", () => goto(number));
+    host.appendChild(button);
+    last = number;
+  }
+  const next = document.createElement("button");
+  next.className = "pager-btn";
+  next.textContent = "Next ›";
+  next.disabled = page >= pages;
+  next.addEventListener("click", () => goto(page + 1));
+  host.appendChild(next);
+  const note = document.createElement("span");
+  note.className = "pager-note muted";
+  note.textContent = `${(meta.total || 0).toLocaleString()} requests total · page ${page} of ${pages}`;
+  host.appendChild(note);
+}
+
+/* Div-bar charts — no canvas, no drawing library, holds on reduced widths. */
+function renderUsageSeries(series) {
+  const host = $("usageSeries");
+  if (!host) return;
+  host.replaceChildren();
+  if (!series.length) {
+    host.appendChild(pageNote("No dated activity for this filter."));
+    return;
+  }
+  const peak = Math.max(...series.map((day) => day.requests || 1));
+  series.forEach((day) => {
+    const slot = document.createElement("div");
+    slot.className = "usage-day";
+    const failed = Math.max(0, (day.requests || 0) - (day.ok || 0));
+    const okBar = document.createElement("div");
+    okBar.className = "usage-bar ok";
+    okBar.style.height = `${Math.round(((day.ok || 0) / peak) * 100)}%`;
+    const failBar = document.createElement("div");
+    failBar.className = "usage-bar failed";
+    failBar.style.height = `${Math.round((failed / peak) * 100)}%`;
+    const label = document.createElement("small");
+    label.textContent = new Date(day.day * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    slot.title = new Date(day.day * 1000).toLocaleDateString(undefined, { month: "long", day: "numeric" })
+      + ` — ${day.ok || 0} ok, ${failed} failed, ${Number(day.tokens || 0).toLocaleString()} tokens, avg ${Math.round(day.avg_latency_ms || 0)} ms`;
+    slot.appendChild(okBar);
+    slot.appendChild(failBar);
+    slot.appendChild(label);
+    host.appendChild(slot);
+  });
+}
+
+function renderUsageByModel(rows) {
+  const host = $("usageByModel");
+  if (!host) return;
+  host.replaceChildren();
+  if (!rows.length) {
+    host.appendChild(pageNote("No requests recorded for this filter."));
+    return;
+  }
+  const peak = Math.max(...rows.map((row) => row.requests || 1));
+  rows.slice(0, 12).forEach((row) => {
+    const line = document.createElement("div");
+    line.className = "usage-model-line";
+    const label = document.createElement("span");
+    label.className = "usage-model-name";
+    label.textContent = row.model;
+    const bar = document.createElement("span");
+    bar.className = "usage-model-bar";
+    bar.style.width = `${Math.round(((row.requests || 0) / peak) * 100)}%`;
+    const note = document.createElement("small");
+    note.className = "muted";
+    note.textContent = `${row.requests} req · ${Number(row.tokens || 0).toLocaleString()} tok · ${Math.round(row.avg_latency_ms || 0)} ms`; 
+    line.title = `${row.provider} — ${row.ok || 0} ok of ${row.requests}`;
+    line.appendChild(label);
+    line.appendChild(bar);
+    line.appendChild(note);
+    host.appendChild(line);
+  });
+}
+
+function usageFiltersFromInputs() {
+  const query = state.usageQuery;
+  query.model = $("usageModelFilter").value.trim();
+  query.provider = $("usageProviderFilter").value.trim();
+  query.from = $("usageFrom").value || "";
+  query.to = $("usageTo").value || "";
+}
+
 /* ------------------------------------------------------------------ */
-/* context meter                                                       */
+/* context meter                                                      */
 /* ------------------------------------------------------------------ */
 
 function estimateTokensFromCharacters(characters) {
@@ -2991,11 +3749,55 @@ function bindEvents() {
   $("usageBtn").addEventListener("click", () => setView("usage"));
   $("settingsBtn").addEventListener("click", () => setView("settings"));
   $("refreshUsage").addEventListener("click", loadUsage);
+  $("usageApply").addEventListener("click", () => { usageFiltersFromInputs(); state.usageQuery.page = 1; loadUsage(); });
+  for (const input of ["usageModelFilter", "usageProviderFilter", "usageFrom", "usageTo"]) {
+    $(input).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { usageFiltersFromInputs(); state.usageQuery.page = 1; loadUsage(); }
+    });
+  }
+  $("usageReset").addEventListener("click", () => {
+    $("usageModelFilter").value = "";
+    $("usageProviderFilter").value = "";
+    $("usageFrom").value = "";
+    $("usageTo").value = "";
+    state.usageQuery = { page: 1, sort: "created_at", dir: "desc", model: "", provider: "", from: "", to: "" };
+    loadUsage();
+  });
+  document.querySelectorAll("#usageHead th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      const query = state.usageQuery;
+      if (query.sort === key) query.dir = query.dir === "asc" ? "desc" : "asc";
+      else { query.sort = key; query.dir = key === "created_at" ? "desc" : "asc"; }
+      query.page = 1;
+      loadUsage();
+    });
+  });
 
   $("sidebarToggle").addEventListener("click", () => {
     const open = document.body.classList.toggle("nav-open");
     $("scrim").classList.toggle("hidden", !open);
   });
+
+  /* ---- panels: left / right / bottom ------------------------------ */
+  /* Sizes and visibility live in localStorage with the same pattern as the
+     theme, and drive :root custom properties — no re-render involved. */
+  state.panelSize = JSON.parse(localStorage.getItem("freeai-panel-size") || "{}") || {};
+  state.panelShow = JSON.parse(localStorage.getItem("freeai-panel-show") || "{}") || {};
+  if (state.panelShow.left == null) { state.panelShow.left = true; }
+  if (state.panelShow.right == null) { state.panelShow.right = false; }
+  if (state.panelShow.bottom == null) { state.panelShow.bottom = false; }
+  PANEL_MIN = { left: 212, right: 240, bottom: 120 };
+  PANEL_MAX = { left: 560, right: 640, bottom: 520 };
+  writePanelVars();
+  applyPanels();
+  $("leftPanelToggle").addEventListener("click", () => togglePanel("left"));
+  $("rightPanelToggle").addEventListener("click", () => togglePanel("right"));
+  $("bottomPanelToggle").addEventListener("click", () => togglePanel("bottom"));
+  document.querySelectorAll(".panel-handle").forEach((handle) => {
+    handle.addEventListener("pointerdown", startPanelDrag);
+  });
+  scheduleRightPanelTimer();
   $("scrim").addEventListener("click", () => {
     document.body.classList.remove("nav-open");
     $("scrim").classList.add("hidden");
@@ -3021,6 +3823,23 @@ function bindEvents() {
     toggleSkillMenu();
   });
   $("skillMenu").addEventListener("click", (event) => event.stopPropagation());
+  // Model picker: same pattern as the skill menu.
+  $("modelChip").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleModelMenu();
+  });
+  $("modelMenu").addEventListener("click", (event) => event.stopPropagation());
+  $("modelFilter").addEventListener("input", () => renderModelMenu());
+  document.addEventListener("click", () => toggleModelMenu(false));
+  // Mode picker (Build/Plan); persists the choice like the model chip.
+  const restore = (key, fallback) => {
+    try { return localStorage.getItem(key); } catch { return fallback; }
+  };
+  const savedModel = restore("freeai-chat-model", "") || "";
+  const savedMode = restore("freeai-chat-mode", "");
+  if (savedModel) state.chatModel = savedModel;
+  setChatMode(savedMode === "plan" ? "plan" : "build");
+  renderModelChipLabel();
   $("skillChipClear").addEventListener("click", () => {
     state.activeSkillId = null;
     state.suggestedSkillId = null;
@@ -3299,6 +4118,10 @@ function bindEvents() {
 (async function init() {
   loadTheme();
   setupThemeToggle();
+  applyAccent(localStorage.getItem("freeai-accent") || "classic");
+  setupSettingsNav();
+  renderAccentPicker();
+  setSettingsSection(localStorage.getItem("freeai-settings-section") || "connection");
   bindEvents();
   setSidebarMode("threads");
   setView("chat");
@@ -3316,4 +4139,173 @@ function bindEvents() {
     await openConversation(state.conversations[0].id);
   }
   if (state.workspace) setSidebarMode("files");
+  setupTerminal();
+  if (state.panelShow.bottom) showTerminalPanel();
 })();
+
+/* ------------------------------------------------------------------ */
+/* bottom panel: terminal                                               */
+/* ------------------------------------------------------------------ */
+
+/* A plain-text view of the PTY (nothing vendored): the shell echoes
+   everything, so we capture keystrokes server-side and draw what comes back,
+   with ANSI control sequences stripped. */
+const termState = { open: false, id: null, source: null, cwd: "", busy: false };
+
+function showTerminalPanel() {
+  if (!state.workspace) return;
+  const cwd = state.workspace.absolute_path || state.workspace.path || "";
+  if (!cwd) return;
+  void openTerminalSession(cwd);
+}
+
+// Called whenever the open workspace changes (or loads): attach the panel to
+// the new folder when the bottom panel is visible.
+function terminalFollowWorkspace() {
+  if (state.panelShow?.bottom) showTerminalPanel();
+}
+
+async function openTerminalSession(cwd) {
+  if (termState.busy || !cwd) return;
+  // Same folder, already attached: nothing to do (keeps scrollback alive).
+  if (termState.id && termState.cwd === cwd) return;
+  termState.busy = true;
+  try {
+    if (termState.id) {
+      await api(`/api/terminal/${termState.id}/close`, { method: "POST", body: JSON.stringify({}) });
+      if (termState.source) termState.source.close();
+      termState.id = null;
+      termState.source = null;
+      $("terminalHost").replaceChildren();
+    }
+    const result = await api("/api/terminal/open", {
+      method: "POST",
+      body: JSON.stringify({ cwd, ...terminalSize() }),
+    });
+    if (!result.ok || !result.data.ok) {
+      toast(result.data.error || "Could not open a terminal.");
+      return;
+    }
+    termState.id = result.data.id;
+    termState.cwd = result.data.cwd;
+    $("terminalFolder").textContent = result.data.cwd;
+    if (result.data.reused) $("terminalHost").replaceChildren();
+    void connectTerminalStream();
+  } finally {
+    termState.busy = false;
+  }
+}
+
+function connectTerminalStream() {
+  const pre = document.createElement("pre");
+  pre.className = "terminal";
+  pre.tabIndex = 0;
+  pre.setAttribute("aria-label", "Terminal output");
+  $("terminalHost").replaceChildren(pre);
+  // A blank session opens with a visible caret line instead of feeling dead.
+  pre.append(document.createTextNode("\n"));
+  if (termState.source) termState.source.close();
+  const source = new EventSource(`/api/terminal/${termState.id}/stream`);
+  termState.source = source;
+  source.onmessage = (event) => {
+    try {
+      const chunk = JSON.parse(event.data);
+      if (chunk === "__exit__") {
+        pre.append(document.createTextNode("\n[process exited — click Restart for a new shell]\n"));
+        return;
+      }
+      pre.append(document.createTextNode(termSanitize(chunk)));
+      pre.scrollTop = pre.scrollHeight;
+    } catch { /* ignore malformed frames */ }
+  };
+  source.addEventListener("done", () => { source.close(); });
+  pre.focus();
+}
+
+function termSanitize(text) {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // window title
+    .replace(/\x1b\[[?0-9;]*[ -/]*[@-~]/g, "")            // cursor + color
+    .replace(/\x1b[^\x1b]/g, "")                           // anything left
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "");
+}
+
+function terminalSize() {
+  const host = $("terminalHost");
+  const box = host.getBoundingClientRect();
+  return {
+    cols: Math.max(20, Math.floor(box.width / 7.2)),
+    rows: Math.max(5, Math.floor(box.height / 17)),
+  };
+}
+
+function terminalFit() {
+  if (!termState.id || termState.busy) return;
+  const { cols, rows } = terminalSize();
+  void api(`/api/terminal/${termState.id}/resize`, {
+    method: "POST",
+    body: JSON.stringify({ cols, rows }),
+  });
+}
+
+const TERM_KEYS = {
+  Enter: "\r",
+  Backspace: "\x7f",
+  Tab: "\t",
+  ArrowUp: "\x1b[A",
+  ArrowDown: "\x1b[B",
+  ArrowRight: "\x1b[C",
+  ArrowLeft: "\x1b[D",
+  Home: "\x1b[H",
+  End: "\x1b[F",
+  Delete: "\x1b[3~",
+  PageUp: "\x1b[5~",
+  PageDown: "\x1b[6~",
+};
+
+function terminalSend(data) {
+  if (!termState.id) return;
+  void api(`/api/terminal/${termState.id}/input`, {
+    method: "POST",
+    body: JSON.stringify({ data }),
+  });
+}
+
+function setupTerminal() {
+  const host = $("terminalHost");
+  host.addEventListener("click", () => host.querySelector("pre")?.focus());
+  host.addEventListener("keydown", (event) => {
+    if (event.ctrlKey) {
+      if (event.key === "c") { event.preventDefault(); terminalSend("\x03"); return; }
+      if (event.key === "d") { event.preventDefault(); terminalSend("\x04"); return; }
+      if (event.key === "u") { event.preventDefault(); terminalSend("\x15"); return; }
+      return; // browser shortcuts pass through
+    }
+    if (event.metaKey || event.altKey) return;
+    const mapped = TERM_KEYS[event.key];
+    if (mapped) {
+      event.preventDefault();
+      terminalSend(mapped);
+    } else if (event.key.length === 1) {
+      event.preventDefault();
+      terminalSend(event.key);
+    }
+  });
+  host.addEventListener("paste", (event) => {
+    event.preventDefault();
+    terminalSend(event.clipboardData ? event.clipboardData.getData("text") : "");
+  });
+  $("terminalRestart").addEventListener("click", () => {
+    if (state.workspace && !termState.busy) {
+      void openTerminalSession(state.workspace.absolute_path || state.workspace.path || "");
+    }
+  });
+  if (window.ResizeObserver) {
+    let timer = null;
+    new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => terminalFit(), 250);
+    }).observe(host);
+  }
+}
