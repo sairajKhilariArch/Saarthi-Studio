@@ -36,3 +36,4 @@ rustc-ice-*.txt
 /android/*.jks
 /android/keystore.properties
 /android/ci-diagnostics/
+.tmp/
