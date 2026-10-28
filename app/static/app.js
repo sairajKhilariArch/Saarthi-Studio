@@ -475,6 +475,9 @@ const state = {
   view: "chat",
   chatContext: null,
   mediaAttachments: [],
+  /* Thread pane scope: "project" lists the active project's threads, "all"
+     lists recent threads from every project, each labelled with its project. */
+  threadScope: (() => { try { return localStorage.getItem("freeai-thread-scope") === "all" ? "all" : "project"; } catch { return "project"; } })(),
   model: "auto",
   contextBudget: 6000,
   lastContextTokens: null,
@@ -916,13 +919,32 @@ async function copyText(text, message) {
 }
 
 async function loadConversations() {
-  const result = await api("/api/conversations");
+  const result = await api(`/api/conversations${state.threadScope === "all" ? "?scope=all" : ""}`);
   if (!result.ok) {
     toast(result.data.error || "Could not load history.");
     return;
   }
   state.conversations = Array.isArray(result.data) ? result.data : [];
+  renderThreadPaneHead();
   renderConversations();
+}
+
+/* The pane header names the thread's context so sidebar threads always read
+   as "this project's threads" or "recent threads across projects". */
+function renderThreadPaneHead() {
+  const label = $("threadPaneLabel");
+  if (!label) return;
+  if (state.threadScope === "all") {
+    label.textContent = "Recent — all projects";
+  } else {
+    const project = activeProjectName();
+    label.textContent = `Recent in ${project}`;
+  }
+  $("threadScopeBtn").textContent = state.threadScope === "all" ? "This project" : "All projects";
+  $("threadScopeBtn").title =
+    state.threadScope === "all"
+      ? "Back to showing this project's threads only"
+      : "Show recent threads from every project";
 }
 
 /* "3m ago" style badge for thread rows. Unknown timestamps stay blank. */
@@ -949,11 +971,18 @@ function renderConversations() {
   }
   state.conversations.forEach((conversation) => {
     const item = document.createElement("div");
-    item.className = "thread-item" + (conversation.id === state.currentId ? " active" : "");
+    const isOpen = conversation.id === state.currentId;
+    item.className = "thread-item" + (isOpen ? " active" : "");
     item.innerHTML = `${icon("chat", "thread-icon")}<span class="thread-title"></span>` +
+      (state.threadScope === "all"
+        ? `<span class="thread-project" title="This thread belongs to this project"></span>`
+        : "") +
       `<button class="thread-delete" title="Delete thread" aria-label="Delete thread">${icon("close")}</button>` +
-      `<span class="thread-time"></span>`;
+      `<span class="thread-time"></span>` +
+      (isOpen ? `<span class="thread-open" title="This thread is open in the chat view">open</span>` : "");
     item.querySelector(".thread-title").textContent = conversation.title;
+    const projectChip = item.querySelector(".thread-project");
+    if (projectChip) projectChip.textContent = conversation.project || "";
     item.querySelector(".thread-time").textContent = relativeTime(conversation.updated_at);
     item.title = `${conversation.title} — ${relativeTime(conversation.updated_at)}`;
     item.addEventListener("click", (event) => {
@@ -3880,6 +3909,12 @@ function bindEvents() {
   $("modeSkills").addEventListener("click", () => { setSidebarMode("skills"); loadSkills(); });
   $("newChat").addEventListener("click", newConversation);
   $("newChatTop").addEventListener("click", newConversation);
+  // Thread pane scope: flip between this-project threads and all-project recents.
+  $("threadScopeBtn").addEventListener("click", async () => {
+    state.threadScope = state.threadScope === "all" ? "project" : "all";
+    try { localStorage.setItem("freeai-thread-scope", state.threadScope); } catch { /* private mode */ }
+    await loadConversations();
+  });
   $("projectSwitcher").addEventListener("click", (event) => {
     event.stopPropagation();
     if ($("projectMenu").classList.contains("hidden")) openProjectMenu();

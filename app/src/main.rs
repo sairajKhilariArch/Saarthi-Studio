@@ -1098,23 +1098,51 @@ async fn activate_project(State(state): State<AppState>, Path(id): Path<String>)
     Json(json!({ "ok": true, "id": id, "name": name, "workspace": workspace })).into_response()
 }
 
-async fn list_conversations(State(state): State<AppState>) -> Response<Body> {
-    let project = active_project_id(&state);
+async fn list_conversations(
+    AxumQuery(params): AxumQuery<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Response<Body> {
+    // `scope=all` returns recent threads across every project, each labelled
+    // with its project name, so the sidebar can show threads in context.
+    // The default keeps the long-standing project-filtered behaviour.
+    let all_scope = params.get("scope").map(String::as_str) == Some("all");
     let result = (|| -> rusqlite::Result<Vec<Value>> {
         let conn = open_db(&state.database_path)?;
-        let mut stmt = conn.prepare(
+        let sql = if all_scope {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
-             (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message
+             (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
+             COALESCE(p.name, 'No project') AS project
+             FROM conversations v LEFT JOIN projects p ON p.id=v.project_id
+             ORDER BY v.updated_at DESC LIMIT 100"
+        } else {
+            "SELECT v.id, v.title, v.created_at, v.updated_at,
+             (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
+             (SELECT COALESCE(name, 'No project') FROM projects p WHERE p.id=v.project_id) AS project
              FROM conversations v WHERE v.project_id=?1 ORDER BY v.updated_at DESC"
-        )?;
-        let rows = stmt.query_map([project], |row| {
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = if all_scope {
+            let rows = stmt.query_map([], |row| {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
+                    "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
+                    "last_message": row.get::<_, Option<String>>(4)?,
+                    "project": row.get::<_, String>(5)?
+                }))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<Value>>>()
+        } else {
+            let project = active_project_id(&state);
+            let rows = stmt.query_map([project], |row| {
             Ok(json!({
                 "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
                 "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                 "last_message": row.get::<_, Option<String>>(4)?
             }))
-        })?;
-        rows.collect()
+            })?;
+            rows.collect::<rusqlite::Result<Vec<Value>>>()
+        };
+        Ok(rows?)
     })();
     match result {
         Ok(items) => Json(Value::Array(items)).into_response(),
