@@ -1286,3 +1286,49 @@ kbd {
 /* settings: deep search provider + key */
 .deep-field { border-top: 1px solid var(--line-soft); padding-top: 10px; }
 .deep-field > span { color: var(--text); font-weight: 600; }
+
+/* message media: composer chips and inline previews in the thread */
+.media-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 4px;
+}
+.media-chips.hidden { display: none; }
+.media-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 3px;
+}
+.media-chip img { width: 44px; height: 44px; object-fit: cover; border-radius: 5px; display: block; }
+.media-chip .media-tag { color: var(--dim); font-size: 11px; font-weight: 600; text-transform: uppercase; padding: 0 4px; }
+.media-chip .chip-close {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.media-chip .chip-close .icon { width: 9px; height: 9px; }
+.msg .media-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.msg .media-thumb { max-width: 260px; max-height: 200px; border-radius: 8px; border: 1px solid var(--line-soft); display: block; }
+.msg .media-strip audio { width: 260px; height: 36px; }

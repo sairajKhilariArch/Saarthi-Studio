@@ -29,12 +29,14 @@ use uuid::Uuid;
 mod browser;
 mod context;
 mod deepsearch;
+mod events;
 #[cfg(feature = "gui")]
 mod gui;
 mod host_api;
 mod host_auth;
 mod host_security;
 mod host_transport;
+mod media;
 mod router;
 mod router_console;
 mod skills;
@@ -54,6 +56,7 @@ struct AppState {
     workspace: workspace::WorkspaceStore,
     client: Client,
     terminal: terminal::Hub,
+    events: events::Hub,
     /// One-minute /models cache keyed by "base|has-key".
     models_cache: Arc<Mutex<HashMap<String, (std::time::Instant, Value)>>>,
 }
@@ -115,7 +118,7 @@ impl Config {
     }
 }
 
-fn now_seconds() -> f64 {
+pub(crate) fn now_seconds() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -219,7 +222,24 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
             total_tokens INTEGER, fallback_attempts TEXT, error TEXT
         );",
     )?;
-    migrate_projects(&conn)
+    let _ = migrate_projects(&conn);
+    migrate_message_attachments(&conn)
+}
+
+/// Give an existing messages table its `attachments` column (JSON of {kind,ref}
+/// entries) so a fresh install and an upgraded install share one schema.
+fn migrate_message_attachments(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(messages)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "attachments")
+    };
+    if !has_column {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN attachments TEXT;")?;
+    }
+    Ok(())
 }
 
 /// Give a pre-projects database its `project_id` column, a first project, and
@@ -344,7 +364,7 @@ fn ensure_setup(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn load_config(state: &AppState) -> Config {
+pub(crate) fn load_config(state: &AppState) -> Config {
     fs::read(&state.config_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok())
@@ -361,7 +381,7 @@ fn save_config_file(path: &FsPath, cfg: &Config) -> io::Result<()> {
     set_private_permissions(path, false)
 }
 
-fn json_error(status: StatusCode, message: impl Into<String>) -> Response<Body> {
+pub(crate) fn json_error(status: StatusCode, message: impl Into<String>) -> Response<Body> {
     (status, Json(json!({"error": message.into()}))).into_response()
 }
 
@@ -410,7 +430,7 @@ fn clean_title(value: &str) -> String {
     }
 }
 
-fn router_url(cfg: &Config, suffix: &str) -> String {
+pub(crate) fn router_url(cfg: &Config, suffix: &str) -> String {
     format!(
         "{}/{}",
         cfg.base_url.trim_end_matches('/'),
@@ -455,7 +475,7 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
 
 /// When the only thing wrong is that a self-hosted gateway is not running,
 /// say exactly how to start it instead of a bare "could not reach" line.
-fn reach_error(base_url: &str, detail: String) -> String {
+pub(crate) fn reach_error(base_url: &str, detail: String) -> String {
     let prefix = "Could not reach router at ".to_string();
     let mut message = format!("{prefix}{base_url}: {detail}");
     if base_url.contains("localhost:20128") {
@@ -1113,11 +1133,16 @@ async fn get_messages(State(state): State<AppState>, Path(id): Path<String>) -> 
         if exists.is_none() {
             return Ok(None);
         }
-        let mut stmt = conn.prepare("SELECT id, role, content, created_at FROM messages WHERE conversation_id=?1 ORDER BY id")?;
+        let mut stmt = conn.prepare("SELECT id, role, content, created_at, attachments FROM messages WHERE conversation_id=?1 ORDER BY id")?;
         let rows = stmt.query_map([id], |row| {
+            let attachments: Option<String> = row.get(4)?;
+            let attachments = attachments
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .unwrap_or(Value::Null);
             Ok(json!({
                 "id": row.get::<_, i64>(0)?, "role": row.get::<_, String>(1)?,
-                "content": row.get::<_, String>(2)?, "created_at": row.get::<_, f64>(3)?
+                "content": row.get::<_, String>(2)?, "created_at": row.get::<_, f64>(3)?,
+                "attachments": attachments
             }))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map(Some)
@@ -1148,7 +1173,10 @@ async fn create_conversation(
             params![id, title, project, now],
         )
     }) {
-        Ok(_) => (StatusCode::CREATED, Json(json!({"id": id, "title": title}))).into_response(),
+        Ok(_) => {
+            events::notify(&state.events, &id, "created");
+            (StatusCode::CREATED, Json(json!({"id": id, "title": title}))).into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1158,9 +1186,14 @@ async fn delete_conversation(
     Path(id): Path<String>,
 ) -> Response<Body> {
     match open_db(&state.database_path)
-        .and_then(|conn| conn.execute("DELETE FROM conversations WHERE id=?1", [id]))
+        .and_then(|conn| conn.execute("DELETE FROM conversations WHERE id=?1", [id.as_str()]))
     {
-        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Ok(count) => {
+            if count > 0 {
+                events::notify(&state.events, &id, "deleted");
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1408,6 +1441,8 @@ struct ChatPrep {
     packed: context::PackedRequest,
     /// Per-message model override from the composer's model picker.
     model: Option<String>,
+    /// (kind, mime, file bytes) for media referenced by this message.
+    attachments: Vec<(String, String, Vec<u8>)>,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -1452,6 +1487,17 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             "Message is too long (50,000 characters maximum).",
         )));
     }
+    // Media listed with this message: validated against the on-disk store now,
+    // so a missing file fails the request instead of degrading silently.
+    let attachments = match media::resolve_attachments(state, input) {
+        Ok(attachments) => attachments,
+        Err(error) => return Err(Box::new(json_error(StatusCode::BAD_REQUEST, error))),
+    };
+    let attachment_records = input
+        .get("attachments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     let mut prompt = if code.trim().is_empty() {
         message.clone()
@@ -1481,6 +1527,13 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             prompt
         );
     }
+    // Decision mode: the reply must end in an actionable recommendation.
+    if input.get("mode").and_then(Value::as_str) == Some("decide") {
+        prompt = format!(
+            "Decision mode: compare the candidate options against the stated\ngoal. Show a short pros/cons table, pick one option, and end with\na single clear recommendation line.\n\n---\n\n{}",
+            prompt
+        );
+    }
     let model = input
         .get("model")
         .and_then(Value::as_str)
@@ -1503,8 +1556,10 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             return Ok(None);
         }
         tx.execute(
-            "INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'user',?2,?3)",
-            params![cid, prompt, now_seconds()],
+            "INSERT INTO messages(conversation_id,role,content,created_at,attachments) VALUES(?1,'user',?2,?3,?4)",
+            params![cid, prompt, now_seconds(),            serde_json::to_string(&attachment_records)
+                .ok()
+                .filter(|_| !attachment_records.is_empty())],
         )?;
         let count: i64 = tx.query_row(
             "SELECT COUNT(*) FROM messages WHERE conversation_id=?1",
@@ -1572,7 +1627,13 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         cfg.context_budget_tokens,
         cfg.history_messages,
     );
-    Ok(ChatPrep { cid, cfg, packed, model })
+    Ok(ChatPrep {
+        cid,
+        cfg,
+        packed,
+        model,
+        attachments,
+    })
 }
 
 /// Record a failed router call so the usage page reflects it.
@@ -1634,12 +1695,16 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         Ok((answer, _sources)) => answer,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
     };
-    let ChatPrep { cid, cfg, packed, model } = match prepare_chat(&state, &input) {
+    let ChatPrep { cid, cfg, mut packed, model, attachments, .. } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
+    // Mirroring: the user's message is saved inside prepare_chat, so every
+    // open view of this thread should refresh now that it landed.
+    events::notify(&state.events, &cid, "user");
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
+    media::apply_media(&mut packed.messages, &attachments);
     // The composer's model wins when present; config's model is the default.
     let chosen_model = model
         .as_deref()
@@ -1667,6 +1732,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                 format!("AI replied, but saving the response failed: {e}"),
             );
         }
+        events::notify(&state.events, &cid, "message");
         let mut meta = json!({ "model": cfg.model, "deepsearch": true });
         meta["context_tokens"] = json!(context_tokens);
         meta["context_trimmed"] = json!(context_trimmed);
@@ -1702,6 +1768,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                     format!("AI replied, but saving the response failed: {e}"),
                 );
             }
+            events::notify(&state.events, &cid, "message");
             meta["context_tokens"] = json!(context_tokens);
             meta["context_trimmed"] = json!(context_trimmed);
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
@@ -1709,6 +1776,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         Err(error) => {
             let latency = started.elapsed().as_millis() as i64;
             log_router_error(&state, &cid, &error, latency, &cfg.model);
+            events::notify(&state.events, &cid, "failed");
             (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({"ok": false, "error": error, "meta": {"latency_ms": latency}})),
@@ -1774,10 +1842,16 @@ struct ReplyRecorder {
     meta: Arc<Mutex<Value>>,
     started: Instant,
     saved: Arc<AtomicBool>,
+    events: events::Hub,
 }
 
 impl ReplyRecorder {
-    fn new(database_path: PathBuf, conversation_id: String, context_tokens: usize) -> Self {
+    fn new(
+        database_path: PathBuf,
+        conversation_id: String,
+        context_tokens: usize,
+        events: events::Hub,
+    ) -> Self {
         Self {
             database_path,
             conversation_id,
@@ -1785,6 +1859,7 @@ impl ReplyRecorder {
             meta: Arc::new(Mutex::new(json!({ "context_tokens": context_tokens }))),
             started: Instant::now(),
             saved: Arc::new(AtomicBool::new(false)),
+            events,
         }
     }
 
@@ -1821,6 +1896,11 @@ impl ReplyRecorder {
             )?;
             Ok(())
         });
+        events::notify(
+            &self.events,
+            &self.conversation_id,
+            if text.trim().is_empty() { "updated" } else { "message" },
+        );
     }
 }
 
@@ -1942,11 +2022,15 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         ds_frames.push_back(sse_frame(&event));
     }
 
-    let ChatPrep { cid, cfg, packed, model } = match prepare_chat(&state, &input) {
+    let ChatPrep { cid, cfg, mut packed, model, attachments, .. } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
+    // Mirroring: the user's message is saved inside prepare_chat, so every
+    // open view of this thread should refresh now that it landed.
+    events::notify(&state.events, &cid, "user");
     let context_tokens = packed.estimated_tokens;
+    media::apply_media(&mut packed.messages, &attachments);
 
     if ds_answer.is_none() && cfg.api_key.trim().is_empty() {
         return json_error(
@@ -1964,7 +2048,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
     // Deep search already answered through a native provider: stream the
     // finished text as one frame set instead of calling the router.
     if let Some(answer) = ds_answer {
-        let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens);
+        let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens, state.events.clone());
         if let Ok(mut held) = recorder.meta.lock() {
             held["model"] = json!(&chosen_model);
             held["deepsearch"] = json!(true);
@@ -2035,7 +2119,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens);
+    let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens, state.events.clone());
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
     }
@@ -2106,6 +2190,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             .timeout(Duration::from_secs(120))
             .build()?,
         terminal: terminal::hub(),
+        events: events::Hub::new(),
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     ensure_setup(&state)?;
@@ -2144,6 +2229,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/models", get(models))
         .route("/api/chat", post(chat))
         .route("/api/chat/stream", post(chat_stream))
+        .route("/api/events", get(crate::events::events))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/projects/:id/update", post(update_project))
         .route("/api/projects/:id/delete", post(delete_project))
@@ -2158,6 +2244,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         )
         .merge(workspace::router(port))
         .merge(terminal::router(port))
+        .merge(media::router(port))
         .merge(router_console::router(port))
         .merge(router_api)
         .layer(middleware::from_fn(local_security_headers))

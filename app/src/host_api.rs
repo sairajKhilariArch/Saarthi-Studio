@@ -1015,6 +1015,7 @@ mod tests {
                     .build()
                     .expect("build HTTP client"),
                 terminal: crate::terminal::hub(),
+                events: crate::events::Hub::new(),
                 models_cache: std::sync::Arc::new(std::sync::Mutex::new(
                     std::collections::HashMap::new(),
                 )),

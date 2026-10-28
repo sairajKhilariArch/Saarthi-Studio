@@ -474,6 +474,7 @@ const state = {
   sidebarMode: "threads",
   view: "chat",
   chatContext: null,
+  mediaAttachments: [],
   model: "auto",
   contextBudget: 6000,
   lastContextTokens: null,
@@ -811,7 +812,7 @@ function closeTab(key) {
 /* ------------------------------------------------------------------ */
 
 function addMessage(role, content, options = {}) {
-  const { meta = null, error = false, attachment = null } = options;
+  const { meta = null, error = false, attachment = null, media = null } = options;
   $("welcome").classList.add("hidden");
 
   const row = document.createElement("div");
@@ -847,6 +848,7 @@ function addMessage(role, content, options = {}) {
     card.className = "msg-card";
     card.textContent = content;
     row.appendChild(card);
+    if (media && media.length) row.appendChild(mediaStrip(media));
     if (attachment) {
       const note = document.createElement("div");
       note.className = "msg-attachment";
@@ -893,6 +895,7 @@ function setBusy(value) {
   state.busy = value;
   $("sendBtn").disabled = value;
   $("attachContextBtn").disabled = value;
+  $("mediaAttachBtn").disabled = value;
   $("thinking").classList.toggle("hidden", !value);
   if (value) scrollChat();
 }
@@ -975,6 +978,38 @@ function renderConversations() {
   });
 }
 
+/* Live thread mirroring: the server pushes a tiny refresh hint whenever a
+   conversation changes (another tab sent a message, a stream finished, a
+   thread was created or deleted). The affected tab refetches just that
+   thread — no full reload, no invented content. */
+let mirrorTimer = null;
+
+function setupMirroring() {
+  if (typeof EventSource === "undefined") return;
+  let source;
+  try {
+    source = new EventSource("/api/events");
+  } catch {
+    return; // SSE unavailable in this embedding.
+  }
+  source.addEventListener("conversation-changed", (ev) => {
+    let data = null;
+    try {
+      data = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    if (!data || !data.conversation_id) return;
+    // This tab already shows the live streaming row for that thread.
+    if (state.busy && streamTargetId === data.conversation_id) return;
+    clearTimeout(mirrorTimer);
+    mirrorTimer = setTimeout(() => {
+      if (state.currentId === data.conversation_id) void openConversation(data.conversation_id);
+      void loadConversations();
+    }, 250);
+  });
+}
+
 async function openConversation(id) {
   const result = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
   if (!result.ok) {
@@ -990,7 +1025,9 @@ async function openConversation(id) {
   $("messages").replaceChildren();
   const messages = Array.isArray(result.data) ? result.data : [];
   $("welcome").classList.toggle("hidden", messages.length > 0 || Boolean(liveRow));
-  messages.forEach((message) => addMessage(message.role === "assistant" ? "assistant" : "user", message.content));
+  messages.forEach((message) => addMessage(message.role === "assistant" ? "assistant" : "user", message.content, {
+    media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
+  }));
   if (liveRow) $("messages").appendChild(liveRow);
   scrollChat();
   renderConversations();
@@ -1057,7 +1094,12 @@ async function sendMessage(preset = null) {
   renderSkillChip();
   $("prompt").value = "";
   autoGrow($("prompt"));
-  addMessage("user", message, { attachment: context ? (context.scratch ? "Scratch pad attached" : context.path) : null });
+  addMessage("user", message, {
+    attachment: context ? (context.scratch ? "Scratch pad attached" : context.path) : null,
+    media: state.mediaAttachments.slice(),
+  });
+  const attachmentsToSend = state.mediaAttachments.map(({ kind, ref }) => ({ kind, ref }));
+  clearMediaAttachments();
   // Show the estimate again until the router reports the real count.
   state.lastContextTokens = null;
   updateContextMeter();
@@ -1085,6 +1127,7 @@ async function sendMessage(preset = null) {
         deepsearch: Boolean(state.deepSearch),
         model: state.chatModel || undefined,
         mode: state.chatMode === "plan" ? "plan" : undefined,
+        attachments: attachmentsToSend.length ? attachmentsToSend : undefined,
       }),
       signal: controller.signal,
     });
@@ -1139,6 +1182,117 @@ async function sendMessage(preset = null) {
 
 /* Live deep-search checklist inside the streaming row: each emitted status,
    query and source line. Built with the DOM so the text is never injected. */
+/* Media attached to a message: images render inline, audio and video use
+   native controls. Refs are always server-generated names from /api/attachments. */
+function mediaStrip(items) {
+  const strip = document.createElement("div");
+  strip.className = "media-strip";
+  for (const item of items) {
+    const url = `/attachments/${encodeURIComponent(item.ref || "")}`;
+    if ((item.kind || "") === "image") {
+      const img = document.createElement("img");
+      img.className = "media-thumb";
+      img.src = url;
+      img.alt = "Attached image";
+      img.loading = "lazy";
+      strip.appendChild(img);
+    } else if (item.kind === "audio") {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = url;
+      strip.appendChild(audio);
+    } else if (item.kind === "video") {
+      const video = document.createElement("video");
+      video.className = "media-thumb";
+      video.controls = true;
+      video.src = url;
+      strip.appendChild(video);
+    }
+  }
+  return strip;
+}
+
+/* Composer media picker: files are read as data URLs, uploaded once to
+   /api/attachments, and listed as removable chips until the message is sent. */
+async function uploadMediaFiles(fileList) {
+  for (const file of Array.from(fileList)) {
+    if (state.mediaAttachments.length >= 4) {
+      toast("A message can carry at most 4 attachments.");
+      break;
+    }
+    const reader = new FileReader();
+    const dataUrl = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+      reader.readAsDataURL(file);
+    }).catch(() => null);
+    if (!dataUrl) {
+      toast(`Could not read ${file.name}.`);
+      continue;
+    }
+    const mime = String(dataUrl).slice(5).split(";base64")[0] || "";
+    const kind = mime.startsWith("image/") ? "image"
+      : mime.startsWith("audio/") ? "audio"
+      : mime.startsWith("video/") ? "video" : "";
+    if (!kind) {
+      toast(`${file.name}: only image, audio and video files can be attached.`);
+      continue;
+    }
+    const result = await api("/api/attachments", {
+      method: "POST",
+      body: JSON.stringify({ kind, data_url: dataUrl }),
+    });
+    if (!result.ok || !result.data.attachment) {
+      toast(result.data.error || `Could not upload ${file.name}.`);
+      continue;
+    }
+    state.mediaAttachments.push(result.data.attachment);
+  }
+  renderMediaChips();
+}
+
+function renderMediaChips() {
+  const wrap = $("mediaChips");
+  wrap.replaceChildren();
+  if (!state.mediaAttachments.length) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  state.mediaAttachments.forEach((item, index) => {
+    const chip = document.createElement("div");
+    chip.className = "media-chip";
+    if ((item.kind || "") === "image") {
+      const img = document.createElement("img");
+      img.src = `/attachments/${encodeURIComponent(item.ref)}`;
+      img.alt = "attachment";
+      img.loading = "lazy";
+      chip.appendChild(img);
+    } else {
+      const label = document.createElement("span");
+      label.className = "media-tag";
+      label.textContent = item.kind;
+      chip.appendChild(label);
+    }
+    const remove = document.createElement("button");
+    remove.className = "chip-close";
+    remove.title = "Remove attachment";
+    remove.setAttribute("aria-label", "Remove attachment");
+    remove.innerHTML = icon("close");
+    remove.addEventListener("click", () => {
+      state.mediaAttachments.splice(index, 1);
+      renderMediaChips();
+    });
+    chip.appendChild(remove);
+    wrap.appendChild(chip);
+  });
+}
+
+function clearMediaAttachments() {
+  state.mediaAttachments = [];
+  renderMediaChips();
+}
+
 function renderDeepSteps(steps, sources) {
   if (!streamRow) return;
   let card = streamRow.querySelector(".deep-steps");
@@ -3816,6 +3970,12 @@ function bindEvents() {
     updateContextMeter();
     suggestSkill($("prompt").value);
   });
+  $("mediaAttachBtn").addEventListener("click", () => $("mediaFileInput").click());
+  $("mediaFileInput").addEventListener("change", async (event) => {
+    const files = event.target.files;
+    if (files && files.length) await uploadMediaFiles(files);
+    event.target.value = "";
+  });
   $("attachContextBtn").addEventListener("click", attachFromComposer);
   $("deepToggle").addEventListener("click", () => setDeepSearch(!state.deepSearch));
   $("skillPickerBtn").addEventListener("click", (event) => {
@@ -4135,6 +4295,7 @@ function bindEvents() {
   await Promise.all([loadSettings(), loadProjects(), loadConversations(), loadWorkspace()]);
   await Promise.all([loadUsage(), loadSkills()]);
   probeRouter();
+  setupMirroring();
   if (state.conversations.length) {
     await openConversation(state.conversations[0].id);
   }

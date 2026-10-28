@@ -33,6 +33,7 @@
   <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.6"/><path d="M5.4 20c.7-3.5 3.3-5.4 6.6-5.4s5.9 1.9 6.6 5.4"/></symbol>
   <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h10a5 5 0 0 1 0 10H8"/><path d="M8 5L4 9l4 4"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7-7l9-9a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5l7.6-7.6"/></symbol>
 </svg>
 
 <div id="app" class="app">
@@ -202,6 +203,7 @@
       </div>
       <div class="composer-shell">
         <div class="composer">
+          <div id="mediaChips" class="media-chips hidden"></div>
           <div id="contextChip" class="context-chip hidden">
             <svg class="icon"><use href="#i-file"/></svg>
             <span id="contextLabel">file</span>
@@ -222,6 +224,10 @@
               <button id="attachContextBtn" class="btn btn-quiet btn-small" title="Attach the active file as context">
                 <svg class="icon"><use href="#i-plus"/></svg>Context
               </button>
+              <button id="mediaAttachBtn" class="btn btn-quiet btn-small" title="Attach photos, audio or video to this message">
+                <svg class="icon"><use href="#i-clip"/></svg>Media
+              </button>
+              <input id="mediaFileInput" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif,audio/wav,audio/mpeg,audio/ogg,audio/mp4,video/mp4,video/webm">
               <button id="deepToggle" class="btn btn-quiet btn-small" title="Deep search: research the question on the web with visible steps and cited sources" aria-pressed="false">
                 <svg class="icon"><use href="#i-search"/></svg>Deep
               </button>

@@ -34,6 +34,30 @@ const HISTORY_MESSAGE_CAP_TOKENS = 1200;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 400;
 
+/* Attachment rules mirror app/src/media.rs so the shared UI behaves the same
+   when the desktop app is closed and VS Code serves the interface itself. */
+export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
+export const ATTACHMENT_KINDS: Record<string, { mimes: string[]; bytes: number }> = {
+  image: { mimes: ["image/png", "image/jpeg", "image/webp", "image/gif"], bytes: 6 * 1024 * 1024 },
+  audio: { mimes: ["audio/wav", "audio/mpeg", "audio/ogg", "audio/mp4"], bytes: 12 * 1024 * 1024 },
+  video: { mimes: ["video/mp4", "video/webm"], bytes: 40 * 1024 * 1024 },
+};
+const ATTACHMENT_EXTENSIONS: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
+  "audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/mp4": "m4a",
+  "video/mp4": "mp4", "video/webm": "webm",
+};
+const ATTACHMENT_MIME_FOR_EXT: Record<string, string> = Object.fromEntries(
+  Object.entries(ATTACHMENT_EXTENSIONS).map(([mime, ext]) => [ext, mime]),
+);
+
+/** Server-generated names only, checked before any filesystem touch. */
+export function isValidAttachmentName(name: string): boolean {
+  if (!/^att-[0-9a-fA-F-]{36}\.[a-z0-9]{3,4}$/.test(name)) return false;
+  const ext = name.split(".")[1];
+  return ext in ATTACHMENT_MIME_FOR_EXT;
+}
+
 export const SYSTEM_PROMPT =
   "You are a concise, helpful AI coding assistant. Be accurate and safe; never claim to run code unless you did.";
 
@@ -81,6 +105,31 @@ export interface PackedRequest {
   messages: ChatMessage[];
   estimatedTokens: number;
   trimmedMessages: number;
+}
+
+/** Fold resolved attachments into the newest user message of the packed
+  context, mirroring media::apply_media in app/src/media.rs. Older history
+  stays text-only: replaying every image into every request would burn
+  context, and most routers re-reject stale media anyway. */
+export function applyMedia(messages: ChatMessage[], attachments: { kind: string; mime: string; bytes: Buffer }[]): void {
+  if (!attachments.length) return;
+  let index = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") { index = i; break; }
+  }
+  if (index < 0) return;
+  const text = messages[index].content;
+  const parts: unknown[] = [{ type: "text", text }];
+  for (const item of attachments) {
+    const dataUrl = `data:${item.mime};base64,${item.bytes.toString("base64")}`;
+    if (item.kind === "image") parts.push({ type: "image_url", image_url: { url: dataUrl } });
+    else if (item.kind === "audio") parts.push({
+      type: "input_audio",
+      input_audio: { data: item.bytes.toString("base64"), format: item.mime.replace("audio/", "") },
+    });
+    else if (item.kind === "video") parts.push({ type: "video_url", video_url: { url: dataUrl } });
+  }
+  messages[index].content = parts as unknown as string;
 }
 
 /**
@@ -156,11 +205,19 @@ export interface Conversation {
   project_id?: string;
 }
 
+export interface AttachmentRef {
+  /** image | audio | video. */
+  kind: string;
+  /** Server-generated name: att-<uuid>.<ext>, served at /attachments/<ref>. */
+  ref: string;
+}
+
 export interface StoredMessage {
   conversation_id: string;
   role: string;
   content: string;
   created_at: number;
+  attachments?: AttachmentRef[];
 }
 
 export interface RequestLogEntry {
@@ -242,9 +299,11 @@ export class ConversationStore {
       .sort((a, b) => a.created_at - b.created_at);
   }
 
-  append(id: string, role: "user" | "assistant", content: string): void {
+  append(id: string, role: "user" | "assistant", content: string, attachments?: AttachmentRef[]): void {
     const now = Date.now() / 1000;
-    this.data.messages.push({ conversation_id: id, role, content, created_at: now });
+    const message: StoredMessage = { conversation_id: id, role, content, created_at: now };
+    if (attachments && attachments.length) message.attachments = attachments.map((entry) => ({ kind: entry.kind, ref: entry.ref }));
+    this.data.messages.push(message);
     const conversation = this.data.conversations.find((entry) => entry.id === id);
     if (!conversation) return;
     conversation.updated_at = now;
@@ -260,6 +319,27 @@ export class ConversationStore {
     if (this.data.conversations.length === before) return false;
     this.save();
     return true;
+  }
+
+  /** Attachment files live beside the store so backups carry both. */
+  attachmentDir(): string {
+    return path.join(path.dirname(this.file), "attachments");
+  }
+
+  saveAttachment(kind: string, ext: string, bytes: Buffer): AttachmentRef {
+    fs.mkdirSync(this.attachmentDir(), { recursive: true, mode: 0o700 });
+    const ref = `att-${randomUUID()}.${ext}`;
+    fs.writeFileSync(path.join(this.attachmentDir(), ref), bytes, { mode: 0o600 });
+    return { kind, ref };
+  }
+
+  readAttachment(ref: string): Buffer | null {
+    if (!isValidAttachmentName(ref)) return null;
+    try {
+      return fs.readFileSync(path.join(this.attachmentDir(), ref));
+    } catch {
+      return null;
+    }
   }
 
   /** Delete every thread owned by a project (mirrors the desktop's cascade). */
@@ -1055,6 +1135,35 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     }
   }
 
+  /* SSE mirroring parity: same frame shape as app/src/events.rs, so the
+     shared browser code mirrors the open thread on both the desktop server
+     and this embedded one without dirty forks. */
+  interface ResolvedAttachment {
+    kind: string;
+    mime: string;
+    bytes: Buffer;
+  }
+
+  const resolveAttachment = (entry: { kind: string; ref: string }): ResolvedAttachment | null => {
+    const bytes = entry.ref ? store.readAttachment(entry.ref) : null;
+    if (!bytes) return null;
+    const mime = ATTACHMENT_MIME_FOR_EXT[entry.ref.split(".")[1]] || "application/octet-stream";
+    return { kind: entry.kind, mime, bytes };
+  };
+
+  const eventClients = new Set<http.ServerResponse>();
+  const notifyConversation = (conversationId: string, reason: string) => {
+    const body = `event: conversation-changed\ndata: ${JSON.stringify({
+      type: "conversation-changed",
+      conversation_id: conversationId,
+      reason,
+      at: Date.now() / 1000,
+    })}\n\n`;
+    for (const client of eventClients) {
+      try { client.write(body); } catch { eventClients.delete(client); }
+    }
+  };
+
   /* One chat turn: persist the user message, run the selected skill/mode
      through the packed context, call the router (honouring a per-message
      model override), persist the reply, log usage. Throws with `status` and
@@ -1089,12 +1198,35 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       prompt = `Plan mode: do not make changes this reply. Answer with a short,\nordered implementation plan (files, steps, risks) the user can approve\nbefore anything is built.\n\n---\n\n${prompt}`;
     }
 
-    store.append(conversationId, "user", prompt);
+    // Media listed with this message: validated against the on-disk store so
+    // a missing file fails the request instead of degrading silently.
+    let attachmentRefs: AttachmentRef[] = [];
+    const listed = body.attachments;
+    if (Array.isArray(listed)) {
+      if (listed.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+        fail(400, `A message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments.`);
+      }
+      for (const entry of listed as Record<string, unknown>[]) {
+        const kind = String(entry.kind || "");
+        const ref = String(entry.ref || "");
+        if (!ATTACHMENT_KINDS[kind] || !isValidAttachmentName(ref)) fail(400, "Attachment reference is invalid.");
+        if (!store.readAttachment(ref)) fail(400, "Attachment file is missing.");
+        attachmentRefs.push({ kind, ref });
+      }
+    }
+
+    store.append(conversationId, "user", prompt, attachmentRefs.length ? attachmentRefs : undefined);
+    notifyConversation(conversationId, "user");
     const config = options.getConfig();
     const history = store
       .messages(conversationId)
       .slice(-Math.max(config.historyMessages, 2))
       .map(({ role, content }) => ({ role, content }));
+    if (attachmentRefs.length) {
+      applyMedia(history, attachmentRefs
+        .map((entry) => resolveAttachment({ kind: entry.kind, ref: entry.ref }))
+        .filter((entry): entry is ResolvedAttachment => entry !== null));
+    }
     const outline = options.workspaceRoot && config.sendWorkspaceOutline ? workspaceOutline(options.workspaceRoot) : null;
     const packed = packMessages({
       system: SYSTEM_PROMPT,
@@ -1107,6 +1239,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     try {
       const reply = await callRouter(config, packed.messages, fetchImpl, modelOverride || undefined);
       store.append(conversationId, "assistant", reply.answer);
+      notifyConversation(conversationId, "assistant");
       store.logRequest({
         created_at: Date.now() / 1000,
         conversation_id: conversationId,
@@ -1202,6 +1335,68 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         return;
       }
 
+      if (routePath === "/api/events" && method === "GET") {
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+        });
+        // 15 s heartbeat keeps proxies from closing idle connections.
+        const heartbeat = setInterval(() => { try { response.write(": keepalive\n\n"); } catch { /* closed */ } }, 15000);
+        eventClients.add(response);
+        request.on("close", () => {
+          clearInterval(heartbeat);
+          eventClients.delete(response);
+        });
+        return;
+      }
+
+      if (routePath === "/api/attachments" && method === "POST") {
+        const body = await readBody(request);
+        const kind = String(body.kind || "");
+        const dataUrl = String(body.data_url || "");
+        const rules = ATTACHMENT_KINDS[kind];
+        if (!rules) { sendJson(response, 400, { ok: false, error: "Attachment kind must be image, audio or video." }); return; }
+        const sep = dataUrl.indexOf(";base64,");
+        const mime = sep > 0 ? dataUrl.slice(5, sep) : "";
+        const payload = sep > 0 ? dataUrl.slice(sep + 8) : "";
+        if (!rules.mimes.includes(mime)) {
+          sendJson(response, 400, { ok: false, error: `${kind} attachments must use one of: ${rules.mimes.join(", ")}.` });
+          return;
+        }
+        if (!payload || payload.length % 4 === 1 || !/^[A-Za-z0-9+/=]+$/.test(payload)) {
+          sendJson(response, 400, { ok: false, error: "The attachment payload is not valid base64." });
+          return;
+        }
+        const bytes = Buffer.from(payload, "base64");
+        if (!bytes.length) { sendJson(response, 400, { ok: false, error: "The attachment payload is empty." }); return; }
+        if (bytes.length > rules.bytes) {
+          sendJson(response, 400, { ok: false, error: `${kind} attachments are limited to ${Math.floor(rules.bytes / (1024 * 1024))} MiB.` });
+          return;
+        }
+        const ext = ATTACHMENT_EXTENSIONS[mime];
+        const attachment = store.saveAttachment(kind, ext, bytes);
+        sendJson(response, 200, {
+          attachment: { ...attachment, size: bytes.length, mime },
+        });
+        return;
+      }
+
+      const attachmentMatch = routePath.match(/^\/attachments\/([^/]+)$/);
+      if (attachmentMatch && method === "GET") {
+        const ref = decodeURIComponent(attachmentMatch[1]);
+        const bytes = store.readAttachment(ref);
+        if (!bytes) { sendJson(response, 404, { ok: false, error: "Attachment not found." }); return; }
+        const mime = ATTACHMENT_MIME_FOR_EXT[ref.split(".")[1]] || "application/octet-stream";
+        response.writeHead(200, {
+          "Content-Type": mime,
+          "Cache-Control": "private, max-age=3600",
+          "X-Content-Type-Options": "nosniff",
+        });
+        response.end(bytes);
+        return;
+      }
+
       const messageMatch = routePath.match(/^\/api\/conversations\/([^/]+)\/messages$/);
       if (messageMatch && method === "GET") {
         const id = decodeURIComponent(messageMatch[1]);
@@ -1209,7 +1404,10 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           sendJson(response, 404, { ok: false, error: "Conversation not found." });
           return;
         }
-        sendJson(response, 200, store.messages(id).map(({ role, content }) => ({ role, content })));
+        sendJson(response, 200, store.messages(id).map(({ role, content, attachments }) => ({
+          role, content,
+          attachments: attachments && attachments.length ? attachments : undefined,
+        })));
         return;
       }
 

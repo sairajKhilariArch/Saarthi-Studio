@@ -68,6 +68,7 @@ The **Android companion app** connects to this machine through the desktop Host 
 - **Projects**: multiple projects with real server-side scoping — every thread list is filtered by the active project; create, rename, archive or delete from the sidebar switcher, and opening a project reopens its folder. Pre-existing threads are migrated into a Default project automatically
 - **Skills**: local `SKILL.md` packs discovered from the opened project, the user config dir, `~/.agents/skills` and a bundled set; enable/disable, inspect content, and enabled skills are injected into the chat system prompt
 - **Skill picker in the composer**: attach a skill to one message with a chip, or let keyword auto-suggest propose one from your draft; the request carries the chosen skill to the router
+- **Media attachments in chat**: attach images, audio or video to a message in the composer; files are stored with the message (SQLite, per-message attachment store), rendered inline in the thread, and folded back into the provider request only for the newest user message so history never re-sends stale media. Image/audio go to models that accept them; video is delivered as a data URL the way OpenAI-compatible servers accept it, and a provider without that form answers with a clear upstream error. Embeddings and transcription are separate router features and are not exposed in the composer yet.
 - **Agent pages**: Workspaces (projects + open folder), Agents (skills as runnable agents), Integrations (live router/workspace/round-trip status with testers), Artifacts (flat, extension-grouped file list of the open folder) and Automation (saved prompt recipes that load into a fresh chat round)
 - **Streaming chat**: replies stream in live with a caret and a working **Stop** button (the partial answer is saved); light and dark themes with a switcher that persists
 - **Backend presets**: twelve OpenAI-compatible platforms (FreeLLMAPI, OmniRoute, Hugging Face, Groq, Cerebras, Gemini, OpenAI, OpenRouter, Mistral, Cloudflare, Together, Novita) pickable in Settings; OmniRoute additionally has start/stop lifecycle control in Integrations
@@ -116,7 +117,7 @@ The console signs in with FreeLLMAPI's loopback desktop session (`POST /api/auth
 
 `vscode-extension/` packages the same interface as a `.vsix`. It probes `http://127.0.0.1:8765/api/health`; if the desktop app answers it embeds it, and if it does not the extension starts its **own** built-in server (same context budget, same conversation store, same router console bridge) inside VS Code. Editor commands attach the active file or the current selection, and the built-in server's folder API is limited to the workspace VS Code has open.
 
-The built-in server now implements the desktop API surface the UI uses — streaming chat (`/api/chat/stream`), skills, projects, workflows, the model catalog, usage pagination/sorting/charts, and opening URLs. Known limitations of the built-in server (it is a plain Node process inside the extension host):
+The built-in server now implements the desktop API surface the UI uses — streaming chat (`/api/chat/stream`), skills, projects, workflows, the model catalog, usage pagination/sorting/charts, opening URLs, live conversation-change events (`/api/events`), and the media attachment store with attachment serving. Known limitations of the built-in server (it is a plain Node process inside the extension host):
 
 - **No terminal panel.** There is no PTY in the extension host; `/api/terminal/*` answers `501` with that message. Use VS Code's own terminal or the desktop app.
 - **No process supervision.** Starting/stopping the FreeLLMAPI or OmniRoute gateways lives in the desktop binary; the built-in server answers with an instruction to start them yourself.
@@ -141,9 +142,18 @@ cat ~/.local/state/free-ai-suite/studio.log
 
 If the Rust build fails, run `cargo build --release` inside `~/.local/share/free-ai-suite/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
 
-FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi
+FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi — its dashboard (`http://127.0.0.1:3001` by default) is where provider keys and fallback chains are configured.
 
-## Monorepo layout and application roles
+## Other GitHub projects this app uses
+
+- **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Saarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
+- **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local `0600` config file.
+
+## Contacts
+
+- Source & issues: https://github.com/sairajKhilariArch/Saarthi-Studio/issues
+- FreeLLMAPI (upstream router): https://github.com/tashfeenahmed/freellmapi
+- A standalone marketing/help site (simple landing page: what the app is, how to use it, installation steps, contacts) is maintained on the `website` branch under `website/`.## Monorepo layout and application roles
 
 The Rust desktop app remains the **primary product and intended host**. Its existing Rust service and web UI remain at `app/`; the desktop README, build scripts, and data locations remain the root-level source of truth.
 
@@ -154,7 +164,7 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
 - **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease bundleRelease` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
 
-**Important:** this directory restructure keeps desktop and Android source side by side; it does not itself implement desktop-host connectivity. The current Android app still configures a router endpoint directly. Do not advertise desktop-host pairing as available until the authenticated host API and Android client transport are implemented and tested.
+**Platform parity (current state):** the Android client supports both Direct Router and Desktop Host mode (authenticated HTTPS, bearer host token — see `docs/android/`); host bridge chat is non-streaming text, and the capabilities endpoint advertises `streaming: false` / `attachments: false` honestly, so media and streaming in chat remain desktop/web/VS Code features until the host API declares and implements them.
 
 ## Production Ready - Branch: main
 

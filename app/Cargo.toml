@@ -21,6 +21,8 @@ serde_json = "=1.0.138"
 sha2 = "=0.10.9"
 subtle = "=2.6.1"
 tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+# Broadcast wrappers feed the live thread-mirroring SSE bus.
+tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
 # Real PTY terminals for the bottom panel (ConPTY on Windows, unix pty).
 portable-pty = "0.9"
