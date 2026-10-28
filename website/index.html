@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saarthi Studio — a local AI studio in Rust</title>
+<meta name="description" content="Saarthi Studio is a local-first AI chat and coding workspace with threads, projects, files, skills, deep search and media attachments. Runs on Linux, Windows, macOS, Android and VS Code.">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #9aa4b2; --accent: #4f8cff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.65 system-ui, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { border-bottom: 1px solid var(--border); padding: 14px 6vw; display: flex; align-items: center; gap: 14px; }
+  header b { font-size: 18px; }
+  header nav { margin-left: auto; display: flex; gap: 22px; }
+  .hero { padding: 72px 6vw 56px; max-width: 980px; }
+  .hero h1 { font-size: 44px; line-height: 1.15; }
+  .hero p { margin-top: 18px; color: var(--muted); font-size: 19px; max-width: 720px; }
+  .cta { margin-top: 30px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 12px 22px; border-radius: 8px; font-weight: 600; }
+  .primary { background: var(--accent); color: #fff; }
+  .ghost { border: 1px solid var(--border); color: var(--text); }
+  section { padding: 48px 6vw; border-top: 1px solid var(--border); max-width: 1080px; }
+  h2 { font-size: 28px; margin-bottom: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .card h3 { font-size: 17px; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 14.5px; }
+  ol, ul { padding-left: 22px; color: var(--muted); }
+  ol li, ul li { margin: 8px 0; }
+  code { background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; font-size: 14px; }
+  pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; overflow-x: auto; margin: 14px 0; }
+  pre code { border: 0; padding: 0; background: none; }
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 15px; }
+  th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+  th { background: var(--panel); }
+  td.amd { color: var(--muted); }
+  footer { border-top: 1px solid var(--border); padding: 30px 6vw; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <b>Saarthi Studio</b>
+  <nav>
+    <a href="#features">Features</a>
+    <a href="#how">How to use</a>
+    <a href="#install">Installation</a>
+    <a href="#contact">Contacts</a>
+  </nav>
+</header>
+
+<div class="hero">
+  <h1>A local AI studio, in Rust.</h1>
+  <p>Saarthi Studio is a local-first AI chat and coding workspace: threads with
+     persistent history, projects, a real file explorer and editor, skills,
+     deep search with cited sources, media attachments, and a live usage
+     dashboard — all served from your machine, on your machine.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download a release</a>
+    <a class="btn ghost" href="https://github.com/sairajKhilariArch/Saarthi-Studio">Source on GitHub</a>
+  </div>
+</div>
+
+<section id="features">
+  <h2>Features</h2>
+  <div class="cards">
+    <div class="card"><h3>Threads &amp; projects</h3><p>Conversations persist in SQLite under the active project. Switching threads or projects never mixes answers — replies stream in live, no refresh needed.</p></div>
+    <div class="card"><h3>Media attachments</h3><p>Attach images, audio or video to a message; stored with the thread and folded into the newest turn for models that accept them.</p></div>
+    <div class="card"><h3>Deep search</h3><p>A composer toggle that researches your question with planned web queries or a provider's built-in tools, streaming each step and replying with cited sources.</p></div>
+    <div class="card"><h3>Projects &amp; files</h3><p>Open any local folder, browse the tree and edit files in tabs with atomic saves. Workspace access is confined to the folder you open.</p></div>
+    <div class="card"><h3>Skills</h3><p>Local <code>SKILL.md</code> packs are discovered, enabled and injected into the chat system prompt; attach one per message or let keyword auto-suggest propose it.</p></div>
+    <div class="card"><h3>Usage analytics</h3><p>Every request is logged with latency, tokens and cost signals; the Usage page paginates, sorts and charts them.</p></div>
+  </div>
+</section>
+
+<section id="how">
+  <h2>How to use</h2>
+  <ol>
+    <li>Launch Saarthi Studio — the window and the website are the same UI at <code>http://127.0.0.1:8765</code>.</li>
+    <li>Open <strong>Provider setup</strong> and configure the upstream endpoint (FreeLLMAPI by default via Docker, or any OpenAI-compatible preset: Hugging Face, OpenRouter, Groq, Gemini and more). Paste the router's unified API key in Router settings.</li>
+    <li>Pick or create a project in the top-left selector, then start a thread in the composer.</li>
+    <li>Chat with a selected model. Attach images/audio/video with the paper-clip control; switch modes (budget/plan) per message; toggle deep search when a question needs sources.</li>
+    <li>Use the bottom panel terminal for the project's commands, the file explorer to edit, and the Usage page to watch tokens and cost.</li>
+  </ol>
+  <p style="margin-top:14px; color:var(--muted)">Runs headless too: <code>FREE_AI_STUDIO_NO_GUI=1 free-ai-studio</code> serves the website only, and an SSH tunnel keeps it private on your network.</p>
+</section>
+
+<section id="install">
+  <h2>Installation</h2>
+  <p>Grab an artifact from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">releases page</a> (every release has SHA-256 checksums):</p>
+  <table>
+    <tr><th>Platform</th><th>Artifact</th><th>Steps</th></tr>
+    <tr><td>Linux</td><td class="amd">.deb / AppImage / tar.gz</td><td><code>sudo dpkg -i *.deb</code>, launch <b>Saarthi Studio</b> from the menu — or run the AppImage directly</td></tr>
+    <tr><td>Windows</td><td class="amd">x64 zip</td><td>Extract and run <code>free-ai-studio.exe</code></td></tr>
+    <tr><td>macOS (Apple silicon)</td><td class="amd">arm64 tar.gz</td><td>Extract, right-click → Open on first launch (unsigned build)</td></tr>
+    <tr><td>Android</td><td class="amd">unsigned APK</td><td>Allow "install unknown apps" for your file manager, open the APK</td></tr>
+    <tr><td>VS Code</td><td class="amd">.vsix</td><td><code>code --install-extension free-ai-studio-vscode.vsix</code></td></tr>
+  </table>
+  <p style="margin-top:18px">From source on Ubuntu:</p>
+  <pre><code>./install-and-run.sh</code></pre>
+  <p>The installer installs prerequisites, builds the Rust app in release mode, starts FreeLLMAPI via Docker Compose, and creates an Applications-menu shortcut. Updating over an existing install keeps all config, history and conversations — they live outside the app folder.</p>
+</section>
+
+<section id="contact">
+  <h2>Contacts</h2>
+  <ul>
+    <li>Bug reports &amp; feature requests: <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/issues">GitHub Issues</a></li>
+    <li>Upstream router project: <a href="https://github.com/tashfeenahmed/freellmapi">FreeLLMAPI</a></li>
+  </ul>
+</section>
+
+<footer>Saarthi Studio — local-first, bound to <code>127.0.0.1</code> by default, keys stored in a <code>0600</code> config file. Rust, axum, rusqlite; UI served as plain static assets.</footer>
+</body>
+</html>
