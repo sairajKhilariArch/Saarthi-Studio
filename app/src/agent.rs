@@ -33,6 +33,11 @@ const STEP_OUTPUT_CAP: usize = 4_000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 /// How much step history the model sees on every prompt, newest first.
 const HISTORY_STEPS: i64 = 40;
+/// Restorable snapshot cap: a bigger file is still diffed live, but its old
+/// content is not persisted for rollback.
+const CHECKPOINT_CAP: usize = 200_000;
+/// How many characters of unified diff one step may log.
+const DIFF_CAP: usize = 8_000;
 
 const RUNNING: &str = "running";
 const AWAITING_APPROVAL: &str = "awaiting_approval";
@@ -173,10 +178,21 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
             seq INTEGER NOT NULL, action TEXT NOT NULL,
             summary TEXT NOT NULL DEFAULT '', output TEXT NOT NULL DEFAULT '',
+            checkpoint TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL,
             FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
         );",
-    )
+    )?;
+    // Databases created before checkpoints predate the column.
+    if let Err(error) = conn.execute(
+        "ALTER TABLE agent_steps ADD COLUMN checkpoint TEXT NOT NULL DEFAULT ''",
+        [],
+    ) {
+        if !error.to_string().contains("duplicate column") {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -246,23 +262,42 @@ fn add_step(
     summary: &str,
     output: &str,
 ) -> Result<(), String> {
+    add_step_with_checkpoint(state, run_id, action, summary, output, "")
+}
+
+/// Same as `add_step`, plus the pre-write snapshot that makes the change
+/// reversible from the run log.
+fn add_step_with_checkpoint(
+    state: &AppState,
+    run_id: &str,
+    action: &str,
+    summary: &str,
+    output: &str,
+    checkpoint: &str,
+) -> Result<(), String> {
     let mut conn = db(state)?;
-    let seq: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id=?1",
-            [run_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| e.to_string())?;
+    insert_step(&mut conn, run_id, action, summary, output, checkpoint).map_err(|e| e.to_string())
+}
+
+fn insert_step(
+    conn: &mut Connection,
+    run_id: &str,
+    action: &str,
+    summary: &str,
+    output: &str,
+    checkpoint: &str,
+) -> rusqlite::Result<()> {
+    let seq: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id=?1",
+        [run_id],
+        |r| r.get(0),
+    )?;
+    let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO agent_steps(run_id,seq,action,summary,output,created_at) VALUES(?1,?2,?3,?4,?5,?6)",
-        params![run_id, seq, action, cap_chars(summary, 600), cap_chars(output, STEP_OUTPUT_CAP), now()],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.commit().map(|_| ()).map_err(|e| e.to_string())
+        "INSERT INTO agent_steps(run_id,seq,action,summary,output,checkpoint,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![run_id, seq, action, cap_chars(summary, 600), cap_chars(output, STEP_OUTPUT_CAP), checkpoint, now()],
+    )?;
+    tx.commit()
 }
 
 fn set_run(
@@ -361,6 +396,71 @@ fn notify(state: &AppState, run_id: Option<&str>) {
         "run_id": run_id,
         "at": now(),
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoints & diffs: every write stays previewable and reversible.
+
+/// Snapshot the file a write is about to replace. The checkpoint (a JSON
+/// record of the old content) is only kept when the file existed and is small
+/// enough to store; the old content is still returned for a live diff whenever
+/// it can be read.
+fn capture_checkpoint(root: &FsPath, path: &str) -> (String, Option<String>) {
+    let Ok(file) = crate::workspace::read_text_file(root, path) else {
+        return (String::new(), None); // new file: nothing to roll back to
+    };
+    let old = file.content;
+    if old.chars().count() > CHECKPOINT_CAP {
+        return (String::new(), Some(old)); // too big to persist, still diffable
+    }
+    let checkpoint = json!({ "path": path, "old": old }).to_string();
+    (checkpoint, Some(old))
+}
+
+/// One hunk of unified diff: the common prefix and suffix stay as context and
+/// the changed middle becomes -old/+new lines. Bounded, so a run's execution
+/// log can never grow without limit.
+fn unified_diff(old: Option<&str>, new: &str, path: &str) -> String {
+    const CONTEXT: usize = 3;
+    let old_lines: Vec<&str> = old.unwrap_or("").lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    if old.is_some() && old_lines == new_lines {
+        return "(no changes — the new content is identical)".to_string();
+    }
+    let mut start = 0;
+    while start < old_lines.len() && start < new_lines.len() && old_lines[start] == new_lines[start] {
+        start += 1;
+    }
+    let mut end_old = old_lines.len();
+    let mut end_new = new_lines.len();
+    while end_old > start && end_new > start && old_lines[end_old - 1] == new_lines[end_new - 1] {
+        end_old -= 1;
+        end_new -= 1;
+    }
+    let ctx_start = start.saturating_sub(CONTEXT);
+    let ctx_end_old = (end_old + CONTEXT).min(old_lines.len());
+    let ctx_end_new = (end_new + CONTEXT).min(new_lines.len());
+    let mut out = format!(
+        "--- {path} ({})\n+++ {path} (after)\n@@ -{},{} +{},{} @@\n",
+        if old.is_some() { "before" } else { "new file" },
+        if old.is_some() { ctx_start + 1 } else { 0 },
+        ctx_end_old.saturating_sub(ctx_start),
+        ctx_start + 1,
+        ctx_end_new.saturating_sub(ctx_start),
+    );
+    for line in &old_lines[ctx_start..start] {
+        out.push_str(&format!(" {line}\n"));
+    }
+    for line in &old_lines[start..end_old] {
+        out.push_str(&format!("-{line}\n"));
+    }
+    for line in &new_lines[start..end_new] {
+        out.push_str(&format!("+{line}\n"));
+    }
+    for line in &old_lines[end_old..ctx_end_old] {
+        out.push_str(&format!(" {line}\n"));
+    }
+    cap_chars(&out, DIFF_CAP)
 }
 
 // ---------------------------------------------------------------------------
@@ -681,9 +781,22 @@ async fn execute_action_step(
         .root()
         .map_err(|error| error.message().to_string())?;
     let summary = pending_summary(action);
+    // Snapshot before writing: the change is then previewable as a diff and
+    // reversible from the run log.
+    let (checkpoint, old_content) = match action {
+        Action::Write { path, .. } => capture_checkpoint(&root, path),
+        _ => (String::new(), None),
+    };
     match dispatch_action(&root, action).await {
         Ok(output) => {
-            add_step(state, &run.id, action.tag(), &summary, &output)?;
+            let output = match action {
+                Action::Write { path, content } => format!(
+                    "{output}\n--- diff ---\n{}",
+                    unified_diff(old_content.as_deref(), content, path)
+                ),
+                _ => output,
+            };
+            add_step_with_checkpoint(state, &run.id, action.tag(), &summary, &output, &checkpoint)?;
             // The next model step sees this result in the history.
             Ok(true)
         }
@@ -757,6 +870,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/runs/:id", get(get_run))
         .route("/api/runs/:id/approve", post(approve_run))
         .route("/api/runs/:id/cancel", post(cancel_run))
+        .route("/api/runs/:id/steps/:seq/restore", post(restore_step))
 }
 
 fn error_response(status: StatusCode, message: impl std::fmt::Display) -> Response {
@@ -849,7 +963,7 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     let mut stmt = match conn
-        .prepare("SELECT seq, action, summary, output, created_at FROM agent_steps WHERE run_id=?1 ORDER BY seq")
+        .prepare("SELECT seq, action, summary, output, created_at, checkpoint FROM agent_steps WHERE run_id=?1 ORDER BY seq")
     {
         Ok(stmt) => stmt,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -862,6 +976,7 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
                 "summary": row.get::<_, String>(2)?,
                 "output": row.get::<_, String>(3)?,
                 "at": row.get::<_, f64>(4)?,
+                "hasCheckpoint": !row.get::<_, String>(5)?.is_empty(),
             }))
         })
         .map_err(|e| e.to_string())
@@ -871,7 +986,86 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
     };
     let mut payload = run_json(&run, rows.len() as i64);
     payload["stepList"] = json!(rows);
+    // A pending write is previewed as a diff against the file on disk right
+    // now, so approval happens with the actual change in view.
+    if run.status == AWAITING_APPROVAL {
+        if let Some(Action::Write { path, content }) = serde_json::from_str::<Value>(&run.pending_action)
+            .ok()
+            .and_then(|value| Action::from_json(&value).ok())
+        {
+            let current = state
+                .workspace
+                .root()
+                .ok()
+                .and_then(|root| crate::workspace::read_text_file(&root, &path).ok())
+                .map(|file| file.content);
+            payload["pendingDiff"] = json!(unified_diff(current.as_deref(), &content, &path));
+        }
+    }
     Json(payload).into_response()
+}
+
+/// Restore a written file to the content snapshotted before an agent wrote to
+/// it. Long-run safety valve, not a full undo system: other files stay as the
+/// run left them, and edits made after the step overwrite the restored content.
+async fn restore_step(
+    State(state): State<crate::AppState>,
+    Path((run_id, seq)): Path<(String, i64)>,
+) -> Response {
+    match load_run(&state, &run_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+    let checkpoint = match db(&state)
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT checkpoint FROM agent_steps WHERE run_id=?1 AND seq=?2 AND action='write'",
+                params![run_id, seq],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+        }) {
+        Ok(text) => text.unwrap_or_default(),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if checkpoint.is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "This step has no checkpoint to restore.");
+    }
+    let parsed: Value = serde_json::from_str(&checkpoint).unwrap_or(Value::Null);
+    let (path, old) = match (
+        parsed.get("path").and_then(Value::as_str),
+        parsed.get("old").and_then(Value::as_str),
+    ) {
+        (Some(path), Some(old)) => (path.to_string(), old.to_string()),
+        _ => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Checkpoint is unreadable; nothing was restored.",
+            )
+        }
+    };
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.message().to_string()),
+    };
+    // Re-validate through the same path-confined write the run itself used.
+    if let Err(error) = crate::workspace::write_text_file(&root, &path, &old) {
+        return error_response(StatusCode::BAD_REQUEST, error.message().to_string());
+    }
+    let _ = add_step(
+        &state,
+        &run_id,
+        "restored",
+        &format!("restore {path}"),
+        &format!(
+            "Rolled back step {seq}: {path} now holds the {} bytes it had before the write.",
+            old.len()
+        ),
+    );
+    notify(&state, Some(&run_id));
+    Json(json!({ "ok": true, "path": path })).into_response()
 }
 
 async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
@@ -943,10 +1137,21 @@ async fn approve_run(
         }
     };
     let summary = pending_summary(&action);
+    let (checkpoint, old_content) = match &action {
+        Action::Write { path, .. } => capture_checkpoint(&root, path),
+        _ => (String::new(), None),
+    };
     match dispatch_action(&root, &action).await {
         Ok(output) => {
             let _ = set_run(&state, &run_id, RUNNING, None, Some(""));
-            let _ = add_step(&state, &run_id, action.tag(), &summary, &output);
+            let output = match &action {
+                Action::Write { path, content } => format!(
+                    "{output}\n--- diff ---\n{}",
+                    unified_diff(old_content.as_deref(), content, path)
+                ),
+                _ => output,
+            };
+            let _ = add_step_with_checkpoint(&state, &run_id, action.tag(), &summary, &output, &checkpoint);
             if let Err(error) = set_run(&state, &run_id, RUNNING, None, Some("")) {
                 return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
             }
@@ -1140,4 +1345,74 @@ mod tests {
         assert!(output.contains("exit: 7"), "{output}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+
+    #[test]
+    fn unified_diff_marks_new_modified_and_identical_files() {
+        let new_file = unified_diff(None, "a\nb\nc\n", "x.txt");
+        assert!(new_file.contains("-0,0"), "{new_file}");
+        assert!(new_file.contains("+a"), "{new_file}");
+
+        let old = "line1\nline2\nline3\nline4\nline5\n";
+        let changed = "line1\nline2\nCHANGED\nline4\nline5\n";
+        let diff = unified_diff(Some(old), changed, "y.txt");
+        assert!(diff.contains("-line3"), "{diff}");
+        assert!(diff.contains("+CHANGED"), "{diff}");
+        assert!(diff.contains(" line1"), "{diff}"); // prefix context kept
+
+        let appended = "line1\nline2\nline3\nline4\nline5\nline6\n";
+        let diff = unified_diff(Some(old), appended, "y.txt");
+        assert!(diff.contains("+line6"), "{diff}");
+        assert!(!diff.contains("-line1"), "{diff}");
+
+        assert!(unified_diff(Some(old), old, "y.txt").contains("identical"));
+    }
+
+    #[test]
+    fn capture_checkpoint_snapshots_only_restorable_files() {
+        let salt = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let dir = std::env::temp_dir().join(format!("saarthi-agent-ckpt-{}", salt));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = FsPath::new(&dir);
+
+        // Missing file: nothing was replaced, so there is nothing to roll back to.
+        let (checkpoint, old) = capture_checkpoint(&root, "missing.txt");
+        assert!(checkpoint.is_empty() && old.is_none());
+
+        std::fs::write(dir.join("real.txt"), "previous content").unwrap();
+        let (checkpoint, old) = capture_checkpoint(&root, "real.txt");
+        assert_eq!(old.as_deref(), Some("previous content"));
+        let parsed: Value = serde_json::from_str(&checkpoint).unwrap();
+        assert_eq!(parsed["path"], "real.txt");
+        assert_eq!(parsed["old"], "previous content");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn steps_persist_checkpoints_and_initialize_is_idempotent() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        initialize(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at) VALUES('r','','t','running',0,0,0,12,0,0)",
+            [],
+        )
+        .unwrap();
+        insert_step(&mut conn, "r", "write", "w", "out", "{\"path\":\"a\",\"old\":\"b\"}").unwrap();
+        insert_step(&mut conn, "r", "think", "t", "", "").unwrap();
+        let (output, checkpoint): (String, String) = conn
+            .query_row(
+                "SELECT output, checkpoint FROM agent_steps WHERE action='write'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(output, "out");
+        assert_eq!(checkpoint, "{\"path\":\"a\",\"old\":\"b\"}");
+        // A second initialize must succeed against a database that already has the column.
+        initialize(&mut conn).unwrap();
+    }
+
 }

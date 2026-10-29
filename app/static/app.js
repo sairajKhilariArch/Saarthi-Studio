@@ -4471,6 +4471,17 @@ function buildRunDetail(detail) {
   }
 
   const steps = detail.stepList || [];
+  if (detail.status === "awaiting_approval" && detail.pendingDiff) {
+    const preview = document.createElement("div");
+    preview.className = "run-diff-wrap";
+    const head = document.createElement("span");
+    head.className = "run-diff-label";
+    head.textContent = "Proposed change — preview before approving:";
+    preview.appendChild(head);
+    preview.appendChild(diffBlock(detail.pendingDiff));
+    box.appendChild(preview);
+  }
+
   if (!steps.length && !detail.error) {
     const none = document.createElement("p");
     none.className = "run-empty";
@@ -4501,11 +4512,43 @@ function buildRunDetail(detail) {
       output.textContent = step.output;
       body.appendChild(output);
     }
+    if (step.hasCheckpoint) {
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "btn btn-quiet btn-small run-restore";
+      restore.textContent = "Restore file to before this step";
+      restore.addEventListener('click', () => restoreRunStep(detail.id, step.seq));
+      body.appendChild(restore);
+    }
     row.appendChild(body);
     list.appendChild(row);
   });
   box.appendChild(list);
   return box;
+}
+
+async function restoreRunStep(runId, seq) {
+  if (!confirm(`Restore the file to its contents before step ${seq}? Only that one file is reverted; any later edits to it are lost.`)) return;
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/steps/${seq}/restore`, { method: "POST" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not restore the file.");
+    return;
+  }
+  toast(result.data.path ? `Restored ${result.data.path} to its pre-write content.` : "File restored.");
+  await loadRunDetail();
+}
+
+function diffBlock(text) {
+  const pre = document.createElement("pre");
+  pre.className = "run-diff";
+  String(text).split("\n").forEach((line) => {
+    const span = document.createElement("span");
+    const isMeta = line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++");
+    span.className = isMeta ? "diff-meta" : line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-del" : "diff-ctx";
+    span.textContent = `${line}\n`;
+    pre.appendChild(span);
+  });
+  return pre;
 }
 
 async function submitRun(event) {

@@ -1390,3 +1390,14 @@ kbd {
 .run-step-action { font-size: 13px; margin-bottom: 4px; }
 .run-step-tag { display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); background: var(--line-soft); border-radius: 4px; padding: 2px 6px; margin-right: 6px; }
 .run-step-output { margin: 0; font-size: 12px; line-height: 1.5; color: var(--dim); background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; }
+
+/* agent runs: change preview and rollback */
+.run-diff-wrap { margin: 0 0 12px; }
+.run-diff-label { display: block; font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 5px; }
+.run-diff { margin: 0; max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 10px; }
+.run-diff span { display: block; white-space: pre; }
+.diff-add { color: #16a34a; }
+.diff-del { color: #dc2626; }
+.diff-ctx { color: var(--dim); }
+.diff-meta { color: var(--text); font-weight: 600; }
+.run-restore { margin-top: 8px; }
