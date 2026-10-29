@@ -428,6 +428,7 @@
           <button type="button" data-settings-section="appearance" aria-selected="false">Appearance</button>
           <button type="button" data-settings-section="context" aria-selected="false">Chat context</button>
           <button type="button" data-settings-section="search" aria-selected="false">Deep search</button>
+          <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
         <form id="settingsForm" class="form-card">
@@ -500,6 +501,23 @@
             <span>Send the open folder's file names with each request</span>
             <small>A names-only outline helps the model navigate the project without sending file contents.</small>
           </label>
+          <label class="field checkbox-field">
+            <input id="adaptiveRouting" type="checkbox">
+            <span>Adaptive model routing for agent runs (both tiers must be set)</span>
+            <small>Routine step types (list/read/think) go to the cheap model; planning, edits and failures go to the strong model. Off = agent runs always use the base model, exactly as before. The chosen model is recorded on each run.</small>
+          </label>
+          <div class="form-row hidden" id="adaptiveTiersRow">
+            <label class="field">
+              <span>Cheap model</span>
+              <input id="cheapModel" type="text" placeholder="e.g. llama-3.1-flash" autocomplete="off">
+              <small>Used for inspection and summary steps only.</small>
+            </label>
+            <label class="field">
+              <span>Strong model</span>
+              <input id="strongModel" type="text" placeholder="e.g. qwen-2.5-coder-32b" autocomplete="off">
+              <small>Used for planning, editing and failure repair.</small>
+            </label>
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save all settings</button>
           </div>
@@ -525,6 +543,21 @@
               </label>
             </div>
             <small>Runs up to 3 web queries, then answers with cited <code>[1]</code> sources. Direct Gemini/OpenAI backends use their built-in web tools without a search key.</small>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Save all settings</button>
+          </div>
+          <div id="settingsMessage" class="notice hidden"></div>
+          </section>
+
+          <section id="settings-privacy" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">Privacy exclusions</h2>
+          <div>
+            <label class="field">
+              <span>Never send these paths to any provider</span>
+              <input id="privacyExclusions" type="text" placeholder=".env, secrets/, credentials*.json">
+            </label>
+            <small>Comma-separated workspace-relative prefixes or exact names (trailing <code>/</code> means a folder). Anything matching is excluded from outlines, attached code, and agent context. Privacy notice hides its "excluded" line when unset.</small>
           </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save all settings</button>

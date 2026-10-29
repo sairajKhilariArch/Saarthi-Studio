@@ -38,6 +38,7 @@ mod host_auth;
 mod host_security;
 mod host_transport;
 mod media;
+mod privacy;
 mod router;
 mod router_console;
 mod skills;
@@ -89,6 +90,19 @@ struct Config {
     /// Search API key for the deep-search loop (server-side only).
     #[serde(default)]
     search_api_key: String,
+    /// Workspace-relative path prefixes (or exact names) never sent to any
+    /// provider, e.g. ".env", "secrets/".
+    #[serde(default)]
+    privacy_exclusions: Vec<String>,
+    /// Opt-in adaptive routing for agent runs: cheap_model decides routine
+    /// reading/inspection steps, strong_model decides planning, edits and
+    /// post-failure repair. Off (and empty tiers) = unchanged behavior.
+    #[serde(default)]
+    adaptive_routing: bool,
+    #[serde(default)]
+    cheap_model: String,
+    #[serde(default)]
+    strong_model: String,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -115,6 +129,10 @@ impl Config {
             disabled_skills: Vec::new(),
             search_provider: String::new(),
             search_api_key: String::new(),
+            privacy_exclusions: Vec::new(),
+            adaptive_routing: false,
+            cheap_model: String::new(),
+            strong_model: String::new(),
         }
     }
 }
@@ -511,6 +529,43 @@ fn response_content(data: &Value) -> String {
     serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
 }
 
+/// Opt-in rule-based tier choice for agent steps. Cheap follows routine
+/// inspection and summary steps; strong handles planning, edits and repair.
+/// Returns None when adaptive routing is off or either tier is unconfigured —
+/// the run then uses the base model exactly as before the feature existed.
+pub(crate) fn adaptive_tier(state: &AppState, last_action: &str, had_error: bool) -> Option<String> {
+    let cfg = load_config(state);
+    choose_tier(&cfg, last_action, had_error)
+}
+
+/// The rule itself, pure so the tier matrix is testable without a live config.
+fn choose_tier(cfg: &Config, last_action: &str, had_error: bool) -> Option<String> {
+    if !cfg.adaptive_routing || cfg.cheap_model.trim().is_empty() || cfg.strong_model.trim().is_empty() {
+        return None;
+    }
+    // First step and repairs are planning work, never cheap.
+    let routine = !had_error
+        && matches!(last_action, "list" | "read" | "think" | "restored" | "failover");
+    if routine {
+        Some(cfg.cheap_model.trim().to_string())
+    } else {
+        Some(cfg.strong_model.trim().to_string())
+    }
+}
+
+/// Snapshot the routing config at run start for the persisted run record,
+/// paired with the base model the run would start on.
+pub(crate) fn run_record_snapshot(state: &AppState) -> (String, String) {
+    let cfg = load_config(state);
+    let snapshot = json!({
+        "base_url": cfg.base_url,
+        "adaptive_routing": cfg.adaptive_routing,
+        "cheap_model": cfg.cheap_model,
+        "strong_model": cfg.strong_model,
+    });
+    (snapshot.to_string(), cfg.model.clone())
+}
+
 pub(crate) async fn call_router(state: &AppState, messages: Vec<Value>, model_override: Option<&str>) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     if cfg.api_key.trim().is_empty() {
@@ -640,6 +695,10 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "send_workspace_outline": cfg.send_workspace_outline,
         "search_provider": cfg.search_provider,
         "has_search_key": !cfg.search_api_key.is_empty(),
+        "privacy_exclusions": cfg.privacy_exclusions,
+        "adaptive_routing": cfg.adaptive_routing,
+        "cheap_model": cfg.cheap_model,
+        "strong_model": cfg.strong_model,
     }))
 }
 
@@ -708,10 +767,31 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Some(provider) = input.get("search_provider").and_then(Value::as_str) {
         cfg.search_provider = provider.trim().to_lowercase();
     }
+    // Exclusions replace wholesale: the UI sends the full list, so removing a
+    // path takes effect on the next send.
+    if let Some(list) = input.get("privacy_exclusions").and_then(Value::as_array) {
+        cfg.privacy_exclusions = list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
     if let Some(key) = input.get("search_api_key").and_then(Value::as_str) {
         if !key.trim().is_empty() {
             cfg.search_api_key = key.trim().to_string();
         }
+    }
+    // Adaptive routing for agent runs: replace wholesale like the other
+    // scalar settings so unchecking the box turns it back off.
+    if let Some(flag) = input.get("adaptive_routing").and_then(Value::as_bool) {
+        cfg.adaptive_routing = flag;
+    }
+    if let Some(m) = input.get("cheap_model").and_then(Value::as_str) {
+        cfg.cheap_model = m.trim().to_string();
+    }
+    if let Some(m) = input.get("strong_model").and_then(Value::as_str) {
+        cfg.strong_model = m.trim().to_string();
     }
     cfg.base_url = base_url;
     cfg.model = model;
@@ -722,7 +802,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model})).into_response()
 }
 
 /* Model catalog: fetched live from the configured router's /models so nothing
@@ -1534,6 +1614,19 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     let mut prompt = if code.trim().is_empty() {
         message.clone()
     } else {
+        // Outbound privacy policy: an editor attachment that looks like it
+        // carries credentials is refused outright — masking shapes could still
+        // leak enough to matter in prose. The reply names the route to fix it.
+        let (_, kinds) = privacy::sanitize(&code);
+        if !kinds.is_empty() {
+            return Err(Box::new(json_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "Your editor attachment was not sent: it looks like it contains credentials ({}).\nRemove the secrets (or send only the parts you need) and retry.",
+                    kinds.join(", ")
+                ),
+            )));
+        }
         format!("{message}\n\nHere is the code from my editor (language: {language}):\n```{language}\n{code}\n```")
     };
 
@@ -2475,6 +2568,29 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn adaptive_tier_matrix_off_or_unconfigured_means_no_override() {
+        let mut cfg = Config::defaults();
+        cfg.adaptive_routing = true;
+        cfg.cheap_model = "cheap-x".into();
+        cfg.strong_model = "strong-x".into();
+        // Routine follow-ups ride the cheap tier.
+        for action in ["list", "read", "think", "restored", "failover"] {
+            assert_eq!(choose_tier(&cfg, action, false).as_deref(), Some("cheap-x"), "{action}");
+        }
+        // First step, work, and repair all go strong.
+        assert_eq!(choose_tier(&cfg, "", false).as_deref(), Some("strong-x"));
+        assert_eq!(choose_tier(&cfg, "write", false).as_deref(), Some("strong-x"));
+        assert_eq!(choose_tier(&cfg, "command", false).as_deref(), Some("strong-x"));
+        assert_eq!(choose_tier(&cfg, "read", true).as_deref(), Some("strong-x"));
+        // Every off-switch returns None: model_override absent = old behavior.
+        cfg.adaptive_routing = false;
+        assert_eq!(choose_tier(&cfg, "read", false), None);
+        cfg.adaptive_routing = true;
+        cfg.cheap_model = "".into();
+        assert_eq!(choose_tier(&cfg, "read", false), None);
     }
 
     #[test]

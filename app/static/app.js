@@ -2724,6 +2724,12 @@ async function loadSettings() {
   $("historyMessages").value = Number(result.data.history_messages) || 6;
   $("sendOutline").checked = result.data.send_workspace_outline !== false;
   $("searchProvider").value = result.data.search_provider || "";
+  $("privacyExclusions").value = (result.data.privacy_exclusions || []).join(", ");
+  const adaptive = result.data.adaptive_routing === true;
+  $("adaptiveRouting").checked = adaptive;
+  $("cheapModel").value = result.data.cheap_model || "";
+  $("strongModel").value = result.data.strong_model || "";
+  $("adaptiveTiersRow").classList.toggle("hidden", !adaptive);
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
   $("searchKeyStatus").textContent = result.data.has_search_key
@@ -2754,7 +2760,12 @@ async function saveSettings(event) {
     history_messages: Number($("historyMessages").value) || 6,
     send_workspace_outline: $("sendOutline").checked,
     search_provider: $("searchProvider").value,
+    privacy_exclusions: $("privacyExclusions").value.split(",").map((s) => s.trim()).filter(Boolean),
+    adaptive_routing: $("adaptiveRouting").checked,
+    cheap_model: $("cheapModel").value.trim(),
+    strong_model: $("strongModel").value.trim(),
   };
+  $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();
   if (key) payload.api_key = key;
   const searchKey = $("searchApiKey").value.trim();
@@ -4196,6 +4207,9 @@ function bindEvents() {
   $("settingsForm").addEventListener("submit", saveSettings);
   $("testConnection").addEventListener("click", testConnection);
   $("openProviderDashboardSettings").addEventListener("click", openProviderDashboard);
+  $("adaptiveRouting").addEventListener("change", () => {
+    $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
+  });
 
   $("routerBtn").addEventListener("click", () => setView("router"));
   [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"]].forEach(([id, view]) => {
@@ -4386,7 +4400,9 @@ function renderRunCard(run) {
   head.appendChild(title);
   const meta = document.createElement("span");
   meta.className = "run-meta";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}`;
+  // Adaptive runs record which model answered; base-model runs stay unlabelled.
+  const modelTag = run.model ? ` · ${run.model}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${modelTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
