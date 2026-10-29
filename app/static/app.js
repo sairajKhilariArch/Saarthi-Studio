@@ -761,6 +761,7 @@ const VIEWS = [
   "integrations",
   "artifacts",
   "automation",
+  "runs",
 ];
 
 function setView(view) {
@@ -782,6 +783,7 @@ function setView(view) {
   if (view === "integrations") loadIntegrations();
   if (view === "artifacts") renderArtifacts();
   if (view === "automation") loadWorkflows();
+  if (view === "runs") void loadRuns();
 }
 
 function activateTab(key) {
@@ -1026,6 +1028,10 @@ function setupMirroring() {
     try {
       data = JSON.parse(ev.data);
     } catch {
+      return;
+    }
+    if (data && data.type === "agent-run-changed") {
+      if (state.view === "runs") void loadRuns();
       return;
     }
     if (!data || !data.conversation_id) return;
@@ -4310,6 +4316,251 @@ function bindEvents() {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* agent runs: autonomous goal execution with approvals                */
+/* ------------------------------------------------------------------ */
+
+state.agentRuns = [];
+state.openRun = null;
+state.runDetail = null;
+
+const RUN_STATUS_CLASS = {
+  running: "run-running",
+  awaiting_approval: "run-await",
+  succeeded: "run-ok",
+  failed: "run-fail",
+  cancelled: "run-done",
+  interrupted: "run-done",
+};
+
+function runAgo(seconds) {
+  const delta = Math.max(0, Date.now() / 1000 - seconds);
+  if (delta < 60) return "just now";
+  if (delta < 3600) return `${Math.floor(delta / 60)} min ago`;
+  if (delta < 86400) return `${Math.floor(delta / 3600)} h ago`;
+  return `${Math.floor(delta / 86400)} d ago`;
+}
+
+async function loadRuns() {
+  const result = await api("/api/runs");
+  if (!result.ok) {
+    toast(result.data.error || "Could not load agent runs.");
+    return;
+  }
+  state.agentRuns = result.data.runs || [];
+  renderRuns();
+}
+
+function renderRuns() {
+  const box = $("runsList");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!state.agentRuns.length) {
+    const empty = document.createElement("p");
+    empty.className = "run-empty";
+    empty.textContent = state.workspace
+      ? "No runs yet. Give the agent a goal above — it plans, edits and verifies inside the open workspace."
+      : "No runs yet. Open a workspace folder first (Spaces → open a folder) — agent runs work inside it.";
+    box.appendChild(empty);
+    return;
+  }
+  state.agentRuns.forEach((run) => box.appendChild(renderRunCard(run)));
+}
+
+function renderRunCard(run) {
+  const card = document.createElement("article");
+  card.className = "card run-card";
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "run-head";
+  const title = document.createElement("div");
+  title.className = "run-title";
+  const pill = document.createElement("span");
+  pill.className = `status-pill run-status ${(RUN_STATUS_CLASS[run.status] || "")}`;
+  pill.textContent = run.status.replace("_", " ");
+  title.appendChild(pill);
+  const goal = document.createElement("span");
+  goal.className = "run-goal";
+  goal.textContent = run.goal;
+  title.appendChild(goal);
+  head.appendChild(title);
+  const meta = document.createElement("span");
+  meta.className = "run-meta";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}`;
+  head.appendChild(meta);
+  head.addEventListener('click', () => toggleRun(run.id));
+  card.appendChild(head);
+
+  if (run.id === state.openRun && state.runDetail) card.appendChild(buildRunDetail(state.runDetail));
+  else if (run.id === state.openRun) void loadRunDetail();
+
+  if (run.status === "awaiting_approval" && run.pendingAction) card.appendChild(buildApprovalRow(run));
+  return card;
+}
+
+async function toggleRun(id) {
+  state.openRun = state.openRun === id ? null : id;
+  state.runDetail = null;
+  if (state.openRun) await loadRunDetail();
+  else renderRuns();
+}
+
+async function loadRunDetail() {
+  const id = state.openRun;
+  if (!id) return;
+  const result = await api(`/api/runs/${encodeURIComponent(id)}`);
+  if (!result.ok) {
+    toast(result.data.error || "Could not load the run.");
+    state.openRun = null;
+    renderRuns();
+    return;
+  }
+  state.runDetail = result.data;
+  renderRuns();
+}
+
+function buildApprovalRow(run) {
+  const row = document.createElement("div");
+  row.className = "run-approval";
+  const label = document.createElement("span");
+  label.className = "run-approval-label";
+  const pending = run.pendingAction || {};  label.textContent = `Waiting for approval — ${pending.summary || pending.tag || "next action"}`;
+  row.appendChild(label);
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "btn btn-accent btn-small";
+  accept.textContent = "Approve & continue";
+  accept.addEventListener('click', () => answerApproval(run.id, true));
+  const reject = document.createElement("button");
+  reject.type = "button";
+  reject.className = "btn btn-quiet btn-small";
+  reject.textContent = "Reject & stop";
+  reject.addEventListener('click', () => answerApproval(run.id, false));
+  row.appendChild(accept);
+  row.appendChild(reject);
+  return row;
+}
+
+function buildRunDetail(detail) {
+  const box = document.createElement("div");
+  box.className = "run-detail";
+
+  const controls = document.createElement("div");
+  controls.className = "run-controls";
+  if (detail.status === "running" || detail.status === "awaiting_approval") {
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "btn btn-quiet btn-small";
+    stop.textContent = "Cancel run";
+    stop.addEventListener('click', () => cancelAgentRun(detail.id));
+    controls.appendChild(stop);
+  }
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "btn btn-quiet btn-small";
+  refresh.textContent = "Refresh";
+  refresh.addEventListener('click', () => loadRunDetail());
+  controls.appendChild(refresh);
+  box.appendChild(controls);
+
+  if (detail.error) {
+    const err = document.createElement("p");
+    err.className = "run-error";
+    err.textContent = detail.error;
+    box.appendChild(err);
+  }
+
+  const steps = detail.stepList || [];
+  if (!steps.length && !detail.error) {
+    const none = document.createElement("p");
+    none.className = "run-empty";
+    none.textContent = "No steps logged yet.";
+    box.appendChild(none);
+    return box;
+  }
+  const list = document.createElement("div");
+  list.className = "run-steps";
+  steps.forEach((step) => {
+    const row = document.createElement("div");    row.className = `run-step${step.action.endsWith("-error") || step.action === "unparsed" ? " run-step-bad" : ""}`;
+    const seq = document.createElement("span");
+    seq.className = "run-seq";
+    seq.textContent = step.seq;
+    row.appendChild(seq);
+    const body = document.createElement("div");
+    body.className = "run-step-body";
+    const actionLine = document.createElement("div");
+    actionLine.className = "run-step-action";
+    actionLine.innerHTML = `<span class="run-step-tag">${escapeHtml(step.action)}</span> `;
+    const actionText = document.createElement("span");
+    actionText.textContent = step.summary || "";
+    actionLine.appendChild(actionText);
+    body.appendChild(actionLine);
+    if (step.output) {
+      const output = document.createElement("pre");
+      output.className = "run-step-output";
+      output.textContent = step.output;
+      body.appendChild(output);
+    }
+    row.appendChild(body);
+    list.appendChild(row);
+  });
+  box.appendChild(list);
+  return box;
+}
+
+async function submitRun(event) {
+  event.preventDefault();
+  const goal = $("runGoal").value.trim();
+  if (!goal) return;
+  const payload = {
+    goal,
+    allowWrites: $("runAllowWrites").checked,
+    allowCommands: $("runAllowCommands").checked,
+    autoApprove: $("runAutoApprove").checked,
+  };
+  const result = await api("/api/runs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not start the run.");
+    return;
+  }
+  $("runGoal").value = "";
+  toast("Agent run started.");
+  state.openRun = result.data.run && result.data.run.id;
+  state.runDetail = null;
+  await loadRuns();
+  if (state.openRun) await loadRunDetail();
+}
+
+async function answerApproval(runId, approve) {
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ approve }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not answer the approval.");
+  }
+  if (approve && result.ok) toast("Approved — the agent continues.");
+  await loadRuns();
+  if (runId === state.openRun) await loadRunDetail();
+}
+
+async function cancelAgentRun(runId) {
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not cancel the run.");
+  } else {
+    toast("Run cancelled.");
+  }
+  await loadRuns();
+  if (runId === state.openRun) await loadRunDetail();
+}
+
 (async function init() {
   loadTheme();
   setupThemeToggle();
@@ -4318,6 +4569,7 @@ function bindEvents() {
   renderAccentPicker();
   setSettingsSection(localStorage.getItem("freeai-settings-section") || "connection");
   bindEvents();
+  $("runsForm").addEventListener("submit", submitRun);
   setSidebarMode("threads");
   setView("chat");
   autoGrow($("prompt"));
