@@ -35,6 +35,7 @@
   <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h10a5 5 0 0 1 0 10H8"/><path d="M8 5L4 9l4 4"/></symbol>
   <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7-7l9-9a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5l7.6-7.6"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><rect x="10" y="10" width="4" height="4" rx="1"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
 </svg>
 
 <div id="app" class="app">
@@ -127,6 +128,7 @@
         <span id="connText">Checking router…</span>
       </div>
       <div class="foot-actions">
+        <button id="localBtn" class="foot-btn"><svg class="icon"><use href="#i-cpu"/></svg>Local AI</button>
         <button id="routerBtn" class="foot-btn"><svg class="icon"><use href="#i-spark"/></svg>Router</button>
         <button id="usageBtn" class="foot-btn"><svg class="icon"><use href="#i-chart"/></svg>Usage</button>
         <button id="settingsBtn" class="foot-btn"><svg class="icon"><use href="#i-gear"/></svg>Settings</button>
@@ -360,6 +362,97 @@
       </div>
     </section>
 
+    <section id="localView" class="view page-view hidden" role="tabpanel" aria-label="Local AI">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">On this computer</p>
+          <h1>Local AI</h1>
+          <p>Run models on your own machine with Ollama — no API key, no cloud. Chat and agent runs in Local AI mode talk only to this computer and never fall back to a remote provider.</p>
+        </header>
+
+        <!-- Runtime connection + status (never fabricated: it reflects live probes) -->
+        <div id="localStatusPanel" class="card form-card local-status-panel" aria-live="polite">
+          <div class="local-status-head">
+            <span id="localStatusDot" class="status-dot" role="img" aria-label="Runtime status"></span>
+            <div class="local-status-title">
+              <h2 id="localStatusTitle">Checking local runtime…</h2>
+              <p id="localStatusDetail" class="muted">Scanning for the Ollama endpoint.</p>
+            </div>
+            <button id="localRefreshBtn" class="btn btn-quiet btn-small" type="button">Refresh</button>
+          </div>
+          <small id="localStatusHint" class="local-setup-hint hidden"></small>
+        </div>
+
+        <!-- Onboarding when no runtime is detected -->
+        <div id="localSetupCard" class="card form-card local-setup-card hidden">
+          <h2 class="form-group-title">Set up local inference</h2>
+          <ol class="local-steps">
+            <li>Install Ollama from <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">ollama.com/download</a> (free, runs offline).</li>
+            <li>Start it: <code>ollama serve</code> (or launch the desktop app on Windows/macOS).</li>
+            <li>Pull a small coding model, e.g. <code>ollama pull qwen2.5-coder:3b</code>.</li>
+            <li>Come back and hit <strong>Refresh</strong> above — models are discovered from the runtime itself, never assumed.</li>
+          </ol>
+        </div>
+
+        <!-- Endpoint + selected model -->
+        <form id="localEndpointForm" class="card form-card">
+          <h2 class="form-group-title">Runtime endpoint &amp; selected model</h2>
+          <div class="field-row">
+            <label class="field">
+              <span>Local endpoint (localhost only)</span>
+              <input id="localBaseUrl" type="url" placeholder="http://127.0.0.1:11434">
+              <small>Remote URLs are refused — local runs never leave this machine.</small>
+            </label>
+            <label class="field">
+              <span>Selected model</span>
+              <input id="localSelectedInput" type="text" placeholder="e.g. qwen2.5-coder:3b" list="localModelTags">
+              <datalist id="localModelTags"></datalist>
+              <small>Pick from the list below or type a tag you have pulled.</small>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent btn-small">Save selection</button>
+            <button type="button" id="localChatToggle" class="btn btn-quiet btn-small" aria-pressed="false">Use for chat &amp; runs: off</button>
+          </div>
+        </form>
+
+        <!-- Pull a model: explicit action only, progress via the event bus -->
+        <form id="localPullForm" class="card form-card">
+          <h2 class="form-group-title">Download a model (explicit step)</h2>
+          <div class="field-row">
+            <label class="field">
+              <span>Model tag</span>
+              <input id="localPullModel" type="text" placeholder="qwen2.5-coder:3b">
+              <small id="localPullNote">Models can be hundreds of MB to several GB — check disk space on the hardware panel before pulling.</small>
+            </label>
+            <div class="form-actions local-pull-actions">
+              <button type="submit" class="btn btn-accent btn-small" id="localPullBtn">Pull model</button>
+              <span id="localPullStatus" class="local-pull-status" role="status"></span>
+            </div>
+          </div>
+        </form>
+
+        <!-- Inventory: live from /api/tags -->
+        <section class="card form-card" aria-labelledby="localModelsTitle">
+          <div class="local-status-head">
+            <h2 class="form-group-title" id="localModelsTitle">Available local models</h2>
+            <button id="localRefreshModelsBtn" class="btn btn-quiet btn-small" type="button">Refresh list</button>
+          </div>
+          <div id="localModelsList" class="list-block" aria-live="polite"></div>
+        </section>
+
+        <!-- Hardware diagnostics: best-effort, Unknown when not detectable -->
+        <section class="card form-card" aria-labelledby="localHardwareTitle">
+          <div class="local-status-head">
+            <h2 class="form-group-title" id="localHardwareTitle">Hardware check</h2>
+            <button id="localHardwareBtn" class="btn btn-quiet btn-small" type="button">Re-check hardware</button>
+          </div>
+          <dl id="localHardware" class="local-hardware" aria-live="polite"></dl>
+          <p id="localRecommendation" class="muted local-recommendation"></p>
+        </section>
+      </div>
+    </section>
+
     <section id="runsView" class="view page-view hidden" role="tabpanel" aria-label="Runs">
       <div class="page">
         <header class="page-head">
@@ -372,6 +465,16 @@
             <span>Goal for the open workspace</span>
             <textarea id="runGoal" rows="3" placeholder="Create hello.txt containing Hi, then verify it exists by listing the folder." required></textarea>
           </label>
+          <div class="field">
+            <span>Agent profile</span>
+            <select id="runProfile" class="run-profile-select">
+              <option value="coding" selected>Coding — plan, edit and verify files</option>
+              <option value="planner">Planner — analyse and produce a plan (read-only)</option>
+              <option value="testing">Testing — run tests and report real results (no edits)</option>
+              <option value="review">Review — findings report over the current code (read-only)</option>
+            </select>
+            <small id="runProfileNote">Planner, testing and review stay read-only on the backend regardless of the checkboxes below.</small>
+          </div>
           <div class="run-perms">
             <label class="run-perm"><input id="runAllowWrites" type="checkbox" checked><span>May write files</span></label>
             <label class="run-perm"><input id="runAllowCommands" type="checkbox"><span>May run commands</span></label>

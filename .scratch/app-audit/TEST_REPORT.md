@@ -30,3 +30,9 @@
 | 2026-10-30 | M6: cd vscode-extension && npm test | 22 passed / 0 failed | |
 | 2026-10-30 | M6: android gradle testDebugUnitTest | exit 0 | |
 | 2026-10-30 | Live adaptive run through a real router | not run | no provider credentials in this environment; failover path covered by construction (step-logged) but not exercised live |
+| 2026-10-30 | M7: cd app && cargo test | 113 passed / 0 failed | includes local-adapter + local-select/pull/hardware validation and no-remote-fallback tests |
+| 2026-10-30 | node --check app/static/app.js | pass | after localBtn/runsBtn wiring fix + local view wiring |
+| 2026-10-30 | cargo build (default gui features) | pass | headless (--no-default-features) build panics in tauri-build 2.7.4 "missing cargo:dev" — pre-existing toolchain issue, release CI unaffected |
+| 2026-10-30 | Live UI: server on :34521, Local AI view opened in browser; click-through of localBtn | pass | view switches; status panel shows real "not detected" + endpoint error; setup card shows; honest model-list unavailability; hardware panel real (i3-1115G4/4c/15GB/GPU/disk) + quantized-model recommendation; token follow-up fix (dead CSS block replaced with styles matching actual markup); no browser console errors |
+| 2026-10-30 | Theme check | pass | dark + light: panel/setup-card/hardware tokens resolve in both themes |
+| 2026-10-30 | Live local inference round-trip | not run | no Ollama on this machine; honest failure path verified instead |

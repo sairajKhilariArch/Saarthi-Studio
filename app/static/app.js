@@ -755,6 +755,7 @@ const VIEWS = [
   "settings",
   "usage",
   "router",
+  "local",
   "skills",
   "workspaces",
   "agents",
@@ -777,6 +778,7 @@ function setView(view) {
   if (view === "chat") setTimeout(() => $("prompt").focus(), 30);
   if (view === "usage") loadUsage();
   if (view === "router") loadConsoleStatus();
+  if (view === "local") void loadLocal();
   if (view === "skills") renderSkillsOverview();
   if (view === "workspaces") renderWorkspaces();
   if (view === "agents") renderAgents();
@@ -1032,6 +1034,10 @@ function setupMirroring() {
     }
     if (data && data.type === "agent-run-changed") {
       if (state.view === "runs") void loadRuns();
+      return;
+    }
+    if (data && (data.type === "local-pull" || data.type === "local-models-changed")) {
+      handleLocalEvent(data);
       return;
     }
     if (!data || !data.conversation_id) return;
@@ -2536,6 +2542,7 @@ async function offerOmnirouteStart() {
 /* ------------------------------------------------------------------ */
 
 const PROVIDER_NAMES = {
+  local: "Local",
   openai: "OpenAI",
   anthropic: "Anthropic",
   claude: "Anthropic",
@@ -2637,7 +2644,21 @@ function toggleModelMenu(force) {
     renderModelMenu();
     $("modelFilter").focus();
     void refreshModelDailyUsage();
+    // Local models come from the runtime, fetched beside the router catalog.
+    void refreshLocalMenuModels();
   }
+}
+
+async function refreshLocalMenuModels() {
+  const result = await api("/api/local/models");
+  state.localModels = result.data && result.data.ok !== undefined ? result.data : state.localModels;
+  renderModelMenu();
+}
+
+function localMenuModels() {
+  const payload = state.localModels;
+  if (!payload || payload.ok === false) return [];
+  return (payload.models || []).map((model) => model.name);
 }
 
 function renderModelMenu() {
@@ -2652,6 +2673,18 @@ function renderModelMenu() {
     chosen: !state.chatModel,
     onPick: () => { state.chatModel = null; },
   }));
+
+  // Local models (from /api/local/models): only real ones the runtime lists,
+  // always labelled as local so nobody mistakes them for router picks.
+  const localNames = localMenuModels().filter((name) => name.toLowerCase().includes(filter));
+  localNames.forEach((name) => {
+    list.appendChild(modelMenuItem({
+      id: `local:${name}`,
+      label: `${name}`,
+      chosen: state.chatModel === `local:${name}`,
+      onPick: () => { state.chatModel = `local:${name}`; },
+    }));
+  });
 
   const note = document.createElement("p");
   note.className = "model-note";
@@ -4212,7 +4245,7 @@ function bindEvents() {
   });
 
   $("routerBtn").addEventListener("click", () => setView("router"));
-  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"]].forEach(([id, view]) => {
+  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"], ["localBtn", "local"], ["runsBtn", "runs"]].forEach(([id, view]) => {
 
     $(id).addEventListener("click", () => setView(view));
   });
@@ -4331,6 +4364,259 @@ function bindEvents() {
 }
 
 /* ------------------------------------------------------------------ */
+/* local AI: real runtime state from /api/local — nothing fabricated   */
+/* ------------------------------------------------------------------ */
+
+state.localStatus = null;
+state.localModels = null;
+state.localHardware = null;
+state.localPulling = null;
+
+async function loadLocal() {
+  const [status, models] = await Promise.all([api("/api/local/status"), api("/api/local/models")]);
+  state.localStatus = status.ok ? status.data : null;
+  if (status.ok) {
+    const runtime = status.data.runtime || {};
+    state.localPulling = status.data.pulling || null;
+    renderLocalStatus();
+    if (!runtime.installed) {
+      // No runtime: the model list would only echo the failure.
+      state.localModels = { ok: false, models: [], error: status.data.runtime && status.data.runtime.error || "" };
+    }
+  }
+  if (models.ok !== undefined) state.localModels = models.data;
+  renderLocalModels();
+  void refreshLocalHardware();
+  const cfg = await api("/api/config");
+  if (cfg.ok) {
+    $("localBaseUrl").value = cfg.data.local_base_url || "http://127.0.0.1:11434";
+    $("localSelectedInput").value = cfg.data.local_model || "";
+    setLocalChatToggle(Boolean(cfg.data.local_chat), cfg.data.local_model);
+  }
+}
+
+function setLocalChatToggle(on, selectedModel) {
+  const button = $("localChatToggle");
+  if (!button) return;
+  button.setAttribute("aria-pressed", String(on));
+  button.textContent = `Use for chat & runs: ${on ? "on" : "off"}`;
+  button.classList.toggle("btn-accent", on);
+  button.classList.toggle("btn-quiet", !on);
+  button.disabled = on && !(selectedModel || "").trim();
+  button.title = on && !(selectedModel || "").trim()
+    ? "Select a local model first"
+    : "When on, chat and agent runs go only to this computer's local runtime — never to a remote provider.";
+}
+
+function renderLocalStatus() {
+  const status = state.localStatus;
+  const dot = $("localStatusDot");
+  const title = $("localStatusTitle");
+  const detail = $("localStatusDetail");
+  const hint = $("localStatusHint");
+  const setupCard = $("localSetupCard");
+  if (!status) {
+    dot.className = "status-dot status-off";
+    title.textContent = "Local runtime status unknown";
+    detail.textContent = "Could not reach the server endpoint. Refresh to retry.";
+    hint.classList.add("hidden");
+    setupCard.classList.remove("hidden");
+    return;
+  }
+  const runtime = status.runtime || {};
+  const pulling = status.pulling;
+  if (pulling) {
+    dot.className = "status-dot status-busy";
+    title.textContent = "Ollama — pulling " + pulling;
+    detail.textContent = "Downloading in the background; this panel refreshes as progress lands.";
+  } else if (runtime.installed) {
+    const selectedOk = status.selected_model_is_installed;
+    dot.className = "status-dot status-ok";
+    title.textContent = `Ollama ${runtime.version || ""} — detected and reachable`.trim();
+    detail.textContent = status.model_count === 1
+      ? "1 installed model on this computer."
+      : `${status.model_count} installed models on this computer.`;
+    if (status.selected_model && selectedOk === false) {
+      dot.className = "status-dot status-warn";
+      detail.textContent = `The saved model "${status.selected_model}" is not installed on this endpoint. Pull it below or pick another.`;
+    }
+    setupCard.classList.add("hidden");
+  } else {
+    dot.className = "status-dot status-off";
+    title.textContent = "Local runtime not detected";
+    detail.textContent = runtime.error || "Nothing answered on the local endpoint.";
+    hint.textContent = runtime.setup_hint || "";
+    hint.classList.toggle("hidden", !runtime.setup_hint);
+    setupCard.classList.remove("hidden");
+  }
+}
+
+function fmtBytes(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = Number(value);
+  let unit = 0;
+  while (size >= 1000 && unit < units.length - 1) { size /= 1024; unit += 1; }
+  return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
+}
+
+function renderLocalModels() {
+  const list = $("localModelsList");
+  const dataset = $("localModelTags");
+  list.replaceChildren();
+  dataset.replaceChildren();
+  const payload = state.localModels;
+  if (!payload || payload.ok === false) {
+    const empty = document.createElement("p");
+    empty.className = "run-empty";
+    empty.textContent = payload && payload.error
+      ? `Model list unavailable: ${payload.error}`
+      : "Start the runtime to see the models installed on this computer.";
+    list.appendChild(empty);
+    return;
+  }
+  const models = payload.models || [];
+  models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.name;
+    dataset.appendChild(option);
+  });
+  if (!models.length) {
+    const empty = document.createElement("p");
+    empty.className = "run-empty";
+    empty.textContent = "No models are installed yet. Pull one below — quantized small coding models are the easiest start.";
+    list.appendChild(empty);
+    return;
+  }
+  state.localModels = null;
+  models.forEach((model) => list.appendChild(localModelCard(model)));
+}
+
+function localModelCard(model) {
+  const selected = state.localStatus && state.localStatus.selected_model === model.name;
+  const card = document.createElement("article");
+  card.className = "card local-model-card" + (selected ? " selected" : "");
+  const head = document.createElement("div");
+  head.className = "local-model-head";
+  const name = document.createElement("strong");
+  name.textContent = model.name;
+  head.appendChild(name);
+  if (selected) {
+    const pill = document.createElement("span");
+    pill.className = "status-pill run-status run-ok";
+    pill.textContent = "selected";
+    head.appendChild(pill);
+  }
+  card.appendChild(head);
+  const meta = document.createElement("p");
+  meta.className = "muted local-model-meta";
+  const size = fmtBytes(model.size_bytes) || "size unknown";
+  meta.textContent = `${model.family || "unknown"} · ${model.parameter_size || "unknown"} · ${model.quantization || "unknown"} · ${size}`;
+  card.appendChild(meta);
+  const actions = document.createElement("div");
+  actions.className = "local-model-actions";
+  const useBtn = document.createElement("button");
+  useBtn.type = "button";
+  useBtn.className = "btn " + (selected ? "btn-quiet" : "btn-accent") + " btn-small";
+  useBtn.textContent = selected ? "Selected" : "Use this model";
+  useBtn.disabled = Boolean(selected);
+  useBtn.addEventListener("click", async () => {
+    const result = await api("/api/local/select", {
+      method: "POST",
+      body: JSON.stringify({ model: model.name }),
+    });
+    if (!result.ok) { toast(result.data.error || "Could not select the model."); return; }
+    toast(`Selected local model: ${model.name}.`);
+    void loadLocal();
+  });
+  actions.appendChild(useBtn);
+  card.appendChild(actions);
+  return card;
+}
+
+async function refreshLocalHardware() {
+  const result = await api("/api/local/hardware");
+  if (!result.ok) return;
+  state.localHardware = result.data;
+  renderLocalHardware();
+}
+
+function renderLocalHardware() {
+  const hw = state.localHardware;
+  const box = $("localHardware");
+  if (!box || !hw) return;
+  const row = (label, value) => `<div><dt>${label}</dt><dd>${value}</dd></div>`;
+  const cores = hw.logical_cores == null ? "Unknown" : `${hw.logical_cores} logical cores`;
+  const ram = hw.ram_total_bytes == null ? "Unknown" : fmtBytes(hw.ram_total_bytes);
+  const gpu = hw.gpu_list == null ? "Unknown" : hw.gpu_list.join(", ");
+  const disk = hw.disk_free_bytes == null ? "Unknown" : `${fmtBytes(hw.disk_free_bytes) || "?"} of ${fmtBytes(hw.disk_total_bytes) || "?"} free`;
+  box.innerHTML = [
+    row("CPU", `${escLocal(hw.cpu_model || "Unknown")} — ${cores}`),
+    row("System RAM", ram),
+    row("GPU", gpu),
+    row("Disk (workspace drive)", hw.disk_path ? `${disk} at ${escLocal(hw.disk_path)}` : disk),
+  ].join("");
+  $("localRecommendation").textContent = hw.recommendation || "";
+}
+
+function escLocal(text) {
+  return String(text).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+}
+
+function setupLocalControls() {
+  $("localRefreshBtn").addEventListener("click", () => void loadLocal());
+  $("localRefreshModelsBtn").addEventListener("click", () => void loadLocal());
+  $("localHardwareBtn").addEventListener("click", () => void refreshLocalHardware());
+  $("localEndpointForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = {
+      base_url: $("localBaseUrl").value.trim(),
+      model: $("localSelectedInput").value.trim(),
+    };
+    const result = await api("/api/local/select", { method: "POST", body: JSON.stringify(payload) });
+    if (!result.ok) { toast(result.data.error || "Could not save the local selection."); return; }
+    toast("Local runtime settings saved.");
+    void loadLocal();
+  });
+  $("localChatToggle").addEventListener("click", async () => {
+    const currentlyOn = $("localChatToggle").getAttribute("aria-pressed") === "true";
+    const result = await api("/api/local/select", {
+      method: "POST",
+      body: JSON.stringify({ chat: !currentlyOn }),
+    });
+    if (!result.ok) { toast(result.data.error || "Could not change the local mode."); return; }
+    toast(!currentlyOn
+      ? "Local AI mode is on — chat and agent runs now use only the local runtime."
+      : "Local AI mode is off — the router answers again.");
+    void loadLocal();
+  });
+  $("localPullForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const tag = $("localPullModel").value.trim();
+    if (!tag) return;
+    const result = await api("/api/local/pull", { method: "POST", body: JSON.stringify({ model: tag }) });
+    if (!result.ok) { toast(result.data.error || "Could not start the pull."); return; }
+    $("localPullStatus").textContent = `Pulling ${tag}…`;
+    state.localPulling = tag;
+    void loadLocal();
+  });
+}
+
+function handleLocalEvent(data) {
+  if (data.type === "local-pull") {
+    const status = $("localPullStatus");
+    if (status) {
+      if (data.phase === "progress") status.textContent = `Pulling ${data.model}… ${data.detail}`;
+      else if (data.phase === "success") { status.textContent = `"${data.model}" downloaded successfully.`; state.localPulling = null; if (state.view === "local") void loadLocal(); }
+      else if (data.phase === "failed") { status.textContent = `Pull of ${data.model} failed: ${data.detail}`; state.localPulling = null; if (state.view === "local") void loadLocal(); }
+      else if (data.phase === "finish") { if (state.localPulling === data.model) { state.localPulling = null; if (state.view === "local") void loadLocal(); } }
+    }
+    return;
+  }
+  if (data.type === "local-models-changed" && state.view === "local") void loadLocal();
+}
+
+/* ------------------------------------------------------------------ */
 /* agent runs: autonomous goal execution with approvals                */
 /* ------------------------------------------------------------------ */
 
@@ -4402,7 +4688,8 @@ function renderRunCard(run) {
   meta.className = "run-meta";
   // Adaptive runs record which model answered; base-model runs stay unlabelled.
   const modelTag = run.model ? ` · ${run.model}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${modelTag}`;
+  const profileTag = run.profile && run.profile !== "coding" ? ` · ${run.profile}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${profileTag}${modelTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
@@ -4573,6 +4860,7 @@ async function submitRun(event) {
   if (!goal) return;
   const payload = {
     goal,
+    profile: $("runProfile").value,
     allowWrites: $("runAllowWrites").checked,
     allowCommands: $("runAllowCommands").checked,
     autoApprove: $("runAutoApprove").checked,
@@ -4628,6 +4916,7 @@ async function cancelAgentRun(runId) {
   renderAccentPicker();
   setSettingsSection(localStorage.getItem("freeai-settings-section") || "connection");
   bindEvents();
+  setupLocalControls();
   $("runsForm").addEventListener("submit", submitRun);
   setSidebarMode("threads");
   setView("chat");

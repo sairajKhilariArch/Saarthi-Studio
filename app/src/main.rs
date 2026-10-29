@@ -37,6 +37,7 @@ mod host_api;
 mod host_auth;
 mod host_security;
 mod host_transport;
+mod local;
 mod media;
 mod privacy;
 mod router;
@@ -103,6 +104,15 @@ struct Config {
     cheap_model: String,
     #[serde(default)]
     strong_model: String,
+    /// Local inference endpoint (Ollama): localhost-only, never a remote URL.
+    #[serde(default = "default_local_base_url")]
+    local_base_url: String,
+    /// Local model the chat and agent runs should use when local mode is on.
+    #[serde(default)]
+    local_model: String,
+    /// When on, chat/run requests go ONLY to the local runtime.
+    #[serde(default)]
+    local_chat: bool,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -133,8 +143,24 @@ impl Config {
             adaptive_routing: false,
             cheap_model: String::new(),
             strong_model: String::new(),
+            local_base_url: default_local_base_url(),
+            local_model: String::new(),
+            local_chat: false,
         }
     }
+}
+
+fn default_local_base_url() -> String {
+    "http://127.0.0.1:11434".to_string()
+}
+
+/// A menu pick of the form "local:<model>" forces local routing for that
+/// turn. Pure helper shared by the chat and stream handlers.
+fn local_forced_model(chosen: &str) -> Option<String> {
+    chosen
+        .strip_prefix("local:")
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
 }
 
 pub(crate) fn now_seconds() -> f64 {
@@ -393,7 +419,7 @@ pub(crate) fn load_config(state: &AppState) -> Config {
         .unwrap_or_else(Config::defaults)
 }
 
-fn save_config_file(path: &FsPath, cfg: &Config) -> io::Result<()> {
+pub(crate) fn save_config_file(path: &FsPath, cfg: &Config) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(cfg)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let temp_path = path.with_extension("tmp");
@@ -562,8 +588,38 @@ pub(crate) fn run_record_snapshot(state: &AppState) -> (String, String) {
         "adaptive_routing": cfg.adaptive_routing,
         "cheap_model": cfg.cheap_model,
         "strong_model": cfg.strong_model,
+        "local": cfg.local_chat,
+        "local_model": cfg.local_model,
     });
     (snapshot.to_string(), cfg.model.clone())
+}
+
+/// The one model seam for chat and agent runs: in Local AI mode every call
+/// goes strictly to the configured local runtime (never to the remote
+/// router, even when the local call fails); otherwise the remote router is
+/// used as before.
+pub(crate) async fn call_model(
+    state: &AppState,
+    messages: Vec<Value>,
+    model_override: Option<&str>,
+) -> Result<(String, Value), String> {
+    let cfg = load_config(state);
+    if cfg.local_chat {
+        if cfg.local_model.trim().is_empty() {
+            return Err(
+                "Local AI mode is on but no local model is selected — pick one on the Local AI page.".to_string(),
+            );
+        }
+        let base = local::effective_base_url(&cfg.local_base_url);
+        let (answer, tokens) = local::chat_once(&base, &cfg.local_model, &messages).await?;
+        let meta = json!({
+            "model": cfg.local_model,
+            "provider": "local",
+            "completion_tokens": if tokens >= 0 { json!(tokens) } else { json!(null) },
+        });
+        return Ok((answer, meta));
+    }
+    call_router(state, messages, model_override).await
 }
 
 pub(crate) async fn call_router(state: &AppState, messages: Vec<Value>, model_override: Option<&str>) -> Result<(String, Value), String> {
@@ -699,6 +755,9 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "adaptive_routing": cfg.adaptive_routing,
         "cheap_model": cfg.cheap_model,
         "strong_model": cfg.strong_model,
+        "local_base_url": cfg.local_base_url,
+        "local_model": cfg.local_model,
+        "local_chat": cfg.local_chat,
     }))
 }
 
@@ -1870,6 +1929,65 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         .into_response();
     }
 
+    // Local AI mode: this turn is answered strictly by the configured local
+    // runtime. It is never rerouted to the remote router, so a dead runtime
+    // stays a visible, actionable error.
+    // Local AI mode: this turn is answered strictly by the configured local
+    // runtime. It is never rerouted to the remote router, so a dead runtime
+    // stays a visible, actionable error. A "local:<model>" manifest pick
+    // forces local routing exactly the same way.
+    let explicit_local = local_forced_model(&chosen_model);
+    if cfg.local_chat || explicit_local.is_some() {
+        let started = Instant::now();
+        let base = local::effective_base_url(&cfg.local_base_url);
+        let model_name = explicit_local.unwrap_or_else(|| cfg.local_model.clone());
+        return match local::chat_once(&base, &model_name, &packed.messages).await {
+            Ok((answer, tokens)) => {
+                let now = now_seconds();
+                let completion = if tokens >= 0 { Some(tokens) } else { None };
+                let log_result = (|| -> rusqlite::Result<()> {
+                    let conn = open_db(&state.database_path)?;
+                    conn.execute("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'assistant',?2,?3)", params![cid, answer, now])?;
+                    conn.execute(
+                        "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,'local','ok',?4,NULL,?5,NULL,'','')",
+                        params![now, cid, model_name, started.elapsed().as_millis() as i64, completion],
+                    )?;
+                    conn.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now, cid])?;
+                    Ok(())
+                })();
+                if let Err(e) = log_result {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("AI replied, but saving the response failed: {e}"),
+                    );
+                }
+                events::notify(&state.events, &cid, "message");
+                Json(json!({
+                    "ok": true,
+                    "answer": answer,
+                    "meta": {
+                        "model": model_name,
+                        "provider": "local",
+                        "completion_tokens": completion,
+                        "context_tokens": context_tokens,
+                        "context_trimmed": context_trimmed,
+                    }
+                }))
+                .into_response()
+            }
+            Err(error) => {
+                let latency = started.elapsed().as_millis() as i64;
+                log_router_error(&state, &cid, &error, latency, &model_name);
+                events::notify(&state.events, &cid, "failed");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"ok": false, "error": error, "meta": {"provider": "local", "latency_ms": latency}})),
+                )
+                    .into_response()
+            }
+        };
+    }
+
     let started = Instant::now();
     match call_router(&state, packed.messages, Some(&chosen_model)).await {
         Ok((answer, mut meta)) => {
@@ -2157,7 +2275,7 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
     let context_tokens = packed.estimated_tokens;
     media::apply_media(&mut packed.messages, &attachments);
 
-    if ds_answer.is_none() && cfg.api_key.trim().is_empty() {
+    if ds_answer.is_none() && !cfg.local_chat && cfg.api_key.trim().is_empty() {
         return json_error(
             StatusCode::BAD_REQUEST,
             "Add your router's unified API key in Settings first.",
@@ -2197,6 +2315,39 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
             recorder,
             finished: false,
         });
+    }
+
+    // Local AI mode: stream strictly from the configured local runtime —
+    // never from the remote router. Ollama's NDJSON deltas are folded into
+    // the same SSE frame shape so the browser and recorder stay unchanged.
+    let explicit_local_stream_model = local_forced_model(&chosen_model);
+    if cfg.local_chat || explicit_local_stream_model.is_some() {
+        let base = local::effective_base_url(&cfg.local_base_url);
+        let local_name = explicit_local_stream_model.unwrap_or_else(|| cfg.local_model.clone());
+        return match local::chat_stream_bytes(&base, &local_name, &packed.messages).await {
+            Ok(stream) => {
+                let recorder =
+                    ReplyRecorder::new(state.database_path.clone(), cid, context_tokens, state.events.clone());
+                if let Ok(mut held) = recorder.meta.lock() {
+                    held["model"] = json!(&local_name);
+                    held["provider"] = json!("local");
+                }
+                let mut pending: VecDeque<String> = ds_frames;
+                pending.push_back(sse_frame(&json!({ "ready": true })));
+                sse_response(StreamState {
+                    bytes: stream,
+                    leftover: String::new(),
+                    pending,
+                    recorder,
+                    finished: false,
+                })
+            }
+            Err(error) => {
+                log_router_error(&state, &cid, &error, 0, &local_name);
+                events::notify(&state.events, &cid, "failed");
+                json_error(StatusCode::BAD_GATEWAY, error)
+            }
+        };
     }
 
     let request_body = json!({
@@ -2371,6 +2522,8 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(workspace::router(port))
         .merge(terminal::router(port))
         .merge(media::router(port))
+        .merge(local::read_routes())
+        .merge(local::mutate_routes(port))
         .merge(agent::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

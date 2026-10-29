@@ -196,6 +196,7 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
     for statement in [
         "ALTER TABLE agent_runs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_runs ADD COLUMN router_config TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE agent_runs ADD COLUMN profile TEXT NOT NULL DEFAULT 'coding'",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -222,6 +223,7 @@ struct RunRow {
     updated_at: f64,
     router_config: String,
     model: String,
+    profile: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -240,6 +242,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         updated_at: row.get(11)?,
         router_config: row.get(12)?,
         model: row.get(13)?,
+        profile: row.get(14)?,
     })
 }
 
@@ -340,7 +343,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -372,6 +375,7 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "error": row.error, "steps": steps,
         "createdAt": row.created_at, "updatedAt": row.updated_at,
         "model": row.model, "routerConfig": row.router_config,
+        "profile": row.profile,
     })
 }
 
@@ -573,6 +577,19 @@ struct PermissionGate;
 
 impl PermissionGate {
     fn decides(run: &RunRow, action: &Action) -> GateDecision {
+        // Profile is Trip mode: planner, testing and review run read-only by
+        // design — writes and commands are denied before the model even
+        // reaches them, no matter which checkboxes were ticked.
+        if let Action::Write {..} | Action::Command {..} = action {
+            if !matches!(run.profile.as_str(), "coding") {
+                if let Action::Write {..} = action {
+                    return GateDecision::Denied("file writes in this profile");
+                }
+                if !matches!(run.profile.as_str(), "testing") {
+                    return GateDecision::Denied("command execution in this profile");
+                }
+            }
+        }
         match action {
             Action::Write { .. } if !run.allow_writes => GateDecision::Denied("file writes"),
             Action::Command { .. } if !run.allow_commands => {
@@ -592,23 +609,31 @@ impl PermissionGate {
 /// The standing instruction: what one JSON action looks like and which tools
 /// this particular run may use.
 fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
-    let write_rule = if run.allow_writes { "write, list" } else { "list (write FORBIDDEN — never emit it)" };
-    let command_rule = if run.allow_commands {
+    // Profile rules override what the checkboxes say: the gate backs the
+    // prompt up, so a denied tool is both forbidden in text and refused.
+    let write_rule = if !profile_rule(&run.profile, true).is_empty() {
+        profile_rule(&run.profile, true).to_string()
+    } else if run.allow_writes {
+        "write, list".to_string()
+    } else {
+        "list (write FORBIDDEN — never emit it)".to_string()
+    };
+    let command_rule = if !profile_rule(&run.profile, false).is_empty() {
+        profile_rule(&run.profile, false).to_string()
+    } else if run.allow_commands {
         if run.auto_approve {
-            "command"
+            "command".to_string()
         } else {
-            "command (each command first waits for user approval)"
+            "command (each command first waits for user approval)".to_string()
         }
     } else {
-        "command FORBIDDEN — never emit it"
+        "command FORBIDDEN — never emit it".to_string()
     };
     vec![
         json!({
             "role": "system",
             "content": format!(
-                "You are the Saarthi Studio autonomous coding agent working inside an open \
-                 workspace folder. You complete the task one step at a time: inspect, plan, \
-                 edit, verify, and keep going until the goal is actually met. Reply with \
+                "{} Reply with \
                  EXACTLY ONE JSON object and nothing else — no markdown fences, no prose. \
                  Choose one:\n\
                  {{\"action\":\"think\",\"summary\":\"...\"}} next thought, open question or plan\n\
@@ -618,7 +643,8 @@ fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
                  {{\"action\":\"command\",\"command\":\"build/test command\"}} run a shell command in the workspace\n\
                  {{\"action\":\"done\",\"summary\":\"...\"}} the goal is met and you verified it\n\
                  {{\"action\":\"fail\",\"reason\":\"...\"}} you cannot meet the goal\n\n\
-                 Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}."
+                 Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}.",
+                profile_role(&run.profile)
             )
         }),
         json!({
@@ -720,7 +746,9 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     let (last_action, had_error) = last_step_kind(state, &run.id)?;
     let tier = crate::adaptive_tier(state, &last_action, had_error);
     let messages = build_messages(run, &build_history(state, &run.id)?);
-    let outcome = crate::call_router(state, messages, tier.as_deref()).await;
+    // call_model routes to the local runtime in Local AI mode and to the
+    // remote router otherwise; a local miss never silently goes remote.
+    let outcome = crate::call_model(state, messages, tier.as_deref()).await;
     let (reply, model_used) = match outcome {
         Ok((reply, _)) => (reply, tier.clone()),
         // Visible failover: a tier miss falls back to the configured base
@@ -734,7 +762,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                 &cap_chars(&tier_error, 600),
             )?;
             let base_messages = build_messages(run, &build_history(state, &run.id)?);
-            let (reply, _) = crate::call_router(state, base_messages, None).await?;
+            let (reply, _) = crate::call_model(state, base_messages, None).await?;
             (reply, None)
         }
         Err(error) => return Err(error),
@@ -988,6 +1016,53 @@ fn error_response(status: StatusCode, message: impl std::fmt::Display) -> Respon
     (status, Json(json!({ "error": message.to_string() }))).into_response()
 }
 
+/// The profile picker: what this run is FOR. An unknown name is rejected at
+/// the door; an empty name is the default coding profile.
+const PROFILES: [&str; 4] = ["coding", "planner", "testing", "review"];
+
+fn normalize_profile(input: &str) -> String {
+    let trimmed = input.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return "coding".to_string();
+    }
+    if PROFILES.contains(&trimmed.as_str()) {
+        trimmed
+    } else {
+        String::new()
+    }
+}
+
+fn profile_role(profile: &str) -> &'static str {
+    match profile {
+        "planner" => "You are the Saarthi Studio PLANNER. Analyze the task and inspect the workspace as \
+needed, then produce a plan. When the plan is complete, finish with done whose summary IS \
+the plan (steps, likely files, dependencies). You may NOT write files or run commands.",
+        "testing" => "You are the Saarthi Studio TESTING agent. Find and run the relevant tests for the \
+goal, capture real exit codes and output, and separate infrastructure failures (missing \
+tools or deps) from actual test failures. You may run commands but may NOT write files. \
+Never claim tests passed unless a run said so.",
+        "review" => "You are the Saarthi Studio REVIEWER. Inspect the current code and recent diffs, and \
+report concrete findings (bugs, security risks, regressions, maintainability issues) with \
+file paths and line references where possible. You may NOT write files or run commands. \
+Finish with done whose summary is the findings list.",
+        _ => "You are the Saarthi Studio autonomous coding agent working inside an open workspace \
+folder. You complete the task one step at a time: inspect, plan, edit, verify, and keep \
+going until the goal is actually met.",
+    }
+}
+
+fn profile_rule(profile: &str, write: bool) -> &'static str {
+    match (profile, write) {
+        ("planner" | "review" | "testing", true) => {
+            "write FORBIDDEN — this profile never modifies files"
+        }
+        ("planner" | "review", false) => {
+            "command FORBIDDEN — this profile never runs commands"
+        }
+        _ => "",
+    }
+}
+
 async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let goal = input.get("goal").and_then(Value::as_str).unwrap_or("").trim().to_string();
     if goal.is_empty() {
@@ -1004,6 +1079,10 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         .and_then(Value::as_i64)
         .unwrap_or(DEFAULT_MAX_STEPS)
         .clamp(1, HARD_MAX_STEPS);
+    let profile = normalize_profile(input.get("profile").and_then(Value::as_str).unwrap_or(""));
+    if profile.trim().is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "Unknown agent profile.");
+    }
 
     // The agent works inside the open workspace folder; without one there is
     // nothing safe to read or edit.
@@ -1021,12 +1100,12 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12)",
             params![
                 id, project_id, goal, RUNNING,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
-                snapshot, base_model
+                snapshot, base_model, profile
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -1044,7 +1123,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     };
     let mut stmt = match conn.prepare(
         "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, r.allow_commands, r.auto_approve, \
-         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, \
+         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, \
          (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
          FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50",
     ) {
@@ -1053,7 +1132,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     };    let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(14)?;
+            let steps: i64 = row.get(15)?;
 
             Ok(run_json(&run, steps))
         })
@@ -1362,6 +1441,89 @@ mod tests {
     }
 
     #[test]
+    fn profile_gate_forces_plan_or_review_read_only() {
+        let base = RunRow {
+            id: "r".into(),
+            project_id: "p".into(),
+            goal: "g".into(),
+            status: RUNNING.into(),
+            allow_writes: true,
+            allow_commands: true,
+            auto_approve: true,
+            max_steps: 5,
+            pending_action: String::new(),
+            error: String::new(),
+            created_at: 0.0,
+            updated_at: 0.0,
+            router_config: String::new(),
+            model: String::new(),
+            profile: "coding".into(),
+        };
+        // Coding + every flag on: writes are allowed outright.
+        assert!(matches!(
+            PermissionGate::decides(&base, &Action::Write { path: "a".into(), content: "b".into() }),
+            GateDecision::Allowed
+        ));
+        // Planner/review are read-only even with every checkbox ticked.
+        for profile in ["planner", "review"] {
+            let run = gated_run(profile);
+            assert!(
+                matches!(
+                    PermissionGate::decides(&run, &Action::Write { path: "a".into(), content: "b".into() }),
+                    GateDecision::Denied(_)
+                ),
+                "profile {profile} must not write"
+            );
+            assert!(
+                matches!(
+                    PermissionGate::decides(&run, &Action::Command { command: "ls".into() }),
+                    GateDecision::Denied(_)
+                ),
+                "profile {profile} must not run commands"
+            );
+        }
+        // Testing runs commands but never writes.
+        let testing = gated_run("testing");
+        assert!(matches!(
+            PermissionGate::decides(&testing, &Action::Command { command: "cargo test".into() }),
+            GateDecision::Allowed
+        ));
+        assert!(matches!(
+            PermissionGate::decides(&testing, &Action::Write { path: "a".into(), content: "b".into() }),
+            GateDecision::Denied(_)
+        ));
+    }
+
+    /// Convenience: an all-allowed coding run with one profile swapped.
+    fn gated_run(profile: &str) -> RunRow {
+        RunRow {
+            id: "r".into(),
+            project_id: "p".into(),
+            goal: "g".into(),
+            status: RUNNING.into(),
+            allow_writes: true,
+            allow_commands: true,
+            auto_approve: true,
+            max_steps: 5,
+            pending_action: String::new(),
+            error: String::new(),
+            created_at: 0.0,
+            updated_at: 0.0,
+            router_config: String::new(),
+            model: String::new(),
+            profile: profile.into(),
+        }
+    }
+
+    #[test]
+    fn unknown_profile_names_are_rejected() {
+        assert_eq!(normalize_profile(""), "coding");
+        assert_eq!(normalize_profile(" coding "), "coding");
+        assert_eq!(normalize_profile("PLANNER"), "planner");
+        assert_eq!(normalize_profile("root"), "");
+    }
+
+    #[test]
     fn permission_matrix_gate_writes_and_commands() {
         let run = RunRow {
             id: "r".into(),
@@ -1378,6 +1540,7 @@ mod tests {
             updated_at: 0.0,
             router_config: String::new(),
             model: String::new(),
+            profile: "coding".into(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -1406,6 +1569,7 @@ mod tests {
             updated_at: 0.0,
             router_config: String::new(),
             model: String::new(),
+            profile: "coding".into(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
