@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install on macOS — Saarthi Studio</title>
+<meta name="description" content="Install Saarthi Studio on macOS: one universal (Apple silicon + Intel) tarball, extracted and run. Gatekeeper workaround included.">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="./index.html"><i></i>Saarthi Studio</a>
+    <nav>
+      <a href="./index.html#features">Features</a>
+      <a href="./index.html#how">How to use</a>
+      <a href="./index.html#install">All platforms</a>
+    </nav>
+    <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="install">
+    <div class="sec-head">
+      <span class="pico-big">🍎</span>
+      <h2>Install on macOS</h2>
+      <p>One universal tarball — the same download runs on Apple silicon and Intel Macs. macOS 12 (Monterey) or newer.</p>
+    </div>
+    <div class="arts"><span class="art">macos-universal tar.gz</span><span class="art">arm64 + x86_64</span></div>
+
+    <article class="platform">
+      <h3><span class="pico">📂</span>Steps</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download the <code>macos-universal</code> tar.gz from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
+        <div class="ins"><div class="insbody"><p>Extract and start it:</p>
+          <pre><code>tar -xzf saarthi-studio-macos-universal.tar.gz
+cd saarthi-studio-macos-universal
+./free-ai-studio</code></pre></div></div>
+        <div class="ins"><div class="insbody"><p>On the first launch Gatekeeper may stop the unsigned binary — right-click <code>free-ai-studio</code> in Finder and choose <b>Open</b>, then confirm. Terminal launches skip the Gatekeeper prompt entirely.</p></div></div>
+      </div>
+      <p class="note"><b>Why unsigned:</b> no Apple Developer ID is attached to the build yet, and unsigned apps are <i>removed</i> by Gatekeeper when re-opened; the tarball avoids that punishment. Signing and notarization are planned — see the release pipeline for the exact steps that enable them. Updating over an existing install keeps all config, history and conversations: they live outside the app folder.</p>
+    </article>
+
+    <div class="pager">
+      <a href="./download-android.html">Next: Android →</a>
+      <a href="./index.html#install">← All platforms</a>
+    </div>
+  </section>
+</main>
+
+<footer>Saarthi Studio — local-first, bound to <code>127.0.0.1</code> by default. Every release ships SHA-256 checksum files next to each artifact.</footer>
+</body>
+</html>

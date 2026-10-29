@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install on Windows — Saarthi Studio</title>
+<meta name="description" content="Install Saarthi Studio on Windows: download the x64 zip, unzip, run. WebView2 note and SmartScreen workaround.">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="./index.html"><i></i>Saarthi Studio</a>
+    <nav>
+      <a href="./index.html#features">Features</a>
+      <a href="./index.html#how">How to use</a>
+      <a href="./index.html#install">All platforms</a>
+    </nav>
+    <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="install">
+    <div class="sec-head">
+      <span class="pico-big">🪟</span>
+      <h2>Install on Windows</h2>
+      <p>One artifact: a portable x64 zip. No installer, no registry changes — unzip and run.</p>
+    </div>
+    <div class="arts"><span class="art">x64 zip</span></div>
+
+    <article class="platform">
+      <h3><span class="pico">📂</span>Steps</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download the Windows zip from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a> and unzip it (right-click → <i>Extract All</i>).</p></div></div>
+        <div class="ins"><div class="insbody"><p>Run <code>free-ai-studio.exe</code> from the extracted folder.</p></div></div>
+        <div class="ins"><div class="insbody"><p>The modern WebView2 runtime ships with recent Windows 10/11 updates. If the app shows a blank window, install <a href="https://developer.microsoft.com/en-us/microsoft-edge/webview2/">Microsoft Edge WebView2</a>.</p></div></div>
+      </div>
+      <p class="note"><b>SmartScreen:</b> the build is unsigned, so the first launch may warn — choose <i>More info → Run anyway</i>. Updating: replace the folder contents; your config and history live outside it (<code>%APPDATA%\free-ai-studio</code> and local data paths), so an update keeps everything.</p>
+    </article>
+
+    <div class="pager">
+      <a href="./download-macos.html">Next: macOS →</a>
+      <a href="./index.html#install">← All platforms</a>
+    </div>
+  </section>
+</main>
+
+<footer>Saarthi Studio — local-first, bound to <code>127.0.0.1</code> by default. Every release ships SHA-256 checksum files next to each artifact.</footer>
+</body>
+</html>

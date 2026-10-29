@@ -8,12 +8,13 @@
 - M4b Android agent runs: agent routes now also mounted at `/api/host/v1/runs*` on the host listener behind the host bearer wall; `agent_runs` advertised in `/api/host/v1/capabilities`; MainActivity Tools menu → "Agent runs" with capability-gated Runs screen (list, detail, pending diff monospace preview, Approve/Reject, Cancel-run, per-step Restore), New-run composer with permission checkboxes, graceful degradation for older hosts. Host boundary tests: unauth 401, list shape, masked 400s, shared 404s.
 
 - M5 macOS packaging: desktop-release.yml macos job now builds BOTH arm64 and x86_64, merges a universal binary with `lipo`, verifies both slices, runs a headless HTTP smoke (`FREE_AI_STUDIO_PORT`), and packages one `macos-universal` unsigned tarball (no dmg: unsigned dmg is punished harder by Gatekeeper than a tarball — deviation from the roadmap wording, same goal). desktop-ci.yml gained a macOS build+test job so macOS-only breaks surface in CI. Signing/notarization stays a documented blocker (no credentials).
+- Round 2: round 1 committed on main (v1.23). Website branch merged with main; one download page per platform (Linux, Windows, macOS, Android, VS Code) with install steps + homepage platform-card grid + shared.css. Runbooks added to README: live adaptive-routing verification and macOS signing/notarization prerequisites.
 
 ## Current
-- M6 done: adaptive routing (choose_tier/adaptive_tier, step-level override + failover-to-base step, recorded per run) + reproducible run records (model/router_config columns + create-time snapshot + per-step record; run card shows model). Settings: Adaptive routing checkbox + cheap/strong fields in Chat context section.
+- Round 2 complete. Website pages + runbooks verified in preview (all links resolve, all pages 200, no console errors).
 
 ## Next
-- Close-out report. Nothing further approved this round; parking lot unchanged.
+- Nothing. Remaining blockers unchanged: macOS signing (needs Apple credentials — runbook in README), Android device testing (needs hardware), live adaptive test by the user (3-minute runbook in README).
 
 ## Blockers
 - Live Android device/emulator: none provisioned (gradle build + unit tests + lint only).

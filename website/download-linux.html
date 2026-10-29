@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install on Linux — Saarthi Studio</title>
+<meta name="description" content="Install Saarthi Studio on Linux: .deb, AppImage, portable tar.gz, or build from source on Ubuntu.">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="./index.html"><i></i>Saarthi Studio</a>
+    <nav>
+      <a href="./index.html#features">Features</a>
+      <a href="./index.html#how">How to use</a>
+      <a href="./index.html#install">All platforms</a>
+    </nav>
+    <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="install">
+    <div class="sec-head">
+      <span class="pico-big">🐧</span>
+      <h2>Install on Linux</h2>
+      <p>Four ways in: the <code>.deb</code> for Ubuntu-family distros, an AppImage, a portable tarball, or build from source. Requires a 64-bit kernel (amd64).</p>
+    </div>
+    <div class="arts"><span class="art">.deb</span><span class="art">AppImage</span><span class="art">tar.gz</span><span class="art">from source</span></div>
+
+    <article class="platform">
+      <h3><span class="pico">📦</span>.deb (recommended on Ubuntu/Debian)</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download <code>saarthi-studio_*_amd64.deb</code> from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
+        <div class="ins"><div class="insbody"><p>Install it:</p>
+          <pre><code>sudo apt install ./saarthi-studio_*_amd64.deb
+# or: sudo dpkg -i saarthi-studio_*_amd64.deb &amp;&amp; sudo apt -f install</code></pre></div></div>
+        <div class="ins"><div class="insbody"><p>Launch <b>Saarthi Studio</b> from the app menu, or run <code>free-ai-studio</code> in a terminal.</p></div></div>
+      </div>
+      <p class="note"><b>Upgrades:</b> installing a newer .deb over an older one preserves everything — config, history and conversations live in <code>~/.config/free-ai-studio</code> and <code>~/.local/share/free-ai-studio</code>, never in the app folder.</p>
+    </article>
+
+    <article class="platform">
+      <h3><span class="pico">🪄</span>AppImage</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download the AppImage from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
+        <div class="ins"><div class="insbody"><p>Make it executable and run it:</p>
+          <pre><code>chmod +x saarthi-studio_*.AppImage
+./saarthi-studio_*.AppImage</code></pre></div></div>
+      </div>
+      <p class="note">No install step at all — the AppImage is self-contained. Keep it anywhere you like.</p>
+    </article>
+
+    <article class="platform">
+      <h3><span class="pico">📁</span>Portable tar.gz</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download the Linux <code>tar.gz</code> from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a> and extract it:</p>
+          <pre><code>tar -xzf saarthi-studio-linux.tar.gz
+cd saarthi-studio-*</code></pre></div></div>
+        <div class="ins"><div class="insbody"><p>Run it in place:</p>
+          <pre><code>./free-ai-studio</code></pre></div></div>
+      </div>
+      <p class="note">The binary loads its UI from <code>static/</code> next to itself — keep the extracted folder together.</p>
+    </article>
+
+    <article class="platform">
+      <h3><span class="pico">🛠️</span>From source (Ubuntu)</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Clone the repo and run the all-in-one installer:</p>
+          <pre><code>git clone https://github.com/sairajKhilariArch/Saarthi-Studio.git
+cd Saarthi-Studio
+./install-and-run.sh</code></pre></div></div>
+        <div class="ins"><div class="insbody"><p>The script installs missing prerequisites, installs the stable Rust toolchain if needed, builds the app in release mode, and starts FreeLLMAPI via Docker Compose. The first build downloads crates from the Cargo registry, so internet is required.</p></div></div>
+      </div>
+      <p class="note">The installer reuses an existing <code>~/freellmapi</code> and never resets your provider settings, database or history.</p>
+    </article>
+
+    <div class="pager">
+      <a href="./download-windows.html">Next: Windows →</a>
+      <a href="./index.html#install">← All platforms</a>
+    </div>
+  </section>
+</main>
+
+<footer>Saarthi Studio — local-first, bound to <code>127.0.0.1</code> by default. Every release ships SHA-256 checksum files next to each artifact.</footer>
+</body>
+</html>

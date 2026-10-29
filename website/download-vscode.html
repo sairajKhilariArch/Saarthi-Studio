@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install the VS Code extension — Saarthi Studio</title>
+<meta name="description" content="Install the Saarthi Studio VS Code extension: VSIX install via command line or Extensions panel, then connect it to a running desktop Studio.">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="./index.html"><i></i>Saarthi Studio</a>
+    <nav>
+      <a href="./index.html#features">Features</a>
+      <a href="./index.html#how">How to use</a>
+      <a href="./index.html#install">All platforms</a>
+    </nav>
+    <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="install">
+    <div class="sec-head">
+      <span class="pico-big">⌨️</span>
+      <h2>VS Code extension</h2>
+      <p>Brings the studio into the editor. Runs standalone or against a desktop Studio for the full feature set. Requires VS Code 1.90 or newer.</p>
+    </div>
+    <div class="arts"><span class="art">VSIX</span></div>
+
+    <article class="platform">
+      <h3><span class="pico">📦</span>Install</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download the <code>.vsix</code> from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
+        <div class="ins"><div class="insbody"><p>Install it:</p>
+          <pre><code>code --install-extension free-ai-studio-vscode.vsix</code></pre>
+          <span class="alt">Or from the Extensions panel: <i>⋯ → Install from VSIX…</i></span></div></div>
+      </div>
+    </article>
+
+    <article class="platform">
+      <h3><span class="pico">🖥️</span>Connect a runtime</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p><b>Full features</b> (threads, agent runs, files, deep search, media) need a running desktop Studio on the same machine — the extension connects to it at <code>http://127.0.0.1:8765</code>.</p></div></div>
+        <div class="ins"><div class="insbody"><p>Without it, the extension falls back to its built-in server with the core chat subset — pointed at your router key in Settings.</p></div></div>
+      </div>
+      <p class="note">The extension mirrors the desktop's agent-run panel: goal, permissions, diff-colored step log, approve/reject, cancel and per-step restore.</p>
+    </article>
+
+    <div class="pager">
+      <a href="./index.html#install">← All platforms</a>
+    </div>
+  </section>
+</main>
+
+<footer>Saarthi Studio — local-first, bound to <code>127.0.0.1</code> by default. Every release ships SHA-256 checksum files next to each artifact.</footer>
+</body>
+</html>

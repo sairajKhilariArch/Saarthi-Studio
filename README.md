@@ -144,6 +144,45 @@ If the Rust build fails, run `cargo build --release` inside `~/.local/share/free
 
 FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi — its dashboard (`http://127.0.0.1:3001` by default) is where provider keys and fallback chains are configured.
 
+## Adaptive model routing for agent runs (optional)
+
+Agent runs can spend cheaper model calls on routine step types and keep the stronger model for real work. The setting lives in **Settings → Chat context**:
+
+1. Enter a **cheap model** (routine `list / read / think` follow-ups) and a **strong model** (the first step, edits, commands, and any step that follows an error).
+2. Tick **Adaptive model routing** and save. Both tiers must be non-empty, or the flag silently degrades to the plain base-model behaviour.
+
+To verify it is actually working:
+
+1. Start an agent run with a goal that needs at least two reads and one edit.
+2. Open the run: the header shows **which model answered** — adaptive runs record the tier per run, and the tier model's name appears on the run card.
+3. In the step log, a `failover` step means the tier call failed and the run retried on the base model — a visible fallback, not a crash.
+4. With the flag off (or a tier left empty), steps use the base model exactly as before; runs record that in the persisted `routerConfig` snapshot seen in run detail.
+
+Nothing is uploaded for routing decisions: the tier choice is a local rule over the step log, made before each model call.
+
+## Signing macOS releases (optional)
+
+The macOS artifact ships **unsigned** (a `macos-universal` tarball of the arm64 + x86_64 `lipo`-merged binary — unsigned dmg files are treated more harshly by Gatekeeper than tarballs). To publish a signed build, add these secrets/variables to the GitHub repository and extend the macos job in `.github/workflows/desktop-release.yml`:
+
+```text
+MACOS_CERTIFICATE_P12 (secret, base64 of a Developer ID Application cert bundle)
+MACOS_CERTIFICATE_PASSWORD (secret)
+KEYCHAIN_PASSWORD (secret, any new strong password for the CI keychain)
+APPLE_ID / APPLE_APP_PASSWORD / APPLE_TEAM_ID (secrets, for notarization)
+```
+
+Then in the packaging step, before `tar`:
+
+```bash
+codesign --deep --force --options runtime --timestamp \
+  --sign "Developer ID Application: <NAME> (<TEAMID>)" dist/$STAGE/free-ai-studio
+xcrun notarytool submit dist/${STAGE}.tar.gz --apple-id "$APPLE_ID" \
+  --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+xcrun stapler staple dist/${STAGE}.tar.gz
+```
+
+Until credentials exist, the tarball flow is the shipped behaviour, and the macOS page documents the Gatekeeper right-click → Open workaround.
+
 ## Other GitHub projects this app uses
 
 - **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Saarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.

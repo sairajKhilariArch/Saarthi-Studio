@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install on Android — Saarthi Studio</title>
+<meta name="description" content="Install the Saarthi Studio Android companion: APK install, then pair it with your desktop over HTTPS with a host token.">
+<link rel="stylesheet" href="shared.css">
+</head>
+<body>
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="./index.html"><i></i>Saarthi Studio</a>
+    <nav>
+      <a href="./index.html#features">Features</a>
+      <a href="./index.html#how">How to use</a>
+      <a href="./index.html#install">All platforms</a>
+    </nav>
+    <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="install">
+    <div class="sec-head">
+      <span class="pico-big">🤖</span>
+      <h2>Android companion</h2>
+      <p>The phone app is a companion to a running desktop Studio — it connects over HTTPS to the desktop Host API on your own network, not a public cloud. Android 7 (API 24) or newer.</p>
+    </div>
+    <div class="arts"><span class="art">APK</span></div>
+
+    <article class="platform">
+      <h3><span class="pico">⬇️</span>Install the APK</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>Download the APK from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
+        <div class="ins"><div class="insbody"><p>In Android settings, allow your file manager or browser to <i>install unknown apps</i>, then open the APK to install.</p></div></div>
+      </div>
+    </article>
+
+    <article class="platform">
+      <h3><span class="pico">🔗</span>Pair with your desktop</h3>
+      <div class="insteps">
+        <div class="ins"><div class="insbody"><p>On the desktop machine, enable the Host API and create a pairing token:</p>
+          <pre><code>export FREE_AI_STUDIO_HOST_API_ENABLED=true
+export FREE_AI_STUDIO_HOST_API_BIND=&lt;LAN IP&gt;
+export FREE_AI_STUDIO_HOST_API_TLS_CERT=&lt;cert.pem&gt;   # client-certificate TLS required
+export FREE_AI_STUDIO_HOST_API_TLS_KEY=&lt;key.pem&gt;
+free-ai-studio host-token create</code></pre></div></div>
+        <div class="ins"><div class="insbody"><p>In the app's connection settings, enter the desktop <code>https://&lt;LAN IP&gt;:8766</code> URL and the pairing token.</p></div></div>
+      </div>
+      <p class="note"><b>What works over the bridge:</b> streaming chat token-by-token, and the full agent-run tools — the Runs screen with step log, diff previews, approve/reject, cancel and per-step restore. Older desktop hosts degrade gracefully: the app checks host capabilities first. The security model lives in <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/blob/main/PLATFORM-ARCHITECTURE.md">PLATFORM-ARCHITECTURE.md</a>.</p>
+    </article>
+
+    <div class="pager">
+      <a href="./download-vscode.html">Next: VS Code →</a>
+      <a href="./index.html#install">← All platforms</a>
+    </div>
+  </section>
+</main>
+
+<footer>Saarthi Studio — local-first, bound to <code>127.0.0.1</code> by default. Every release ships SHA-256 checksum files next to each artifact.</footer>
+</body>
+</html>

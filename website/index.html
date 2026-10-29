@@ -142,26 +142,9 @@
   .step h3 { font-size: 15.5px; margin-bottom: 4px; }
   .step p { font-size: 14.5px; }
 
-  /* install: one dedicated block per platform */
-  .platform { background: linear-gradient(160deg, rgba(28,34,52,.85), rgba(16,20,32,.9));
-              border: 1px solid var(--border); border-radius: var(--r); padding: clamp(18px, 3vw, 30px); }
-  .platform + .platform { margin-top: clamp(14px, 2vw, 20px); }
-  .platform h3 { display: flex; align-items: center; gap: 12px; font-size: clamp(1.1rem, 2.2vw, 1.4rem); }
-  .platform h3 .pico { font-size: 1.5em; }
-  .arts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  /* artifact chip (also on install cards) */
   .art { font-size: 12px; font-weight: 700; color: #cfe0ff; border: 1px solid var(--border-hi);
          background: rgba(91,140,255,.08); border-radius: 999px; padding: 4px 12px; }
-  .insteps { counter-reset: ins; display: grid; gap: 10px; margin-top: 16px; }
-  .ins { display: flex; gap: 12px; align-items: flex-start; font-size: 14.5px; }
-  .ins::before { counter-increment: ins; content: counter(ins); flex: 0 0 auto;
-    width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px;
-    font-size: 12.5px; font-weight: 800; color: #fff;
-    background: linear-gradient(135deg, var(--accent), var(--accent2)); }
-  .ins .insbody { min-width: 0; }
-  .ins p { margin: 0; }
-  .ins .alt { display: block; margin-top: 4px; color: var(--muted); font-size: 13.5px; }
-  .note { margin-top: 14px; font-size: 13.5px; color: var(--muted);
-          border-left: 3px solid var(--accent); padding: 6px 0 6px 12px; }
 
   /* contact */
   .contact-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 22px; }
@@ -193,7 +176,7 @@
     <nav>
       <a href="#features">Features</a>
       <a href="#how">How to use</a>
-      <a href="#install">Installation</a>
+      <a href="#install">Install</a>
       <a href="#contact">Contacts</a>
     </nav>
     <a class="btn primary" href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Download</a>
@@ -295,70 +278,33 @@
       <h2>Installation</h2>
       <p>Every release ships SHA-256 checksum files next to each artifact. Updating over an existing install keeps all config, history and conversations — they live outside the app folder.</p>
     </div>
-
-    <article class="platform">
-      <h3><span class="pico">🐧</span>Linux</h3>
-      <div class="arts"><span class="art">.deb</span><span class="art">AppImage</span><span class="art">tar.gz</span><span class="art">from source</span></div>
-      <div class="insteps">
-        <div class="ins"><div class="insbody"><p>Download <code>saarthi-studio_*_amd64.deb</code> from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
-        <div class="ins"><div class="insbody"><p>Install it:</p>
-          <pre><code>sudo apt install ./saarthi-studio_*_amd64.deb
-# or: sudo dpkg -i saarthi-studio_*_amd64.deb &amp;&amp; sudo apt -f install</code></pre>
-          <span class="alt">Upgrading over an older .deb preserves everything — data lives in <code>~/.config/free-ai-studio</code> and <code>~/.local/share/free-ai-studio</code>, never in the app folder.</span></div></div>
-        <div class="ins"><div class="insbody"><p>Launch <b>Saarthi Studio</b> from the app menu, or run <code>free-ai-studio</code> in a terminal.</p></div></div>
-      </div>
-      <p class="note"><b>Other options:</b> AppImage — download, <code>chmod +x</code>, then run it directly. Portable — extract the <code>tar.gz</code> and run <code>./free-ai-studio</code>. From source on Ubuntu — <code>./install-and-run.sh</code> installs prerequisites, builds the Rust app in release mode and starts FreeLLMAPI via Docker Compose.</p>
-    </article>
-
-    <article class="platform">
-      <h3><span class="pico">🪟</span>Windows</h3>
-      <div class="arts"><span class="art">x64 zip</span></div>
-      <div class="insteps">
-        <div class="ins"><div class="insbody"><p>Download the Windows zip from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a> and unzip it (right-click → Extract All).</p></div></div>
-        <div class="ins"><div class="insbody"><p>Run <code>free-ai-studio.exe</code>. The modern WebView2 runtime ships with recent Windows 10/11 updates; if the app shows a blank window, install Microsoft Edge WebView2.</p></div></div>
-      </div>
-      <p class="note"><b>SmartScreen:</b> the build is unsigned, so the first launch may warn — choose <i>More info → Run anyway</i>.</p>
-    </article>
-
-    <article class="platform">
-      <h3><span class="pico">🍎</span>macOS (Apple silicon)</h3>
-      <div class="arts"><span class="art">arm64 tar.gz</span></div>
-      <div class="insteps">
-        <div class="ins"><div class="insbody"><p>Download the <code>macos-arm64</code> tar.gz from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
-        <div class="ins"><div class="insbody"><p>Extract and start it:</p>
-          <pre><code>tar -xzf saarthi-studio-macos-arm64.tar.gz
-./free-ai-studio</code></pre></div></div>
-        <div class="ins"><div class="insbody"><p>On the first launch Gatekeeper may stop the unsigned binary — right-click <code>free-ai-studio</code> in Finder and choose <b>Open</b>, then confirm.</p></div></div>
-      </div>
-    </article>
-
-    <article class="platform">
-      <h3><span class="pico">🤖</span>Android companion</h3>
-      <div class="arts"><span class="art">APK</span></div>
-      <div class="insteps">
-        <div class="ins"><div class="insbody"><p>Download the APK from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
-        <div class="ins"><div class="insbody"><p>In Android settings, allow your file manager or browser to <i>install unknown apps</i>, then open the APK to install.</p></div></div>
-        <div class="ins"><div class="insbody"><p><b>Pair with your desktop:</b> the app connects over HTTPS to the desktop Host API, not a public cloud. On the desktop machine, export the Host API settings and create a pairing token:</p>
-          <pre><code>export FREE_AI_STUDIO_HOST_API_ENABLED=true
-export FREE_AI_STUDIO_HOST_API_BIND=&lt;LAN IP&gt;
-export FREE_AI_STUDIO_HOST_API_TLS_CERT=&lt;cert.pem&gt;   # client-certificate TLS required
-export FREE_AI_STUDIO_HOST_API_TLS_KEY=&lt;key.pem&gt;
-free-ai-studio host-token create</code></pre></div></div>
-        <div class="ins"><div class="insbody"><p>In the app's connection settings, enter the desktop <code>https://&lt;LAN IP&gt;:8766</code> URL and the pairing token. The security model lives in <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/blob/main/PLATFORM-ARCHITECTURE.md">PLATFORM-ARCHITECTURE.md</a>.</p></div></div>
-      </div>
-    </article>
-
-    <article class="platform">
-      <h3><span class="pico">⌨️</span>VS Code extension</h3>
-      <div class="arts"><span class="art">VSIX</span></div>
-      <div class="insteps">
-        <div class="ins"><div class="insbody"><p>Download the <code>.vsix</code> from the <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">Releases page</a>.</p></div></div>
-        <div class="ins"><div class="insbody"><p>Install it:</p>
-          <pre><code>code --install-extension free-ai-studio-vscode.vsix</code></pre>
-          <span class="alt">Or from the Extensions panel: <i>⋯ → Install from VSIX…</i></span></div></div>
-        <div class="ins"><div class="insbody"><p><b>Full features</b> (threads, files, deep search, media) need a running desktop Studio on the same machine — the extension connects to it at <code>http://127.0.0.1:8765</code>. Without it, the extension falls back to its built-in server with the core chat subset.</p></div></div>
-      </div>
-    </article>
+    <div class="grid">
+      <a class="scene3d" href="./download-linux.html" style="display:block"><div class="tilt"><span class="face"></span>
+        <span class="ico">🐧</span><h3>Linux</h3>
+        <p>.deb, AppImage, portable tar.gz or from source — full instructions.</p>
+        <p class="art" style="margin-top:10px; display:inline-block">4 artefacts</p>
+      </div></a>
+      <a class="scene3d" href="./download-windows.html" style="display:block"><div class="tilt"><span class="face"></span>
+        <span class="ico">🪟</span><h3>Windows</h3>
+        <p>Portable x64 zip, WebView2 note, SmartScreen workaround.</p>
+        <p class="art" style="margin-top:10px; display:inline-block">1 artefact</p>
+      </div></a>
+      <a class="scene3d" href="./download-macos.html" style="display:block"><div class="tilt"><span class="face"></span>
+        <span class="ico">🍎</span><h3>macOS</h3>
+        <p>Universal tarball (silicon + Intel), Gatekeeper walkthrough.</p>
+        <p class="art" style="margin-top:10px; display:inline-block">1 artefact</p>
+      </div></a>
+      <a class="scene3d" href="./download-android.html" style="display:block"><div class="tilt"><span class="face"></span>
+        <span class="ico">🤖</span><h3>Android companion</h3>
+        <p>APK install and desktop pairing over HTTPS with a host token.</p>
+        <p class="art" style="margin-top:10px; display:inline-block">1 artefact</p>
+      </div></a>
+      <a class="scene3d" href="./download-vscode.html" style="display:block"><div class="tilt"><span class="face"></span>
+        <span class="ico">⌨️</span><h3>VS Code extension</h3>
+        <p>VSIX install, desktop-connected vs standalone modes.</p>
+        <p class="art" style="margin-top:10px; display:inline-block">1 artefact</p>
+      </div></a>
+    </div>
   </section>
 
   <section id="contact">
