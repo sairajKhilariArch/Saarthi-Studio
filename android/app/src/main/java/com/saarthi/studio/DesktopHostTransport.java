@@ -3,7 +3,7 @@ package com.saarthi.studio;
 import java.net.URI;
 import java.net.URISyntaxException;
 
-/** Desktop Rust host transport. Chat is non-streaming until the later streaming milestone. */
+/** Desktop Rust host transport. Streams the host's SSE chat frames token by token. */
 final class DesktopHostTransport implements ConnectionTransport {
     private static final String API_PREFIX = "/api/host/v1/";
 
@@ -33,7 +33,7 @@ final class DesktopHostTransport implements ConnectionTransport {
         return desktopHostToken == null ? "" : desktopHostToken;
     }
 
-    @Override public boolean supportsStreaming() { return false; }
+    @Override public boolean supportsStreaming() { return true; }
 
     private static URI parseHttpsUri(String value) {
         try {

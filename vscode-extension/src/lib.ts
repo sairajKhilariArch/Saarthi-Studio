@@ -9,6 +9,19 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+import {
+  AgentRuntime,
+  AWAITING_APPROVAL,
+  DEFAULT_MAX_STEPS,
+  RunStore,
+  bindTools,
+  isExcluded,
+  parseAction,
+  sanitize,
+  unifiedDiff,
+} from "./agent";
+import type { AgentStep } from "./agent";
+
 /* ------------------------------------------------------------------ */
 /* types + constants                                                   */
 /* ------------------------------------------------------------------ */
@@ -20,6 +33,8 @@ export interface StudioConfig {
   contextBudgetTokens: number;
   historyMessages: number;
   sendWorkspaceOutline: boolean;
+  /** Workspace path prefixes never sent to any provider (desktop parity). */
+  privacyExclusions?: string[];
 }
 
 export const CHARS_PER_TOKEN = 4;
@@ -1152,16 +1167,77 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   };
 
   const eventClients = new Set<http.ServerResponse>();
+  const notifyListeners = (payload: Record<string, unknown>) => {
+    const body = `event: conversation-changed\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of eventClients) {
+      try { client.write(body); } catch { eventClients.delete(client); }
+    }
+  };
   const notifyConversation = (conversationId: string, reason: string) => {
-    const body = `event: conversation-changed\ndata: ${JSON.stringify({
+    notifyListeners({
       type: "conversation-changed",
       conversation_id: conversationId,
       reason,
       at: Date.now() / 1000,
-    })}\n\n`;
-    for (const client of eventClients) {
-      try { client.write(body); } catch { eventClients.delete(client); }
+    });
+  };
+
+  /* Agent runs (desktop /api/runs parity): same bounded loop, permissions,
+     statuses and JSON shapes, persisted beside the conversation store. The
+     Runs page is the shared browser UI, so once the routes speak the same
+     contract the panel works here unchanged. */
+  const runsStore = new RunStore(path.join(path.dirname(options.storeFile), "runs.json"));
+  runsStore.markInterrupted();
+  bindTools({ resolveInside });
+  const notifyRun = (runId: string | null) => {
+    notifyListeners({
+      type: "agent-run-changed",
+      run_id: runId,
+      at: Date.now() / 1000,
+    });
+  };
+  const agentRuntime = new AgentRuntime(runsStore, {
+    root: () => {
+      if (!options.workspaceRoot) {
+        const error = new Error("Open a folder in VS Code to browse files.") as Error & { status?: number };
+        error.status = 400;
+        throw error;
+      }
+      return options.workspaceRoot;
+    },
+    callRouter: (messages) => callRouter(options.getConfig(), messages, fetchImpl).then((reply) => reply.answer),
+    exclusions: () => options.getConfig().privacyExclusions || [],
+    notify: notifyRun,
+  });
+  /** Step rows in the exact JSON shape /api/runs/:id returns on the desktop. */
+  const runDetailSteps = (steps: AgentStep[]): Array<Record<string, unknown>> =>
+    steps.map((step) => ({
+      seq: step.seq,
+      action: step.action,
+      summary: step.summary,
+      output: step.output,
+      at: step.at,
+      hasCheckpoint: Boolean(step.checkpoint),
+    }));
+
+  const sendRunDetail = (response: http.ServerResponse, id: string) => {
+    const run = runsStore.load(id);
+    if (!run) { sendJson(response, 404, { ok: false, error: "No such run." }); return; }
+    const payload = agentRuntime.summary(run) as Record<string, unknown>;
+    payload.stepList = runDetailSteps(runsStore.steps(id));
+    // A pending write is previewed as a diff against the file on disk.
+    if (run.status === AWAITING_APPROVAL && run.pendingAction) {
+      const parsed = parseAction(run.pendingAction);
+      if (parsed.ok && parsed.action.action === "write" && options.workspaceRoot) {
+        try {
+          const file = readTextFile(options.workspaceRoot, String(parsed.action.path || ""));
+          payload.pendingDiff = unifiedDiff(file.content, String(parsed.action.content || ""), String(parsed.action.path || ""));
+        } catch {
+          payload.pendingDiff = unifiedDiff(null, String(parsed.action.content || ""), String(parsed.action.path || ""));
+        }
+      }
     }
+    sendJson(response, 200, payload);
   };
 
   /* One chat turn: persist the user message, run the selected skill/mode
@@ -1180,6 +1256,19 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     };
     if (!conversationId || !message) fail(400, "Choose a conversation and enter a message.");
     if (!store.has(conversationId)) fail(404, "Conversation not found.");
+
+    // Outbound privacy policy (desktop parity): an editor attachment that
+    // looks like it carries credentials is refused outright — masking shapes
+    // could still leak enough to matter in prose. The reply names the fix.
+    if (code.trim()) {
+      const kinds = sanitize(code).findings;
+      if (kinds.length) {
+        fail(
+          422,
+          `Your editor attachment was not sent: it looks like it contains credentials (${kinds.join(", ")}).\nRemove the secrets (or send only the parts you need) and retry.`,
+        );
+      }
+    }
 
     let prompt = code.trim()
       ? `${message}\n\nHere is the code from my editor (language: ${language}):\n\`\`\`${language}\n${code}\n\`\`\``
@@ -1227,7 +1316,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         .map((entry) => resolveAttachment({ kind: entry.kind, ref: entry.ref }))
         .filter((entry): entry is ResolvedAttachment => entry !== null));
     }
-    const outline = options.workspaceRoot && config.sendWorkspaceOutline ? workspaceOutline(options.workspaceRoot) : null;
+    const outline = options.workspaceRoot && config.sendWorkspaceOutline
+      ? workspaceOutline(options.workspaceRoot, config.privacyExclusions || [])
+      : null;
     const packed = packMessages({
       system: SYSTEM_PROMPT,
       outline,
@@ -1317,6 +1408,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
             context_budget_tokens: config.contextBudgetTokens,
             history_messages: config.historyMessages,
             send_workspace_outline: config.sendWorkspaceOutline,
+            privacy_exclusions: config.privacyExclusions || [],
             embedded: true,
           });
           return;
@@ -1420,6 +1512,62 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
       if (routePath === "/api/usage" && method === "GET") {
         sendJson(response, 200, store.usage(url.searchParams));
+        return;
+      }
+
+      /* agent runs --------------------------------------------- */
+      if (routePath === "/api/runs" && method === "GET") {
+        sendJson(response, 200, { runs: runsStore.list().map((run) => agentRuntime.summary(run)) });
+        return;
+      }
+      if (routePath === "/api/runs" && method === "POST") {
+        const body = await readBody(request);
+        const result = agentRuntime.create({
+          goal: body.goal,
+          allowWrites: body.allowWrites,
+          allowCommands: body.allowCommands,
+          autoApprove: body.autoApprove,
+          maxSteps: Number(body.maxSteps) || DEFAULT_MAX_STEPS,
+          projectId: activeProject() || "",
+        });
+        if (!result.ok) {
+          sendJson(response, result.status || 400, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true, run: { id: result.id, status: "running" } });
+        return;
+      }
+      const runSegments = routePath.startsWith("/api/runs/")
+        ? routePath.slice("/api/runs/".length).split("/").filter(Boolean)
+        : null;
+      if (runSegments && runSegments.length === 1 && method === "GET") {
+        sendRunDetail(response, decodeURIComponent(runSegments[0]));
+        return;
+      }
+      if (runSegments && runSegments.length === 2 && method === "POST") {
+        const id = decodeURIComponent(runSegments[0]);
+        const body = await readBody(request);
+        if (runSegments[1] === "approve") {
+          if (typeof body.approve !== "boolean") {
+            sendJson(response, 400, { ok: false, error: "Provide approve: true or false." });
+            return;
+          }
+          const result = await agentRuntime.approve(id, body.approve);
+          sendJson(response, result.ok ? 200 : 400, result.ok ? { ok: true, status: result.status } : { ok: false, error: result.error });
+          return;
+        }
+        if (runSegments[1] === "cancel") {
+          const result = agentRuntime.cancel(id);
+          sendJson(response, result.ok ? 200 : 400, result.ok ? { ok: true, status: result.status } : { ok: false, error: result.error });
+          return;
+        }
+      }
+      if (
+        runSegments && runSegments.length === 4 && method === "POST" &&
+        runSegments[1] === "steps" && runSegments[3] === "restore"
+      ) {
+        const result = agentRuntime.restoreStep(decodeURIComponent(runSegments[0]), Number(runSegments[2]));
+        sendJson(response, result.ok ? 200 : 400, result.ok ? { ok: true } : { ok: false, error: result.error });
         return;
       }
 
@@ -1928,7 +2076,7 @@ function requireRoot(options: EmbeddedServerOptions): string {
   return options.workspaceRoot;
 }
 
-export function workspaceOutline(root: string): string {
+export function workspaceOutline(root: string, privacyExclusions: string[] = []): string {
   const names: string[] = [];
   const walk = (dir: string, depth: number) => {
     if (depth > 3 || names.length > 300) return;
@@ -1942,6 +2090,10 @@ export function workspaceOutline(root: string): string {
       if (names.length > 300) return;
       if (item.name === "node_modules" || item.name === ".git" || item.name === "target") continue;
       const relative = path.relative(root, path.join(dir, item.name)).split(path.sep).join("/");
+      // Privacy exclusions: matching paths never appear in an outbound outline.
+      if (privacyExclusions.length && isExcluded(relative, privacyExclusions)) {
+        continue;
+      }
       names.push(item.isDirectory() ? `${relative}/` : relative);
       if (item.isDirectory()) walk(path.join(dir, item.name), depth + 1);
     }

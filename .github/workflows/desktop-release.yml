@@ -1,11 +1,11 @@
 name: Desktop Release
 
 # Builds every release artifact: Linux x86_64 (portable tarball, .deb package
-# via cargo-deb, AppImage), Windows x86_64 (portable zip), macOS arm64
-# (portable tarball, unsigned), the unsigned Android
-# release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to build and
-# attach all of them to one GitHub release; workflow_dispatch builds and uploads
-# artifacts without a release.
+# via cargo-deb, AppImage), Windows x86_64 (portable zip), macOS universal
+# arm64+x86_64 (portable tarball, unsigned, headless-smoked), the unsigned
+# Android release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to
+# build and attach all of them to one GitHub release; workflow_dispatch builds
+# and uploads artifacts without a release.
 on:
   workflow_dispatch:
   push:
@@ -239,20 +239,26 @@ jobs:
           files: dist/*.zip
 
   macos:
-    # macOS has no packaging pipeline yet: this ships a portable, UNSIGNED
-    # arm64 tarball (binary + full static tree + license). No codesign or
-    # notarization, so Gatekeeper asks the user to right-click → Open on first
-    # launch — documented in README. Same runtime layout as the Linux tarball,
-    # so the binary resolves its UI from static/ next to itself.
-    name: Build macOS release package (arm64, unsigned)
+    # macOS ships a portable, UNSIGNED universal (arm64 + x86_64) tarball:
+    # binary + full static tree + license, same runtime layout as the Linux
+    # tarball (the binary resolves its UI from static/ next to itself). No
+    # dmg: unsigned .dmg files get worse Gatekeeper treatment than a tarball.
+    # No codesign or notarization (no available credentials), so Gatekeeper
+    # asks the user to right-click -> Open on first launch - documented in
+    # README. The headless smoke below proves the merged binary actually
+    # boots and serves HTTP, not merely that lipo succeeded.
+    name: Build macOS release package (universal, unsigned)
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v5
 
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
+
+      - name: Add the Intel target for the universal merge
+        run: rustup target add x86_64-apple-darwin
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -261,27 +267,61 @@ jobs:
 
       - name: Read package version
         id: meta
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(sed -n 's/^version = "\\(.*\\)"/\\1/p' app/Cargo.toml | head -n1)" >> "$GITHUB_OUTPUT"
 
-      - name: Build release binary and run tests
+      - name: Build release binaries and run tests
         working-directory: app
         run: |
           set -eu
-          cargo build --release --locked
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
           cargo test --locked
+
+      - name: Stage the tree and merge the universal binary
+        run: |
+          set -eu
+          VERSION="${{ steps.meta.outputs.version }}"
+          STAGE="dist/free-ai-suite_${VERSION}_macos-universal"
+          mkdir -p "$STAGE/static"
+          lipo -create \
+            app/target/aarch64-apple-darwin/release/free-ai-studio \
+            app/target/x86_64-apple-darwin/release/free-ai-studio \
+            -output "$STAGE/free-ai-studio"
+          cp -r app/static/. "$STAGE/static/"
+          cp README.md "$STAGE/"
+          cp app/LICENSE "$STAGE/LICENSE"
+          echo "$STAGE" > dist/stage-name.txt
+
+      - name: Verify the universal binary carries both arches
+        run: |
+          set -eu
+          STAGE="$(cat dist/stage-name.txt)"
+          arches="$(lipo -info "$STAGE/free-ai-studio")"
+          echo "$arches"
+          echo "$arches" | grep -q arm64 || { echo "ERROR: arm64 slice missing"; exit 1; }
+          echo "$arches" | grep -q x86_64 || { echo "ERROR: x86_64 slice missing"; exit 1; }
+
+      - name: Smoke the universal binary (headless server answers HTTP)
+        run: |
+          set -euo pipefail
+          STAGE="$(cat dist/stage-name.txt)"
+          FREE_AI_STUDIO_PORT=32987 "$STAGE/free-ai-studio" --headless &
+          PID=$!
+          clean_up() { kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; }
+          trap clean_up EXIT
+          smoke=0
+          for _ in $(seq 1 40); do
+            if curl -fsS -o /dev/null "http://127.0.0.1:32987/"; then smoke=1; break; fi
+            sleep 0.5
+          done
+          if [ "$smoke" = "1" ]; then echo "headless server answered the smoke request"; else echo "ERROR: headless server did not answer HTTP"; exit 1; fi
 
       - name: Package portable tarball
         run: |
           set -eu
-          VERSION="${{ steps.meta.outputs.version }}"
-          STAGE="free-ai-suite_${VERSION}_macos-arm64"
-          mkdir -p "dist/$STAGE/static"
-          cp app/target/release/free-ai-studio "dist/$STAGE/free-ai-studio"
-          cp -r app/static/. "dist/$STAGE/static/"
-          cp README.md "dist/$STAGE/"
-          cp app/LICENSE "dist/$STAGE/LICENSE"
-          tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
-          rm -rf "dist/$STAGE"
+          STAGE="$(cat dist/stage-name.txt)"
+          tar -C dist -czf "${STAGE}.tar.gz" "$(basename "$STAGE")"
+          rm -rf "$STAGE" dist/stage-name.txt
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

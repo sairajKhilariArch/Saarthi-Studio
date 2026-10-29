@@ -192,6 +192,17 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
             return Err(error);
         }
     }
+    // Reproducible-run record (M6): additive columns, safe on any vintage.
+    for statement in [
+        "ALTER TABLE agent_runs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE agent_runs ADD COLUMN router_config TEXT NOT NULL DEFAULT ''",
+    ] {
+        if let Err(error) = conn.execute(statement, []) {
+            if !error.to_string().contains("duplicate column") {
+                return Err(error);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -209,6 +220,8 @@ struct RunRow {
     error: String,
     created_at: f64,
     updated_at: f64,
+    router_config: String,
+    model: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -225,6 +238,8 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         error: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        router_config: row.get(12)?,
+        model: row.get(13)?,
     })
 }
 
@@ -325,7 +340,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -356,6 +371,7 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "maxSteps": row.max_steps, "pendingAction": read_pending(row),
         "error": row.error, "steps": steps,
         "createdAt": row.created_at, "updatedAt": row.updated_at,
+        "model": row.model, "routerConfig": row.router_config,
     })
 }
 
@@ -649,7 +665,11 @@ fn build_history(state: &AppState, run_id: &str) -> Result<String, String> {
         if output.is_empty() {
             lines.push(head);
         } else {
-            lines.push(format!("{head}\n{}", cap_chars(output, 300)));
+            // Anything a previous step saw is masked before it rides the next
+            // prompt, so a credential-shaped value never reaches the provider
+            // twice.
+            let (masked, _) = crate::privacy::sanitize(&cap_chars(output, 300));
+            lines.push(format!("{head}\n{masked}"));
         }
     }
     Ok(if lines.is_empty() {
@@ -659,13 +679,72 @@ fn build_history(state: &AppState, run_id: &str) -> Result<String, String> {
     })
 }
 
+/// The previous step's action tag, used to pick the adaptive tier. Error
+/// steps are reported separately so repair always upgrades.
+fn last_step_kind(state: &AppState, run_id: &str) -> Result<(String, bool), String> {
+    let conn = db(state)?;
+    let last: Option<String> = conn
+        .query_row(
+            "SELECT action FROM agent_steps WHERE run_id=?1 ORDER BY seq DESC LIMIT 1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match last {
+        Some(action) => Ok((action.clone(), action == "error")),
+        None => Ok((String::new(), false)),
+    }
+}
+
+/// Reproducible-run record: keep which model actually answered a step. Empty
+/// stays empty (adaptive routing off), so untouched runs look like before.
+fn record_model(state: &AppState, run_id: &str, model: Option<&str>) {
+    if let Some(model) = model.filter(|m| !m.is_empty()) {
+        let _ = db(state).and_then(|conn|
+            conn.execute(
+                "UPDATE agent_runs SET model=?1 WHERE id=?2 AND model<>?1",
+                params![model, run_id],
+            ).map_err(|e| e.to_string())
+        );
+    }
+}
+
 /// Feed the goal plus complete history into the model and get the next action.
 async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
         return Ok(false); // cancelled while we were working
     }
+    // Adaptive routing (off unless configured): routine inspection steps go to
+    // the cheap tier; planning, editing and post-failure repair go strong.
+    let (last_action, had_error) = last_step_kind(state, &run.id)?;
+    let tier = crate::adaptive_tier(state, &last_action, had_error);
     let messages = build_messages(run, &build_history(state, &run.id)?);
-    let (reply, _) = crate::call_router(state, messages, None).await?;
+    let outcome = crate::call_router(state, messages, tier.as_deref()).await;
+    let (reply, model_used) = match outcome {
+        Ok((reply, _)) => (reply, tier.clone()),
+        // Visible failover: a tier miss falls back to the configured base
+        // model instead of killing a long run over one bad cheap pick.
+        Err(tier_error) if tier.is_some() => {
+            add_step(
+                state,
+                &run.id,
+                "failover",
+                "Tier call failed; retrying on the base model.",
+                &cap_chars(&tier_error, 600),
+            )?;
+            let base_messages = build_messages(run, &build_history(state, &run.id)?);
+            let (reply, _) = crate::call_router(state, base_messages, None).await?;
+            (reply, None)
+        }
+        Err(error) => return Err(error),
+    };
+    record_model(state, &run.id, model_used.as_deref());
+    // A cancel can land while the model is thinking: a stopped run must not
+    // act on the reply that arrives afterwards.
+    if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
+        return Ok(false);
+    };
 
     match parse_action(&reply) {
         ParsedAction::Ok(Action::Think { summary }) => {
@@ -787,18 +866,33 @@ async fn execute_action_step(
         Action::Write { path, .. } => capture_checkpoint(&root, path),
         _ => (String::new(), None),
     };
-    match dispatch_action(&root, action).await {
+    // Privacy: a read or listing of an excluded path is replaced by a notice,
+    // so credential-bearing files never reach the provider in a run prompt.
+    let exclusions = crate::load_config(state).privacy_exclusions.clone();
+    let excluded_path = match action {
+        Action::Read { path } | Action::List { path }
+            if crate::privacy::is_excluded(path, &exclusions) =>
+        {
+            Some((action.tag(), path.clone()))
+        }
+        _ => None,
+    };
+    let outcome: Result<String, String> = match &excluded_path {
+        Some((_, path)) => Ok(format!(
+            "[blocked by privacy policy: {path} is on the outbound exclusion list; contents were not sent and are not shown here.]"
+        )),
+        None => dispatch_action(&root, action).await,
+    };
+    let output = match outcome {
         Ok(output) => {
-            let output = match action {
+            let diff = match action {
                 Action::Write { path, content } => format!(
-                    "{output}\n--- diff ---\n{}",
+                    "\n--- diff ---\n{}",
                     unified_diff(old_content.as_deref(), content, path)
                 ),
-                _ => output,
+                _ => String::new(),
             };
-            add_step_with_checkpoint(state, &run.id, action.tag(), &summary, &output, &checkpoint)?;
-            // The next model step sees this result in the history.
-            Ok(true)
+            format!("{output}{diff}")
         }
         Err(error) => {
             add_step(
@@ -809,9 +903,12 @@ async fn execute_action_step(
                 &error,
             )?;
             // Not fatal: the next model step sees the error and can repair.
-            Ok(true)
+            return Ok(true);
         }
-    }
+    };
+    add_step_with_checkpoint(state, &run.id, action.tag(), &summary, &output, &checkpoint)?;
+    // The next model step sees this result in the history.
+    Ok(true)
 }
 
 /// Drives a run to a terminal state: keeps stepping the model until the goal
@@ -865,12 +962,26 @@ fn spawn_run(state: AppState, run_id: String) {
 // HTTP surface
 
 pub(crate) fn router() -> Router<AppState> {
+    run_routes("/api/runs")
+}
+
+/// The same run surface under the host-listener prefix: remote clients (VS
+/// Code, Android) reach it behind the host bearer wall instead of local UI
+/// auth.
+pub(crate) fn host_router() -> Router<AppState> {
+    run_routes("/api/host/v1/runs")
+}
+
+fn run_routes(prefix: &'static str) -> Router<AppState> {
     Router::new()
-        .route("/api/runs", post(create_run).get(list_runs))
-        .route("/api/runs/:id", get(get_run))
-        .route("/api/runs/:id/approve", post(approve_run))
-        .route("/api/runs/:id/cancel", post(cancel_run))
-        .route("/api/runs/:id/steps/:seq/restore", post(restore_step))
+        .route(prefix, post(create_run).get(list_runs))
+        .route(format!("{prefix}/:id").as_str(), get(get_run))
+        .route(format!("{prefix}/:id/approve").as_str(), post(approve_run))
+        .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
+        .route(
+            format!("{prefix}/:id/steps/:seq/restore").as_str(),
+            post(restore_step),
+        )
 }
 
 fn error_response(status: StatusCode, message: impl std::fmt::Display) -> Response {
@@ -905,13 +1016,17 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let project_id = crate::active_project_id(&state);
     let id = uuid::Uuid::new_v4().to_string();
     let stamp = now();
+    // Reproducible-run record: freeze the routing config as it was when the
+    // run started, so the run shows which model setup produced it.
+    let (snapshot, base_model) = crate::run_record_snapshot(&state);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11)",
             params![
                 id, project_id, goal, RUNNING,
-                allow_writes, allow_commands, auto_approve, max_steps, stamp
+                allow_writes, allow_commands, auto_approve, max_steps, stamp,
+                snapshot, base_model
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -935,11 +1050,11 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     ) {
         Ok(stmt) => stmt,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
-    let rows = stmt
+    };    let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(12)?;
+            let steps: i64 = row.get(14)?;
+
             Ok(run_json(&run, steps))
         })
         .map_err(|e| e.to_string());
@@ -1261,6 +1376,8 @@ mod tests {
             error: String::new(),
             created_at: 0.0,
             updated_at: 0.0,
+            router_config: String::new(),
+            model: String::new(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -1287,6 +1404,8 @@ mod tests {
             error: String::new(),
             created_at: 0.0,
             updated_at: 0.0,
+            router_config: String::new(),
+            model: String::new(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),

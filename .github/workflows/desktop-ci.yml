@@ -71,3 +71,30 @@ jobs:
       - name: Run clippy
         working-directory: app
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  macos:
+    # Keep macOS compiling: the release pipeline merges a universal binary,
+    # and an Intel-only or macOS-only source break fails there rather than
+    # here. The GitHub runner's system WebKit satisfies Tauri's links.
+    name: Test and build desktop (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up nightly Rust (see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Build debug binary
+        working-directory: app
+        run: cargo build --locked
+
+      - name: Run desktop tests
+        working-directory: app
+        run: cargo test --locked

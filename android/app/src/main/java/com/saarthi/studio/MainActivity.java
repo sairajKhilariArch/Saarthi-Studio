@@ -110,6 +110,8 @@ public class MainActivity extends Activity {
     private int messageHistoryLimit = 150;
     private static final int MESSAGE_PAGE_SIZE = 150;
     private static final int MAX_VISIBLE_MESSAGES = 1500;
+    /** The desktop host API caps chat messages (its own limit, shared with the desktop UI). */
+    private static final int HOST_MESSAGE_CHARS = 50_000;
     private static final String STATE_PREFS = "saarthi_chat_state";
     private static final String CURRENT_CONVERSATION_KEY = "current_conversation_id";
     private static final int REQUEST_EXPORT_MARKDOWN = 6101;
@@ -594,10 +596,6 @@ public class MainActivity extends Activity {
     private void sendMessage() { sendMessage(false); }
 
     private void sendMessage(boolean visionConfirmed) {
-        if (config.connectionMode != ConnectionMode.DIRECT_ROUTER) {
-            toast("Desktop Host chat is not enabled in this milestone. Direct Router remains available.");
-            return;
-        }
         if (sending) return;
         if (!attachedImages.isEmpty() && !visionConfirmed && !isKnownVisionModel(config.model)) {
             new AlertDialog.Builder(this).setTitle("Try image with this model?")
@@ -609,8 +607,8 @@ public class MainActivity extends Activity {
         String prompt = promptInput.getText().toString().trim();
         if (prompt.isEmpty() && (!attachedFiles.isEmpty() || !attachedImages.isEmpty())) prompt = "Please analyze the attached file(s) and image(s).";
         if (prompt.isEmpty()) { promptInput.setError("Type a message first, dictate it, or attach a file/image"); return; }
-        if (config.baseUrl.trim().isEmpty() || config.apiKey.trim().isEmpty()) {
-            openSettings(); toast("Set the FreeLLMAPI URL and unified API key first."); return;
+        if (!connectionConfigured()) {
+            openSettings(); toast(connectionSetupMessage()); return;
         }
         String code = codeVisible ? codeInput.getText().toString().trim() : "";
         StringBuilder fullText = new StringBuilder(prompt);
@@ -631,6 +629,11 @@ public class MainActivity extends Activity {
             toast("This message exceeds the 1.6 million character limit. Remove some text or attachments and try again.");
             return;
         }
+        if (config.connectionMode == ConnectionMode.DESKTOP_HOST && fullText.length() > HOST_MESSAGE_CHARS) {
+            toast("Desktop Host messages are limited to " + HOST_MESSAGE_CHARS
+                    + " characters including attachments. Shorten the message or remove attachments.");
+            return;
+        }
         long targetConversationId = currentConversationId;
         store.renameIfDefaultTitle(targetConversationId, promptToTitle(prompt));
         renderConversationTitle();
@@ -645,14 +648,10 @@ public class MainActivity extends Activity {
     }
 
     private void startRequest(long targetConversationId, Message userMessage) {
-        if (config.connectionMode != ConnectionMode.DIRECT_ROUTER) {
-            toast("Desktop Host chat is not enabled in this milestone. Direct Router remains available.");
-            return;
-        }
         if (sending) return;
         if (userMessage == null) { toast("Could not find the user message to send."); return; }
-        if (config.baseUrl.trim().isEmpty() || config.apiKey.trim().isEmpty()) {
-            openSettings(); toast("Set the FreeLLMAPI URL and unified API key first."); return;
+        if (!connectionConfigured()) {
+            openSettings(); toast(connectionSetupMessage()); return;
         }
         currentConversationId = targetConversationId;
         saveCurrentConversationId();
@@ -674,7 +673,8 @@ public class MainActivity extends Activity {
             catch (JSONException ignored) { }
         }
         ConnectionTransport transport = ConnectionTransportFactory.create(config.connectionMode);
-        String base = config.baseUrl;
+        boolean hostMode = config.connectionMode == ConnectionMode.DESKTOP_HOST;
+        String base = hostMode ? config.desktopHostUrl : config.baseUrl;
         String key = transport.credential(config.apiKey, config.desktopHostToken);
         String model = config.model == null || config.model.trim().isEmpty() ? "auto" : config.model.trim();
         executor.execute(() -> {
@@ -685,7 +685,11 @@ public class MainActivity extends Activity {
             StringBuilder answer = new StringBuilder();
             String successfulModel = model;
             try {
-                List<String> candidates = modelCandidates(model, config.fallbackModels);
+                // The desktop host picks its own model; per-callback fallback
+                // candidates would only repeat the identical host request.
+                List<String> candidates = hostMode
+                        ? Collections.singletonList(model)
+                        : modelCandidates(model, config.fallbackModels);
                 Exception lastModelError = null;
                 boolean completed = false;
                 int transientRetryIndex = -1;
@@ -697,9 +701,15 @@ public class MainActivity extends Activity {
                     answer.setLength(0);
                     try {
                         JSONObject body = new JSONObject();
-                        body.put("model", candidateModel);
-                        body.put("messages", msgs);
-                        body.put("stream", true);
+                        if (hostMode) {
+                            body.put("conversation_id", hostConversationId(targetConversationId, transport, base, key));
+                            body.put("message", userMessage.content);
+                            body.put("stream", true);
+                        } else {
+                            body.put("model", candidateModel);
+                            body.put("messages", msgs);
+                            body.put("stream", true);
+                        }
                         StreamResult streamed = requestStream(transport.endpoint(base, "chat/completions"), key, body.toString(), answer);
                         if (stopRequested) throw new java.io.InterruptedIOException("Generation stopped by user");
                         responseStatus = streamed.status;
@@ -851,10 +861,56 @@ public class MainActivity extends Activity {
 
     private static int extractReportedTokens(JSONObject json) {
         JSONObject usage = json == null ? null : json.optJSONObject("usage");
+        if (usage == null && json != null) usage = json.optJSONObject("meta"); // desktop host meta
         if (usage == null || !usage.has("total_tokens")) return -1;
         Object value = usage.opt("total_tokens");
         try { return value instanceof Number ? ((Number)value).intValue() : Integer.parseInt(String.valueOf(value)); }
         catch (Exception ignored) { return -1; }
+    }
+
+    /** True when the selected transport has everything it needs to send. */
+    private boolean connectionConfigured() {
+        if (config.connectionMode == ConnectionMode.DESKTOP_HOST) {
+            return !config.desktopHostUrl.trim().isEmpty() && !config.desktopHostToken.trim().isEmpty();
+        }
+        return !config.baseUrl.trim().isEmpty() && !config.apiKey.trim().isEmpty();
+    }
+
+    private String connectionSetupMessage() {
+        return config.connectionMode == ConnectionMode.DESKTOP_HOST
+                ? "Set the Desktop Host URL and token first."
+                : "Set the FreeLLMAPI URL and unified API key first.";
+    }
+
+    /**
+     * The desktop thread for a local conversation. Created once on the host and
+     * remembered in private prefs, so every later send reuses the same history.
+     */
+    private String hostConversationId(long localId, ConnectionTransport transport, String base, String key) throws Exception {
+        android.content.SharedPreferences prefs = getSharedPreferences("host_threads", MODE_PRIVATE);
+        String stored = prefs.getString("local_" + localId, "");
+        if (!stored.isEmpty()) return stored;
+        Conversation local = store.getConversation(localId);
+        String title = local == null || local.title.trim().isEmpty() ? "From my phone" : local.title;
+        JSONObject payload = new JSONObject().put("title", title);
+        HttpResult created = request("POST", transport.endpoint(base, "conversations"), key, payload.toString());
+        if (created.status < 200 || created.status >= 300) {
+            throw new Exception(errorText(parseJson(created.body), created.body, created.status));
+        }
+        String id = parseJson(created.body).optString("id", "");
+        if (id.isEmpty()) throw new Exception("The desktop host did not return a conversation id.");
+        prefs.edit().putString("local_" + localId, id).apply();
+        return id;
+    }
+
+    /** Push the growing streamed answer into the live bubble on the UI thread. */
+    private void publishStreamText(String snapshot) {
+        main.post(() -> {
+            if (streamingTextView != null) {
+                streamingTextView.setText(snapshot);
+                scrollToBottom();
+            }
+        });
     }
 
     private StreamResult requestStream(String url, String apiKey, String body, StringBuilder answer) throws Exception {
@@ -893,6 +949,24 @@ public class MainActivity extends Activity {
                     catch (JSONException malformed) { continue; } // Ignore SSE comments/keepalives and malformed intermediary frames.
                     JSONObject eventError = event.optJSONObject("error");
                     if (eventError != null) throw new Exception("FreeLLMAPI stream error: " + eventError.optString("message", eventError.toString()));
+                    // Desktop host frames: {"delta":"…"} pieces, then {"done":true,"meta":{…}}.
+                    Object hostDelta = event.opt("delta");
+                    if (hostDelta instanceof String) {
+                        if (!((String) hostDelta).isEmpty()) {
+                            answer.append((String) hostDelta);
+                            publishStreamText(answer.toString());
+                        }
+                        continue;
+                    }
+                    if (event.optBoolean("done", false)) {
+                        JSONObject hostMeta = event.optJSONObject("meta");
+                        if (hostMeta != null && hostMeta.has("total_tokens")) {
+                            Object total = hostMeta.opt("total_tokens");
+                            try { tokens = total instanceof Number ? ((Number) total).intValue() : Integer.parseInt(String.valueOf(total)); }
+                            catch (NumberFormatException ignored) { }
+                        }
+                        break;
+                    }
                     if (event.has("usage")) tokens = extractReportedTokens(event);
                     JSONArray choices = event.optJSONArray("choices");
                     JSONObject choice = choices == null || choices.length() == 0 ? null : choices.optJSONObject(0);
@@ -900,13 +974,7 @@ public class MainActivity extends Activity {
                     String piece = streamContent(delta == null ? null : delta.opt("content"));
                     if (!piece.isEmpty()) {
                         answer.append(piece);
-                        String snapshot = answer.toString();
-                        main.post(() -> {
-                            if (streamingTextView != null) {
-                                streamingTextView.setText(snapshot);
-                                scrollToBottom();
-                            }
-                        });
+                        publishStreamText(answer.toString());
                     }
                 }
             }
@@ -1127,7 +1195,7 @@ public class MainActivity extends Activity {
 
     private void showToolsMenu() {
         String[] items = {"Attach text/code file", "Attach image (vision models)", "Manage attachments",
-                "Dictate message", "Read last answer aloud", "Stop speech", "Prompt presets", "Model preferences", "Free-tier budget", "Usage diagnostics"};
+                "Dictate message", "Read last answer aloud", "Stop speech", "Prompt presets", "Model preferences", "Free-tier budget", "Usage diagnostics", "Agent runs"};
         new AlertDialog.Builder(this).setTitle("Saarthi tools").setItems(items, (dialog, which) -> {
             if (which == 0) pickTextFile();
             else if (which == 1) pickImage();
@@ -1138,8 +1206,434 @@ public class MainActivity extends Activity {
             else if (which == 6) showPromptPresets();
             else if (which == 7) openSettings();
             else if (which == 8) showFreeTierBudget();
-            else showUsageDiagnostics();
+            else if (which == 9) showUsageDiagnostics();
+            else openAgentRuns();
         }).setNegativeButton("Close", null).show();
+    }
+
+    // ---------------------------------------------------------------------
+    // Agent runs (Desktop Host mode only): list, detail, approvals, restore.
+    // Same run surface as the desktop web UI, under /api/host/v1/runs.
+    // ---------------------------------------------------------------------
+
+    private void openAgentRuns() {
+        if (config.connectionMode != ConnectionMode.DESKTOP_HOST) {
+            toast("Agent runs need a Desktop Host connection — connect one in Settings → Desktop Host.");
+            return;
+        }
+        // Capability discovery keeps older desktop builds working: older hosts
+        // answer without agent_runs and the phone degrades to a clear message.
+        executor.execute(() -> {
+            try {
+                DesktopHostTransport transport = new DesktopHostTransport();
+                String token = transport.credential(config.apiKey, config.desktopHostToken);
+                HttpResult caps = request("GET", transport.endpoint(config.desktopHostUrl, "capabilities"), token, null);
+                JSONObject features = parseJson(caps.body).optJSONObject("features");
+                boolean supported = caps.status >= 200 && caps.status < 300
+                        && features != null && features.optBoolean("agent_runs", false);
+                main.post(() -> {
+                    if (supported) showAgentRunsList();
+                    else toast("This desktop host does not expose agent runs. Update Saarthi Studio on the desktop.");
+                });
+            } catch (Exception e) {
+                main.post(() -> toast("Could not check the desktop host: " + friendlyError(e.getMessage())));
+            }
+        });
+    }
+
+    private static String agentStatusLabel(String status) {
+        switch (status == null ? "" : status) {
+            case "running": return "Running";
+            case "awaiting_approval": return "Needs your approval";
+            case "completed": return "Completed";
+            case "failed": return "Failed";
+            case "cancelled": return "Cancelled";
+            default: return status.isEmpty() ? "Unknown" : status;
+        }
+    }
+
+    private static int agentStatusColor(String status) {
+        switch (status == null ? "" : status) {
+            case "running": return ACCENT;
+            case "awaiting_approval": return Color.rgb(255, 196, 61);
+            case "completed": return GREEN;
+            case "failed": case "cancelled": return DANGER;
+            default: return TEXT;
+        }
+    }
+
+    private DesktopHostTransport hostTransport() { return new DesktopHostTransport(); }
+
+    private String hostToken() { return hostTransport().credential(config.apiKey, config.desktopHostToken); }
+
+    private String hostOperation(String operation) { return hostTransport().endpoint(config.desktopHostUrl, operation); }
+
+    private void showAgentRunsList() {
+        LinearLayout dialogContent = new LinearLayout(this);
+        dialogContent.setOrientation(LinearLayout.VERTICAL);
+        dialogContent.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        Button refresh = smallButton("↻ Refresh");
+        LinearLayout.LayoutParams refreshLp = new LinearLayout.LayoutParams(-1, dp(38));
+        refreshLp.bottomMargin = dp(8);
+        dialogContent.addView(refresh, refreshLp);
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        dialogContent.addView(scroll, new LinearLayout.LayoutParams(-1, dp(430)));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Agent runs")
+                .setView(dialogContent)
+                .setNegativeButton("Close", (d, w) -> d.dismiss())
+                .setPositiveButton("+ New run", (d, w) -> showAgentRunComposer())
+                .create();
+        Runnable[] refreshHolder = new Runnable[1];
+        refreshHolder[0] = () -> loadAgentRunsInto(list);
+        refresh.setOnClickListener(v -> refreshHolder[0].run());
+        loadAgentRunsInto(list);
+        dialog.show();
+    }
+
+    private void loadAgentRunsInto(LinearLayout list) {
+        list.removeAllViews();
+        TextView loading = label("Loading runs…", 13, MUTED, false);
+        list.addView(loading);
+        executor.execute(() -> {
+            try {
+                HttpResult result = request("GET", hostOperation("runs"), hostToken(), null);
+                main.post(() -> {
+                    list.removeAllViews();
+                    if (result.status < 200 || result.status >= 300) {
+                        list.addView(label("Could not load agent runs (HTTP " + result.status + ").", 13, DANGER, false));
+                        return;
+                    }
+                    JSONArray runs = parseJson(result.body).optJSONArray("runs");
+                    if (runs == null || runs.length() == 0) {
+                        TextView empty = label("No agent runs yet. Start one with “+ New run”.", 14, MUTED, false);
+                        empty.setPadding(dp(8), dp(12), dp(8), dp(12));
+                        list.addView(empty);
+                        return;
+                    }
+                    for (int i = 0; i < runs.length() && i < 50; i++) {
+                        JSONObject run = runs.optJSONObject(i);
+                        if (run != null) {
+                            LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+                            cardLp.bottomMargin = dp(9);
+                            list.addView(agentRunCard(run), cardLp);
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    list.removeAllViews();
+                    list.addView(label("Could not load agent runs: " + friendlyError(e.getMessage()), 13, DANGER, false));
+                });
+            }
+        });
+    }
+
+    private LinearLayout agentRunCard(JSONObject run) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(PANEL_ALT, 14));
+        card.setPadding(dp(12), dp(10), dp(12), dp(10));
+        String goal = run.optString("goal", "");
+        if (goal.length() > 160) goal = goal.substring(0, 160) + "…";
+        TextView title = label(goal.isEmpty() ? "(empty goal)" : goal, 15, TEXT, true);
+        title.setMaxLines(2);
+        card.addView(title);
+        String status = run.optString("status", "");
+        JSONObject pending = run.optJSONObject("pendingAction");
+        int steps = run.optInt("steps", 0);
+        String info = agentStatusLabel(status)
+                + (pending == null || pending.optString("summary", "").isEmpty() ? "" : " · " + pending.optString("summary"))
+                + " · " + steps + (steps == 1 ? " step" : " steps");
+        TextView meta = label(info, 12, agentStatusColor(status), true);
+        meta.setPadding(0, dp(4), 0, dp(2));
+        card.addView(meta);
+        String error = run.optString("error", "");
+        if (!error.isEmpty()) {
+            TextView err = label(error, 12, MUTED, false);
+            err.setMaxLines(2);
+            err.setPadding(0, dp(2), 0, dp(2));
+            card.addView(err);
+        }
+        card.setOnClickListener(v -> showAgentRunDetail(run.optString("id", "")));
+        return card;
+    }
+
+    private void showAgentRunDetail(String runId) {
+        if (runId.trim().isEmpty()) {
+            toast("That run has no id; open it from the desktop instead.");
+            return;
+        }
+        LinearLayout dialogContent = new LinearLayout(this);
+        dialogContent.setOrientation(LinearLayout.VERTICAL);
+        dialogContent.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        TextView goalView = label("", 15, TEXT, true);
+        goalView.setMaxLines(4);
+        dialogContent.addView(goalView);
+        TextView statusView = label("", 12, TEXT, false);
+        statusView.setPadding(0, dp(4), 0, dp(8));
+        dialogContent.addView(statusView);
+
+        TextView diffView = new TextView(this);
+        diffView.setTextSize(11);
+        diffView.setTypeface(Typeface.MONOSPACE);
+        diffView.setTextColor(TEXT);
+        diffView.setBackground(round(PANEL_ALT, 10));
+        diffView.setPadding(dp(10), dp(8), dp(10), dp(8));
+        diffView.setVisibility(View.GONE);
+        dialogContent.addView(diffView, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout actionsRow = row();
+        actionsRow.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        Button approve = smallButton("Approve");
+        approve.setTextColor(GREEN);
+        Button reject = smallButton("Reject");
+        reject.setTextColor(DANGER);
+        Button cancelRun = smallButton("Cancel run");
+        actionsRow.addView(approve);
+        LinearLayout.LayoutParams rejectLp = new LinearLayout.LayoutParams(-2, -2);
+        rejectLp.leftMargin = dp(6);
+        actionsRow.addView(reject, rejectLp);
+        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(-2, -2);
+        cancelLp.leftMargin = dp(6);
+        actionsRow.addView(cancelRun, cancelLp);
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(-1, -2);
+        actionsLp.topMargin = dp(8);
+        dialogContent.addView(actionsRow, actionsLp);
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        LinearLayout.LayoutParams listLp = new LinearLayout.LayoutParams(-1, dp(400));
+        listLp.topMargin = dp(10);
+        dialogContent.addView(scroll, listLp);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Agent run")
+                .setView(dialogContent)
+                .setNegativeButton("Close", (d, w) -> d.dismiss())
+                .create();
+        Runnable refresh = () -> loadAgentRunDetail(runId, goalView, statusView, diffView, actionsRow, approve, reject, cancelRun, list, dialog);
+        approve.setOnClickListener(v -> sendAgentRunAction(runId, "/approve", "{\"approve\":true}", refresh));
+        reject.setOnClickListener(v -> sendAgentRunAction(runId, "/approve", "{\"approve\":false}", refresh));
+        cancelRun.setOnClickListener(v -> sendAgentRunAction(runId, "/cancel", "{}", refresh));
+        refresh.run();
+        dialog.show();
+    }
+
+    private void loadAgentRunDetail(String runId, TextView goalView, TextView statusView, TextView diffView,
+                                    LinearLayout actionsRow, Button approve, Button reject, Button cancelRun,
+                                    LinearLayout list, AlertDialog dialog) {
+        list.removeAllViews();
+        list.addView(label("Loading run…", 13, MUTED, false));
+        actionsRow.setVisibility(View.GONE);
+        diffView.setVisibility(View.GONE);
+        executor.execute(() -> {
+            try {
+                HttpResult result = request("GET", hostOperation("runs/" + runId), hostToken(), null);
+                main.post(() -> {
+                    if (result.status < 200 || result.status >= 300) {
+                        list.removeAllViews();
+                        list.addView(label("Could not load this run (HTTP " + result.status + "); check the desktop host.", 13, DANGER, false));
+                        return;
+                    }
+                    renderAgentRunDetail(runId, parseJson(result.body), goalView, statusView, diffView,
+                            actionsRow, approve, reject, cancelRun, list,
+                            () -> loadAgentRunDetail(runId, goalView, statusView, diffView,
+                                    actionsRow, approve, reject, cancelRun, list, dialog));
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    list.removeAllViews();
+                    list.addView(label("Could not load the run: " + friendlyError(e.getMessage()), 13, DANGER, false));
+                });
+            }
+        });
+    }
+
+    private void renderAgentRunDetail(String runId, JSONObject run, TextView goalView, TextView statusView, TextView diffView,
+                                      LinearLayout actionsRow, Button approve, Button reject, Button cancelRun,
+                                      LinearLayout list, Runnable refresh) {
+        String goal = run.optString("goal", "");
+        goalView.setText(goal.isEmpty() ? "(empty goal)" : goal);
+        String status = run.optString("status", "");
+        int steps = run.optInt("steps", 0);
+        String statusText = agentStatusLabel(status) + " · " + steps + (steps == 1 ? " step" : " steps");
+        String error = run.optString("error", "");
+        if (!error.isEmpty()) statusText += "\n" + error;
+        statusView.setText(statusText);
+        statusView.setTextColor(agentStatusColor(status));
+
+        actionsRow.setVisibility(View.GONE);
+        diffView.setVisibility(View.GONE);
+        if ("awaiting_approval".equals(status)) {
+            actionsRow.setVisibility(View.VISIBLE);
+            approve.setVisibility(View.VISIBLE);
+            reject.setVisibility(View.VISIBLE);
+            cancelRun.setVisibility(View.GONE);
+            String diff = run.optString("pendingDiff", "");
+            if (!diff.isEmpty()) {
+                if (diff.length() > 20000) diff = diff.substring(0, 20000) + "\n… (diff truncated; view the full text on the desktop)";
+                diffView.setText(diff);
+                diffView.setVisibility(View.VISIBLE);
+            }
+        } else if ("running".equals(status)) {
+            actionsRow.setVisibility(View.VISIBLE);
+            approve.setVisibility(View.GONE);
+            reject.setVisibility(View.GONE);
+            cancelRun.setVisibility(View.VISIBLE);
+        }
+
+        JSONArray stepList = run.optJSONArray("stepList");
+        int count = stepList == null ? 0 : stepList.length();
+        if (count == 0) {
+            TextView empty = label("No steps yet — the agent is inspecting the project…", 13, MUTED, false);
+            empty.setPadding(dp(4), dp(10), dp(4), dp(10));
+            list.addView(empty);
+            return;
+        }
+        // Newest first so waiters see the last action (or pending diff) first.
+        for (int i = count - 1; i >= 0 && i >= count - 40; i--) {
+            JSONObject step = stepList.optJSONObject(i);
+            if (step == null) continue;
+            int seq = step.optInt("seq", 0);
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(round(PANEL_ALT, 10));
+            card.setPadding(dp(10), dp(8), dp(10), dp(8));
+            LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(-1, -2);
+            cardLp.bottomMargin = dp(8);
+            TextView title = label("#" + seq + " · " + step.optString("action", ""), 12, TEXT, true);
+            card.addView(title);
+            TextView summary = label(step.optString("summary", ""), 11, MUTED, false);
+            summary.setMaxLines(2);
+            card.addView(summary);
+            String output = step.optString("output", "");
+            if (!output.isEmpty()) {
+                if (output.length() > 4000) output = output.substring(0, 4000) + "\n… (output truncated)";
+                TextView out = label(output, 10, MUTED, false);
+                out.setTypeface(Typeface.MONOSPACE);
+                out.setMaxLines(12);
+                out.setPadding(dp(2), dp(4), 0, dp(4));
+                card.addView(out);
+            }
+            if (step.optBoolean("hasCheckpoint", false)) {
+                Button restore = smallButton("Restore file");
+                restore.setOnClickListener(v -> {
+                    restore.setEnabled(false);
+                    sendAgentRunAction(runId, "/steps/" + seq + "/restore", "{}", refresh);
+                });
+                LinearLayout.LayoutParams restoreLp = new LinearLayout.LayoutParams(-2, -2);
+                restoreLp.topMargin = dp(6);
+                card.addView(restore, restoreLp);
+            }
+            list.addView(card, cardLp);
+        }
+    }
+
+    private void showAgentRunComposer() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(14), dp(8), dp(14), dp(4));
+
+        EditText goalField = new EditText(this);
+        goalField.setHint("Describe what the agent should do…");
+        goalField.setTextSize(14);
+        goalField.setTextColor(TEXT);
+        goalField.setHintTextColor(MUTED);
+        goalField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        goalField.setMinLines(3);
+        goalField.setMaxLines(8);
+        goalField.setBackground(round(PANEL_ALT, 12));
+        goalField.setPadding(dp(12), dp(10), dp(12), dp(10));
+        content.addView(goalField, new LinearLayout.LayoutParams(-1, -2));
+
+        android.widget.CheckBox writes = new android.widget.CheckBox(this);
+        writes.setText("Allow file edits (read-only inspection without this)");
+        writes.setTextSize(13);
+        writes.setTextColor(TEXT);
+        android.widget.CheckBox commands = new android.widget.CheckBox(this);
+        commands.setText("Allow shell commands (build/tests)");
+        commands.setTextSize(13);
+        commands.setTextColor(TEXT);
+        android.widget.CheckBox autoApprove = new android.widget.CheckBox(this);
+        autoApprove.setText("Auto-approve the agent's file edits");
+        autoApprove.setTextSize(13);
+        autoApprove.setTextColor(TEXT);
+        LinearLayout permissionPanel = new LinearLayout(this);
+        permissionPanel.setOrientation(LinearLayout.VERTICAL);
+        permissionPanel.setBackground(round(PANEL_ALT, 10));
+        permissionPanel.setPadding(dp(10), dp(8), dp(10), dp(8));
+        permissionPanel.addView(writes);
+        permissionPanel.addView(commands);
+        permissionPanel.addView(autoApprove);
+        content.addView(permissionPanel, new LinearLayout.LayoutParams(-1, -2));
+
+        new AlertDialog.Builder(this)
+                .setTitle("New agent run")
+                .setView(content)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Start run", (d, w) -> startAgentRun(
+                        goalField.getText().toString(), writes.isChecked(), commands.isChecked(), autoApprove.isChecked()))
+                .create()
+                .show();
+    }
+
+    private void startAgentRun(String goalText, boolean allowWrites, boolean allowCommands, boolean autoApprove) {
+        String goal = goalText == null ? "" : goalText.trim();
+        if (goal.isEmpty()) {
+            toast("Describe what the agent should do.");
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                HttpResult result = request("POST", hostOperation("runs"), hostToken(),
+                        "{\"goal\":" + JSONObject.quote(goal) + ",\"allowWrites\":" + allowWrites
+                                + ",\"allowCommands\":" + allowCommands
+                                + ",\"autoApprove\":" + autoApprove + "}");
+                main.post(() -> {
+                    if (result.status >= 200 && result.status < 300) {
+                        JSONObject run = parseJson(result.body).optJSONObject("run");
+                        String id = run == null ? "" : run.optString("id", "");
+                        toast("Agent run started. Steps stream in as it works.");
+                        if (!id.isEmpty()) showAgentRunDetail(id);
+                    } else {
+                        toast(agentRunError(result));
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> toast("Could not start the run: " + friendlyError(e.getMessage())));
+            }
+        });
+    }
+
+    private void sendAgentRunAction(String runId, String action, String body, Runnable refresh) {
+        executor.execute(() -> {
+            try {
+                HttpResult result = request("POST", hostOperation("runs/" + runId) + action, hostToken(), body);
+                main.post(() -> {
+                    if (result.status >= 200 && result.status < 300) toast("Done — refreshing the run.");
+                    else toast(agentRunError(result));
+                    refresh.run();
+                });
+            } catch (Exception e) {
+                main.post(() -> toast("Could not contact the desktop host: " + friendlyError(e.getMessage())));
+            }
+        });
+    }
+
+    private static String agentRunError(HttpResult result) {
+        if (result.status == 400) return "The desktop rejected this run — it needs an open workspace folder and a short goal.";
+        if (result.status == 401) return "The Desktop Host token was rejected. Check it in Settings → Desktop Host.";
+        return "Desktop host returned HTTP " + result.status + ".";
     }
 
     private void pickTextFile() {
@@ -2385,6 +2879,7 @@ public class MainActivity extends Activity {
     }
     private static JSONObject parseJson(String body) { try { return new JSONObject(body); } catch (Exception e) { return new JSONObject(); } }
     private static String responseText(JSONObject data) throws JSONException {
+        if (data.has("answer")) return data.optString("answer", ""); // desktop host reply
         JSONObject choice = data.optJSONArray("choices") == null ? null : data.optJSONArray("choices").optJSONObject(0);
         JSONObject message = choice == null ? null : choice.optJSONObject("message");
         if (message == null) return data.toString(2);

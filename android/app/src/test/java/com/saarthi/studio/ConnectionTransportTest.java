@@ -52,6 +52,6 @@ public class ConnectionTransportTest {
         assertEquals("https://desktop.example.test/api/host/v1/capabilities",
                 host.endpoint("https://desktop.example.test", "capabilities"));
         assertEquals("host-secret", host.credential("router-secret", "host-secret"));
-        assertFalse(host.supportsStreaming());
+        assertTrue(host.supportsStreaming());
     }
 }

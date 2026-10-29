@@ -25,6 +25,15 @@ import {
   deleteEntry,
   workspaceOutline,
 } from "../dist/lib.mjs";
+import {
+  capChars,
+  buildHistory,
+  isExcluded,
+  noticeText,
+  parseAction,
+  sanitize,
+  unifiedDiff,
+} from "../dist/agent.mjs";
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "studio-test-"));
@@ -378,6 +387,303 @@ test("built-in server proxies the console and refuses non-admin paths", async ()
   await embedded.close();
   router.server.closeAllConnections();
   router.server.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+/* ------------------------------------------------------------------ */
+/* privacy + agent runs (desktop parity, M2/M3)                        */
+/* ------------------------------------------------------------------ */
+
+test("privacy scan masks the same credential shapes as the desktop", () => {
+  const masked = sanitize("SERVICE_API_KEY=sk-totally-real-key-abcdef1234567890\nCOLOR=blue\n");
+  assert.ok(!masked.text.includes("sk-totally-real"), "key leaked");
+  assert.ok(masked.text.includes("SERVICE_API_KEY="));
+  assert.ok(masked.text.includes("COLOR=blue"), "ordinary lines untouched");
+  assert.ok(masked.findings.includes("key-assignment"));
+
+  const bearer = sanitize("Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789\n");
+  assert.ok(!bearer.text.includes("abcdefghijklmnopqrstuvwxyz0123456789"));
+  assert.ok(bearer.findings.includes("bearer"));
+
+  const aws = sanitize("aws_access_key_id=AKIAfaketoken000000000123\n");
+  assert.ok(!aws.text.includes("AKIAfaketoken"));
+  assert.ok(aws.findings.includes("aws"));
+
+  const jwt = sanitize("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepartsignaturepart\n");
+  assert.ok(!jwt.text.includes("signaturepartsignaturepart"));
+  assert.ok(jwt.findings.includes("jwt"));
+
+  const pem = sanitize("-----BEGIN RSA PRIVATE KEY-----\nMIIaaaabcdefghijklmno\n-----END RSA PRIVATE KEY-----\n");
+  assert.ok(!pem.text.includes("MIIaaaabcdefghijklmno"));
+  assert.ok(pem.text.includes("-----BEGIN"), "header stays readable");
+  assert.ok(pem.findings.includes("pem"));
+
+  const clean = sanitize("let config = Config::default();\nplain words here\n");
+  assert.equal(clean.text, "let config = Config::default();\nplain words here\n");
+  assert.deepEqual(clean.findings, []);
+
+  const short = sanitize("token=short\npassword=1234\n");
+  assert.deepEqual(short.findings, [], "short values are not masked");
+});
+
+test("exclusion rules match paths and prefixes only", () => {
+  const rules = [".env", "secrets/", " certs "];
+  assert.ok(isExcluded(".env", rules));
+  assert.ok(isExcluded("secrets/prod.pem", rules));
+  assert.ok(isExcluded("certs/host.key", rules), "trimmed rule");
+  assert.ok(isExcluded("./.env", rules));
+  assert.ok(isExcluded("secrets", rules), "over-exclusion is the safe direction");
+  assert.ok(!isExcluded("src/main.rs", rules));
+  assert.ok(!isExcluded("", rules));
+});
+
+test("parse action maps one JSON step per model reply", () => {
+  assert.deepEqual(
+    parseAction('{"action":"write","path":"a.txt","content":"x"}'),
+    { ok: true, action: { action: "write", path: "a.txt", content: "x" } },
+  );
+  const thought = parseAction("plain text reply");
+  assert.ok(thought.ok);
+  assert.equal(thought.action.action, "think");
+  assert.ok(!parseAction('{"action":"explode"}').ok);
+  assert.ok(!parseAction('{"action":"read"}').ok, "missing field");
+});
+
+test("unified diff shows the changed middle with context", () => {
+  const diff = unifiedDiff("a\nb\nc", "a\nB\nc", "f.txt");
+  assert.ok(diff.includes("-b"));
+  assert.ok(diff.includes("+B"));
+  assert.ok(diff.includes("a"), "context kept");
+  assert.equal(unifiedDiff("same", "same", "f.txt"), "(no changes — the new content is identical)");
+  const fresh = unifiedDiff(null, "x", "f.txt");
+  assert.ok(fresh.includes("new file"));
+  assert.ok(fresh.includes("+x"));
+});
+
+test("history is privacy-masked before it rides the next prompt", () => {
+  const history = buildHistory([
+    { seq: 1, action: "read", summary: "read env", output: "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789\n" },
+    { seq: 2, action: "think", summary: "planned", output: "" },
+  ]);
+  assert.ok(history.includes("2. [think] planned"));
+  assert.ok(history.includes("1. [read] read env"));
+  assert.ok(!history.includes("abcdefghijklmnopqrstuvwxyz0123456789"), "secret leaked into history");
+  assert.ok(history.includes("[masked]"));
+});
+
+test("notice text names both findings and exclusions", () => {
+  assert.equal(noticeText([], []), null);
+  const text = noticeText(["bearer"], ["certs/host.key"]);
+  assert.ok(text.includes("bearer"));
+  assert.ok(text.includes("certs/host.key"));
+});
+
+test("outline skips excluded paths", () => {
+  const excluded = workspaceOutline(process.cwd(), ["node_modules", "node_modules/nested"]);
+  assert.ok(!excluded.includes("node_modules"));
+});
+
+test("agent runs: approval gate, live diff, restore", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  fs.writeFileSync(path.join(workspace, "notes.txt"), "before\n");
+  fs.writeFileSync(path.join(workspace, ".env"), "SERVICE_API_KEY=sk-totally-real-key-abcdef1234567890\n");
+  const scripted = [
+    '{"action":"read","path":".env"}',
+    '{"action":"write","path":"notes.txt","content":"after\\n"}',
+    '{"action":"done","summary":"written"}',
+  ];
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        model: "auto",
+        provider: "mock",
+        choices: [{ message: { content: scripted.shift() || '{"action":"fail","reason":"out of script"}' } }],
+      }),
+      { status: 200 },
+    );
+
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+      privacyExclusions: [".env", "certs/"],
+    }),
+  });
+
+  const get = async (route) => {
+    const response = await fetch(`${embedded.url}${route}`);
+    return { status: response.status, body: await response.json() };
+  };
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 8000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = (await get(`/api/runs/${id}`)).body;
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const config = (await get("/api/config")).body;
+  assert.deepEqual(config.privacy_exclusions, [".env", "certs/"], "exclusions echo on config");
+
+  assert.equal((await post("/api/runs", { goal: "" })).status, 400);
+  assert.equal((await get("/api/runs/nope")).status, 404, "404-tolerant detail");
+
+  const created = await post("/api/runs", {
+    goal: "update notes.txt",
+    allowWrites: true,
+    autoApprove: false,
+  });
+  assert.equal(created.status, 200);
+  assert.equal(created.body.ok, true);
+  const id = created.body.run.id;
+
+  // The run lists immediately.
+  const listed = (await get("/api/runs")).body;
+  assert.ok(listed.runs.some((run) => run.id === id && run.goal === "update notes.txt"));
+
+  // Step 1 reads the excluded .env: contents never reach the run log.
+  const paused = await waitRun(id, (run) => run.status === "awaiting_approval");
+  const blocked = paused.stepList.find((step) => step.output.includes("blocked by privacy policy"));
+  assert.ok(blocked, "excluded read was not blocked");
+  assert.ok(!paused.stepList.some((step) => (step.output || "").includes("sk-totally-real")), "secret leaked");
+
+  // The pending write preview is a real unified diff against the file on disk.
+  assert.ok(paused.pendingAction && paused.pendingAction.tag === "write");
+  assert.match(paused.pendingDiff, /-before/);
+  assert.match(paused.pendingDiff, /\+after/);
+  assert.equal(fs.readFileSync(path.join(workspace, "notes.txt"), "utf8"), "before\n", "nothing written before approval");
+
+  // Rejecting and re-approving a fresh run is covered by the approve path:
+  // approve it and the write lands.
+  const approved = await post(`/api/runs/${id}/approve`, { approve: true });
+  assert.equal(approved.status, 200);
+  const done = await waitRun(id, (run) => run.status === "succeeded");
+  const writeStep = done.stepList.find((step) => step.action === "write");
+  assert.equal(fs.readFileSync(path.join(workspace, "notes.txt"), "utf8"), "after\n");
+  assert.ok(writeStep.output.includes("--- diff ---"));
+  assert.ok(writeStep.hasCheckpoint); // existing file → restorable
+
+  // Restore rolls the file back to the pre-write snapshot.
+  const restored = await post(`/api/runs/${id}/steps/${writeStep.seq}/restore`);
+  assert.equal(restored.status, 200);
+  assert.equal(fs.readFileSync(path.join(workspace, "notes.txt"), "utf8"), "before\n");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("agent runs: denied permission and cancellation", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const scripted = [];
+  // The second model call parks inside the stub until the test releases it,
+  // so the cancel provably lands while the reply is still in flight.
+  let callIndex = 0;
+  let releaseGate = null;
+  let markEntered = null;
+  const entered = new Promise((resolve) => { markEntered = resolve; });
+  const fetchImpl = async () => {
+    callIndex += 1;
+    if (callIndex === 2) {
+      markEntered();
+      await new Promise((resolve) => { releaseGate = resolve; });
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return new Response(
+      JSON.stringify({
+        model: "auto",
+        provider: "mock",
+        choices: [{ message: { content: scripted.length ? scripted.shift() : '{"action":"think","summary":"waiting"}' } }],
+      }),
+      { status: 200 },
+    );
+  };
+
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 8000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await get(`/api/runs/${id}`);
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  // A write without allowWrites fails honestly, naming the missing permission.
+  scripted.push('{"action":"write","path":"doomed.txt","content":"x"}');
+  const doomed = await post("/api/runs", {
+    goal: "edit a file",
+    allowWrites: false,
+    autoApprove: true,
+  });
+  assert.equal(doomed.status, 200);
+  const denied = await waitRun(doomed.body.run.id, (run) => run.status === "failed");
+  assert.match(denied.error, /file writes/);
+
+  // Cancel a live run while its model reply is still in flight: the write
+  // that reply proposes must never reach the workspace.
+  scripted.push('{"action":"write","path":"ignored.txt","content":"x"}');
+  const live = await post("/api/runs", { goal: "loop", allowWrites: true, autoApprove: true });
+  assert.equal(live.status, 200);
+  await Promise.race([
+    entered,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("model call never started")), 8000)),
+  ]);
+  const cancelled = await post(`/api/runs/${live.body.run.id}/cancel`);
+  assert.equal(cancelled.status, 200);
+  releaseGate(); // the reply now returns to a run the user already stopped
+  const after = await waitRun(live.body.run.id, (run) => run.status === "cancelled");
+  assert.equal(after.status, "cancelled");
+  assert.equal(after.steps, 0, "no step recorded for a reply that arrived after cancel");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(!fs.existsSync(path.join(workspace, "ignored.txt")), "cancelled run must not write");
+
+  await embedded.close();
   cleanupTemp(workspace);
   cleanupTemp(storage);
 });

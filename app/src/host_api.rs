@@ -4,7 +4,7 @@
 //! router and is not mounted on a network listener until the transport guardrails
 //! in the next implementation step are in place.
 
-use super::{chat, create_conversation, load_config, open_db, router_url, AppState};
+use super::{chat, chat_stream, create_conversation, load_config, open_db, router_url, AppState};
 use crate::host_auth::HostTokenStore;
 use axum::{
     body::{to_bytes, Body},
@@ -50,6 +50,9 @@ pub(super) fn build_router(state: AppState, token_store: HostTokenStore) -> Rout
             get(list_host_messages),
         )
         .route("/api/host/v1/chat", post(host_chat))
+        // Agent runs share the desktop runtime; the host bearer wall covers
+        // them the same as every other v1 route.
+        .merge(crate::agent::host_router())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .route_layer(from_fn_with_state(token_store, require_host_bearer))
         .with_state(state)
@@ -223,7 +226,8 @@ async fn host_capabilities() -> Json<Value> {
             "message_history": true,
             "non_streaming_chat": true,
             "model_list": true,
-            "streaming": false,
+            "streaming": true,
+            "agent_runs": true,
             "attachments": false,
             "conversation_delete": false,
             "usage_diagnostics": false
@@ -707,7 +711,7 @@ async fn host_chat(State(state): State<AppState>, Json(input): Json<Value>) -> R
     if object.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "conversation_id" | "message" | "code" | "language"
+            "conversation_id" | "message" | "code" | "language" | "stream"
         )
     }) || object
         .get("conversation_id")
@@ -719,6 +723,7 @@ async fn host_chat(State(state): State<AppState>, Json(input): Json<Value>) -> R
         || object
             .get("language")
             .is_some_and(|value| !value.is_string())
+        || object.get("stream").is_some_and(|value| !value.is_boolean())
     {
         return host_error(
             StatusCode::BAD_REQUEST,
@@ -760,8 +765,22 @@ async fn host_chat(State(state): State<AppState>, Json(input): Json<Value>) -> R
     // prompt construction, history persistence, upstream requests and diagnostics.
     // Translate every failed response to a stable public error shape so upstream
     // router URLs, provider text and local DB details are not sent to the phone.
-    let response = chat(State(state), Json(input)).await;
+    let stream = input
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let response = if stream {
+        chat_stream(State(state), Json(input)).await
+    } else {
+        chat(State(state), Json(input)).await
+    };
     if response.status().is_success() {
+        if stream {
+            // The desktop's SSE frames are already the public contract the
+            // phone parses ({"delta"} pieces, then {"done", "meta"}); forward
+            // the stream body untouched rather than re-encoding it.
+            return response;
+        }
         let body = match to_bytes(response.into_body(), 4 * 1024 * 1024).await {
             Ok(body) => body,
             Err(_) => {
@@ -817,6 +836,13 @@ async fn host_chat(State(state): State<AppState>, Json(input): Json<Value>) -> R
         return response;
     }
 
+    host_chat_failure(response).await
+}
+
+/// Translate a failed chat response — JSON or SSE stream — into the stable
+/// public error shape so upstream router URLs, provider text and local DB
+/// details never reach the phone.
+async fn host_chat_failure(response: Response<Body>) -> Response<Body> {
     let upstream_status = response.status();
     let internal_error_body = to_bytes(response.into_body(), 16 * 1024)
         .await
@@ -1190,12 +1216,62 @@ mod tests {
         let data = Fixture::response_json(response).await;
         assert_eq!(data["api_version"], API_VERSION);
         assert_eq!(data["model_policy"], "desktop_configured");
-        assert_eq!(data["features"]["streaming"], false);
+        assert_eq!(data["features"]["streaming"], true);
+        assert_eq!(data["features"]["agent_runs"], true);
         assert_eq!(data["features"]["model_list"], true);
         assert_eq!(data["features"]["attachments"], false);
         assert_eq!(data["features"]["conversation_delete"], false);
         assert_eq!(data["features"]["usage_diagnostics"], false);
         assert_eq!(data["limits"]["request_body_bytes"], MAX_REQUEST_BODY_BYTES);
+    }
+
+    #[tokio::test]
+    async fn agent_run_routes_sit_behind_the_host_bearer_wall() {
+        let fixture = Fixture::new();
+
+        // Unauthenticated access fails closed before any handler runs.
+        let anonymous = fixture
+            .send(Method::GET, "/api/host/v1/runs", None, None)
+            .await;
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+        // List is reachable with a valid token, even when nothing has run.
+        let listed = fixture
+            .send(Method::GET, "/api/host/v1/runs", Some(&fixture.token), None)
+            .await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let data = Fixture::response_json(listed).await;
+        assert!(data["runs"].as_array().is_some(), "shape: {data}");
+
+        // Start requires an open workspace; the host policy masks 400-level
+        // handler errors into the shared invalid_request envelope, so no
+        // internal detail reaches the phone.
+        let started = fixture
+            .send(
+                Method::POST,
+                "/api/host/v1/runs",
+                Some(&fixture.token),
+                Some(r#"{"goal":"build a portfolio site"}"#),
+            )
+            .await;
+        assert_eq!(started.status(), StatusCode::BAD_REQUEST);
+        let data = Fixture::response_json(started).await;
+        assert_eq!(data["error"]["code"], "invalid_request");
+
+        // Unknown run ids fail with the shared 404 shape on every action.
+        let unknown = "00000000-0000-4000-8000-000000000000";
+        for (method, path) in [
+            (Method::GET, format!("/api/host/v1/runs/{unknown}")),
+            (Method::POST, format!("/api/host/v1/runs/{unknown}/approve")),
+            (Method::POST, format!("/api/host/v1/runs/{unknown}/cancel")),
+        ] {
+            let response = fixture
+                .send(method, &path, Some(&fixture.token), Some(r#"{"approve":true}"#))
+                .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            let data = Fixture::response_json(response).await;
+            assert_eq!(data["error"], "No such run.", "{path}");
+        }
     }
 
     #[tokio::test]
@@ -1404,6 +1480,57 @@ mod tests {
         assert!(!public_body.contains("API key"));
     }
 
+    /// The stream path must fail exactly like the JSON path: sanitized,
+    /// stable code, no upstream detail leaking to the phone.
+    #[tokio::test]
+    async fn streaming_chat_errors_use_the_same_public_shape() {
+        let fixture = Fixture::new();
+        let created = fixture
+            .send(
+                Method::POST,
+                "/api/host/v1/conversations",
+                Some(&fixture.token),
+                Some(r#"{"title":"Stream error fixture"}"#),
+            )
+            .await;
+        let conversation_id = Fixture::response_json(created).await["id"]
+            .as_str()
+            .expect("conversation ID")
+            .to_owned();
+
+        let response = fixture
+            .send(
+                Method::POST,
+                "/api/host/v1/chat",
+                Some(&fixture.token),
+                Some(&format!(
+                    r#"{{"conversation_id":"{conversation_id}","message":"hello","stream":true}}"#
+                )),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let data = Fixture::response_json(response).await;
+        assert_eq!(data["error"]["code"], "host_not_configured");
+        let public_body = data.to_string();
+        assert!(!public_body.contains("localhost:3001"));
+        assert!(!public_body.contains("API key"));
+
+        // stream must be a boolean; anything else is an invalid request.
+        let invalid = fixture
+            .send(
+                Method::POST,
+                "/api/host/v1/chat",
+                Some(&fixture.token),
+                Some(&format!(
+                    r#"{{"conversation_id":"{conversation_id}","message":"hello","stream":"yes"}}"#
+                )),
+            )
+            .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        let invalid_data = Fixture::response_json(invalid).await;
+        assert_eq!(invalid_data["error"]["code"], "invalid_request");
+    }
+
     #[tokio::test]
     async fn malformed_cursor_and_missing_conversation_use_stable_errors() {
         let fixture = Fixture::new();
@@ -1491,6 +1618,113 @@ mod tests {
         let body = data.to_string();
         assert!(!body.contains("localhost:3001"));
         assert!(!body.contains("API key"));
+    }
+
+    /// The mock router answers with plain JSON; chat_stream still turns that
+    /// into the phone's frames, so this exercises the whole host stream path:
+    /// status, content type, {delta} piece, {done, meta} close, persistence.
+    async fn mock_chat_router(Json(payload): Json<Value>) -> Json<Value> {
+        assert_eq!(payload["stream"], true, "host stream must ask the router to stream");
+        Json(json!({
+            "id": "chatcmpl-mock",
+            "model": "model-a",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello from the mock router"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
+        }))
+    }
+
+    #[tokio::test]
+    async fn streaming_chat_passes_delta_and_done_frames_to_the_phone() {
+        let fixture = Fixture::new();
+        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock router");
+        let upstream_address = upstream_listener.local_addr().expect("mock router address");
+        let upstream = Router::new().route("/v1/chat/completions", post(mock_chat_router));
+        tokio::spawn(async move {
+            axum::serve(upstream_listener, upstream)
+                .await
+                .expect("serve mock router");
+        });
+
+        let config = json!({
+            "base_url": format!("http://{upstream_address}/v1"),
+            "model": "model-a",
+            "api_key": "router-test-secret"
+        });
+        fs::write(
+            &fixture.config_path,
+            serde_json::to_vec_pretty(&config).expect("serialize fixture config"),
+        )
+        .expect("write fixture config");
+
+        let created = fixture
+            .send(
+                Method::POST,
+                "/api/host/v1/conversations",
+                Some(&fixture.token),
+                Some(r#"{"title":"Stream fixture"}"#),
+            )
+            .await;
+        let conversation_id = Fixture::response_json(created).await["id"]
+            .as_str()
+            .expect("conversation ID")
+            .to_owned();
+
+        let response = fixture
+            .send(
+                Method::POST,
+                "/api/host/v1/chat",
+                Some(&fixture.token),
+                Some(&format!(
+                    r#"{{"conversation_id":"{conversation_id}","message":"hello","stream":true}}"#
+                )),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        assert!(
+            content_type.contains("text/event-stream"),
+            "unexpected content type: {content_type}"
+        );
+        let bytes = to_bytes(response.into_body(), MAX_REQUEST_BODY_BYTES + 1024)
+            .await
+            .expect("read stream body");
+        let frames = String::from_utf8_lossy(&bytes);
+        assert!(
+            frames.contains(r#"{"delta":"Hello from the mock router"}"#),
+            "missing delta frame: {frames}"
+        );
+        assert!(frames.contains(r#""done":true"#), "missing done frame: {frames}");
+        // The public stream must not leak router configuration.
+        assert!(!frames.contains("router-test-secret"));
+        assert!(!frames.contains(upstream_address.to_string().as_str()));
+
+        // The exchange persisted through the stream path: user + assistant.
+        let messages = fixture
+            .send(
+                Method::GET,
+                &format!("/api/host/v1/conversations/{conversation_id}/messages"),
+                Some(&fixture.token),
+                None,
+            )
+            .await;
+        assert_eq!(messages.status(), StatusCode::OK);
+        let listed = Fixture::response_json(messages).await;
+        let items = listed["items"].as_array().expect("message items");
+        assert_eq!(items.len(), 2, "user and assistant messages: {listed}");
+        assert_eq!(items[0]["role"], "user");
+        assert_eq!(items[1]["role"], "assistant");
+        assert_eq!(items[1]["content"], "Hello from the mock router");
     }
 
     async fn fake_router_models(headers: axum::http::HeaderMap) -> Json<Value> {

@@ -51,8 +51,9 @@ await build({
 
 if (withTests) {
   await build({
-    entryPoints: [join(here, "src", "lib.ts")],
-    outfile: join(here, "dist", "lib.mjs"),
+    entryPoints: [join(here, "src", "lib.ts"), join(here, "src", "agent.ts")],
+    outdir: join(here, "dist"),
+    outExtension: { ".js": ".mjs" },
     bundle: true,
     platform: "node",
     format: "esm",
