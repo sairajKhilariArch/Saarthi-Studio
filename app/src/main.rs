@@ -26,6 +26,7 @@ use std::{
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+mod agent;
 mod browser;
 mod context;
 mod deepsearch;
@@ -193,7 +194,7 @@ fn set_private_permissions(path: &FsPath, dir: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
+pub(crate) fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 10000;")?;
     Ok(conn)
@@ -223,6 +224,9 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
         );",
     )?;
     let _ = migrate_projects(&conn);
+    if let Err(error) = agent::initialize(&conn) {
+        println!("agent run tables: {error}");
+    }
     migrate_message_attachments(&conn)
 }
 
@@ -286,7 +290,7 @@ fn migrate_projects(conn: &Connection) -> rusqlite::Result<()> {
 
 /// The project new sessions belong to. Repairs an empty or stale pointer
 /// (a deleted or archived project) instead of failing the request.
-fn active_project_id(state: &AppState) -> String {
+pub(crate) fn active_project_id(state: &AppState) -> String {
     let conn = match open_db(&state.database_path) {
         Ok(conn) => conn,
         Err(_) => return String::new(),
@@ -507,7 +511,7 @@ fn response_content(data: &Value) -> String {
     serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
 }
 
-async fn call_router(state: &AppState, messages: Vec<Value>, model_override: Option<&str>) -> Result<(String, Value), String> {
+pub(crate) async fn call_router(state: &AppState, messages: Vec<Value>, model_override: Option<&str>) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     if cfg.api_key.trim().is_empty() {
         return Err("Add your router's unified API key in Settings first.".into());
@@ -2222,6 +2226,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     ensure_setup(&state)?;
+    agent::mark_interrupted(&state);
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -2273,6 +2278,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(workspace::router(port))
         .merge(terminal::router(port))
         .merge(media::router(port))
+        .merge(agent::router().route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        )))
         .merge(router_console::router(port))
         .merge(router_api)
         .layer(middleware::from_fn(local_security_headers))

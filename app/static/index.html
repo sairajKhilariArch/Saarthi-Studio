@@ -17,6 +17,7 @@
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z"/><rect x="7" y="4.5" width="12" height="15" rx="1" fill="none" stroke-width="0"/></symbol>
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.6l1.9 6.2a3.4 3.4 0 0 0 1.3 1.3l6.2 1.9-6.2 1.9a3.4 3.4 0 0 0-1.3 1.3L12 21.4l-1.9-6.2a3.4 3.4 0 0 0-1.3-1.3L2.6 12l6.2-1.9a3.4 3.4 0 0 0 1.3-1.3z"/></symbol>
   <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-5 4z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
@@ -136,6 +137,7 @@
         <button id="integrationsBtn" class="foot-btn"><svg class="icon"><use href="#i-cube"/></svg>Connections</button>
         <button id="artifactsBtn" class="foot-btn"><svg class="icon"><use href="#i-file"/></svg>Files</button>
         <button id="automationBtn" class="foot-btn"><svg class="icon"><use href="#i-undo"/></svg>Auto</button>
+        <button id="runsBtn" class="foot-btn"><svg class="icon"><use href="#i-play"/></svg>Runs</button>
       </div>
       <p class="foot-note">Chats stay in local SQLite. Files stay on this computer.</p>
     </footer>
@@ -355,6 +357,33 @@
             <button type="submit" class="btn btn-accent btn-small">Save workflow</button>
           </div>
         </form>
+      </div>
+    </section>
+
+    <section id="runsView" class="view page-view hidden" role="tabpanel" aria-label="Runs">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Autonomous coding</p>
+          <h1>Agent runs</h1>
+          <p>Give the agent a goal for the open workspace and it plans, lists, reads, edits files and runs build/test commands one step at a time — pausing for your approval before anything risky. Every step is logged here and survives restarts; a crash leaves the run marked interrupted, never half-repeated.</p>
+        </header>
+        <form id="runsForm" class="card form-card">
+          <label class="field">
+            <span>Goal for the open workspace</span>
+            <textarea id="runGoal" rows="3" placeholder="Create hello.txt containing Hi, then verify it exists by listing the folder." required></textarea>
+          </label>
+          <div class="run-perms">
+            <label class="run-perm"><input id="runAllowWrites" type="checkbox" checked><span>May write files</span></label>
+            <label class="run-perm"><input id="runAllowCommands" type="checkbox"><span>May run commands</span></label>
+            <label class="run-perm"><input id="runAutoApprove" type="checkbox"><span>Auto-approve (no pauses)</span></label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent btn-small">
+              <svg class="icon"><use href="#i-play"/></svg>Start run
+            </button>
+          </div>
+        </form>
+        <div id="runsList" class="list-block"></div>
       </div>
     </section>
 

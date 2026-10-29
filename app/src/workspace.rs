@@ -210,7 +210,7 @@ impl WorkspaceStore {
         }
     }
 
-    fn root(&self) -> Result<PathBuf, WorkspaceError> {
+    pub(crate) fn root(&self) -> Result<PathBuf, WorkspaceError> {
         self.current()
             .map(|entry| entry.root)
             .ok_or_else(|| conflict("Open a folder first."))
@@ -403,15 +403,15 @@ pub(crate) fn language_for(path: &FsPath) -> String {
 }
 
 #[derive(Debug, Serialize)]
-struct FilePayload {
-    path: String,
-    content: String,
+pub(crate) struct FilePayload {
+    pub(crate) path: String,
+    pub(crate) content: String,
     language: String,
-    size: u64,
+    pub(crate) size: u64,
     modified: f64,
 }
 
-fn read_text_file(root: &FsPath, relative: &str) -> Result<FilePayload, WorkspaceError> {
+pub(crate) fn read_text_file(root: &FsPath, relative: &str) -> Result<FilePayload, WorkspaceError> {
     let path = resolve_inside(root, relative)?;
     let meta = fs::metadata(&path).map_err(|_| not_found("That file does not exist."))?;
     if meta.is_dir() {
@@ -446,7 +446,7 @@ fn read_text_file(root: &FsPath, relative: &str) -> Result<FilePayload, Workspac
     })
 }
 
-fn write_text_file(
+pub(crate) fn write_text_file(
     root: &FsPath,
     relative: &str,
     content: &str,
@@ -489,12 +489,12 @@ fn write_text_file(
 }
 
 #[derive(Debug, Serialize)]
-struct DirEntry {
+pub(crate) struct DirEntry {
     name: String,
-    path: String,
-    dir: bool,
+    pub(crate) path: String,
+    pub(crate) dir: bool,
     symlink: bool,
-    hidden: bool,
+    pub(crate) hidden: bool,
     size: u64,
 }
 
@@ -506,7 +506,7 @@ struct ArtifactEntry {
     ext: String,
 }
 
-fn list_directory(root: &FsPath, relative: &str) -> Result<(Vec<DirEntry>, bool), WorkspaceError> {
+pub(crate) fn list_directory(root: &FsPath, relative: &str) -> Result<(Vec<DirEntry>, bool), WorkspaceError> {
     let dir = resolve_inside(root, relative)?;
     let meta = fs::metadata(&dir).map_err(|_| not_found("That folder does not exist."))?;
     if !meta.is_dir() {
