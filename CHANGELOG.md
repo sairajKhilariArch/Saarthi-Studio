@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.25.0
+
+### CI/CD hygiene (Step 1)
+
+- Desktop `cargo clippy` and workspace `rustfmt --check` both pass locally:
+  needless borrows and `unnecessary_mut_passed` in agent tests fixed, the stale
+  MSRV declaration (1.75) corrected to 1.80 (required by
+  `std::sync::LazyLock`), the unused `privacy::notice_text` helper and its test
+  deleted, and one unnecessary `Ok(...?)` wrap replaced in `main.rs`.
+- Static file serving gained an `image/svg+xml` MIME mapping so the new
+  favicon is not served as an opaque octet stream.
+- Full local verification recorded in the test report: desktop tests 112/112,
+  extension 22/22, Android gradle tests + lint green.
+
+## 1.24.0
+
+- Local LLM support: Local AI page wired to a real Ollama adapter
+  (`app/src/local.rs`), runtime detection, honest failure paths, model
+  selection/pull, and hardware diagnostics — no silent fallback to remote
+  providers.
+
+## 1.23.0
+
+- Privacy pass (shared Rust core + VS Code port), agent runtime parity for VS
+  Code and Android, adaptive model routing, reproducible run records, and
+  universal (arm64 + x86_64) macOS packaging in the release workflow.
+
 ## 1.22.0
 
 ### Usage page: full analytics

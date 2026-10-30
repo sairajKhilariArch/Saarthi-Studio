@@ -12,7 +12,14 @@
 //! reported with a human-readable notice so the user can see what was filtered.
 
 const KEY_NAMES: [&str; 9] = [
-    "api_key", "apikey", "api-key", "secret", "token", "password", "passwd", "access_key",
+    "api_key",
+    "apikey",
+    "api-key",
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "access_key",
     "private_key",
 ];
 
@@ -55,8 +62,6 @@ pub(crate) fn sanitize(text: &str) -> (String, Vec<String>) {
     };
     (out, findings)
 }
-
-
 
 fn push_kind(findings: &mut Vec<String>, kind: &str) {
     if !findings.iter().any(|existing| existing == kind) {
@@ -112,7 +117,13 @@ fn assignments_key(lower: &str, name: &str) -> bool {
             .trim_start();
         if let Some(remainder) = value.strip_prefix(['=', ':']) {
             let value = remainder.trim_start_matches(['"']);
-            let len = value.split('\n').next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).count();
+            let len = value
+                .split('\n')
+                .next()
+                .unwrap_or("")
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .count();
             if len >= 16 && !partial_word {
                 return true;
             }
@@ -203,8 +214,8 @@ fn mask_assignments_in(chars: &[char], name: &str) -> Vec<char> {
         let after = index + name_units.len();
         // "keyhole" is not a key named "key": the next char must not extend
         // the word.
-        let partial_word = after < chars.len()
-            && (chars[after].is_alphanumeric() || chars[after] == '_');
+        let partial_word =
+            after < chars.len() && (chars[after].is_alphanumeric() || chars[after] == '_');
         if partial_word {
             out.extend(&chars[index..after]);
             index = after;
@@ -254,29 +265,6 @@ pub(crate) fn is_excluded(path: &str, exclusions: &[String]) -> bool {
     })
 }
 
-/// Human-readable summary of what the outbound policy changed, or None.
-pub(crate) fn notice_text(findings: &[String], excluded_paths: &[String]) -> Option<String> {
-    let mut parts = Vec::new();
-    if !findings.is_empty() {
-        parts.push(format!(
-            "possible credentials masked before sending ({}: {})",
-            findings.len(),
-            findings.join(", ")
-        ));
-    }
-    if !excluded_paths.is_empty() {
-        parts.push(format!(
-            "excluded files were not sent: {}",
-            excluded_paths.join(", ")
-        ));
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("; "))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,7 +284,10 @@ mod tests {
         let secret_env = "SERVICE_API_KEY=sk-totally-real-key-abcdef1234567890\nCOLOR=blue\n";
         let (out, _) = assert_masked(secret_env, "sk-totally-real", "key-assignment");
         assert!(out.contains("SERVICE_API_KEY="), "{out}");
-        assert!(out.contains("COLOR=blue"), "ordinary lines untouched: {out}");
+        assert!(
+            out.contains("COLOR=blue"),
+            "ordinary lines untouched: {out}"
+        );
         assert!(out.contains("[masked]"), "{out}");
 
         let bearer = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789\n";
@@ -346,17 +337,5 @@ mod tests {
         // the excluded folder is also kept off the wire.
         assert!(is_excluded("secrets", &rules));
         assert!(!is_excluded("", &rules));
-    }
-
-    #[test]
-    fn notice_text_summarizes_findings_and_exclusions() {
-        assert!(notice_text(&[], &[]).is_none());
-        let text = notice_text(
-            &["bearer".to_string()],
-            &["certs/host.key".to_string()],
-        )
-        .unwrap();
-        assert!(text.contains("bearer"));
-        assert!(text.contains("certs/host.key"));
     }
 }

@@ -7,9 +7,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use reqwest::{Client, Url};
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
+use reqwest::{Client, Url};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -559,19 +559,29 @@ fn response_content(data: &Value) -> String {
 /// inspection and summary steps; strong handles planning, edits and repair.
 /// Returns None when adaptive routing is off or either tier is unconfigured —
 /// the run then uses the base model exactly as before the feature existed.
-pub(crate) fn adaptive_tier(state: &AppState, last_action: &str, had_error: bool) -> Option<String> {
+pub(crate) fn adaptive_tier(
+    state: &AppState,
+    last_action: &str,
+    had_error: bool,
+) -> Option<String> {
     let cfg = load_config(state);
     choose_tier(&cfg, last_action, had_error)
 }
 
 /// The rule itself, pure so the tier matrix is testable without a live config.
 fn choose_tier(cfg: &Config, last_action: &str, had_error: bool) -> Option<String> {
-    if !cfg.adaptive_routing || cfg.cheap_model.trim().is_empty() || cfg.strong_model.trim().is_empty() {
+    if !cfg.adaptive_routing
+        || cfg.cheap_model.trim().is_empty()
+        || cfg.strong_model.trim().is_empty()
+    {
         return None;
     }
     // First step and repairs are planning work, never cheap.
     let routine = !had_error
-        && matches!(last_action, "list" | "read" | "think" | "restored" | "failover");
+        && matches!(
+            last_action,
+            "list" | "read" | "think" | "restored" | "failover"
+        );
     if routine {
         Some(cfg.cheap_model.trim().to_string())
     } else {
@@ -622,7 +632,11 @@ pub(crate) async fn call_model(
     call_router(state, messages, model_override).await
 }
 
-pub(crate) async fn call_router(state: &AppState, messages: Vec<Value>, model_override: Option<&str>) -> Result<(String, Value), String> {
+pub(crate) async fn call_router(
+    state: &AppState,
+    messages: Vec<Value>,
+    model_override: Option<&str>,
+) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     if cfg.api_key.trim().is_empty() {
         return Err("Add your router's unified API key in Settings first.".into());
@@ -631,7 +645,11 @@ pub(crate) async fn call_router(state: &AppState, messages: Vec<Value>, model_ov
     let chosen = model_override
         .map(str::trim)
         .filter(|m| !m.is_empty())
-        .unwrap_or(if cfg.model.trim().is_empty() { "auto" } else { cfg.model.as_str() });
+        .unwrap_or(if cfg.model.trim().is_empty() {
+            "auto"
+        } else {
+            cfg.model.as_str()
+        });
     let request_body = json!({
         "model": chosen,
         "messages": messages,
@@ -866,15 +884,19 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
 }
 
 /* Model catalog: fetched live from the configured router's /models so nothing
-   is mirrored by hand, cached for a minute (cheap rate limits). Each entry
-   carries any context-window metadata the router publishes, which powers the
-   composer's context meter. */
+is mirrored by hand, cached for a minute (cheap rate limits). Each entry
+carries any context-window metadata the router publishes, which powers the
+composer's context meter. */
 async fn models(
     State(state): State<AppState>,
     AxumQuery(params): AxumQuery<HashMap<String, String>>,
 ) -> Response<Body> {
     let cfg = load_config(&state);
-    let cache_key = format!("{}|{}", cfg.base_url.trim_end_matches('/'), !cfg.api_key.is_empty());
+    let cache_key = format!(
+        "{}|{}",
+        cfg.base_url.trim_end_matches('/'),
+        !cfg.api_key.is_empty()
+    );
     let refresh = params.contains_key("refresh");
     if !refresh {
         if let Some((at, cached)) = state.models_cache.lock().unwrap().get(&cache_key) {
@@ -894,10 +916,11 @@ async fn models(
         Err(e) => (false, json!(e), json!([])),
     };
     if ok {
-        state.models_cache.lock().unwrap().insert(
-            cache_key,
-            (std::time::Instant::now(), models.clone()),
-        );
+        state
+            .models_cache
+            .lock()
+            .unwrap()
+            .insert(cache_key, (std::time::Instant::now(), models.clone()));
     }
     (
         StatusCode::OK,
@@ -945,16 +968,23 @@ async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, Stri
         .unwrap_or_default();
     let mut models = Vec::new();
     for row in rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else { continue };
-        let context_window = ["context_length", "context_window", "max_input_tokens", "top_provider::context_length"]
-            .iter()
-            .find_map(|key| row.get(key).and_then(Value::as_i64))
-            .or_else(|| {
-                // OpenRouter nests limits under top_provider.
-                row.pointer("/top_provider/context_length")
-                    .and_then(Value::as_i64)
-            })
-            .unwrap_or(0);
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let context_window = [
+            "context_length",
+            "context_window",
+            "max_input_tokens",
+            "top_provider::context_length",
+        ]
+        .iter()
+        .find_map(|key| row.get(key).and_then(Value::as_i64))
+        .or_else(|| {
+            // OpenRouter nests limits under top_provider.
+            row.pointer("/top_provider/context_length")
+                .and_then(Value::as_i64)
+        })
+        .unwrap_or(0);
         models.push(json!({
             "id": id,
             "owner": row.get("owned_by").and_then(Value::as_str).unwrap_or(""),
@@ -962,14 +992,16 @@ async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, Stri
         }));
     }
     models.sort_by(|a, b| {
-        a.get("id").and_then(Value::as_str).unwrap_or("")
+        a.get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
             .cmp(b.get("id").and_then(Value::as_str).unwrap_or(""))
     });
     Ok(models)
 }
 
 /* Workflows: saved prompt recipes. They live in a small JSON file next to
-   the config — no schema migration, and they are machine-global by nature. */
+the config — no schema migration, and they are machine-global by nature. */
 #[derive(Clone, Serialize, Deserialize)]
 struct Workflow {
     id: String,
@@ -1049,7 +1081,8 @@ async fn save_workflow(State(state): State<AppState>, Json(input): Json<Value>) 
 async fn delete_workflow(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
-) -> Response<Body> {    let mut workflows = load_workflows(&state);
+) -> Response<Body> {
+    let mut workflows = load_workflows(&state);
     let before = workflows.len();
     workflows.retain(|w| w.id != id);
     if workflows.len() == before {
@@ -1082,7 +1115,9 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
         rows.collect()
     })();
     match result {
-        Ok(projects) => Json(json!({ "ok": true, "active": active, "projects": projects })).into_response(),
+        Ok(projects) => {
+            Json(json!({ "ok": true, "active": active, "projects": projects })).into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1184,9 +1219,9 @@ async fn update_project(
 async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
     // Conversations cascade (FK ON DELETE CASCADE), so threads and messages
     // leave with the project instead of reappearing under another one.
-    match open_db(&state.database_path).and_then(|conn| {
-        conn.execute("DELETE FROM projects WHERE id=?1", [&id])
-    }) {
+    match open_db(&state.database_path)
+        .and_then(|conn| conn.execute("DELETE FROM projects WHERE id=?1", [&id]))
+    {
         Ok(0) => json_error(StatusCode::NOT_FOUND, "No such project."),
         Ok(_) => {
             let mut cfg = load_config(&state);
@@ -1278,15 +1313,15 @@ async fn list_conversations(
         } else {
             let project = active_project_id(&state);
             let rows = stmt.query_map([project], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
-                "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
-                "last_message": row.get::<_, Option<String>>(4)?
-            }))
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
+                    "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
+                    "last_message": row.get::<_, Option<String>>(4)?
+                }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
         };
-        Ok(rows?)
+        rows
     })();
     match result {
         Ok(items) => Json(Value::Array(items)).into_response(),
@@ -1410,16 +1445,21 @@ async fn usage(
             args.push(format!("%{value}%"));
         }
     }
-    for (clause, key) in [(" AND created_at >= ?", "from"), (" AND created_at <= ?", "to")] {
-        let value = params
-            .get(key)
-            .and_then(|v| v.parse::<f64>().ok());
+    for (clause, key) in [
+        (" AND created_at >= ?", "from"),
+        (" AND created_at <= ?", "to"),
+    ] {
+        let value = params.get(key).and_then(|v| v.parse::<f64>().ok());
         if let Some(value) = value {
             where_sql.push_str(clause);
             args.push(value.to_string());
         }
     }
-    let order = format!(" ORDER BY {sort_column} {}, id {}", if desc { "DESC" } else { "ASC" }, if desc { "DESC" } else { "ASC" });
+    let order = format!(
+        " ORDER BY {sort_column} {}, id {}",
+        if desc { "DESC" } else { "ASC" },
+        if desc { "DESC" } else { "ASC" }
+    );
 
     let result = (|| -> rusqlite::Result<Value> {
         let conn = open_db(&state.database_path)?;
@@ -1430,9 +1470,9 @@ async fn usage(
              COALESCE(SUM(total_tokens),0) AS total_tokens,\
              COALESCE(AVG(latency_ms),0) AS avg_latency_ms FROM request_log{where_sql}",
         );
-        let summary = conn
-            .prepare(&summary_sql)?
-            .query_row(rusqlite::params_from_iter(args.iter()), |r| {
+        let summary = conn.prepare(&summary_sql)?.query_row(
+            rusqlite::params_from_iter(args.iter()),
+            |r| {
                 Ok(json!({
                     "requests": r.get::<_, i64>(0)?,
                     "successful": r.get::<_, Option<i64>>(1)?.unwrap_or(0),
@@ -1440,7 +1480,8 @@ async fn usage(
                     "total_tokens": r.get::<_, i64>(3)?,
                     "avg_latency_ms": r.get::<_, f64>(4)?
                 }))
-            })?;
+            },
+        )?;
         let total: i64 = summary.get("requests").and_then(Value::as_i64).unwrap_or(0);
         let pages = ((total + page_size - 1) / page_size).max(1);
 
@@ -1838,7 +1879,11 @@ async fn deepsearch_phase(
     input: &mut Value,
     events: &mut Vec<Value>,
 ) -> Result<(Option<String>, Vec<Value>), String> {
-    if !input.get("deepsearch").and_then(Value::as_bool).unwrap_or(false) {
+    if !input
+        .get("deepsearch")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         return Ok((None, Vec::new()));
     }
     let question = input
@@ -1880,7 +1925,14 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         Ok((answer, _sources)) => answer,
         Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
     };
-    let ChatPrep { cid, cfg, mut packed, model, attachments, .. } = match prepare_chat(&state, &input) {
+    let ChatPrep {
+        cid,
+        cfg,
+        mut packed,
+        model,
+        attachments,
+        ..
+    } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
@@ -1896,7 +1948,13 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| if cfg.model.trim().is_empty() { "auto".to_string() } else { cfg.model.clone() });
+        .unwrap_or_else(|| {
+            if cfg.model.trim().is_empty() {
+                "auto".to_string()
+            } else {
+                cfg.model.clone()
+            }
+        });
 
     // A native provider already answered during the deep-search phase.
     if let Some(answer) = ds_answer {
@@ -1908,7 +1966,10 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                 "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,'deepsearch','ok',?4,NULL,NULL,NULL,'','')",
                 params![now, cid, cfg.model],
             )?;
-            conn.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now, cid])?;
+            conn.execute(
+                "UPDATE conversations SET updated_at=?1 WHERE id=?2",
+                params![now, cid],
+            )?;
             Ok(())
         })();
         if let Err(e) = log_result {
@@ -1953,7 +2014,10 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                         "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,'local','ok',?4,NULL,?5,NULL,'','')",
                         params![now, cid, model_name, started.elapsed().as_millis() as i64, completion],
                     )?;
-                    conn.execute("UPDATE conversations SET updated_at=?1 WHERE id=?2", params![now, cid])?;
+                    conn.execute(
+                        "UPDATE conversations SET updated_at=?1 WHERE id=?2",
+                        params![now, cid],
+                    )?;
                     Ok(())
                 })();
                 if let Err(e) = log_result {
@@ -2111,7 +2175,11 @@ impl ReplyRecorder {
         if self.saved.swap(true, Ordering::SeqCst) {
             return;
         }
-        let text = self.text.lock().map(|guard| guard.clone()).unwrap_or_default();
+        let text = self
+            .text
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
         let meta = self
             .meta
             .lock()
@@ -2143,7 +2211,11 @@ impl ReplyRecorder {
         events::notify(
             &self.events,
             &self.conversation_id,
-            if text.trim().is_empty() { "updated" } else { "message" },
+            if text.trim().is_empty() {
+                "updated"
+            } else {
+                "message"
+            },
         );
     }
 }
@@ -2179,7 +2251,9 @@ fn sse_response(state: StreamState) -> Response<Body> {
             match st.bytes.next().await {
                 Some(Ok(chunk)) => st.ingest(&String::from_utf8_lossy(&chunk)),
                 Some(Err(error)) => {
-                    st.push(json!({ "error": format!("The stream from the router failed: {error}") }));
+                    st.push(
+                        json!({ "error": format!("The stream from the router failed: {error}") }),
+                    );
                     st.finished = true;
                 }
                 None => st.finish(),
@@ -2209,7 +2283,9 @@ impl StreamState {
         while let Some(index) = self.leftover.find("\n\n") {
             let event: String = self.leftover.drain(..index + 2).collect();
             for line in event.lines() {
-                let Some(payload) = line.strip_prefix("data:") else { continue };
+                let Some(payload) = line.strip_prefix("data:") else {
+                    continue;
+                };
                 let parsed = parse_stream_payload(payload);
                 if let Some(text) = parsed.delta {
                     if let Ok(mut held) = self.recorder.text.lock() {
@@ -2219,9 +2295,14 @@ impl StreamState {
                 }
                 if let Some(usage) = parsed.usage {
                     if let Ok(mut held) = self.recorder.meta.lock() {
-                        held["prompt_tokens"] = usage.get("prompt_tokens").cloned().unwrap_or(Value::Null);
-                        held["completion_tokens"] = usage.get("completion_tokens").cloned().unwrap_or(Value::Null);
-                        held["total_tokens"] = usage.get("total_tokens").cloned().unwrap_or(Value::Null);
+                        held["prompt_tokens"] =
+                            usage.get("prompt_tokens").cloned().unwrap_or(Value::Null);
+                        held["completion_tokens"] = usage
+                            .get("completion_tokens")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        held["total_tokens"] =
+                            usage.get("total_tokens").cloned().unwrap_or(Value::Null);
                     }
                 }
                 if let Some(error) = parsed.error {
@@ -2255,7 +2336,10 @@ impl StreamState {
 /// Stream the router's answer token by token. The client aborting the fetch
 /// drops this body, which drops the byte stream and runs the recorder's
 /// `Drop`, so whatever was answered so far is still stored.
-async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>) -> Response<Body> {
+async fn chat_stream(
+    State(state): State<AppState>,
+    Json(mut input): Json<Value>,
+) -> Response<Body> {
     let mut ds_frames: VecDeque<String> = VecDeque::new();
     let mut ds_events: Vec<Value> = Vec::new();
     let ds_answer = match deepsearch_phase(&state, &mut input, &mut ds_events).await {
@@ -2266,7 +2350,14 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         ds_frames.push_back(sse_frame(&event));
     }
 
-    let ChatPrep { cid, cfg, mut packed, model, attachments, .. } = match prepare_chat(&state, &input) {
+    let ChatPrep {
+        cid,
+        cfg,
+        mut packed,
+        model,
+        attachments,
+        ..
+    } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
     };
@@ -2287,12 +2378,23 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| if cfg.model.trim().is_empty() { "auto".to_string() } else { cfg.model.clone() });
+        .unwrap_or_else(|| {
+            if cfg.model.trim().is_empty() {
+                "auto".to_string()
+            } else {
+                cfg.model.clone()
+            }
+        });
 
     // Deep search already answered through a native provider: stream the
     // finished text as one frame set instead of calling the router.
     if let Some(answer) = ds_answer {
-        let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens, state.events.clone());
+        let recorder = ReplyRecorder::new(
+            state.database_path.clone(),
+            cid,
+            context_tokens,
+            state.events.clone(),
+        );
         if let Ok(mut held) = recorder.meta.lock() {
             held["model"] = json!(&chosen_model);
             held["deepsearch"] = json!(true);
@@ -2327,8 +2429,12 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         let local_name = explicit_local_stream_model.unwrap_or_else(|| cfg.local_model.clone());
         return match local::chat_stream_bytes(&base, &local_name, &packed.messages).await {
             Ok(stream) => {
-                let recorder =
-                    ReplyRecorder::new(state.database_path.clone(), cid, context_tokens, state.events.clone());
+                let recorder = ReplyRecorder::new(
+                    state.database_path.clone(),
+                    cid,
+                    context_tokens,
+                    state.events.clone(),
+                );
                 if let Ok(mut held) = recorder.meta.lock() {
                     held["model"] = json!(&local_name);
                     held["provider"] = json!("local");
@@ -2396,7 +2502,12 @@ async fn chat_stream(State(state): State<AppState>, Json(mut input): Json<Value>
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let recorder = ReplyRecorder::new(state.database_path.clone(), cid, context_tokens, state.events.clone());
+    let recorder = ReplyRecorder::new(
+        state.database_path.clone(),
+        cid,
+        context_tokens,
+        state.events.clone(),
+    );
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
     }
@@ -2514,12 +2625,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/projects/:id/activate", post(activate_project))
         .route("/api/workflows", get(list_workflows).post(save_workflow))
         .route("/api/workflows/:id/delete", post(delete_workflow))
-        .merge(
-            skills::router().route_layer(middleware::from_fn_with_state(
-                workspace::LocalOriginGuard::new(port),
-                workspace::guard_local_origin,
-            )),
-        )
+        .merge(skills::router().route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        )))
         .merge(workspace::router(port))
         .merge(terminal::router(port))
         .merge(media::router(port))
@@ -2666,17 +2775,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(feature = "gui")]
         {
             if let Err(error) = gui::run(boot.port, boot.shutdown_tx.clone(), APP_NAME) {
-                println!(
-                    "Could not open the application window ({error})."
-                );
-                println!(
-                    "Continuing headless: falling back to your browser."
-                );
+                println!("Could not open the application window ({error}).");
+                println!("Continuing headless: falling back to your browser.");
                 browser::open(boot.port);
-                println!(
-                    "Or open http://127.0.0.1:{} manually.",
-                    boot.port
-                );
+                println!("Or open http://127.0.0.1:{} manually.", boot.port);
             }
         }
         #[cfg(not(feature = "gui"))]
@@ -2732,12 +2834,22 @@ mod tests {
         cfg.strong_model = "strong-x".into();
         // Routine follow-ups ride the cheap tier.
         for action in ["list", "read", "think", "restored", "failover"] {
-            assert_eq!(choose_tier(&cfg, action, false).as_deref(), Some("cheap-x"), "{action}");
+            assert_eq!(
+                choose_tier(&cfg, action, false).as_deref(),
+                Some("cheap-x"),
+                "{action}"
+            );
         }
         // First step, work, and repair all go strong.
         assert_eq!(choose_tier(&cfg, "", false).as_deref(), Some("strong-x"));
-        assert_eq!(choose_tier(&cfg, "write", false).as_deref(), Some("strong-x"));
-        assert_eq!(choose_tier(&cfg, "command", false).as_deref(), Some("strong-x"));
+        assert_eq!(
+            choose_tier(&cfg, "write", false).as_deref(),
+            Some("strong-x")
+        );
+        assert_eq!(
+            choose_tier(&cfg, "command", false).as_deref(),
+            Some("strong-x")
+        );
         assert_eq!(choose_tier(&cfg, "read", true).as_deref(), Some("strong-x"));
         // Every off-switch returns None: model_override absent = old behavior.
         cfg.adaptive_routing = false;
@@ -2778,8 +2890,9 @@ mod tests {
         assert!(done.done);
         assert!(done.delta.is_none());
 
-        let usage =
-            parse_stream_payload(r#"{"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}"#);
+        let usage = parse_stream_payload(
+            r#"{"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}"#,
+        );
         assert_eq!(
             usage
                 .usage

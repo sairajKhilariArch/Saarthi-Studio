@@ -91,7 +91,10 @@ pub(crate) async fn fetch_models(base_url: &str) -> Result<Vec<Value>, String> {
         .await
         .map_err(|e| format!("Model listing (HTTP {status}) was unreadable: {e}"))?;
     if !status.is_success() {
-        return Err(format!("Model listing failed with HTTP {}.", status.as_u16()));
+        return Err(format!(
+            "Model listing failed with HTTP {}.",
+            status.as_u16()
+        ));
     }
     Ok(body
         .get("models")
@@ -190,7 +193,9 @@ pub(crate) async fn chat_once(
         .unwrap_or("")
         .to_string();
     if answer.trim().is_empty() {
-        return Err(format!("The local model \"{model}\" returned an empty reply."));
+        return Err(format!(
+            "The local model \"{model}\" returned an empty reply."
+        ));
     }
     Ok((
         answer,
@@ -261,14 +266,20 @@ pub(crate) async fn chat_stream_bytes(
         let body = response.text().await.unwrap_or_default();
         let detail = serde_json::from_str::<Value>(&body)
             .ok()
-            .and_then(|value| value.get("error").and_then(Value::as_str).map(str::to_string))
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| body.chars().take(300).collect());
         return Err(format!(
             "Local chat failed (HTTP {}): {detail} — if the model is missing, try `ollama pull {model}`.",
             status.as_u16()
         ));
     }
-    type ByteStream = futures_util::stream::BoxStream<'static, Result<bytes::Bytes, reqwest::Error>>;
+    type ByteStream =
+        futures_util::stream::BoxStream<'static, Result<bytes::Bytes, reqwest::Error>>;
     let upstream: ByteStream = response.bytes_stream().boxed();
     Ok(futures_util::stream::unfold(
         (upstream, String::new()),
@@ -321,12 +332,15 @@ struct PullState {
 }
 
 fn pull_state() -> &'static std::sync::Mutex<PullState> {
-    static PULL_STATE: std::sync::OnceLock<std::sync::Mutex<PullState>> = std::sync::OnceLock::new();
+    static PULL_STATE: std::sync::OnceLock<std::sync::Mutex<PullState>> =
+        std::sync::OnceLock::new();
     PULL_STATE.get_or_init(|| std::sync::Mutex::new(PullState { model: None }))
 }
 
 fn try_begin_pull(model: &str) -> bool {
-    let Ok(mut state) = pull_state().lock() else { return false };
+    let Ok(mut state) = pull_state().lock() else {
+        return false;
+    };
     match state.model.as_deref() {
         Some(running) if !running.is_empty() => false,
         _ => {
@@ -371,7 +385,12 @@ async fn run_pull(state: AppState, model: String) {
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            publish_pull(&state, &model, "failed", &format!("connection error: {error}"));
+            publish_pull(
+                &state,
+                &model,
+                "failed",
+                &format!("connection error: {error}"),
+            );
             end_pull();
             return;
         }
@@ -440,7 +459,9 @@ pub(crate) struct HardwareReport {
 
 fn hardware_report() -> HardwareReport {
     HardwareReport {
-        logical_cores: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+        logical_cores: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0),
         cpu_model: cpu_platform_model().unwrap_or_else(|| "Unknown".to_string()),
         ram_total_bytes: ram_platform_total(),
         gpus: gpu_platform_list(),
@@ -452,12 +473,7 @@ fn cpu_platform_model() -> Option<String> {
     let info = std::fs::read_to_string("/proc/cpuinfo").ok()?;
     info.lines()
         .find_map(|line| line.strip_prefix("model name"))
-        .map(|rest| {
-            rest.trim_start()
-                .trim_start_matches(':')
-                .trim()
-                .to_string()
-        })
+        .map(|rest| rest.trim_start().trim_start_matches(':').trim().to_string())
         .filter(|value| !value.is_empty())
 }
 
@@ -592,10 +608,8 @@ pub(crate) fn validate_base_url(url: &str) -> Result<(), String> {
         return Err("Use an http(s) endpoint URL.".to_string());
     }
     let host = parsed.host_str().unwrap_or("");
-    let local = host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host.ends_with(".localhost");
+    let local =
+        host == "localhost" || host == "127.0.0.1" || host == "::1" || host.ends_with(".localhost");
     if !local {
         return Err("The local runtime endpoint must be a localhost address.".to_string());
     }
@@ -614,8 +628,8 @@ pub(crate) fn read_routes() -> Router<AppState> {
 }
 
 pub(crate) fn mutate_routes(port: u16) -> Router<AppState> {
-    use axum::middleware;
     use crate::workspace::{guard_local_origin, LocalOriginGuard};
+    use axum::middleware;
     Router::new()
         .route("/api/local/select", post(local_select))
         .route("/api/local/pull", post(local_pull))
@@ -816,7 +830,9 @@ async fn local_pull(State(state): State<AppState>, Json(input): Json<Value>) -> 
             .into_response();
     }
     tokio::spawn(run_pull(state.clone(), model.clone()));
-    state.events.publish(json!({ "type": "local-models-changed", "at": crate::now_seconds() }));
+    state
+        .events
+        .publish(json!({ "type": "local-models-changed", "at": crate::now_seconds() }));
     Json(json!({ "ok": true, "model": model })).into_response()
 }
 
@@ -825,10 +841,7 @@ async fn local_hardware(State(state): State<AppState>) -> Response {
     let root = state.workspace.current_root();
     let (disk, disk_path) = match &root {
         Some(root) => (disk_free_for_path(root), root.display().to_string()),
-        None => (
-            disk_free_for_path(&std::env::temp_dir()),
-            String::new(),
-        ),
+        None => (disk_free_for_path(&std::env::temp_dir()), String::new()),
     };
     Json(json!({
         "logical_cores": if report.logical_cores > 0 { Some(report.logical_cores) } else { None },
@@ -873,7 +886,11 @@ mod tests {
 
     #[test]
     fn chat_request_body_is_stream_switchable() {
-        let body = chat_request_body("llama3.2", &[json!({"role": "user", "content": "hi"})], false);
+        let body = chat_request_body(
+            "llama3.2",
+            &[json!({"role": "user", "content": "hi"})],
+            false,
+        );
         assert_eq!(body["model"], "llama3.2");
         assert_eq!(body["stream"], false);
         assert_eq!(chat_request_body("m", &[], true)["stream"], true);
@@ -911,7 +928,10 @@ mod tests {
     #[test]
     fn effective_base_url_defaults_when_blank() {
         assert_eq!(effective_base_url(""), "http://127.0.0.1:11434");
-        assert_eq!(effective_base_url(" http://127.0.0.1:11500/ "), "http://127.0.0.1:11500");
+        assert_eq!(
+            effective_base_url(" http://127.0.0.1:11500/ "),
+            "http://127.0.0.1:11500"
+        );
     }
 
     #[test]
@@ -963,7 +983,10 @@ mod tests {
     #[tokio::test]
     async fn unreachable_runtime_reports_a_clear_error() {
         let error = fetch_version("http://127.0.0.1:19999").await.unwrap_err();
-        assert!(error.contains("Cannot reach the local runtime"), "got: {error}");
+        assert!(
+            error.contains("Cannot reach the local runtime"),
+            "got: {error}"
+        );
     }
 
     #[tokio::test]
@@ -1016,9 +1039,9 @@ mod tests {
                 }))
             }),
         );
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let (answer, tokens) = chat_once(
+        let (answer, tokens) = chat_once(
             &format!("http://{address}"),
             "llama3.2",
             &[json!({"role": "user", "content": "hi"})],
@@ -1044,13 +1067,17 @@ mod tests {
         );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let error = chat_once(&format!("http://{address}"), "nope", &[]).await.unwrap_err();
+        let error = chat_once(&format!("http://{address}"), "nope", &[])
+            .await
+            .unwrap_err();
         assert!(error.contains("ollama pull nope"), "got: {error}");
     }
 
     #[tokio::test]
     async fn unreachable_chat_reports_setup_guidance() {
-        let error = chat_once("http://127.0.0.1:19999", "llama3.2", &[]).await.unwrap_err();
+        let error = chat_once("http://127.0.0.1:19999", "llama3.2", &[])
+            .await
+            .unwrap_err();
         assert!(error.contains("unreachable"), "got: {error}");
         assert!(!error.to_lowercase().contains("remote"));
     }

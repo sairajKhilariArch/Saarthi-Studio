@@ -18,8 +18,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path as FsPath;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
@@ -107,23 +107,26 @@ impl Action {
         };
         match tag {
             "think" => Ok(Action::Think {
-                summary: field("summary", value)?
-,
+                summary: field("summary", value)?,
             }),
-            "list" => Ok(Action::List { path: field("path", value)? }),
-            "read" => Ok(Action::Read { path: field("path", value)? }),
+            "list" => Ok(Action::List {
+                path: field("path", value)?,
+            }),
+            "read" => Ok(Action::Read {
+                path: field("path", value)?,
+            }),
             "write" => Ok(Action::Write {
                 path: field("path", value)?,
                 content: field("content", value)?,
             }),
-            "command" => Ok(Action::Command { command: field("command", value)? }),
+            "command" => Ok(Action::Command {
+                command: field("command", value)?,
+            }),
             "done" => Ok(Action::Done {
-                summary: field("summary", value)?
-,
+                summary: field("summary", value)?,
             }),
             "fail" => Ok(Action::Fail {
-                reason: field("reason", value)?
-,
+                reason: field("reason", value)?,
             }),
             other => Err(format!("unknown action \"{other}\"")),
         }
@@ -352,16 +355,22 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
 }
 
 fn step_count(state: &AppState, run_id: &str) -> Result<i64, String> {
-    db(state)?.query_row(
-        "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1",
-        [run_id],
-        |row| row.get(0),
-    ).map_err(|e| e.to_string())
+    db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
 }
 
 fn run_status(state: &AppState, run_id: &str) -> Result<Option<String>, String> {
     db(state)?
-        .query_row("SELECT status FROM agent_runs WHERE id=?1", [run_id], |row| row.get(0))
+        .query_row(
+            "SELECT status FROM agent_runs WHERE id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
         .optional()
         .map_err(|e| e.to_string())
 }
@@ -448,7 +457,8 @@ fn unified_diff(old: Option<&str>, new: &str, path: &str) -> String {
         return "(no changes — the new content is identical)".to_string();
     }
     let mut start = 0;
-    while start < old_lines.len() && start < new_lines.len() && old_lines[start] == new_lines[start] {
+    while start < old_lines.len() && start < new_lines.len() && old_lines[start] == new_lines[start]
+    {
         start += 1;
     }
     let mut end_old = old_lines.len();
@@ -510,7 +520,13 @@ async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, Strin
                     .iter()
                     .filter(|e| !e.hidden)
                     .take(200)
-                    .map(|e| if e.dir { format!("{}/", e.path) } else { e.path.clone() })
+                    .map(|e| {
+                        if e.dir {
+                            format!("{}/", e.path)
+                        } else {
+                            e.path.clone()
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 let mut out = cap_chars(&names, STEP_OUTPUT_CAP);
@@ -580,9 +596,9 @@ impl PermissionGate {
         // Profile is Trip mode: planner, testing and review run read-only by
         // design — writes and commands are denied before the model even
         // reaches them, no matter which checkboxes were ticked.
-        if let Action::Write {..} | Action::Command {..} = action {
+        if let Action::Write { .. } | Action::Command { .. } = action {
             if !matches!(run.profile.as_str(), "coding") {
-                if let Action::Write {..} = action {
+                if let Action::Write { .. } = action {
                     return GateDecision::Denied("file writes in this profile");
                 }
                 if !matches!(run.profile.as_str(), "testing") {
@@ -727,12 +743,13 @@ fn last_step_kind(state: &AppState, run_id: &str) -> Result<(String, bool), Stri
 /// stays empty (adaptive routing off), so untouched runs look like before.
 fn record_model(state: &AppState, run_id: &str, model: Option<&str>) {
     if let Some(model) = model.filter(|m| !m.is_empty()) {
-        let _ = db(state).and_then(|conn|
+        let _ = db(state).and_then(|conn| {
             conn.execute(
                 "UPDATE agent_runs SET model=?1 WHERE id=?2 AND model<>?1",
                 params![model, run_id],
-            ).map_err(|e| e.to_string())
-        );
+            )
+            .map_err(|e| e.to_string())
+        });
     }
 }
 
@@ -805,7 +822,12 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                 )
                 .map_err(|e| e.to_string())?;
             if retries >= 3 {
-                finish(state, &run.id, FAILED, "The model kept replying with unparseable text.")?;
+                finish(
+                    state,
+                    &run.id,
+                    FAILED,
+                    "The model kept replying with unparseable text.",
+                )?;
                 return Ok(false);
             }
         }
@@ -953,7 +975,8 @@ async fn run_loop(state: AppState, run_id: String) {
             Ok(true) => notify(&state, Some(&run_id)),
             Ok(false) => break,
             Err(error) => {
-                let database_ok = add_step(&state, &run_id, "error", "The model call failed:", &error).is_ok();
+                let database_ok =
+                    add_step(&state, &run_id, "error", "The model call failed:", &error).is_ok();
                 if database_ok {
                     let _ = finish(&state, &run_id, FAILED, &error);
                 }
@@ -1034,20 +1057,28 @@ fn normalize_profile(input: &str) -> String {
 
 fn profile_role(profile: &str) -> &'static str {
     match profile {
-        "planner" => "You are the Saarthi Studio PLANNER. Analyze the task and inspect the workspace as \
+        "planner" => {
+            "You are the Saarthi Studio PLANNER. Analyze the task and inspect the workspace as \
 needed, then produce a plan. When the plan is complete, finish with done whose summary IS \
-the plan (steps, likely files, dependencies). You may NOT write files or run commands.",
-        "testing" => "You are the Saarthi Studio TESTING agent. Find and run the relevant tests for the \
+the plan (steps, likely files, dependencies). You may NOT write files or run commands."
+        }
+        "testing" => {
+            "You are the Saarthi Studio TESTING agent. Find and run the relevant tests for the \
 goal, capture real exit codes and output, and separate infrastructure failures (missing \
 tools or deps) from actual test failures. You may run commands but may NOT write files. \
-Never claim tests passed unless a run said so.",
-        "review" => "You are the Saarthi Studio REVIEWER. Inspect the current code and recent diffs, and \
+Never claim tests passed unless a run said so."
+        }
+        "review" => {
+            "You are the Saarthi Studio REVIEWER. Inspect the current code and recent diffs, and \
 report concrete findings (bugs, security risks, regressions, maintainability issues) with \
 file paths and line references where possible. You may NOT write files or run commands. \
-Finish with done whose summary is the findings list.",
-        _ => "You are the Saarthi Studio autonomous coding agent working inside an open workspace \
+Finish with done whose summary is the findings list."
+        }
+        _ => {
+            "You are the Saarthi Studio autonomous coding agent working inside an open workspace \
 folder. You complete the task one step at a time: inspect, plan, edit, verify, and keep \
-going until the goal is actually met.",
+going until the goal is actually met."
+        }
     }
 }
 
@@ -1056,24 +1087,39 @@ fn profile_rule(profile: &str, write: bool) -> &'static str {
         ("planner" | "review" | "testing", true) => {
             "write FORBIDDEN — this profile never modifies files"
         }
-        ("planner" | "review", false) => {
-            "command FORBIDDEN — this profile never runs commands"
-        }
+        ("planner" | "review", false) => "command FORBIDDEN — this profile never runs commands",
         _ => "",
     }
 }
 
 async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
-    let goal = input.get("goal").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let goal = input
+        .get("goal")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if goal.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "Describe what the agent should do.");
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Describe what the agent should do.",
+        );
     }
     if goal.chars().count() > 5_000 {
         return error_response(StatusCode::BAD_REQUEST, "Goal is too long.");
     }
-    let allow_writes = input.get("allowWrites").and_then(Value::as_bool).unwrap_or(false);
-    let allow_commands = input.get("allowCommands").and_then(Value::as_bool).unwrap_or(false);
-    let auto_approve = input.get("autoApprove").and_then(Value::as_bool).unwrap_or(false);
+    let allow_writes = input
+        .get("allowWrites")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let allow_commands = input
+        .get("allowCommands")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let auto_approve = input
+        .get("autoApprove")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let max_steps = input
         .get("maxSteps")
         .and_then(Value::as_i64)
@@ -1129,7 +1175,8 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     ) {
         Ok(stmt) => stmt,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };    let rows = stmt
+    };
+    let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
             let steps: i64 = row.get(15)?;
@@ -1183,9 +1230,10 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
     // A pending write is previewed as a diff against the file on disk right
     // now, so approval happens with the actual change in view.
     if run.status == AWAITING_APPROVAL {
-        if let Some(Action::Write { path, content }) = serde_json::from_str::<Value>(&run.pending_action)
-            .ok()
-            .and_then(|value| Action::from_json(&value).ok())
+        if let Some(Action::Write { path, content }) =
+            serde_json::from_str::<Value>(&run.pending_action)
+                .ok()
+                .and_then(|value| Action::from_json(&value).ok())
         {
             let current = state
                 .workspace
@@ -1211,21 +1259,23 @@ async fn restore_step(
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
-    let checkpoint = match db(&state)
-        .and_then(|conn| {
-            conn.query_row(
-                "SELECT checkpoint FROM agent_steps WHERE run_id=?1 AND seq=?2 AND action='write'",
-                params![run_id, seq],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())
-        }) {
+    let checkpoint = match db(&state).and_then(|conn| {
+        conn.query_row(
+            "SELECT checkpoint FROM agent_steps WHERE run_id=?1 AND seq=?2 AND action='write'",
+            params![run_id, seq],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }) {
         Ok(text) => text.unwrap_or_default(),
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     if checkpoint.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "This step has no checkpoint to restore.");
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "This step has no checkpoint to restore.",
+        );
     }
     let parsed: Value = serde_json::from_str(&checkpoint).unwrap_or(Value::Null);
     let (path, old) = match (
@@ -1299,7 +1349,10 @@ async fn approve_run(
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     if run.status != AWAITING_APPROVAL || run.pending_action.is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "This run has no action waiting for approval.");
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "This run has no action waiting for approval.",
+        );
     }
     let action = match serde_json::from_str::<Value>(&run.pending_action)
         .ok()
@@ -1315,8 +1368,19 @@ async fn approve_run(
     };
 
     if !approved {
-        let _ = add_step(&state, &run_id, "rejected", &pending_summary(&action), "Rejected by the user.");
-        let _ = finish(&state, &run_id, FAILED, "You rejected the action the agent needed.");
+        let _ = add_step(
+            &state,
+            &run_id,
+            "rejected",
+            &pending_summary(&action),
+            "Rejected by the user.",
+        );
+        let _ = finish(
+            &state,
+            &run_id,
+            FAILED,
+            "You rejected the action the agent needed.",
+        );
         notify(&state, Some(&run_id));
         return Json(json!({ "ok": true, "status": FAILED })).into_response();
     }
@@ -1325,7 +1389,12 @@ async fn approve_run(
         Ok(root) => root,
         Err(error) => {
             let message = error.message().to_string();
-            let _ = finish(&state, &run_id, FAILED, &format!("Workspace closed: {message}"));
+            let _ = finish(
+                &state,
+                &run_id,
+                FAILED,
+                &format!("Workspace closed: {message}"),
+            );
             notify(&state, Some(&run_id));
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, message);
         }
@@ -1345,7 +1414,14 @@ async fn approve_run(
                 ),
                 _ => output,
             };
-            let _ = add_step_with_checkpoint(&state, &run_id, action.tag(), &summary, &output, &checkpoint);
+            let _ = add_step_with_checkpoint(
+                &state,
+                &run_id,
+                action.tag(),
+                &summary,
+                &output,
+                &checkpoint,
+            );
             if let Err(error) = set_run(&state, &run_id, RUNNING, None, Some("")) {
                 return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
             }
@@ -1368,7 +1444,10 @@ fn cap_chars(text: &str, limit: usize) -> String {
         return text.to_string();
     }
     let cut: String = text.chars().take(limit).collect();
-    format!("{cut}… [{overflow} chars truncated]", overflow = total - limit)
+    format!(
+        "{cut}… [{overflow} chars truncated]",
+        overflow = total - limit
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,13 +1495,26 @@ mod tests {
     #[test]
     fn action_json_roundtrip_preserves_every_variant() {
         let actions = vec![
-            Action::Think { summary: "checking".into() },
+            Action::Think {
+                summary: "checking".into(),
+            },
             Action::List { path: ".".into() },
-            Action::Read { path: "a/b.rs".into() },
-            Action::Write { path: "a.txt".into(), content: "héllo ★".into() },
-            Action::Command { command: "cargo test".into() },
-            Action::Done { summary: "all good".into() },
-            Action::Fail { reason: "broken".into() },
+            Action::Read {
+                path: "a/b.rs".into(),
+            },
+            Action::Write {
+                path: "a.txt".into(),
+                content: "héllo ★".into(),
+            },
+            Action::Command {
+                command: "cargo test".into(),
+            },
+            Action::Done {
+                summary: "all good".into(),
+            },
+            Action::Fail {
+                reason: "broken".into(),
+            },
         ];
         for action in actions {
             let json = action.to_json();
@@ -1461,7 +1553,13 @@ mod tests {
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
-            PermissionGate::decides(&base, &Action::Write { path: "a".into(), content: "b".into() }),
+            PermissionGate::decides(
+                &base,
+                &Action::Write {
+                    path: "a".into(),
+                    content: "b".into()
+                }
+            ),
             GateDecision::Allowed
         ));
         // Planner/review are read-only even with every checkbox ticked.
@@ -1469,14 +1567,25 @@ mod tests {
             let run = gated_run(profile);
             assert!(
                 matches!(
-                    PermissionGate::decides(&run, &Action::Write { path: "a".into(), content: "b".into() }),
+                    PermissionGate::decides(
+                        &run,
+                        &Action::Write {
+                            path: "a".into(),
+                            content: "b".into()
+                        }
+                    ),
                     GateDecision::Denied(_)
                 ),
                 "profile {profile} must not write"
             );
             assert!(
                 matches!(
-                    PermissionGate::decides(&run, &Action::Command { command: "ls".into() }),
+                    PermissionGate::decides(
+                        &run,
+                        &Action::Command {
+                            command: "ls".into()
+                        }
+                    ),
                     GateDecision::Denied(_)
                 ),
                 "profile {profile} must not run commands"
@@ -1485,11 +1594,22 @@ mod tests {
         // Testing runs commands but never writes.
         let testing = gated_run("testing");
         assert!(matches!(
-            PermissionGate::decides(&testing, &Action::Command { command: "cargo test".into() }),
+            PermissionGate::decides(
+                &testing,
+                &Action::Command {
+                    command: "cargo test".into()
+                }
+            ),
             GateDecision::Allowed
         ));
         assert!(matches!(
-            PermissionGate::decides(&testing, &Action::Write { path: "a".into(), content: "b".into() }),
+            PermissionGate::decides(
+                &testing,
+                &Action::Write {
+                    path: "a".into(),
+                    content: "b".into()
+                }
+            ),
             GateDecision::Denied(_)
         ));
     }
@@ -1600,9 +1720,17 @@ mod tests {
             .unwrap();
         }
         assert_eq!(mark_interrupted_rows(&conn).unwrap(), 2);
-        for (id, expected) in [("a", INTERRUPTED), ("b", INTERRUPTED), ("c", SUCCEEDED), ("d", FAILED), ("e", CANCELLED)] {
+        for (id, expected) in [
+            ("a", INTERRUPTED),
+            ("b", INTERRUPTED),
+            ("c", SUCCEEDED),
+            ("d", FAILED),
+            ("e", CANCELLED),
+        ] {
             let status: String = conn
-                .query_row("SELECT status FROM agent_runs WHERE id=?1", [id], |r| r.get(0))
+                .query_row("SELECT status FROM agent_runs WHERE id=?1", [id], |r| {
+                    r.get(0)
+                })
                 .unwrap();
             assert_eq!(status, expected, "{id}");
         }
@@ -1613,7 +1741,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("saarthi-agent-cmd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let root = FsPath::new(&dir);
-        let output = run_command(&root, "echo marker-stdout; echo marker-stderr 1>&2").await.unwrap();
+        let output = run_command(root, "echo marker-stdout; echo marker-stderr 1>&2")
+            .await
+            .unwrap();
         assert!(output.contains("marker-stdout"), "{output}");
         assert!(output.contains("marker-stderr"), "{output}");
         assert!(output.contains("exit: 0"), "{output}");
@@ -1624,11 +1754,10 @@ mod tests {
     async fn run_command_reports_the_real_exit_code() {
         let dir = std::env::temp_dir().join(format!("saarthi-agent-cmd2-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let output = run_command(&FsPath::new(&dir), "exit 7").await.unwrap();
+        let output = run_command(FsPath::new(&dir), "exit 7").await.unwrap();
         assert!(output.contains("exit: 7"), "{output}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
-
 
     #[test]
     fn unified_diff_marks_new_modified_and_identical_files() {
@@ -1662,11 +1791,11 @@ mod tests {
         let root = FsPath::new(&dir);
 
         // Missing file: nothing was replaced, so there is nothing to roll back to.
-        let (checkpoint, old) = capture_checkpoint(&root, "missing.txt");
+        let (checkpoint, old) = capture_checkpoint(root, "missing.txt");
         assert!(checkpoint.is_empty() && old.is_none());
 
         std::fs::write(dir.join("real.txt"), "previous content").unwrap();
-        let (checkpoint, old) = capture_checkpoint(&root, "real.txt");
+        let (checkpoint, old) = capture_checkpoint(root, "real.txt");
         assert_eq!(old.as_deref(), Some("previous content"));
         let parsed: Value = serde_json::from_str(&checkpoint).unwrap();
         assert_eq!(parsed["path"], "real.txt");
@@ -1677,13 +1806,21 @@ mod tests {
     #[test]
     fn steps_persist_checkpoints_and_initialize_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
-        initialize(&mut conn).unwrap();
+        initialize(&conn).unwrap();
         conn.execute(
             "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at) VALUES('r','','t','running',0,0,0,12,0,0)",
             [],
         )
         .unwrap();
-        insert_step(&mut conn, "r", "write", "w", "out", "{\"path\":\"a\",\"old\":\"b\"}").unwrap();
+        insert_step(
+            &mut conn,
+            "r",
+            "write",
+            "w",
+            "out",
+            "{\"path\":\"a\",\"old\":\"b\"}",
+        )
+        .unwrap();
         insert_step(&mut conn, "r", "think", "t", "", "").unwrap();
         let (output, checkpoint): (String, String) = conn
             .query_row(
@@ -1695,7 +1832,6 @@ mod tests {
         assert_eq!(output, "out");
         assert_eq!(checkpoint, "{\"path\":\"a\",\"old\":\"b\"}");
         // A second initialize must succeed against a database that already has the column.
-        initialize(&mut conn).unwrap();
+        initialize(&conn).unwrap();
     }
-
 }

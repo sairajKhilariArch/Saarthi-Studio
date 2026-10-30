@@ -380,12 +380,9 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn omniroute_container_running() -> bool {
-    run_cmd(
-        "docker",
-        &["ps", "-q", "--filter", "name=^omniroute$"],
-    )
-    .map(|ids| !ids.is_empty())
-    .unwrap_or(false)
+    run_cmd("docker", &["ps", "-q", "--filter", "name=^omniroute$"])
+        .map(|ids| !ids.is_empty())
+        .unwrap_or(false)
 }
 
 pub(crate) struct OmniStatus {
@@ -450,9 +447,12 @@ pub(crate) async fn omniroute_start() -> Result<OmniStatus, String> {
         run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
     } else {
         // A stopped container with the same name must be started, not recreated.
-        let exists = run_cmd("docker", &["ps", "-a", "-q", "--filter", "name=^omniroute$"])
-            .map(|ids| !ids.is_empty())
-            .unwrap_or(false);
+        let exists = run_cmd(
+            "docker",
+            &["ps", "-a", "-q", "--filter", "name=^omniroute$"],
+        )
+        .map(|ids| !ids.is_empty())
+        .unwrap_or(false);
         if exists {
             run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
         } else {
@@ -515,9 +515,7 @@ pub(crate) async fn omniroute_shutdown_cleanup() {
 }
 
 /// `free-ai-studio omniroute <start|stop|status>`
-pub(crate) fn run_omniroute_cli(
-    args: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run_omniroute_cli(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let action = args.first().map(String::as_str).unwrap_or("status");
     let runtime = tokio::runtime::Runtime::new()?;
     match action {

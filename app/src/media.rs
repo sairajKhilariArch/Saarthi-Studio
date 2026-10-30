@@ -115,7 +115,10 @@ fn mime_for_name(name: &str) -> &'static str {
 
 /// POST /api/attachments — {"kind":"image","data_url":"data:image/png;base64,…"}
 /// Returns a server-named reference; the DB stores just that string.
-async fn save_attachment(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+async fn save_attachment(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
     let kind = input.get("kind").and_then(Value::as_str).unwrap_or("");
     let data_url = input.get("data_url").and_then(Value::as_str).unwrap_or("");
     let (allowed, limit) = match kind_limits(kind) {
@@ -164,9 +167,10 @@ async fn save_attachment(State(state): State<AppState>, Json(input): Json<Value>
             }
         }))
         .into_response(),
-        Err(_) => {
-            crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, "Could not store the attachment.")
-        }
+        Err(_) => crate::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not store the attachment.",
+        ),
     }
 }
 
@@ -212,7 +216,9 @@ pub(crate) fn is_valid_attachment_name(name: &str) -> bool {
         return false;
     }
     bytes.starts_with(b"att-")
-        && bytes[4..40].iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+        && bytes[4..40]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
         && matches!(
             &name[41..],
             "png" | "jpg" | "webp" | "gif" | "wav" | "mp3" | "ogg" | "m4a" | "mp4" | "webm"
@@ -243,8 +249,7 @@ pub(crate) fn resolve_attachments(
             return Err("Attachment reference is invalid.".into());
         }
         let path: PathBuf = attachment_dir(state).join(name);
-        let bytes =
-            std::fs::read(&path).map_err(|_| "Attachment file is missing.".to_string())?;
+        let bytes = std::fs::read(&path).map_err(|_| "Attachment file is missing.".to_string())?;
         out.push((kind.to_string(), mime_for_name(name).to_string(), bytes));
     }
     Ok(out)
@@ -290,8 +295,9 @@ pub(crate) fn encode_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let word =
-            (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | (*chunk.get(2).unwrap_or(&0) as u32);
+        let word = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | (*chunk.get(2).unwrap_or(&0) as u32);
         out.push(ALPHABET[(word >> 18 & 63) as usize] as char);
         out.push(ALPHABET[(word >> 12 & 63) as usize] as char);
         out.push(if chunk.len() > 1 {
@@ -388,7 +394,8 @@ async fn embeddings(State(state): State<AppState>, Json(input): Json<Value>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;    #[test]
+    use super::*;
+    #[test]
     fn base64_round_trips() {
         for sample in ["", "a", "ab", "abc", "hello world", "\u{1F680}"] {
             let encoded = encode_base64(sample.as_bytes());
@@ -433,7 +440,8 @@ mod tests {
         let mut messages = vec![json!({"role": "user", "content": "plain"})];
         apply_media(&mut messages, &[]);
         assert_eq!(messages[0]["content"], json!("plain"));
-    }    #[test]
+    }
+    #[test]
     fn attachment_names_are_strict() {
         assert!(is_valid_attachment_name(
             "att-3fa85f64-5717-4562-b3fc-2c963f66afa6.png"
@@ -450,5 +458,4 @@ mod tests {
             "att-3fa85f64-5717-4562-b3fc-2c963f66afa6.txt"
         ));
     }
-
 }

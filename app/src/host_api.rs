@@ -723,7 +723,9 @@ async fn host_chat(State(state): State<AppState>, Json(input): Json<Value>) -> R
         || object
             .get("language")
             .is_some_and(|value| !value.is_string())
-        || object.get("stream").is_some_and(|value| !value.is_boolean())
+        || object
+            .get("stream")
+            .is_some_and(|value| !value.is_boolean())
     {
         return host_error(
             StatusCode::BAD_REQUEST,
@@ -1266,7 +1268,12 @@ mod tests {
             (Method::POST, format!("/api/host/v1/runs/{unknown}/cancel")),
         ] {
             let response = fixture
-                .send(method, &path, Some(&fixture.token), Some(r#"{"approve":true}"#))
+                .send(
+                    method,
+                    &path,
+                    Some(&fixture.token),
+                    Some(r#"{"approve":true}"#),
+                )
                 .await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
             let data = Fixture::response_json(response).await;
@@ -1624,7 +1631,10 @@ mod tests {
     /// into the phone's frames, so this exercises the whole host stream path:
     /// status, content type, {delta} piece, {done, meta} close, persistence.
     async fn mock_chat_router(Json(payload): Json<Value>) -> Json<Value> {
-        assert_eq!(payload["stream"], true, "host stream must ask the router to stream");
+        assert_eq!(
+            payload["stream"], true,
+            "host stream must ask the router to stream"
+        );
         Json(json!({
             "id": "chatcmpl-mock",
             "model": "model-a",
@@ -1704,7 +1714,10 @@ mod tests {
             frames.contains(r#"{"delta":"Hello from the mock router"}"#),
             "missing delta frame: {frames}"
         );
-        assert!(frames.contains(r#""done":true"#), "missing done frame: {frames}");
+        assert!(
+            frames.contains(r#""done":true"#),
+            "missing done frame: {frames}"
+        );
         // The public stream must not leak router configuration.
         assert!(!frames.contains("router-test-secret"));
         assert!(!frames.contains(upstream_address.to_string().as_str()));

@@ -62,9 +62,8 @@ fn shell_command(cwd: &str) -> CommandBuilder {
     #[cfg(target_os = "windows")]
     let mut cmd = CommandBuilder::new("powershell.exe");
     #[cfg(not(target_os = "windows"))]
-    let mut cmd = CommandBuilder::new(
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
-    );
+    let mut cmd =
+        CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     cmd
@@ -74,7 +73,10 @@ pub(crate) fn hub() -> Hub {
     Arc::new(TerminalHub::new())
 }
 
-async fn terminal_open(State(state): State<crate::AppState>, AxumJson(input): AxumJson<Value>) -> Response {
+async fn terminal_open(
+    State(state): State<crate::AppState>,
+    AxumJson(input): AxumJson<Value>,
+) -> Response {
     let hub = state.terminal.clone();
     let cwd = input
         .get("cwd")
@@ -83,19 +85,36 @@ async fn terminal_open(State(state): State<crate::AppState>, AxumJson(input): Ax
         .trim()
         .trim_end_matches('/')
         .to_string();
-    let cols = input.get("cols").and_then(Value::as_u64).unwrap_or(80).max(20) as u16;
-    let rows = input.get("rows").and_then(Value::as_u64).unwrap_or(24).max(5) as u16;
+    let cols = input
+        .get("cols")
+        .and_then(Value::as_u64)
+        .unwrap_or(80)
+        .max(20) as u16;
+    let rows = input
+        .get("rows")
+        .and_then(Value::as_u64)
+        .unwrap_or(24)
+        .max(5) as u16;
     if cwd.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "Set a project folder before opening a terminal.");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Set a project folder before opening a terminal.",
+        );
     }
     if !std::path::Path::new(&cwd).is_dir() {
-        return json_error(StatusCode::BAD_REQUEST, format!("Folder does not exist: {cwd}").as_str());
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("Folder does not exist: {cwd}").as_str(),
+        );
     }
     {
         // One session per directory; switching projects leaves the old one
         // running so returning to that project keeps its scrollback.
         let sessions = hub.sessions.lock().unwrap();
-        if let Some(found) = sessions.values().find(|s| s.cwd == cwd && s.alive().load(Ordering::SeqCst)) {
+        if let Some(found) = sessions
+            .values()
+            .find(|s| s.cwd == cwd && s.alive().load(Ordering::SeqCst))
+        {
             return AxumJson(json!({
                 "ok": true, "id": found.id, "cwd": found.cwd, "reused": true
             }))
@@ -165,25 +184,22 @@ async fn terminal_open(State(state): State<crate::AppState>, AxumJson(input): Ax
         let _ = reap_tx.send("\"__exit__\"".to_string());
     });
 
-        hub.sessions.lock().unwrap().insert(
+    hub.sessions.lock().unwrap().insert(
+        id,
+        TerminalSession {
             id,
-            TerminalSession {
-                id,
-                tx,
-                alive: alive.clone(),
-                master: pair.master,
-                writer: Mutex::new(Some(writer)),
-                cwd: cwd.clone(),
-            },
-        );
+            tx,
+            alive: alive.clone(),
+            master: pair.master,
+            writer: Mutex::new(Some(writer)),
+            cwd: cwd.clone(),
+        },
+    );
 
     AxumJson(json!({ "ok": true, "id": id, "cwd": cwd, "reused": false })).into_response()
 }
 
-async fn terminal_stream(
-    State(state): State<crate::AppState>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn terminal_stream(State(state): State<crate::AppState>, Path(id): Path<u64>) -> Response {
     let hub = state.terminal.clone();
     let session = hub
         .sessions
@@ -192,24 +208,30 @@ async fn terminal_stream(
         .get(&id)
         .map(|s| (s.tx.subscribe(), s.alive.clone()));
     let Some((rx, alive)) = session else {
-        return json_error(StatusCode::NOT_FOUND, "No such terminal session. Open the panel again.");
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "No such terminal session. Open the panel again.",
+        );
     };
     let stream = futures_util::stream::unfold((rx, alive), |(mut rx, alive)| async move {
         if !alive.load(Ordering::SeqCst) {
-            return Some((Ok::<_, std::convert::Infallible>(SseEvent::default().event("done")), (rx, alive)));
+            return Some((
+                Ok::<_, std::convert::Infallible>(SseEvent::default().event("done")),
+                (rx, alive),
+            ));
         }
         match rx.recv().await {
             Ok(data) => Some((Ok(SseEvent::default().data(data)), (rx, alive))),
             Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                Some((
-                    Ok(SseEvent::default().data("\"… output skipped while output was fast …\"")),
-                    (rx, alive),
-                ))
-            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => Some((
+                Ok(SseEvent::default().data("\"… output skipped while output was fast …\"")),
+                (rx, alive),
+            )),
         }
     });
-    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 async fn terminal_input(
@@ -224,7 +246,11 @@ async fn terminal_input(
     let hub = state.terminal.clone();
     let send_result = hub.sessions.lock().unwrap().get(&id).and_then(|session| {
         let mut writer_guard = session.writer.lock().unwrap();
-        writer_guard.as_mut().map(|writer| writer.write_all(data.as_bytes()).and_then(|_| writer.flush()))
+        writer_guard.as_mut().map(|writer| {
+            writer
+                .write_all(data.as_bytes())
+                .and_then(|_| writer.flush())
+        })
     });
     match send_result {
         Some(Ok(())) => AxumJson(json!({ "ok": true })).into_response(),
@@ -238,13 +264,24 @@ async fn terminal_resize(
     Path(id): Path<u64>,
     AxumJson(input): AxumJson<Value>,
 ) -> Response {
-    let cols = input.get("cols").and_then(Value::as_u64).unwrap_or(80).clamp(20, 500) as u16;
-    let rows = input.get("rows").and_then(Value::as_u64).unwrap_or(24).clamp(5, 200) as u16;
+    let cols = input
+        .get("cols")
+        .and_then(Value::as_u64)
+        .unwrap_or(80)
+        .clamp(20, 500) as u16;
+    let rows = input
+        .get("rows")
+        .and_then(Value::as_u64)
+        .unwrap_or(24)
+        .clamp(5, 200) as u16;
     let hub = state.terminal.clone();
     let result = hub.sessions.lock().unwrap().get(&id).map(|session| {
-        session
-            .master
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        session.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
     });
     match result {
         Some(Ok(())) => AxumJson(json!({ "ok": true })).into_response(),
@@ -253,10 +290,7 @@ async fn terminal_resize(
     }
 }
 
-async fn terminal_close(
-    State(state): State<crate::AppState>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn terminal_close(State(state): State<crate::AppState>, Path(id): Path<u64>) -> Response {
     let hub = state.terminal.clone();
     let closed = hub.sessions.lock().unwrap().remove(&id).is_some();
     // Dropping the master closes the PTY; the shell SIGHUPs and exits.

@@ -73,10 +73,7 @@ pub(crate) fn roots(
         "user".to_string(),
         home_dir().join(".config/free-ai-studio/skills"),
     ));
-    roots.push((
-        "agents".to_string(),
-        home_dir().join(".agents/skills"),
-    ));
+    roots.push(("agents".to_string(), home_dir().join(".agents/skills")));
     roots
 }
 
@@ -84,7 +81,9 @@ pub(crate) fn discover(roots: &[(String, PathBuf)]) -> Vec<Skill> {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
     for (source, root) in roots {
-        let Ok(entries) = fs::read_dir(root) else { continue };
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let dir = entry.path();
             if !dir.is_dir() {
@@ -282,7 +281,10 @@ async fn get_skills(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "ok": true, "skills": skills }))
 }
 
-async fn get_skill(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response<Body> {
+async fn get_skill(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response<Body> {
     match instructions_for(&id, &all_skills(&state)) {
         Some(skill) if skill.error.is_none() => Json(json!({
             "ok": true,
@@ -367,7 +369,11 @@ mod tests {
     #[test]
     fn flags_a_manifest_without_instructions() {
         let root = scratch("broken");
-        write_skill(&root, "empty", "---\nname: empty\ndescription: Nothing here.\n---\n");
+        write_skill(
+            &root,
+            "empty",
+            "---\nname: empty\ndescription: Nothing here.\n---\n",
+        );
         let skills = discover(&[("built-in".into(), root)]);
         assert_eq!(skills.len(), 1);
         assert!(skills[0]
@@ -430,8 +436,16 @@ mod tests {
     #[test]
     fn index_lists_enabled_skills_only() {
         let root = scratch("index");
-        write_skill(&root, "a", "---\nname: a\ndescription: First skill.\n---\nGo.\n");
-        write_skill(&root, "b", "---\nname: b\ndescription: Second skill.\n---\nStop.\n");
+        write_skill(
+            &root,
+            "a",
+            "---\nname: a\ndescription: First skill.\n---\nGo.\n",
+        );
+        write_skill(
+            &root,
+            "b",
+            "---\nname: b\ndescription: Second skill.\n---\nStop.\n",
+        );
         let all = discover(&[("built-in".into(), root)]);
         let index = index_text(&["b".into()], &all).expect("index");
         assert!(index.contains("- a: First skill."));

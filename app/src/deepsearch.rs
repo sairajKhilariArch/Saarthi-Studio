@@ -90,7 +90,10 @@ pub async fn run(
     emit(status_event("Planning searches…"));
     let queries = plan_queries(client, cfg, question).await;
     let queries = normalize_queries(&queries);
-    emit(status_event(&format!("Searching the web ({} queries)…", queries.len())));
+    emit(status_event(&format!(
+        "Searching the web ({} queries)…",
+        queries.len()
+    )));
 
     let mut sources: Vec<Value> = Vec::new();
     let mut succeeded = 0usize;
@@ -112,8 +115,9 @@ pub async fn run(
         }
     }
     if succeeded == 0 {
-        return Err("Every web search failed. Check the search key in Settings → Deep search."
-            .into());
+        return Err(
+            "Every web search failed. Check the search key in Settings → Deep search.".into(),
+        );
     }
 
     let sources = dedupe_by_url(&sources);
@@ -125,7 +129,9 @@ pub async fn run(
         ));
     }
     if sources.is_empty() {
-        emit(status_event("No results found — answering without sources."));
+        emit(status_event(
+            "No results found — answering without sources.",
+        ));
         return Ok(Outcome {
             answer: None,
             augmented: None,
@@ -170,7 +176,10 @@ pub fn normalize_queries(raw: &[String]) -> Vec<String> {
             continue;
         }
         let query: String = query.chars().take(200).collect();
-        if !out.iter().any(|existing| existing.eq_ignore_ascii_case(&query)) {
+        if !out
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&query))
+        {
             out.push(query);
         }
         if out.len() >= MAX_QUERIES {
@@ -236,7 +245,10 @@ pub fn push_source(sources: &mut Vec<Value>, result: Value) {
     if url.is_empty() {
         return;
     }
-    if sources.iter().any(|existing| existing["url"].as_str() == Some(url.as_str())) {
+    if sources
+        .iter()
+        .any(|existing| existing["url"].as_str() == Some(url.as_str()))
+    {
         return;
     }
     sources.push(result);
@@ -437,7 +449,10 @@ async fn gemini_grounding(
         "contents": [{ "role": "user", "parts": [{ "text": question }] }],
         "tools": [{ "google_search": {} }],
     });
-    let url = format!("{prefix}/v1beta/models/{model}:generateContent?key={}", cfg.api_key);
+    let url = format!(
+        "{prefix}/v1beta/models/{model}:generateContent?key={}",
+        cfg.api_key
+    );
     let response = client
         .post(url)
         .json(&body)
@@ -571,10 +586,17 @@ mod tests {
 
     #[test]
     fn normalize_caps_trims_and_dedupes() {
-        let raw: Vec<String> = ["  rust async  ", "RUST ASYNC", "", "sqlite fts", "tokio", "axum"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let raw: Vec<String> = [
+            "  rust async  ",
+            "RUST ASYNC",
+            "",
+            "sqlite fts",
+            "tokio",
+            "axum",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         let queries = normalize_queries(&raw);
         assert_eq!(queries.len(), MAX_QUERIES);
         assert_eq!(queries[0], "rust async");
@@ -585,7 +607,10 @@ mod tests {
     #[test]
     fn parse_plan_json_survives_fences_and_prose() {
         let reply = "Here you go:\n```json\n[\"a query\", \"b query\"]\n```";
-        assert_eq!(parse_plan_json(reply), vec!["a query".to_string(), "b query".to_string()]);
+        assert_eq!(
+            parse_plan_json(reply),
+            vec!["a query".to_string(), "b query".to_string()]
+        );
         assert!(parse_plan_json("no array here").is_empty());
         assert!(parse_plan_json("[not json]").is_empty());
     }
@@ -593,7 +618,11 @@ mod tests {
     #[test]
     fn augment_prompt_lists_every_source_with_citations() {
         let sources = vec![
-            source("Rust book", "https://doc.rust-lang.org/book/", "ownership rules"),
+            source(
+                "Rust book",
+                "https://doc.rust-lang.org/book/",
+                "ownership rules",
+            ),
             source("Tokio", "https://tokio.rs/", "async runtime"),
         ];
         let prompt = augment_prompt("how do I use async?", &sources);
@@ -626,7 +655,10 @@ mod tests {
         push_source(&mut sources, source("a again", "https://dup.com/", "two"));
         assert_eq!(sources.len(), 1);
         for i in 0..(MAX_TOTAL_SOURCES + 5) {
-            push_source(&mut sources, source("t", &format!("https://e.com/{i}"), "s"));
+            push_source(
+                &mut sources,
+                source("t", &format!("https://e.com/{i}"), "s"),
+            );
         }
         assert_eq!(sources.len(), MAX_TOTAL_SOURCES);
         push_source(&mut sources, source("empty", "", "s"));

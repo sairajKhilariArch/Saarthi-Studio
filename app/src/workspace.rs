@@ -506,7 +506,10 @@ struct ArtifactEntry {
     ext: String,
 }
 
-pub(crate) fn list_directory(root: &FsPath, relative: &str) -> Result<(Vec<DirEntry>, bool), WorkspaceError> {
+pub(crate) fn list_directory(
+    root: &FsPath,
+    relative: &str,
+) -> Result<(Vec<DirEntry>, bool), WorkspaceError> {
     let dir = resolve_inside(root, relative)?;
     let meta = fs::metadata(&dir).map_err(|_| not_found("That folder does not exist."))?;
     if !meta.is_dir() {

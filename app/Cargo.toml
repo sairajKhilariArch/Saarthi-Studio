@@ -2,7 +2,7 @@
 name = "free-ai-studio"
 version = "1.22.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.80"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
 license = "MIT"
 
