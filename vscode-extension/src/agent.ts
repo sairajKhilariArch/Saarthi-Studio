@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import type { ChatMessage } from "./lib";
 import { spawn } from "node:child_process";
 
 /* Constants mirror the desktop's agent.rs. */
@@ -268,7 +269,7 @@ export function unifiedDiff(oldText: string | null, next: string, filePath: stri
 }
 
 /** The standing instruction plus the goal and capped history. */
-export function buildMessages(run: { goal: string; allowWrites: boolean; allowCommands: boolean; autoApprove: boolean }, history: string): Array<Record<string, string>> {
+export function buildMessages(run: { goal: string; allowWrites: boolean; allowCommands: boolean; autoApprove: boolean }, history: string): ChatMessage[] {
   const writeRule = run.allowWrites ? "write, list" : "list (write FORBIDDEN — never emit it)";
   const commandRule = !run.allowCommands
     ? "command FORBIDDEN — never emit it"
@@ -493,7 +494,7 @@ export interface AgentRuntimeDeps {
   /** Open workspace root; throws WorkspaceError when none is open. */
   root: () => string;
   /** Shared path-confined helpers from lib.ts (resolveInside, etc.). */
-  callRouter: (messages: Array<Record<string, string>>) => Promise<string>;
+  callRouter: (messages: ChatMessage[]) => Promise<string>;
   exclusions?: () => string[];
   notify: (runId: string | null) => void;
 }
@@ -618,7 +619,7 @@ async function dispatchTool(root: string, action: AgentAction): Promise<ToolOutc
         fs.writeFileSync(target, action.content || "", "utf8");
         return {
           ok: true,
-          output: `Wrote ${(action.content || "").length} bytes to ${action.path}.\n--- diff ---\n${unifiedDiff(oldContent, action.content, action.path)}`,
+          output: `Wrote ${(action.content || "").length} bytes to ${action.path}.\n--- diff ---\n${unifiedDiff(oldContent, action.content || "", action.path ?? "unknown")}`,
           checkpoint,
           oldContent,
         };

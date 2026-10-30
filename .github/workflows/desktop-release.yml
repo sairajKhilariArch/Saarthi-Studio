@@ -131,13 +131,12 @@ jobs:
           tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
           rm -rf "dist/$STAGE"
 
-      - name: Build .deb package
-        run: |
-          set -eu
-          cargo install cargo-deb --locked
-          cd app
-          cargo deb --locked
-          cp target/debian/*.deb ../dist/
+      # No .deb here: the deb job (ubuntu-22.04, headless) is the
+      # distributable deb — a GUI-tree deb from ubuntu-latest carries a
+      # glibc 2.39 dependency that refuses to install on 22.04 (this is what
+      # broke the deb step in the v1.25.0 run), and its identical filename
+      # races the deb job for the same release asset. Windowed binaries ship
+      # as tarball + AppImage, exactly as the deb job's header says.
 
       - name: Build AppImage
         run: |

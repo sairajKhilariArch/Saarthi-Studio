@@ -36,3 +36,15 @@
 | 2026-10-30 | Live UI: server on :34521, Local AI view opened in browser; click-through of localBtn | pass | view switches; status panel shows real "not detected" + endpoint error; setup card shows; honest model-list unavailability; hardware panel real (i3-1115G4/4c/15GB/GPU/disk) + quantized-model recommendation; token follow-up fix (dead CSS block replaced with styles matching actual markup); no browser console errors |
 | 2026-10-30 | Theme check | pass | dark + light: panel/setup-card/hardware tokens resolve in both themes |
 | 2026-10-30 | Live local inference round-trip | not run | no Ollama on this machine; honest failure path verified instead |
+
+### v1.25.0 release pipeline repair
+
+| 2026-10-30 | Release run 41007439650 job analysis | 3 of 6 jobs failed | deb (headless build panic), release (Linux deb step), vscode-extension (tsc); versions in tree said 1.22.0 under tag v1.25.0 |
+| 2026-10-30 | headless: cargo build --release --locked --no-default-features (build.rs gated) | pass in 21m55s | "missing cargo:dev" panic gone |
+| 2026-10-30 | cargo test --locked --no-default-features | 113 passed / 0 failed | includes the 1.25.0 version bump |
+| 2026-10-30 | vscode: npx tsc --noEmit | 2 errors found → fixed → TSC CLEAN | agent.ts unifiedDiff arg; callRouter/ChatMessage[] through lib.ts |
+| 2026-10-30 | vscode: npm ci && npm test | 22 passed / 0 failed | after fixes |
+| 2026-10-30 | vscode: npx vsce package --no-dependencies | DONE (106.43 KB vsix) | CI's failing step reproduced only via tsc; packaging now works |
+| 2026-10-30 | GUI deb: cargo deb --locked (local ubuntu-24.04) | built free-ai-studio_1.25.0-1_amd64.deb | Depends carries libc6 >= 2.39 → refuses Ubuntu 22.04 install |
+| 2026-10-30 | deb static checks | skills present; gui-free depends (headless deb) | headless deb job remains the one .deb source |
+| 2026-10-30 | desktop-release.yml: GUI deb removed from `release` job | YAML parses | removes glibc-2.39 conflict and the same-filename asset race with the deb job |
