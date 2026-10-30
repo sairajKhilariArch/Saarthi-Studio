@@ -33,6 +33,11 @@ jobs:
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
 
+      # .cargo/config.toml links with mold everywhere; without this binary the
+      # 22.04 job died at the first build-script link (cannot find 'ld').
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -150,6 +155,11 @@ jobs:
           # appimagetool does not generate AppRun; provide it explicitly so the
           # AppImage has an entry point that resolves usr/ relative to itself.
           ln -s usr/bin/free-ai-studio AppDir/AppRun
+          # appimagetool also rejects the build without the desktop file's Icon
+          # present as a PNG next to the .desktop plus a .DirIcon alias. The
+          # PNG is committed so no SVG rasterizer is needed on the runner.
+          cp app/packaging/icons/free-ai-suite-256.png AppDir/free-ai-suite.png
+          ln -s free-ai-suite.png AppDir/.DirIcon
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "dist/free-ai-suite_${VERSION}_x86_64.AppImage"
