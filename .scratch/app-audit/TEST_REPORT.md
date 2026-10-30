@@ -48,3 +48,19 @@
 | 2026-10-30 | GUI deb: cargo deb --locked (local ubuntu-24.04) | built free-ai-studio_1.25.0-1_amd64.deb | Depends carries libc6 >= 2.39 → refuses Ubuntu 22.04 install |
 | 2026-10-30 | deb static checks | skills present; gui-free depends (headless deb) | headless deb job remains the one .deb source |
 | 2026-10-30 | desktop-release.yml: GUI deb removed from `release` job | YAML parses | removes glibc-2.39 conflict and the same-filename asset race with the deb job |
+
+### v1.25.0 re-run iterations (log-driven repair)
+
+| 2026-10-30 | Run 2 (48f6d60): tsc + version fixes verified on CI | 4/6 jobs pass | Windows, macOS, Android, VS Code now green; deb + AppImage still failing |
+| 2026-10-30 | Run 2 log: deb job | cannot find 'ld' | .cargo/config.toml links with mold; 22.04 job never installed it → mold step added |
+| 2026-10-30 | Run 2 log: AppImage | free-ai-suite.png missing + .DirIcon invalid | committed 256px icon restre (app/packaging/icons/free-ai-suite-256.png) + .DirIcon symlink → fixed |
+| 2026-10-30 | Run 3 (8f54bd1) | 5/6 jobs pass | AppImage green; deb job now fails at cargo deb: `Static file asset path did not match any existing files: app/static/skills/debug/SKILL.md` |
+| 2026-10-30 | Run 3 root cause | bare `debug` in .gitignore | Rust-template ignore matched app/static/skills/debug/ — skill never committed while deb metadata + static check expect it; anchored /debug/ /target/ and committed the skill |
+| 2026-10-30 | Run 4 (a643a0e) | see next entry | fourth re-run underway |
+
+### Step 2 live verification (master plan)
+
+| 2026-10-30 | Live B4: chat round-trip through FreeLLMAPI (localhost:3001, key present) | pass | "Reply pong" → answer "pong", model gemini-3.5-flash, latency 3.3s, request_log logged by the app |
+| 2026-10-30 | Live B2 measurement: trivial message packing | 2918 est. tokens of 6000 budget | bulk = capped workspace outline (300 entries / depth 4 / bulky dirs skipped) + history window; no code change needed — packing is bounded by construction |
+| 2026-10-30 | Live B5/B7: agent run d30cf183 | succeeded in 2 steps | real write created saarthi_ci_check.txt (diff shown) in the active workspace (/Documents/program/helooww), file verified on disk with exact content; done step; routerConfig snapshot recorded |
+| 2026-10-30 | B6 error handling | verified by suite + code paths | tool errors become `-error` steps repairable by next step; unparsed replies capped at 3; hard step ceiling; app-restart marks runs; cancel-mid-flight covered by prior regression |
