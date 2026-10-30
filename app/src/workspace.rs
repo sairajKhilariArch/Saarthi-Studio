@@ -346,7 +346,11 @@ pub(crate) fn resolve_inside(root: &FsPath, relative: &str) -> Result<PathBuf, W
             None => parent,
         }
     };
-    if !resolved.starts_with(root) {
+    // The containment check compares against the root the way the filesystem
+    // really spells it: on macOS /var is a symlink to /private/var, so a root
+    // given through such an alias must not reject its own contents.
+    let root_resolved = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if !resolved.starts_with(root_resolved) {
         return Err(forbidden("That path is outside the open folder."));
     }
     Ok(resolved)
@@ -1068,6 +1072,22 @@ mod tests {
 
         assert!(resolve_inside(&root, "escape/secret.txt").is_err());
         assert!(resolve_inside(&root, "escape").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_accepts_a_root_given_through_a_symlink_alias() {
+        // macOS /var -> /private/var: a root spelled through a symlink must
+        // still contain its own files, not "forbid" every relative path.
+        let fixture = Fixture::new("alias-root");
+        fs::write(fixture.path("inside.txt"), "ok").unwrap();
+        let alias = Fixture::new("alias-parent");
+        let alias_link = alias.path("link");
+        std::os::unix::fs::symlink(&fixture.root, &alias_link).expect("create symlink");
+
+        let resolved = resolve_inside(&alias_link, "inside.txt").unwrap();
+        assert!(resolved.ends_with("inside.txt"));
+        assert!(read_text_file(&alias_link, "inside.txt").is_ok());
     }
 
     #[test]
