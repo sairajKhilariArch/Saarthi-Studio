@@ -64,3 +64,10 @@
 | 2026-10-30 | Live B2 measurement: trivial message packing | 2918 est. tokens of 6000 budget | bulk = capped workspace outline (300 entries / depth 4 / bulky dirs skipped) + history window; no code change needed — packing is bounded by construction |
 | 2026-10-30 | Live B5/B7: agent run d30cf183 | succeeded in 2 steps | real write created saarthi_ci_check.txt (diff shown) in the active workspace (/Documents/program/helooww), file verified on disk with exact content; done step; routerConfig snapshot recorded |
 | 2026-10-30 | B6 error handling | verified by suite + code paths | tool errors become `-error` steps repairable by next step; unparsed replies capped at 3; hard step ceiling; app-restart marks runs; cancel-mid-flight covered by prior regression |
+
+### Step 3 live verification (hybrid cloud/local)
+
+| 2026-10-30 | Mode validation | pass | `POST /api/runs` with `mode:"cloud"` → 400 "Unknown agent mode — use \"hybrid\" or leave it out."; unit test `run_modes_accept_only_default_and_hybrid` |
+| 2026-10-30 | Hybrid run e5b4e68c (real FreeLLMAPI plan, mock Ollama executor) | succeeded, 4 steps | steps: `plan` (real cloud plan) → `escalate` (mock local 500 + real cloud guidance logged) → `write hybrid-ok.txt` (22 bytes) → `done`; run `mode: hybrid`, `model: local:qwen2.5-coder:1.5b`; file verified on disk with exact content |
+| 2026-10-30 | Escalation transfer | pass | mock request log: local call 1 = 500; call 2 (retry) carried the cloud guidance in a new user message ("Your previous step could not run… Cloud guidance for this step…"); call 3 = next step after the write |
+| 2026-10-30 | Static | green | rustfmt --check clean, `cargo clippy --all-targets -- -D warnings` clean, 114/114 tests pass |

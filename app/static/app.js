@@ -4861,6 +4861,7 @@ async function submitRun(event) {
   const payload = {
     goal,
     profile: $("runProfile").value,
+    mode: $("runMode").value,
     allowWrites: $("runAllowWrites").checked,
     allowCommands: $("runAllowCommands").checked,
     autoApprove: $("runAutoApprove").checked,

@@ -13,8 +13,15 @@
 - M6 done: adaptive routing (choose_tier/adaptive_tier, step-level override + failover-to-base step, recorded per run) + reproducible run records (model/router_config columns + create-time snapshot + per-step record; run card shows model). Settings: Adaptive routing checkbox + cheap/strong fields in Chat context section.
 - M7 done: Local AI. Backend: `local.rs` — Ollama-only adapter (127.0.0.1:11434 default, configurable, remote URLs refused), real runtime detection/API-version probe, `/api/tags` model discovery, select/pull endpoints (pull progress via the event bus, one pull at a time), best-effort hardware probe (CPU/RAM/GPU/disk, Unknown when undetectable), `chat_through_local` gating. Routes: `/api/local/{status,models,hardware,select,pull}`; config gains local_base_url/local_model/local_chat. Frontend: Local AI view wired to `localBtn` (handler was missing — added, plus `runsBtn` which had the same defect), status panel + setup onboarding when the runtime is absent, endpoint/selection form, explicit pull form, model cards, hardware panel with exact-machine recommendation. Chat/runs stay on remote unless the local toggle is on; no silent fallback either way.
 
+## Step 3 (master plan) — hybrid cloud/local architecture (done)
+- New per-run mode `hybrid` (`agent_runs.mode`, additive migration; `normalize_mode` rejects anything but ""/"hybrid"; `POST /api/runs` refuses a hybrid run without a selected local model).
+- Phase 1 in `run_loop`: `plan_with_cloud` asks the cloud router (never the local runtime) for a compact numbered plan from the goal + capped workspace outline; the plan is logged as a `plan` step and reuses any existing plan on resume.
+- Phase 2 in `step_once`: hybrid runs skip the adaptive tiers and go to `hybrid_execute` → `local::chat_once` against the configured Ollama endpoint. On a local failure, `ask_cloud_for_guidance` makes one bounded cloud call (goal + capped step log + error), logs it as an `escalate` step and appends the guidance to the retry prompt; a second failure fails the run.
+- Context transfer is the existing bounded step log (`build_messages`/`build_history`, 300-char outputs, sanitized) — the cloud only ever sees the goal, outline, step log and error, never chat history.
+- UI: run composer gained a "Model mode" picker (`runMode`), payload sends `mode`; `run_json`/lists expose `mode`.
+
 ## Next
-- Release-pipeline repair (v1.25.0 re-run) and Step 2 of the master plan (see trace below).
+- Step 4 (master plan): multi-agent orchestration on top of this runtime.
 
 ## Step 1 close-out (release pipeline repair)
 - Release failure diagnosis from the v1.25.0 workflow run 41007439650: deb job failed in the headless build (`build.rs` ran `tauri_build::build()` unconditionally — panic "missing cargo:dev" without the `gui` feature); Linux `release` job failed at `cargo deb`; vscode job failed at `npx tsc --noEmit` (2 real type errors). Also: every version in tree still said 1.22.0 while the tag said v1.25.0 (Windows zip asset was literally `free-ai-suite_1.22.0_windows-x86_64.zip`).
@@ -27,7 +34,7 @@
 - Simple-message token path already capped by `context::pack` (B2: verify live request sizes; B3: multi-turn window behavior).
 
 ## Blockers
-- No Ollama runtime on this VM: runtime detection, model listing, pull and local chat verified as honest failure paths + unit tests; a live local inference round-trip needs a machine with Ollama installed.
+- No Ollama runtime on this machine: runtime detection, model listing, pull and local chat verified as honest failure paths + unit tests. Hybrid mode was verified end-to-end against a mock of Ollama's `/api/chat` contract (plan → local step → escalation → retry → write → done); a live local-inference run still needs Ollama installed (`ollama pull qwen2.5-coder:1.5b`).
 - Live Android device/emulator: none provisioned (gradle build + unit tests + lint only).
 - Later-turn environment: `gradle` not on PATH — binary found at `~/.local/opt/gradle/gradle-8.9/bin/gradle`; JDK used: `/usr/lib/jvm/java-17-openjdk-amd64`.
 - No macOS runner locally (M5 CI jobs execute only on GitHub's `macos-latest`); signing credentials absent.

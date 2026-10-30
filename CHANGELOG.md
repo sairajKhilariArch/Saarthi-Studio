@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Hybrid AI (Step 3): cloud plans, local executes
+
+- New per-run agent mode `hybrid`: the cloud router writes a compact
+  implementation plan (`plan` step) from the goal and the capped workspace
+  outline, then every execution step runs on the configured local Ollama
+  model, so edits and commands stay on this machine.
+- Escalation: when a local step fails, one bounded cloud call returns concrete
+  guidance — logged as an `escalate` step and appended to the retry prompt —
+  and a second failure fails the run instead of looping. The cloud only sees
+  the goal, the step log and the local error, never chat history.
+- Runs record their `mode`; the run composer gained a "Model mode" picker and
+  `/api/runs` rejects unknown modes and hybrid runs with no local model.
+
 ## 1.25.0
 
 ### CI/CD hygiene (Step 1)

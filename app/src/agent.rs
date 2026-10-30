@@ -200,6 +200,8 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE agent_runs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_runs ADD COLUMN router_config TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_runs ADD COLUMN profile TEXT NOT NULL DEFAULT 'coding'",
+        // "" is a normal single-model run; "hybrid" is cloud-plan/local-execute.
+        "ALTER TABLE agent_runs ADD COLUMN mode TEXT NOT NULL DEFAULT ''",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -227,6 +229,9 @@ struct RunRow {
     router_config: String,
     model: String,
     profile: String,
+    /// "" for a normal run, "hybrid" when the cloud plans and the local
+    /// runtime executes.
+    mode: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -246,6 +251,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         router_config: row.get(12)?,
         model: row.get(13)?,
         profile: row.get(14)?,
+        mode: row.get(15)?,
     })
 }
 
@@ -346,7 +352,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -384,7 +390,7 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "error": row.error, "steps": steps,
         "createdAt": row.created_at, "updatedAt": row.updated_at,
         "model": row.model, "routerConfig": row.router_config,
-        "profile": row.profile,
+        "profile": row.profile, "mode": row.mode,
     })
 }
 
@@ -721,6 +727,159 @@ fn build_history(state: &AppState, run_id: &str) -> Result<String, String> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Hybrid runs: cloud plans, local executes with bounded escalation
+
+/// Hybrid phase 1: the cloud model turns the goal into an implementation
+/// plan. The plan is logged as a `plan` step, so it reaches the executor
+/// through the ordinary step history — no chat history is transferred at all,
+/// only the goal, the workspace outline and the step log.
+/// A resumed run reuses its existing plan instead of paying for a new one.
+async fn plan_with_cloud(state: &AppState, run: &RunRow) -> Result<(), String> {
+    let has_plan: bool = db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='plan'",
+            [&run.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|e| e.to_string())?
+        > 0;
+    if has_plan {
+        return Ok(());
+    }
+    let outline = state.workspace.outline().unwrap_or_default();
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "You are the Saarthi Studio PLANNER running in the cloud. You cannot read \
+        files or run commands. Given a coding goal and a workspace outline, reply with a compact \
+        implementation plan: numbered steps, one line each, naming the exact files to create or edit \
+        and the command that verifies the result. No preamble, no code blocks, at most 40 lines."
+        }),
+        json!({
+            "role": "user",
+            "content": format!(
+                "Workspace goal:\n{}\n\nWorkspace files:\n{}\n\nReply with the plan only.",
+                run.goal,
+                if outline.is_empty() { "(no workspace outline available)" } else { &outline }
+            )
+        }),
+    ];
+    // Always the cloud: a local model planning its own work defeats the
+    // split this mode exists for.
+    let (plan, _meta) = crate::call_router(state, messages, None).await?;
+    let plan = plan.trim();
+    if plan.is_empty() {
+        return Err("The cloud model returned an empty plan.".to_string());
+    }
+    add_step(
+        state,
+        &run.id,
+        "plan",
+        "Cloud plan ready — the local model executes it.",
+        plan,
+    )?;
+    notify(state, Some(&run.id));
+    Ok(())
+}
+
+/// Hybrid phase 2: one execution step on the local runtime. When the local
+/// call fails, the cloud is asked for guidance once, that exchange is logged
+/// as an `escalate` step, and the local model retries the same step with the
+/// guidance in view. A second failure fails the run honestly instead of
+/// looping.
+async fn hybrid_execute(
+    state: &AppState,
+    run: &RunRow,
+    messages: Vec<Value>,
+) -> Result<(String, String), String> {
+    let cfg = crate::load_config(state);
+    let model = cfg.local_model.trim().to_string();
+    if model.is_empty() {
+        return Err(
+            "Hybrid mode needs a local model: pick one on the Local AI page, then start a new run."
+                .to_string(),
+        );
+    }
+    let base = crate::local::effective_base_url(&cfg.local_base_url);
+    match crate::local::chat_once(&base, &model, &messages).await {
+        Ok((reply, _)) => Ok((reply, format!("local:{model}"))),
+        Err(local_error) => {
+            // Stuck locally: buy one piece of cloud guidance; the work stays
+            // on this machine.
+            let guidance = match ask_cloud_for_guidance(state, run, &local_error).await {
+                Ok(guidance) => guidance,
+                Err(cloud_error) => {
+                    return Err(format!(
+                        "{local_error} (the cloud guidance call also failed: {cloud_error})"
+                    ))
+                }
+            };
+            add_step(
+                state,
+                &run.id,
+                "escalate",
+                "Local step failed — the cloud model was asked for guidance.",
+                &format!(
+                    "local error: {}\n\nguidance:\n{}",
+                    cap_chars(&local_error, 800),
+                    cap_chars(&guidance, 2_000)
+                ),
+            )?;
+            let mut retry = messages;
+            retry.push(json!({
+                "role": "user",
+                "content": format!(
+                    "Your previous step could not run: {}\n\nCloud guidance for this step:\n{}\n\n\
+                     Emit the next single JSON action now, applying this guidance.",
+                    cap_chars(&local_error, 800),
+                    cap_chars(&guidance, 2_000)
+                )
+            }));
+            match crate::local::chat_once(&base, &model, &retry).await {
+                Ok((reply, _)) => Ok((reply, format!("local:{model}"))),
+                Err(second) => Err(format!(
+                    "The local model failed twice on this step: {second}"
+                )),
+            }
+        }
+    }
+}
+
+/// One bounded guidance request to the cloud, scoped to the current step: the
+/// goal, the capped step log and the local error only.
+async fn ask_cloud_for_guidance(
+    state: &AppState,
+    run: &RunRow,
+    local_error: &str,
+) -> Result<String, String> {
+    let history = build_history(state, &run.id)?;
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "You are the Saarthi Studio cloud advisor. A small local model is \
+        executing an approved plan and got stuck. Reply with at most 6 short bullet points of \
+        concrete guidance for its next step: what to read, what to change and how to verify. \
+        No code dumps."
+        }),
+        json!({
+            "role": "user",
+            "content": format!(
+                "Goal:\n{}\n\nExecution log:\n{}\n\nLocal error:\n{}",
+                run.goal,
+                cap_chars(&history, 4_000),
+                cap_chars(local_error, 1_000)
+            )
+        }),
+    ];
+    let (guidance, _meta) = crate::call_router(state, messages, None).await?;
+    let guidance = guidance.trim().to_string();
+    if guidance.is_empty() {
+        return Err("The cloud model returned empty guidance.".to_string());
+    }
+    Ok(guidance)
+}
+
 /// The previous step's action tag, used to pick the adaptive tier. Error
 /// steps are reported separately so repair always upgrades.
 fn last_step_kind(state: &AppState, run_id: &str) -> Result<(String, bool), String> {
@@ -758,31 +917,38 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
         return Ok(false); // cancelled while we were working
     }
-    // Adaptive routing (off unless configured): routine inspection steps go to
-    // the cheap tier; planning, editing and post-failure repair go strong.
-    let (last_action, had_error) = last_step_kind(state, &run.id)?;
-    let tier = crate::adaptive_tier(state, &last_action, had_error);
     let messages = build_messages(run, &build_history(state, &run.id)?);
-    // call_model routes to the local runtime in Local AI mode and to the
-    // remote router otherwise; a local miss never silently goes remote.
-    let outcome = crate::call_model(state, messages, tier.as_deref()).await;
-    let (reply, model_used) = match outcome {
-        Ok((reply, _)) => (reply, tier.clone()),
-        // Visible failover: a tier miss falls back to the configured base
-        // model instead of killing a long run over one bad cheap pick.
-        Err(tier_error) if tier.is_some() => {
-            add_step(
-                state,
-                &run.id,
-                "failover",
-                "Tier call failed; retrying on the base model.",
-                &cap_chars(&tier_error, 600),
-            )?;
-            let base_messages = build_messages(run, &build_history(state, &run.id)?);
-            let (reply, _) = crate::call_model(state, base_messages, None).await?;
-            (reply, None)
+    // Hybrid runs execute on the local runtime; the cloud was already used
+    // for the plan. Every other run keeps the existing single-model path.
+    let (reply, model_used) = if run.mode == "hybrid" {
+        let (reply, model) = hybrid_execute(state, run, messages).await?;
+        (reply, Some(model))
+    } else {
+        // Adaptive routing (off unless configured): routine inspection steps
+        // go to the cheap tier; planning, edits and repair go strong.
+        let (last_action, had_error) = last_step_kind(state, &run.id)?;
+        let tier = crate::adaptive_tier(state, &last_action, had_error);
+        // call_model routes to the local runtime in Local AI mode and to the
+        // remote router otherwise; a local miss never silently goes remote.
+        let outcome = crate::call_model(state, messages, tier.as_deref()).await;
+        match outcome {
+            Ok((reply, _)) => (reply, tier.clone()),
+            // Visible failover: a tier miss falls back to the configured base
+            // model instead of killing a long run over one bad cheap pick.
+            Err(tier_error) if tier.is_some() => {
+                add_step(
+                    state,
+                    &run.id,
+                    "failover",
+                    "Tier call failed; retrying on the base model.",
+                    &cap_chars(&tier_error, 600),
+                )?;
+                let base_messages = build_messages(run, &build_history(state, &run.id)?);
+                let (reply, _) = crate::call_model(state, base_messages, None).await?;
+                (reply, None)
+            }
+            Err(error) => return Err(error),
         }
-        Err(error) => return Err(error),
     };
     record_model(state, &run.id, model_used.as_deref());
     // A cancel can land while the model is thinking: a stopped run must not
@@ -965,6 +1131,18 @@ async fn execute_action_step(
 /// completes, approval is requested, the user cancels, or the hard step
 /// ceiling is reached.
 async fn run_loop(state: AppState, run_id: String) {
+    // Hybrid phase 1: the cloud plans before the local model touches anything.
+    if let Ok(Some(run)) = load_run(&state, &run_id) {
+        if run.mode == "hybrid" && run.status == RUNNING {
+            if let Err(error) = plan_with_cloud(&state, &run).await {
+                let _ = add_step(&state, &run_id, "error", "The cloud plan failed:", &error);
+                let _ = finish(&state, &run_id, FAILED, &error);
+                ACTIVE.lock().unwrap().remove(&run_id);
+                notify(&state, Some(&run_id));
+                return;
+            }
+        }
+    }
     while step_count(&state, &run_id).unwrap_or(0) < HARD_MAX_STEPS {
         let run = match load_run(&state, &run_id) {
             Ok(Some(run)) if run.status == RUNNING => run,
@@ -1092,6 +1270,16 @@ fn profile_rule(profile: &str, write: bool) -> &'static str {
     }
 }
 
+/// The run-mode picker: "" is the normal single-model run, "hybrid" is
+/// cloud-plans/local-executes. Anything else is rejected at the door.
+fn normalize_mode(input: &str) -> Option<String> {
+    match input.trim().to_lowercase().as_str() {
+        "" => Some(String::new()),
+        "hybrid" => Some("hybrid".to_string()),
+        _ => None,
+    }
+}
+
 async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let goal = input
         .get("goal")
@@ -1129,6 +1317,23 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     if profile.trim().is_empty() {
         return error_response(StatusCode::BAD_REQUEST, "Unknown agent profile.");
     }
+    let mode = match normalize_mode(input.get("mode").and_then(Value::as_str).unwrap_or("")) {
+        Some(mode) => mode,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "Unknown agent mode — use \"hybrid\" or leave it out.",
+            )
+        }
+    };
+    // Hybrid runs need a local executor up front, so a run can never be
+    // started down a path that is guaranteed to fail on its first step.
+    if mode == "hybrid" && crate::load_config(&state).local_model.trim().is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Hybrid mode needs a local model: pick and pull one on the Local AI page first.",
+        );
+    }
 
     // The agent works inside the open workspace folder; without one there is
     // nothing safe to read or edit.
@@ -1146,12 +1351,12 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13)",
             params![
                 id, project_id, goal, RUNNING,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
-                snapshot, base_model, profile
+                snapshot, base_model, profile, mode
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -1169,7 +1374,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     };
     let mut stmt = match conn.prepare(
         "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, r.allow_commands, r.auto_approve, \
-         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, \
+         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, r.mode, \
          (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
          FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50",
     ) {
@@ -1179,7 +1384,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(15)?;
+            let steps: i64 = row.get(16)?;
 
             Ok(run_json(&run, steps))
         })
@@ -1550,6 +1755,7 @@ mod tests {
             router_config: String::new(),
             model: String::new(),
             profile: "coding".into(),
+            mode: String::new(),
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -1632,6 +1838,7 @@ mod tests {
             router_config: String::new(),
             model: String::new(),
             profile: profile.into(),
+            mode: String::new(),
         }
     }
 
@@ -1641,6 +1848,14 @@ mod tests {
         assert_eq!(normalize_profile(" coding "), "coding");
         assert_eq!(normalize_profile("PLANNER"), "planner");
         assert_eq!(normalize_profile("root"), "");
+    }
+
+    #[test]
+    fn run_modes_accept_only_default_and_hybrid() {
+        assert_eq!(normalize_mode(""), Some(String::new()));
+        assert_eq!(normalize_mode(" Hybrid "), Some("hybrid".to_string()));
+        assert_eq!(normalize_mode("cloud"), None);
+        assert_eq!(normalize_mode("local"), None);
     }
 
     #[test]
@@ -1661,6 +1876,7 @@ mod tests {
             router_config: String::new(),
             model: String::new(),
             profile: "coding".into(),
+            mode: String::new(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -1690,6 +1906,7 @@ mod tests {
             router_config: String::new(),
             model: String::new(),
             profile: "coding".into(),
+            mode: String::new(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),

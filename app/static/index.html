@@ -474,6 +474,14 @@
             </select>
             <small id="runProfileNote">Planner, testing and review stay read-only on the backend regardless of the checkboxes below.</small>
           </div>
+          <div class="field">
+            <span>Model mode</span>
+            <select id="runMode" class="run-profile-select">
+              <option value="" selected>Default — the configured cloud model does everything</option>
+              <option value="hybrid">Hybrid — cloud model plans, local model executes (needs a local model; escalation to the cloud when stuck)</option>
+            </select>
+            <small>Hybrid keeps your files on this machine: the cloud only writes the plan and answers when the local model gets stuck.</small>
+          </div>
           <div class="run-perms">
             <label class="run-perm"><input id="runAllowWrites" type="checkbox" checked><span>May write files</span></label>
             <label class="run-perm"><input id="runAllowCommands" type="checkbox"><span>May run commands</span></label>
