@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <title>Saarthi Studio</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -128,18 +129,16 @@
         <span id="connText">Checking router…</span>
       </div>
       <div class="foot-actions">
-        <button id="localBtn" class="foot-btn"><svg class="icon"><use href="#i-cpu"/></svg>Local AI</button>
-        <button id="routerBtn" class="foot-btn"><svg class="icon"><use href="#i-spark"/></svg>Router</button>
-        <button id="usageBtn" class="foot-btn"><svg class="icon"><use href="#i-chart"/></svg>Usage</button>
-        <button id="settingsBtn" class="foot-btn"><svg class="icon"><use href="#i-gear"/></svg>Settings</button>
-      </div>
-      <div class="foot-actions">
-        <button id="workspacesBtn" class="foot-btn"><svg class="icon"><use href="#i-layers"/></svg>Spaces</button>
-        <button id="agentsBtn" class="foot-btn"><svg class="icon"><use href="#i-user"/></svg>Agents</button>
-        <button id="integrationsBtn" class="foot-btn"><svg class="icon"><use href="#i-cube"/></svg>Connections</button>
-        <button id="artifactsBtn" class="foot-btn"><svg class="icon"><use href="#i-file"/></svg>Files</button>
-        <button id="automationBtn" class="foot-btn"><svg class="icon"><use href="#i-undo"/></svg>Auto</button>
-        <button id="runsBtn" class="foot-btn"><svg class="icon"><use href="#i-play"/></svg>Runs</button>
+        <button id="localBtn" class="foot-btn" title="Local AI — run models on this machine"><svg class="icon"><use href="#i-cpu"/></svg><span>Local AI</span></button>
+        <button id="routerBtn" class="foot-btn" title="Router console"><svg class="icon"><use href="#i-spark"/></svg><span>Router</span></button>
+        <button id="usageBtn" class="foot-btn" title="Usage analytics"><svg class="icon"><use href="#i-chart"/></svg><span>Usage</span></button>
+        <button id="settingsBtn" class="foot-btn" title="Settings"><svg class="icon"><use href="#i-gear"/></svg><span>Settings</span></button>
+        <button id="workspacesBtn" class="foot-btn" title="Spaces — projects"><svg class="icon"><use href="#i-layers"/></svg><span>Spaces</span></button>
+        <button id="agentsBtn" class="foot-btn" title="Agents"><svg class="icon"><use href="#i-user"/></svg><span>Agents</span></button>
+        <button id="integrationsBtn" class="foot-btn" title="Connections"><svg class="icon"><use href="#i-cube"/></svg><span>Connections</span></button>
+        <button id="artifactsBtn" class="foot-btn" title="Files"><svg class="icon"><use href="#i-file"/></svg><span>Files</span></button>
+        <button id="automationBtn" class="foot-btn" title="Automation"><svg class="icon"><use href="#i-undo"/></svg><span>Auto</span></button>
+        <button id="runsBtn" class="foot-btn" title="Agent runs"><svg class="icon"><use href="#i-play"/></svg><span>Runs</span></button>
       </div>
       <p class="foot-note">Chats stay in local SQLite. Files stay on this computer.</p>
     </footer>

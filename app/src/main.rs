@@ -723,6 +723,7 @@ async fn serve_static(state: AppState, relative: &str) -> Response<Body> {
         "html" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" => "application/javascript; charset=utf-8",
+        "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     };
     let mut response = Response::new(Body::from(bytes));
