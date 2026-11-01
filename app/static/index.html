@@ -468,11 +468,15 @@
             <span>Agent profile</span>
             <select id="runProfile" class="run-profile-select">
               <option value="coding" selected>Coding — plan, edit and verify files</option>
+              <option value="frontend">Frontend developer — build/fix UI code</option>
+              <option value="backend">Backend developer — build/fix server code</option>
+              <option value="database">Database engineer — schema, migrations, data access</option>
               <option value="planner">Planner — analyse and produce a plan (read-only)</option>
               <option value="testing">Testing — run tests and report real results (no edits)</option>
+              <option value="debugger">Debugger — reproduce and diagnose failures (no edits)</option>
               <option value="review">Review — findings report over the current code (read-only)</option>
             </select>
-            <small id="runProfileNote">Planner, testing and review stay read-only on the backend regardless of the checkboxes below.</small>
+            <small id="runProfileNote">Planner, testing, debugger and review stay read-only on the backend regardless of the checkboxes below.</small>
           </div>
           <div class="field">
             <span>Model mode</span>

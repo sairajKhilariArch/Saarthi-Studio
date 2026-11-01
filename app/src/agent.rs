@@ -809,15 +809,16 @@ struct PermissionGate;
 
 impl PermissionGate {
     fn decides(run: &RunRow, action: &Action) -> GateDecision {
-        // Profile is Trip mode: planner, testing and review run read-only by
-        // design — writes and commands are denied before the model even
-        // reaches them, no matter which checkboxes were ticked.
+        // Profile is the authority: inspectors (planner, review) run read-only
+        // by design — writes and commands are denied before the model even
+        // reaches them, no matter which checkboxes were ticked. Builders and
+        // running inspectors get their role's tools.
         if let Action::Write { .. } | Action::Command { .. } = action {
-            if !matches!(run.profile.as_str(), "coding") {
+            if !profile_can_write(&run.profile) {
                 if let Action::Write { .. } = action {
                     return GateDecision::Denied("file writes in this profile");
                 }
-                if !matches!(run.profile.as_str(), "testing") {
+                if !profile_can_command(&run.profile) {
                     return GateDecision::Denied("command execution in this profile");
                 }
             }
@@ -1728,7 +1729,13 @@ fn error_response(status: StatusCode, message: impl std::fmt::Display) -> Respon
 
 /// The profile picker: what this run is FOR. An unknown name is rejected at
 /// the door; an empty name is the default coding profile.
-const PROFILES: [&str; 4] = ["coding", "planner", "testing", "review"];
+// Specialist agent roles (multi-agent orchestration). Every role shares the
+// same model router; what differs is the role prompt and its tool permissions:
+// builders (coding, frontend, backend, database) edit files, inspectors
+// (planner, testing, debugger, review) produce reports and never modify code.
+const PROFILES: [&str; 8] = [
+    "coding", "frontend", "backend", "database", "planner", "testing", "debugger", "review",
+];
 
 fn normalize_profile(input: &str) -> String {
     let trimmed = input.trim().to_lowercase();
@@ -1745,9 +1752,33 @@ fn normalize_profile(input: &str) -> String {
 fn profile_role(profile: &str) -> &'static str {
     match profile {
         "planner" => {
-            "You are the Saarthi Studio PLANNER. Analyze the task and inspect the workspace as \
-needed, then produce a plan. When the plan is complete, finish with done whose summary IS \
-the plan (steps, likely files, dependencies). You may NOT write files or run commands."
+            "You are the Saarthi Studio ARCHITECT/PLANNER. Analyze the task and inspect the \
+workspace as needed, plan system structure and boundaries, and produce the plan the \
+implementation agents will follow. When the plan is complete, finish with done whose \
+summary IS the plan (steps, likely files, dependencies). You may NOT write files or \
+run commands."
+        }
+        "frontend" => {
+            "You are the Saarthi Studio FRONTEND developer. Build and fix UI code (markup, \
+styles, frontend scripts) in the workspace, one step at a time, and verify what you \
+can with commands. Finish with done only once the frontend actually addresses the goal."
+        }
+        "backend" => {
+            "You are the Saarthi Studio BACKEND developer. Build and fix server-side code, \
+routes and business logic in the workspace, one step at a time, and verify what you \
+can with commands. Finish with done only once the backend actually addresses the goal."
+        }
+        "database" => {
+            "You are the Saarthi Studio DATABASE engineer. Work on schema definitions, \
+migrations and data-access code in the workspace, one step at a time, and verify \
+what you can with commands. Finish with done only once the data layer actually \
+addresses the goal."
+        }
+        "debugger" => {
+            "You are the Saarthi Studio DEBUGGING agent. Reproduce failures with real \
+commands, read the relevant code and logs, and diagnose the exact cause with file \
+paths and line references. You may run commands but may NOT write files — your \
+summary is the diagnosis (and optionally the suggested fix), not a repair."
         }
         "testing" => {
             "You are the Saarthi Studio TESTING agent. Find and run the relevant tests for the \
@@ -1771,12 +1802,23 @@ going until the goal is actually met."
 
 fn profile_rule(profile: &str, write: bool) -> &'static str {
     match (profile, write) {
-        ("planner" | "review" | "testing", true) => {
+        ("planner" | "review" | "testing" | "debugger", true) => {
             "write FORBIDDEN — this profile never modifies files"
         }
         ("planner" | "review", false) => "command FORBIDDEN — this profile never runs commands",
         _ => "",
     }
+}
+
+/// Who may drive tools, independent of any checkboxes: builders edit files,
+/// inspectors (planner, review) never touch either, running inspectors
+/// (testing, debugger) get commands but no writes.
+fn profile_can_write(profile: &str) -> bool {
+    matches!(profile, "coding" | "frontend" | "backend" | "database")
+}
+
+fn profile_can_command(profile: &str) -> bool {
+    !matches!(profile, "planner" | "review")
 }
 
 /// The run-mode picker: "" is the normal single-model run, "hybrid" is
@@ -2438,6 +2480,40 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             ),
             GateDecision::Denied(_)
         ));
+
+        // Debugger runs commands but never writes.
+        let dbg = gated_run("debugger");
+        assert!(matches!(
+            PermissionGate::decides(
+                &dbg,
+                &Action::Command {
+                    command: "ls".into()
+                }
+            ),
+            GateDecision::Allowed
+        ));
+        assert!(matches!(
+            PermissionGate::decides(
+                &dbg,
+                &Action::Write {
+                    path: "a".into(),
+                    content: "b".into()
+                }
+            ),
+            GateDecision::Denied(_)
+        ));
+        // Builders get writes (frontend here).
+        let fe = gated_run("frontend");
+        assert!(matches!(
+            PermissionGate::decides(
+                &fe,
+                &Action::Write {
+                    path: "a".into(),
+                    content: "b".into()
+                }
+            ),
+            GateDecision::Allowed
+        ));
     }
 
     /// Convenience: an all-allowed coding run with one profile swapped.
@@ -2467,6 +2543,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(normalize_profile(""), "coding");
         assert_eq!(normalize_profile(" coding "), "coding");
         assert_eq!(normalize_profile("PLANNER"), "planner");
+        assert_eq!(normalize_profile("Frontend"), "frontend");
+        assert_eq!(normalize_profile("backend"), "backend");
+        assert_eq!(normalize_profile(" database "), "database");
+        assert_eq!(normalize_profile("Debugger"), "debugger");
         assert_eq!(normalize_profile("root"), "");
     }
 
