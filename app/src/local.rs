@@ -142,10 +142,21 @@ fn is_model_installed(models: &[Value], name: &str) -> bool {
 
 /// Build the /api/chat request body. Kept pure for tests.
 pub(crate) fn chat_request_body(model: &str, messages: &[Value], stream: bool) -> Value {
+    // Sampling options matter at 1.5B scale: with Ollama's defaults the runner
+    // quietly aborts degenerate loops ("token repeat limit reached"), which
+    // kills a run for a bad taste in one token. A real context window and a
+    // light repeat penalty keep the JSON protocol stable without changing
+    // model behaviour noticeably.
     json!({
         "model": model,
         "messages": messages,
         "stream": stream,
+        "options": {
+            "num_ctx": 8192,
+            "num_predict": 2048,
+            "repeat_penalty": 1.1,
+            "temperature": 0.4,
+        },
     })
 }
 

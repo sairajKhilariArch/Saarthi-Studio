@@ -15,6 +15,26 @@
 - Runs record their `mode`; the run composer gained a "Model mode" picker and
   `/api/runs` rejects unknown modes and hybrid runs with no local model.
 
+### Multi-agent team mode and local-model robustness
+
+- New per-run agent mode `team`: the executor works, then an independent
+  REVIEWER model checks the result. Findings land as a `review` step and ride
+  back on one repair round; a run that never passed review is not reported as
+  reviewer-approved.
+- Local executor loop hardened for 1.5B-class models: placeholder echoes of
+  the instruction examples (exact and prefixed paths/commands) are corrected
+  in a single step instead of a drift spiral, a thrown-in `fail` verdict goes
+  to review instead of silently ending the run, and the JSON repair chain
+  rebuilds unclosed `"""` value fences (closing at the next code fence and
+  undoing `\'` double-escapes) as its last fallback — a shape taken live from
+  a real repair round.
+- Local chat requests now pin sampling options (8k context, 2k output,
+  repeat penalty 1.1, temperature 0.4) so Ollama's runner stops aborting long
+  turns with "token repeat limit reached" on CPU.
+- Verified end to end on the machine: a broken `greet.py` diagnosed by the
+  local executor from the exit code, rewritten, verified (`python3 greet.py`
+  → `Hello, Saarthi!`, exit 0), reviewer APPROVE, run succeeded in team mode.
+
 ## 1.25.0
 
 ### CI/CD hygiene (Step 1)
