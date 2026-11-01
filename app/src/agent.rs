@@ -115,7 +115,16 @@ impl Action {
             "read" => Ok(Action::Read {
                 path: field("path", value)?,
             }),
-            "write" => Ok(Action::Write {
+            // Small executors say "create" for "write"; same meaning. A
+            // create/write with no content is an incomplete reply, not an
+            // executed step: report it and let the next turn do the real write.
+            "write" | "create" if value.get("content").and_then(Value::as_str).is_none() => {
+                Ok(Action::Think {
+                    summary: "The file action carried no content; emitting a real write now."
+                        .to_string(),
+                })
+            }
+            "write" | "create" => Ok(Action::Write {
                 path: field("path", value)?,
                 content: field("content", value)?,
             }),
@@ -127,6 +136,22 @@ impl Action {
             }),
             "fail" => Ok(Action::Fail {
                 reason: field("reason", value)?,
+            }),
+            // Small executors echo the execution log back and emit observed
+            // error tags ("write-error", …) or no-op reports ("verify") as
+            // their action. Those are step reports, not requests: map them to
+            // think steps so the loop continues instead of failing on
+            // unparseable replies.
+            "verify" => Ok(Action::Think {
+                summary: field("summary", value).unwrap_or_else(|_| "Verify the result".into()),
+            }),
+            other if other.ends_with("-error") => Ok(Action::Think {
+                summary: value
+                    .get("summary")
+                    .or_else(|| value.get("output"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("Reporting an earlier step error.")
+                    .to_string(),
             }),
             other => Err(format!("unknown action \"{other}\"")),
         }
@@ -148,12 +173,29 @@ fn parse_action(text: &str) -> ParsedAction {
     let trimmed = text.trim();
     match (trimmed.find('{'), trimmed.rfind('}')) {
         (Some(open), Some(close)) if close > open => {
-            match serde_json::from_str::<Value>(&trimmed[open..=close]) {
-                Ok(value) => match Action::from_json(&value) {
-                    Ok(action) => ParsedAction::Ok(action),
-                    Err(error) => ParsedAction::Malformed(format!("invalid action: {error}")),
-                },
-                Err(error) => ParsedAction::Malformed(format!("invalid JSON: {error}")),
+            let raw = &trimmed[open..=close];
+            // Small models sometimes wrap multi-line file content in Python
+            // triple quotes, which is not JSON at all. Repair that shape
+            // before anything else; real JSON never contains `"""`.
+            let docs = repair_triple_quotes(raw);
+            // Small models often emit raw newlines or tabs inside a string
+            // value (file content), which is invalid JSON. Give the document
+            // a second chance with those control characters escaped.
+            let doc = match serde_json::from_str::<Value>(&docs) {
+                Ok(doc) => doc,
+                Err(_first) if docs.contains(['\n', '\r', '\t']) => {
+                    match serde_json::from_str::<Value>(&escape_raw_controls(&docs)) {
+                        Ok(doc) => doc,
+                        Err(error) => {
+                            return ParsedAction::Malformed(format!("invalid JSON: {error}"))
+                        }
+                    }
+                }
+                Err(error) => return ParsedAction::Malformed(format!("invalid JSON: {error}")),
+            };
+            match Action::from_json(&doc) {
+                Ok(action) => ParsedAction::Ok(action),
+                Err(error) => ParsedAction::Malformed(format!("invalid action: {error}")),
             }
         }
         _ if !trimmed.is_empty() => ParsedAction::Ok(Action::Think {
@@ -161,6 +203,108 @@ fn parse_action(text: &str) -> ParsedAction {
         }),
         _ => ParsedAction::Malformed("empty reply".to_string()),
     }
+}
+
+/// Escape malformed JSON that small models emit: raw control characters and
+/// unescaped quotes that sit inside string literals so a reply with
+/// multi-line file content parses as the model meant it. Only runs as a
+/// second chance — well-formed replies are parsed first, untouched.
+fn repair_triple_quotes(raw: &str) -> String {
+    if !raw.contains("\"\"\"") {
+        return raw.to_string();
+    }
+    let mut out = String::with_capacity(raw.len() + 64);
+    let mut rest = raw;
+    while let Some(pos) = rest.find("\"\"\"") {
+        out.push_str(&rest[..pos]);
+        out.push('"'); // opening fence becomes a normal string start
+        let after = &rest[pos + 3..];
+        match after.find("\"\"\"") {
+            Some(end) => {
+                out.push_str(&escape_json_body(&after[..end]));
+                out.push('"');
+                rest = &after[end + 3..];
+            }
+            None => {
+                // Unclosed fence: escape to the end of the document.
+                out.push_str(&escape_json_body(after));
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Turn raw text into a valid JSON string body: quotes and backslashes
+/// escaped, control characters mapped to JSON escapes.
+fn escape_json_body(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    for c in content.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn escape_raw_controls(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 32);
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string && escaped {
+            escaped = false;
+            out.push(c);
+        } else if in_string {
+            match c {
+                '\\' => {
+                    escaped = true;
+                    out.push(c);
+                }
+                '"' => {
+                    // A quote ending a real JSON string is always followed by
+                    // a separator (`,`, `}`, `]`, `:`, whitespace, or the end
+                    // of the document). A quote before a letter or digit
+                    // therefore belongs inside the content — escape it.
+                    let follows_separator = matches!(
+                        chars.peek(),
+                        Some(',')
+                            | Some('}')
+                            | Some(']')
+                            | Some(':')
+                            | Some('\n')
+                            | Some('\r')
+                            | Some('\t')
+                            | Some(' ')
+                            | None
+                    );
+                    if follows_separator {
+                        in_string = false;
+                        out.push(c);
+                    } else {
+                        out.push_str("\\\"");
+                    }
+                }
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                _ => out.push(c),
+            }
+        } else {
+            out.push(c);
+            if c == '"' {
+                in_string = true;
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -507,9 +651,29 @@ fn unified_diff(old: Option<&str>, new: &str, path: &str) -> String {
 /// open folder even with every permission granted.
 async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, String> {
     match action {
-        Action::Write { path, content } => crate::workspace::write_text_file(root, path, content)
-            .map(|file| format!("Wrote {} bytes to {}.", file.content.len(), file.path))
-            .map_err(|e| e.message().to_string()),
+        Action::Write { path, content } => {
+            // Small executors write into subfolders that do not exist yet and
+            // then stall on "parent does not exist" errors. Write permission
+            // already covers creating the parent inside the workspace, so
+            // create it here instead of failing the step. Only plain-name
+            // components are accepted, so the folder can never escape root.
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                let plain = !parent.as_os_str().is_empty()
+                    && parent
+                        .components()
+                        .all(|c| matches!(c, std::path::Component::Normal(_)));
+                if plain {
+                    let target = root.join(parent);
+                    if !target.is_dir() {
+                        std::fs::create_dir_all(&target)
+                            .map_err(|e| format!("Could not create the parent folder: {e}"))?;
+                    }
+                }
+            }
+            crate::workspace::write_text_file(root, path, content)
+                .map(|file| format!("Wrote {} bytes to {}.", file.content.len(), file.path))
+                .map_err(|e| e.message().to_string())
+        }
         Action::Read { path } => crate::workspace::read_text_file(root, path)
             .map(|file| {
                 format!(
@@ -801,6 +965,18 @@ async fn hybrid_execute(
                 .to_string(),
         );
     }
+    // Small executors drift: a 1.5B model copies the placeholder payloads
+    // from the action list verbatim and treats `read` of a not-yet-created
+    // file as fatal. Repeating the ground rules costs a few tokens and
+    // removes the most common wasted turns.
+    let mut messages = messages;
+    messages.push(json!({
+        "role": "system",
+        "content": "Working rules for this local executor: the example values in the \
+    action list (relative/path, build/test command) are placeholders — replace them with \
+    real file names and real shell commands. A file that does not exist yet is expected: \
+    create it with the write action BEFORE running any command. One small step per reply."
+    }));
     let base = crate::local::effective_base_url(&cfg.local_base_url);
     match crate::local::chat_once(&base, &model, &messages).await {
         Ok((reply, _)) => Ok((reply, format!("local:{model}"))),
@@ -921,8 +1097,59 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     // Hybrid runs execute on the local runtime; the cloud was already used
     // for the plan. Every other run keeps the existing single-model path.
     let (reply, model_used) = if run.mode == "hybrid" {
-        let (reply, model) = hybrid_execute(state, run, messages).await?;
-        (reply, Some(model))
+        let (reply, model) = hybrid_execute(state, run, messages.clone()).await?;
+        // A model that declares `fail` is just as stuck as one whose local
+        // call errored out: buy the same one-shot piece of cloud guidance and
+        // retry, unless this run already spent its rescue.
+        let escalate_so_far: i64 = db(state)?
+            .query_row(
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='escalate'",
+                [&run.id],
+                |r| r.get(0),
+            )
+            .unwrap_or(i64::MAX);
+        let executed_so_far = executed_tool_steps(state, &run.id).unwrap_or(1);
+        let stuck_reason = match parse_action(&reply) {
+            ParsedAction::Ok(Action::Fail { reason }) => Some(format!(
+                "The local model gave up without completing the task: {reason}"
+            )),
+            // A `done` with no executed tool step is an unverified claim: no
+            // file was written and no command ran. Hold the run to the plan.
+            ParsedAction::Ok(Action::Done { .. }) if executed_so_far == 0 => Some(
+                "The local model claimed done but executed no plan action yet: no file was written and no command was run."
+                    .to_string(),
+            ),
+            _ => None,
+        };
+        match stuck_reason {
+            Some(reason) if escalate_so_far == 0 => {
+                let guidance = ask_cloud_for_guidance(state, run, &reason).await?;
+                add_step(
+                    state,
+                    &run.id,
+                    "escalate",
+                    "Local model stuck — the cloud model was asked for guidance.",
+                    &format!(
+                        "reason: {}\n\nguidance:\n{}",
+                        cap_chars(&reason, 800),
+                        cap_chars(&guidance, 2_000)
+                    ),
+                )?;
+                let mut retry = messages;
+                retry.push(json!({
+                    "role": "user",
+                    "content": format!(
+                        "Since your last step did not advance the task ({}).\n\nCloud guidance for getting unstuck:\n{}\n\nEmit the next single JSON action now, applying this guidance. Do not claim done until an executed action (file write or verified command) actually implements the plan.",
+                        cap_chars(&reason, 800),
+                        cap_chars(&guidance, 2_000)
+                    )
+                }));
+                // If the guided retry still errors out, the run fails honestly.
+                let (retry_reply, _) = hybrid_execute(state, run, retry).await?;
+                (retry_reply, Some(model))
+            }
+            _ => (reply, Some(model)),
+        }
     } else {
         // Adaptive routing (off unless configured): routine inspection steps
         // go to the cheap tier; planning, edits and repair go strong.
@@ -962,6 +1189,26 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             add_step(state, &run.id, "think", &summary, "")?;
         }
         ParsedAction::Ok(Action::Done { summary }) => {
+            // Honesty gate for hybrid executors: a run that says `done` while
+            // nothing was ever written or executed has nothing real to show
+            // for it. Reporting it as success would be a lie.
+            if run.mode == "hybrid" && executed_tool_steps(state, &run.id).unwrap_or(i64::MAX) == 0
+            {
+                add_step(
+                    state,
+                    &run.id,
+                    "fail",
+                    "Done without any executed action",
+                    "The model claimed the goal is complete, but no file was written and no command was run, so nothing was actually delivered or verified.",
+                )?;
+                finish(
+                    state,
+                    &run.id,
+                    FAILED,
+                    "The model claimed done without executing any plan action.",
+                )?;
+                return Ok(false);
+            }
             add_step(state, &run.id, "done", "Run complete", &summary)?;
             finish(state, &run.id, SUCCEEDED, "")?;
             return Ok(false);
@@ -999,6 +1246,19 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         }
     }
     Ok(true)
+}
+
+/// How many real tool steps (a written file or a run command) this run has
+/// produced. Used by the hybrid honesty gate: `done` with zero of these
+/// delivered nothing.
+fn executed_tool_steps(state: &AppState, run_id: &str) -> Result<i64, String> {
+    db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action IN ('write','command')",
+            [run_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())
 }
 
 /// The model sometimes re-emits the exact action it just executed (most often
@@ -1674,7 +1934,7 @@ mod tests {
                 assert_eq!(path, "hi.txt");
                 assert_eq!(content, "Hi there");
             }
-            other => panic!("expected write, got {other:?}"),
+            other => panic!("expected write with escaping, got {other:?}"),
         }
         let garbage = "{\"action\":\"teleport\",\"x\":3}";
         match parse_action(garbage) {
@@ -1693,6 +1953,74 @@ mod tests {
         }
         match parse_action("   ") {
             ParsedAction::Malformed(text) => assert_eq!(text, "empty reply"),
+            other => panic!("expected malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_action_repairs_raw_newlines_in_content() {
+        // Exactly how 1.5B executors emit multi-line file content.
+        let json_doc = "{\"action\": \"write\", \"path\": \"even_check.py\", \"content\": \"def is_even(n):\n    return n % 2 == 0\"}";
+        let raw = format!("```json\n{json_doc}\n```");
+        match parse_action(&raw) {
+            ParsedAction::Ok(Action::Write { path, content }) => {
+                assert_eq!(path, "even_check.py");
+                assert!(content.contains("def is_even(n):"));
+                assert!(content.contains('\n'));
+            }
+            other => panic!("expected write with escaping, got {other:?}"),
+        }
+        // Content with unescaped inner quotes parses as written, too.
+        let quoted = r#"{"action": "write", "path": "even_check.py", "content": "print("ODD")
+print("EVEN")
+"}"#;
+        match parse_action(quoted) {
+            ParsedAction::Ok(Action::Write { path, content }) => {
+                assert_eq!(path, "even_check.py");
+                assert!(content.contains("print(\"ODD\")\nprint(\"EVEN\")\n"));
+            }
+            other => panic!("expected write with escaping, got {other:?}"),
+        }
+        // Repair-on-escape gives up cleanly on genuinely broken JSON.
+        let broken = "{\"action\": wrong}";
+        match parse_action(broken) {
+            ParsedAction::Malformed(text) => assert!(text.contains("invalid JSON")),
+            other => panic!("expected malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_action_repairs_python_triple_quoted_content() {
+        // The real crash: the 1.5B executor wraps file content in Python
+        // docstring fences instead of a JSON string.
+        let raw = "```json\n{\n  \"action\": \"write\",\n  \"path\": \"even_check.py\",\n  \"content\": \"\"\"\\
+if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if is_even(num) else \"ODD\")\n\"\"\"\n}\n```";
+        match parse_action(raw) {
+            ParsedAction::Ok(Action::Write { path, content }) => {
+                assert_eq!(path, "even_check.py");
+                assert!(content.contains("int(sys.argv[1])"));
+                assert!(content.contains('"'), "inner quotes must survive");
+                assert!(content.contains('\n'));
+                assert!(!content.contains("\"\"\""));
+            }
+            other => panic!("expected write from triple-quoted content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn observed_error_tag_echo_becomes_a_think_report() {
+        // The 1.5B executor re-emits "write-error" from its own step log as
+        // its action; that must keep the loop alive, not fail the run.
+        let raw = "{\"action\": \"write-error\", \"summary\": \"Write even_check.py\"}";
+        match parse_action(raw) {
+            ParsedAction::Ok(Action::Think { summary }) => {
+                assert!(summary.contains("even_check"));
+            }
+            other => panic!("expected think report, got {other:?}"),
+        }
+        // Genuinely unknown tags still fail loudly.
+        match parse_action("{\"action\": \"teleport\"}") {
+            ParsedAction::Malformed(text) => assert!(text.contains("unknown action")),
             other => panic!("expected malformed, got {other:?}"),
         }
     }
@@ -1995,6 +2323,30 @@ mod tests {
         assert!(!diff.contains("-line1"), "{diff}");
 
         assert!(unified_diff(Some(old), old, "y.txt").contains("identical"));
+    }
+
+    #[tokio::test]
+    async fn write_action_creates_a_missing_parent_folder_inside_the_workspace() {
+        // The 1.5B executor kept writing into subfolders that do not exist;
+        // the write action creates the parent instead of failing the step.
+        let salt = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let dir = std::env::temp_dir().join(format!("saarthi-agent-wparent-{}", salt));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = FsPath::new(&dir);
+        let action = Action::Write {
+            path: "src/even_check.py".into(),
+            content: "def is_even(n):\n    return n % 2 == 0\n".into(),
+        };
+        let output = dispatch_action(root, &action).await.unwrap();
+        assert!(output.starts_with("Wrote "), "{output}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src/even_check.py")).unwrap(),
+            "def is_even(n):\n    return n % 2 == 0\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
