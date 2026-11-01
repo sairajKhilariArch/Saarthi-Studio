@@ -106,7 +106,10 @@ impl Action {
                 .map(str::to_string)
         };
         match tag {
-            "think" => Ok(Action::Think {
+            // Reviewer findings echoed by the executor itself (it reads the
+            // handoff and thinks it must review): findings are a report, so
+            // treat them as a think step, not a parse strike.
+            "think" | "review" | "review-issue" => Ok(Action::Think {
                 summary: field("summary", value)?,
             }),
             "list" => Ok(Action::List {
@@ -179,19 +182,25 @@ fn parse_action(text: &str) -> ParsedAction {
             // before anything else; real JSON never contains `"""`.
             let docs = repair_triple_quotes(raw);
             // Small models often emit raw newlines or tabs inside a string
-            // value (file content), which is invalid JSON. Give the document
-            // a second chance with those control characters escaped.
+            // value (file content), which is invalid JSON.
             let doc = match serde_json::from_str::<Value>(&docs) {
                 Ok(doc) => doc,
-                Err(_first) if docs.contains(['\n', '\r', '\t']) => {
-                    match serde_json::from_str::<Value>(&escape_raw_controls(&docs)) {
-                        Ok(doc) => doc,
-                        Err(error) => {
-                            return ParsedAction::Malformed(format!("invalid JSON: {error}"))
-                        }
+                Err(first) => {
+                    // Second chance: the control characters escaped.
+                    let escaped = escape_raw_controls(&docs);
+                    // Third chance for the 4B-class shape that defeats the
+                    // triple-quote pairing: content as a Python-style value
+                    // fence that itself contains docstrings (five `"""` per
+                    // document). Rebuild the string value directly.
+                    let rebuilt = escape_raw_controls(&repair_value_fence(raw).unwrap_or_default());
+                    match serde_json::from_str::<Value>(&escaped)
+                        .ok()
+                        .or_else(|| serde_json::from_str::<Value>(&rebuilt).ok())
+                    {
+                        Some(doc) => doc,
+                        None => return ParsedAction::Malformed(format!("invalid JSON: {first}")),
                     }
                 }
-                Err(error) => return ParsedAction::Malformed(format!("invalid JSON: {error}")),
             };
             match Action::from_json(&doc) {
                 Ok(action) => ParsedAction::Ok(action),
@@ -236,8 +245,32 @@ fn repair_triple_quotes(raw: &str) -> String {
     out
 }
 
-/// Turn raw text into a valid JSON string body: quotes and backslashes
+/// Escape malformed JSON that small models emit: quotes and backslashes
 /// escaped, control characters mapped to JSON escapes.
+/// The 4B-class executors write file content as a Python-style value fence
+/// (`"content": """` ... final `"""`) whose body itself contains docstrings,
+/// so there are five `"""` per document and fence-pairing cannot recover the
+/// original shape. The unambiguous anchors are the first fence in value
+/// position and the very last fence in the document: rebuild the string
+/// value from them with the body escaped.
+fn repair_value_fence(doc: &str) -> Option<String> {
+    // Anchor 1: the colon-space-fence of the content field; anchor 2: the
+    // very last fence in the document.
+    let open = doc.find(": \"\"\"")?;
+    let body_start = open + 5; // past `: """`
+    let close = doc.rfind("\"\"\"")?;
+    if close < body_start {
+        return None; // no body between the fences
+    }
+    let body = escape_json_body(&doc[body_start..close]);
+    Some(format!(
+        "{}\"{}\"{}",
+        &doc[..open + 2],
+        body,
+        &doc[close + 3..] // the JSON tail after the closing fence (e.g. `}`)
+    ))
+}
+
 fn escape_json_body(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
     for c in content.chars() {
@@ -826,7 +859,7 @@ fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
                  {{\"action\":\"list\",\"path\":\"relative/path\"}} inspect the folder\n\
                  {{\"action\":\"read\",\"path\":\"relative/path\"}} read a file (always read before editing)\n\
                  {{\"action\":\"write\",\"path\":\"relative/path\",\"content\":\"full file text\"}} create or overwrite a file\n\
-                 {{\"action\":\"command\",\"command\":\"build/test command\"}} run a shell command in the workspace\n\
+                 {{\"action\":\"command\",\"command\":\"echo ready\"}} run a shell command in the workspace\n\
                  {{\"action\":\"done\",\"summary\":\"...\"}} the goal is met and you verified it\n\
                  {{\"action\":\"fail\",\"reason\":\"...\"}} you cannot meet the goal\n\n\
                  Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}.",
@@ -968,15 +1001,8 @@ async fn hybrid_execute(
     // Small executors drift: a 1.5B model copies the placeholder payloads
     // from the action list verbatim and treats `read` of a not-yet-created
     // file as fatal. Repeating the ground rules costs a few tokens and
-    // removes the most common wasted turns.
-    let mut messages = messages;
-    messages.push(json!({
-        "role": "system",
-        "content": "Working rules for this local executor: the example values in the \
-    action list (relative/path, build/test command) are placeholders — replace them with \
-    real file names and real shell commands. A file that does not exist yet is expected: \
-    create it with the write action BEFORE running any command. One small step per reply."
-    }));
+    // removes the most common wasted turns. (Pushed for every mode in
+    // step_once now; see PLACEHOLDER_RULES.)
     let base = crate::local::effective_base_url(&cfg.local_base_url);
     match crate::local::chat_once(&base, &model, &messages).await {
         Ok((reply, _)) => Ok((reply, format!("local:{model}"))),
@@ -1058,6 +1084,152 @@ async fn ask_cloud_for_guidance(
 
 /// The previous step's action tag, used to pick the adaptive tier. Error
 /// steps are reported separately so repair always upgrades.
+/// Team orchestration after the executor claims done: the run switches to the
+/// REVIEWER agent (its role prompt, through the same shared model router —
+/// every role shares one router, nothing installs a private model). Verdicts:
+/// APPROVE finishes the run; a first ISSUES verdict hands the findings back to
+/// the executor for one repair round through the persisted step log; a second
+/// ISSUES verdict ends the run with the open findings recorded, never hidden.
+/// When the executor claimed `fail`, the honest terminal status is FAILED even
+/// if the pipeline is otherwise identical.
+async fn team_review_done(
+    state: &AppState,
+    run: &RunRow,
+    summary: &str,
+    executor_failed: bool,
+) -> Result<bool, String> {
+    let end_status = if executor_failed { FAILED } else { SUCCEEDED };
+    let rounds: i64 = db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='review'",
+            [&run.id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if rounds >= 2 {
+        // Both rounds failed the result: report that, do not loop forever.
+        add_step(
+            state,
+            &run.id,
+            if executor_failed { "fail" } else { "done" },
+            if executor_failed {
+                "Run stopped on the executor's fail plus unresolved review findings"
+            } else {
+                "Run complete with unresolved review findings"
+            },
+            &format!(
+                "{summary}\nTwo review rounds reported findings and the run stopped there. \
+                 Every finding is in the review steps of this log."
+            ),
+        )?;
+        finish(state, &run.id, end_status, "")?;
+        return Ok(false);
+    }
+    let reply = call_reviewer(state, run).await?;
+    let (approved, findings) = interpret_verdict(&reply);
+    if approved {
+        add_step(
+            state,
+            &run.id,
+            "review",
+            "The REVIEWER approved the executor's result.",
+            &reply,
+        )?;
+        add_step(
+            state,
+            &run.id,
+            "done",
+            "Run complete (reviewer-approved)",
+            summary,
+        )?;
+        // The reviewer verified against the goal, so its approval also
+        // overrides the executor's failure claim.
+        finish(state, &run.id, SUCCEEDED, "")?;
+        return Ok(false);
+    }
+    add_step(
+        state,
+        &run.id,
+        "review",
+        "The REVIEWER agent reports findings:",
+        &findings,
+    )?;
+    if rounds == 0 {
+        add_step(
+            state,
+            &run.id,
+            "handoff",
+            "Findings handed back to the EXECUTOR for one repair round.",
+            "Fix every finding above, re-verify the result, and only then claim done again.",
+        )?;
+        return Ok(true); // the loop continues: the executor acts on the findings
+    }
+    add_step(
+        state,
+        &run.id,
+        if executor_failed { "fail" } else { "done" },
+        if executor_failed {
+            "Run stopped on the executor's fail plus unresolved review findings"
+        } else {
+            "Run complete with unresolved review findings"
+        },
+        &format!(
+            "{summary}\nThe second review round still reported findings. They are kept in \
+             this log verbatim; nothing was marked fixed that was not fixed."
+        ),
+    )?;
+    finish(state, &run.id, end_status, "")?;
+    Ok(false)
+}
+
+/// The REVIEWER agent sees the goal and the full persisted execution log and
+/// answers with APPROVE or ISSUES. Same call_model surface as every other
+/// agent step: the shared model router decides which provider serves it.
+async fn call_reviewer(state: &AppState, run: &RunRow) -> Result<String, String> {
+    let history = build_history(state, &run.id)?;
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": format!(
+                "{}\n\nYou are reviewing one finished agent run. Start your reply with the \
+                 single word APPROVE (when the goal is genuinely met) or ISSUES (followed by \
+                 each concrete, checkable finding). No verdict word, no approval.",
+                profile_role("review")
+            ),
+        }),
+        json!({
+            "role": "user",
+            "content": format!(
+                "The agent was asked:\n{}\n\nFull execution log:\n{}\n\nVerify the \
+                 result against the goal — read what you need, run what you may — and \
+                 give your verdict.",
+                run.goal,
+                cap_chars(&history, 4_000)
+            )
+        }),
+    ];
+    let (reply, _meta) = crate::call_model(state, messages, None).await?;
+    if reply.trim().is_empty() {
+        return Err("The reviewer agent returned an empty reply.".into());
+    }
+    Ok(reply)
+}
+
+/// Read the reviewer's verdict word from its reply. Anything ambiguous counts
+/// as ISSUES: an unverified approval would be a lie, an extra repair round is
+/// only a slower run.
+fn interpret_verdict(reply: &str) -> (bool, String) {
+    // Markdown fences are plausible model output; opening backticks and any
+    // newlines before the verdict word do not change it.
+    let body = reply.trim().trim_start_matches(['`', '\n', '\r', ' ']);
+    let head = body.chars().take(48).collect::<String>().to_uppercase();
+    if head.starts_with("APPROVE") {
+        (true, reply.trim().to_string())
+    } else {
+        (false, reply.trim().to_string())
+    }
+}
+
 fn last_step_kind(state: &AppState, run_id: &str) -> Result<(String, bool), String> {
     let conn = db(state)?;
     let last: Option<String> = conn
@@ -1088,12 +1260,35 @@ fn record_model(state: &AppState, run_id: &str, model: Option<&str>) {
     }
 }
 
+/// Ground rules every executor gets, in every mode: the example payloads in
+/// the action list keep being echoed literally by models that think they are
+/// real values. Stated here once and shown each step — a few tokens against
+/// the most common wasted turns.
+const PLACEHOLDER_RULES: &str = "Working rules: the example values in the action list \
+(relative/path, echo ready) are placeholders — replace them with real \
+file names in this workspace and real shell commands. A file that does not exist \
+yet is expected: create it with the write action BEFORE running any command that \
+needs it. One small step per reply.";
+
 /// Feed the goal plus complete history into the model and get the next action.
 async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
         return Ok(false); // cancelled while we were working
     }
-    let messages = build_messages(run, &build_history(state, &run.id)?);
+    let mut messages = build_messages(run, &build_history(state, &run.id)?);
+    messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
+    // Team handoff: the run just came back from the REVIEWER with findings.
+    // The step log already carries them; this message tells the executor what
+    // to do with them so it does not re-claim done immediately.
+    if run.mode == "team" {
+        let (last, _) = last_step_kind(state, &run.id)?;
+        if last == "review" || last == "handoff" {
+            messages.push(json!({
+                "role": "user",
+                "content": "Your earlier result was reviewed and got findings (see the review step in the log). Address every finding now by writing real, fixed file content — never write instructions or issue summaries into the file — then re-verify and only then claim done again. Do not re-issue the same done summary."
+            }));
+        }
+    }
     // Hybrid runs execute on the local runtime; the cloud was already used
     // for the plan. Every other run keeps the existing single-model path.
     let (reply, model_used) = if run.mode == "hybrid" {
@@ -1209,11 +1404,23 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                 )?;
                 return Ok(false);
             }
+            // Team orchestration: the executor's done is not the run's end —
+            // the result goes to the REVIEWER agent (same entry point a human
+            // review has, same shared model router).
+            if run.mode == "team" {
+                return team_review_done(state, run, &summary, false).await;
+            }
             add_step(state, &run.id, "done", "Run complete", &summary)?;
             finish(state, &run.id, SUCCEEDED, "")?;
             return Ok(false);
         }
         ParsedAction::Ok(Action::Fail { reason }) => {
+            // Team runs do not die on the executor's word alone: the failure
+            // claim itself goes to the REVIEWER, which reads the whole log —
+            // including that one green command the executor managed to forget.
+            if run.mode == "team" {
+                return team_review_done(state, run, &reason, true).await;
+            }
             add_step(state, &run.id, "fail", "Model gave up", &reason)?;
             finish(state, &run.id, FAILED, &reason)?;
             return Ok(false);
@@ -1287,6 +1494,35 @@ async fn execute_action_step(
     run: &RunRow,
     action: &Action,
 ) -> Result<bool, String> {
+    // The example payloads in the action list get copied verbatim by drifting
+    // models, which then chase a phantom `relative/path` until they give up.
+    // Caught here as an instruction misread, not an execution error: one clear
+    // correction step, no strike, loop continues.
+    let placeholder_echo = match action {
+        Action::List { path } | Action::Read { path } | Action::Write { path, .. } => {
+            path == "relative/path"
+                || path.starts_with("relative/path/")
+                || path.starts_with("build/test/")
+        }
+        Action::Command { command } => {
+            command == "build/test" || command.starts_with("build/test ")
+        }
+        _ => false,
+    };
+    if placeholder_echo {
+        add_step(
+            state,
+            &run.id,
+            action.tag(),
+            "Used the example placeholder instead of a real value",
+            "\"relative/path\" and \"build/test\" are the placeholder examples from the \
+             instructions, not real values. Substitute a real file name in this \
+             workspace or a real shell command, then continue the task.",
+        )?;
+        notify(state, Some(&run.id));
+        return Ok(true);
+    }
+
     match PermissionGate::decides(run, action) {
         GateDecision::Denied(need) => {
             add_step(
@@ -1531,11 +1767,14 @@ fn profile_rule(profile: &str, write: bool) -> &'static str {
 }
 
 /// The run-mode picker: "" is the normal single-model run, "hybrid" is
-/// cloud-plans/local-executes. Anything else is rejected at the door.
+/// cloud-plans/local-executes, "team" runs the executor and then hands the
+/// result to the REVIEWER agent (a one-round repair loop). Anything else is
+/// rejected at the door.
 fn normalize_mode(input: &str) -> Option<String> {
     match input.trim().to_lowercase().as_str() {
         "" => Some(String::new()),
         "hybrid" => Some("hybrid".to_string()),
+        "team" => Some("team".to_string()),
         _ => None,
     }
 }
@@ -1582,7 +1821,7 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         None => {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                "Unknown agent mode — use \"hybrid\" or leave it out.",
+                "Unknown agent mode — use \"hybrid\", \"team\", or leave it out.",
             )
         }
     };
@@ -1990,6 +2229,30 @@ print("EVEN")
     }
 
     #[test]
+    fn write_action_rebuilds_value_fence_with_docstring_inside() {
+        // The 4B-class shape that defeats fence pairing: the content value is
+        // a Python fence whose body itself has docstrings — more `"""` in
+        // one document than pairing can recover. Rebuilt from the first
+        // value-position fence to the last fence in the document.
+        let raw = "```json\n{\n  \"action\": \"write\",\n  \"path\": \"greet.py\",\n  \"content\": \"\"\"\\
+def greet(name):\n    \"\"\"\n    Returns a greeting.\n    \"\"\"\n    return f'Hello, {name}!'\n\"\"\"\n}\n```";
+        let parsed = parse_action(raw);
+        match parsed {
+            ParsedAction::Ok(Action::Write { path, content }) => {
+                assert_eq!(path, "greet.py");
+                assert!(content.contains("def greet(name):"));
+                assert!(content.contains("Returns a greeting."));
+                assert!(content.contains("return f'Hello"));
+                assert!(
+                    content.contains('\"'),
+                    "docstring quotes must become escaped quotes"
+                );
+            }
+            other => panic!("expected rebuilt write action, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn write_action_repairs_python_triple_quoted_content() {
         // The real crash: the 1.5B executor wraps file content in Python
         // docstring fences instead of a JSON string.
@@ -2179,11 +2442,37 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     }
 
     #[test]
-    fn run_modes_accept_only_default_and_hybrid() {
+    fn run_modes_accept_default_hybrid_and_team() {
         assert_eq!(normalize_mode(""), Some(String::new()));
         assert_eq!(normalize_mode(" Hybrid "), Some("hybrid".to_string()));
+        assert_eq!(normalize_mode("team"), Some("team".to_string()));
+        assert_eq!(normalize_mode(" Team "), Some("team".to_string()));
         assert_eq!(normalize_mode("cloud"), None);
         assert_eq!(normalize_mode("local"), None);
+    }
+
+    #[test]
+    fn reviewer_verdict_requires_an_explicit_approve_word() {
+        let (approved, findings) = interpret_verdict("APPROVE - the goal is met.");
+        assert!(approved);
+        assert!(findings.contains("APPROVE"));
+        // Any formatting the models actually produce still counts.
+        let (approved, _) = interpret_verdict("```\nAPPROVE\n```");
+        assert!(approved);
+        // The verdict word must come first: “I approve.” buried in a sentence
+        // is not an approval the executor can rely on.
+        let (approved, _) = interpret_verdict("I approve.");
+        assert!(!approved);
+        // Ambiguous or missing verdict is ISSUES: an unverified approval would
+        // be a lie, an extra repair round is only a slower run.
+        let (approved, _) = interpret_verdict("The file looks fine to me.");
+        assert!(!approved);
+        let (approved, _) = interpret_verdict("");
+        assert!(!approved);
+        // Findings survive verbatim for the handoff step.
+        let (approved, findings) = interpret_verdict("ISSUES: test missing");
+        assert!(!approved);
+        assert_eq!(findings, "ISSUES: test missing");
     }
 
     #[test]
