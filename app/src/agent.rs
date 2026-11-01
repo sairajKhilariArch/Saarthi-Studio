@@ -255,12 +255,25 @@ fn repair_triple_quotes(raw: &str) -> String {
 /// value from them with the body escaped.
 fn repair_value_fence(doc: &str) -> Option<String> {
     // Anchor 1: the colon-space-fence of the content field; anchor 2: the
-    // very last fence in the document.
+    // very last fence in the document — or, when the model never closes it
+    // (a stray ```json fence follows instead), the boundary of that fence.
     let open = doc.find(": \"\"\"")?;
     let body_start = open + 5; // past `: """`
     let close = doc.rfind("\"\"\"")?;
     if close < body_start {
-        return None; // no body between the fences
+        // Unclosed open: the model ended the content at the next code fence.
+        // Keep body up to that boundary, drop the trailing junk (the intent
+        // is one action per reply), and undo the `\'` pairs it double-escaped.
+        let boundary = doc[body_start..].find("\n```")?;
+        let body = doc[body_start..body_start + boundary].replace("\\\'", "'");
+        let tail = &doc[body_start + boundary..].trim_start();
+        let tail = if tail.starts_with('}') { *tail } else { "}" };
+        return Some(format!(
+            "{}\"{}\"{}",
+            &doc[..open + 2],
+            escape_json_body(&body),
+            tail
+        ));
     }
     let body = escape_json_body(&doc[body_start..close]);
     Some(format!(
@@ -2252,6 +2265,22 @@ def greet(name):\n    \"\"\"\n    Returns a greeting.\n    \"\"\"\n    return f'
         }
     }
 
+    #[test]
+    fn write_action_rebuilds_unclosed_value_fence() {
+        // Wire shape from a real team repair round: the model opens a """
+        // value fence but closes it with a ```json block, then appends a
+        // second object. Rebuild the body up to the fence boundary and
+        // undo the backslash-escaped quotes it double-escaped.
+        let raw = "```json\n{\n  \"action\": \"write\",\n  \"path\": \"greet.py\",\n  \"content\": \"\"\"def greet(name):\n    return f\\'Hello, {name}!\\'\n```\n\n```json\n{ \"action\": \"command\" }\n```";
+        match parse_action(raw) {
+            ParsedAction::Ok(Action::Write { path, content }) => {
+                assert_eq!(path, "greet.py");
+                assert!(content.contains("def greet(name):"));
+                assert!(content.contains("return f'Hello, {name}!'"));
+            }
+            other => panic!("expected rebuilt write action, got {other:?}"),
+        }
+    }
     #[test]
     fn write_action_repairs_python_triple_quoted_content() {
         // The real crash: the 1.5B executor wraps file content in Python
