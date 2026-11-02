@@ -35,8 +35,45 @@
 - Tests: parse_crew defaults/role validation/writer rule, crew_stage_index clamping,
   reviewer verdict interpretation, permission gates with the crew field (120 desktop tests).
 - E2E orchestration verified in-test against a scripted mock router (real run loop, real /api/runs route, real SQLite step log): crew handoff (write -> handoff -> read -> done, handoff names the next reviewer stage), and the team review round (review ISSUES -> handoff repair -> second review APPROVE -> succeeded, workspace file actually fixed).
+- Multi-client parity closed: team/crew/profile ported to the VS Code standalone server
+  (agent.ts: normalizeMode/normalizeProfile/parseCrew/crewStageIndex/interpretVerdict,
+  profile-aware buildMessages + allowed() gating, staged stepOnce, teamReviewDone;
+  lib.ts /api/runs forwards profile/mode/crew; summaries expose mode+crew for the run
+  cards; hybrid answers with an honest "needs the desktop app" 400). E2E crew handoff,
+  team repair round and desktop-identical validation errors asserted in test/lib.test.mjs
+  (25/25 extension tests, tsc clean).
 
-## Next
+## Step 5 (master plan) — DRAFT: resilient multi-agent runs
+Goal: crews survive real workloads without lying about progress.
+1. Per-stage budgets: a stage max-steps (default: run budget split across stages) enforced
+   in the loop; an exhausted stage logs an honest "stage incomplete" handoff and either
+   fails or moves on per a per-run policy stored on the run row and shown on the card.
+2. Resume from stage k: reuse the approval-resume path - the step log is already the
+   orchestrator state, so "run again" continues the current stage without a new run.
+3. Crew templates: named rosters stored beside workflows; composer preset chips; POST
+   /api/runs keeps accepting raw line-ups (same validation).
+4. Cross-client golden run: one scripted mock-router scenario asserted byte-identical on
+   the Rust suite and the extension suite (step sequences already match).
+Acceptance: scripted tests cover budget exhaustion + resume + templates; desktop and
+extension produce identical step sequences for the same script.
+
+## Step 6 (master plan) - DRAFT: adaptive, accountable orchestration
+Goal: reuse the M6 adaptive-routing machinery for crews and close the loop on quality.
+1. Profile-aware tiers: inspector steps (review/planner thinking, reads) proposed on the
+   cheap tier, builders + repairs on strong - extend choose_tier with the acting profile;
+   opt-in adaptiveRouting unchanged.
+2. Per-role accountability: tag agent model calls with run_id+profile on request_log so
+   run cards can show who spent what (tokens, latency) - read-only SQL, no new engine.
+3. Crew insights: success rate and findings-by-role from review steps surfaced in the
+   existing usage/insights area.
+4. Quality gate (opt-in per run): require the final crew stage to be review, and
+   auto-append a debugger stage when review keeps reporting issues.
+Acceptance: adaptive choice recorded per step like M6; insights are plain SQL; no silent
+fallback beyond the existing tier failover.
+
+## Next
+- Android: run-composer mode picker + roster field, capability-gated (blocked on no device/emulator here).
+- Release: push the round and tag (needs an explicit ask). Android/gradle unit tests still blocked (no gradle/wrapper on this machine).
 - Release: push the round and tag (needs an explicit ask). Android/gradle unit tests can’t run on the current machine (no gradle/wrapper).
 
 ## Step 1 close-out (release pipeline repair)

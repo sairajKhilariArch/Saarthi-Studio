@@ -269,24 +269,45 @@ export function unifiedDiff(oldText: string | null, next: string, filePath: stri
 }
 
 /** The standing instruction plus the goal and capped history. */
-export function buildMessages(run: { goal: string; allowWrites: boolean; allowCommands: boolean; autoApprove: boolean }, history: string): ChatMessage[] {
-  const writeRule = run.allowWrites ? "write, list" : "list (write FORBIDDEN — never emit it)";
-  const commandRule = !run.allowCommands
-    ? "command FORBIDDEN — never emit it"
-    : run.autoApprove ? "command" : "command (each command first waits for user approval)";
-  const system = `You are the Saarthi Studio autonomous coding agent working inside an open ` +
-    `workspace folder. You complete the task one step at a time: inspect, plan, ` +
-    `edit, verify, and keep going until the goal is actually met. Reply with ` +
-    `EXACTLY ONE JSON object and nothing else — no markdown fences, no prose. Choose one:\n` +
-    `{"action":"think","summary":"..."} next thought, open question or plan\n` +
-    `{"action":"list","path":"relative/path"} inspect the folder\n` +
-    `{"action":"read","path":"relative/path"} read a file (always read before editing)\n` +
-    `{"action":"write","path":"relative/path","content":"full file text"} create or overwrite a file\n` +
-    `{"action":"command","command":"build/test command"} run a shell command in the workspace\n` +
-    `{"action":"done","summary":"..."} the goal is met and you verified it\n` +
-    `{"action":"fail","reason":"..."} you cannot meet the goal\n\n` +
+export function buildMessages(
+  run: { goal: string; allowWrites: boolean; allowCommands: boolean; autoApprove: boolean; profile?: string },
+  history: string,
+): ChatMessage[] {
+  // Profile rules override what the checkboxes say: the gate backs the
+  // prompt up, so a denied tool is both forbidden in text and refused.
+  const profile = run.profile || "";
+  const writeRule = profileRule(profile, true) ||
+    (run.allowWrites ? "write, list" : "list (write FORBIDDEN - never emit it)");
+  const commandRule = profileRule(profile, false) ||
+    (!run.allowCommands
+      ? "command FORBIDDEN - never emit it"
+      : run.autoApprove ? "command" : "command (each command first waits for user approval)");
+  const system = `${profileRole(profile)} Reply with ` +
+    `EXACTLY ONE JSON object and nothing else - no markdown fences, no prose. Choose one:
+` +
+    `{"action":"think","summary":"..."} next thought, open question or plan
+` +
+    `{"action":"list","path":"relative/path"} inspect the folder
+` +
+    `{"action":"read","path":"relative/path"} read a file (always read before editing)
+` +
+    `{"action":"write","path":"relative/path","content":"full file text"} create or overwrite a file
+` +
+    `{"action":"command","command":"build/test command"} run a shell command in the workspace
+` +
+    `{"action":"done","summary":"..."} the goal is met and you verified it
+` +
+    `{"action":"fail","reason":"..."} you cannot meet the goal
+
+` +
     `Permitted tools for this run: read: always; write: ${writeRule}; command: ${commandRule}.`;
-  const user = `Workspace goal:\n${run.goal}\n\nSteps so far:\n${history}\n\n` +
+  const user = `Workspace goal:
+${run.goal}
+
+Steps so far:
+${history}
+
+` +
     `Choose the next single step as one JSON action. If a previous step errored, ` +
     `diagnose it and repair your approach; if you already verified success, emit done.`;
   return [{ role: "system", content: system }, { role: "user", content: user }];
@@ -309,6 +330,134 @@ export function buildHistory(steps: Array<{ seq: number; action: string; summary
 }
 
 /* ------------------------------------------------------------------ */
+/* multi-agent orchestration (agent.rs port)                           */
+
+export const PROFILES = [
+  "coding", "frontend", "backend", "database",
+  "planner", "testing", "debugger", "review",
+] as const;
+
+/** Standing role prompt prefixed onto every step (agent.rs profile_role). */
+export function profileRole(profile: string): string {
+  switch (profile) {
+    case "planner":
+      return "You are the Saarthi Studio ARCHITECT/PLANNER. Analyze the task and inspect the workspace as needed, plan system structure and boundaries, and produce the plan the implementation agents will follow. When the plan is complete, finish with done whose summary IS the plan (steps, likely files, dependencies). You may NOT write files or run commands.";
+    case "frontend":
+      return "You are the Saarthi Studio FRONTEND developer. Build and fix UI code (markup, styles, frontend scripts) in the workspace, one step at a time, and verify what you can with commands. Finish with done only once the frontend actually addresses the goal.";
+    case "backend":
+      return "You are the Saarthi Studio BACKEND developer. Build and fix server-side code, routes and business logic in the workspace, one step at a time, and verify what you can with commands. Finish with done only once the backend actually addresses the goal.";
+    case "database":
+      return "You are the Saarthi Studio DATABASE engineer. Work on schema definitions, migrations and data-access code in the workspace, one step at a time, and verify what you can with commands. Finish with done only once the data layer actually addresses the goal.";
+    case "debugger":
+      return "You are the Saarthi Studio DEBUGGING agent. Reproduce failures with real commands, read the relevant code and logs, and diagnose the exact cause with file paths and line references. You may run commands but may NOT write files. Your summary is the diagnosis (and optionally the suggested fix), not a repair.";
+    case "testing":
+      return "You are the Saarthi Studio TESTING agent. Find and run the relevant tests for the goal, capture real exit codes and output, and separate infrastructure failures (missing tools or deps) from actual test failures. You may run commands but may NOT write files. Never claim tests passed unless a run said so.";
+    case "review":
+      return "You are the Saarthi Studio REVIEWER. Inspect the current code and recent diffs, and report concrete findings (bugs, security risks, regressions, maintainability issues) with file paths and line references where possible. You may NOT write files or run commands. Finish with done whose summary is the findings list.";
+    default:
+      return "You are the Saarthi Studio autonomous coding agent working inside an open workspace folder. You complete the task one step at a time: inspect, plan, edit, verify, and keep going until the goal is actually met.";
+  }
+}
+
+export function normalizeProfile(input: unknown): string {
+  const trimmed = String(input ?? "").trim().toLowerCase();
+  if (!trimmed) return "coding";
+  return (PROFILES as readonly string[]).includes(trimmed) ? trimmed : "";
+}
+
+/** "" normal run, "team" executor->REVIEWER, "crew" staged pipeline, "hybrid" desktop-only. */
+export function normalizeMode(input: unknown): string | null {
+  const value = String(input ?? "").trim().toLowerCase();
+  if (!value) return "";
+  if (value === "hybrid" || value === "team" || value === "crew") return value;
+  return null;
+}
+
+/** Parse and validate the crew roster; returns the roles or the error message. */
+export function parseCrew(input: { crew?: unknown }, mode: string, allowWrites: boolean): string[] | string {
+  if (mode !== "crew") return [];
+  let roles: string[];
+  if (input.crew === undefined || input.crew === null) {
+    roles = ["coding", "review"];
+  } else if (Array.isArray(input.crew)) {
+    roles = [];
+    for (const item of input.crew as unknown[]) {
+      const profile = normalizeProfile(item);
+      if (!profile) {
+        const raw = typeof item === "string" ? item : JSON.stringify(item);
+        return `Unknown crew agent role: ${raw}. Known roles: ${PROFILES.join(", ")}.`;
+      }
+      roles.push(profile);
+    }
+    if (!roles.length || roles.length > 6) return "A crew has 1–6 agent stages.";
+  } else {
+    return "The crew field must be a JSON array of role names.";
+  }
+  if (allowWrites && !roles.some(profileCanWrite)) {
+    return "This crew has no building agent, but file writes are allowed - add a building role (coding, frontend, backend, database) or turn writes off.";
+  }
+  return roles;
+}
+
+/* ------------------------------------------------------------------ */
+/** Crew stages are counted by recorded handoffs, clamped to the last stage. */
+export function crewStageIndex(handoffSteps: number, crewLen: number): number {
+  return Math.min(Math.max(handoffSteps, 0), Math.max(crewLen - 1, 0));
+}
+
+/** APPROVE or nothing: an unverified approval would be a lie (interpret_verdict). */
+export function interpretVerdict(reply: string): { approved: boolean; findings: string } {
+  const trimmed = String(reply || "").trim();
+  const head = [...trimmed.replace(/^[`\n\r ]+/, "")].slice(0, 48).join("").toUpperCase();
+  return { approved: head.startsWith("APPROVE"), findings: trimmed };
+}
+
+/** Builders edit files; inspectors (planner, review) never touch either. */
+function profileCanWrite(profile: string): boolean {
+  return ["coding", "frontend", "backend", "database"].includes(profile);
+}
+function profileCanCommand(profile: string): boolean {
+  return !["planner", "review"].includes(profile);
+}
+function profileRule(profile: string, write: boolean): string {
+  if (["planner", "review", "testing", "debugger"].includes(profile) && write) {
+    return "write FORBIDDEN - this profile never modifies files";
+  }
+  if (["planner", "review"].includes(profile) && !write) {
+    return "command FORBIDDEN - this profile never runs commands";
+  }
+  return "";
+}
+
+/** One stage-start message per crew handoff, mirroring agent.rs step_once. */
+function crewStageStart(profile: string): string {
+  return `You are the ${profile} agent in a crew. Earlier stages' actions and results are in the step log. Do your role's part of the goal now, and finish with done when your stage's work is complete - not the whole task unless your role is the last builder.`;
+}
+
+const TEAM_REPAIR_DIRECTIVE = "Your earlier result was reviewed and got findings (see the review step in the log). Address every finding now by writing real, fixed file content - never write instructions or issue summaries into the file - then re-verify and only then claim done again. Do not re-issue the same done summary.";
+
+/** The REVIEWER call sees the goal and the full persisted log (call_reviewer). */
+function reviewerMessages(goal: string, history: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: `${profileRole("review")}
+
+You are reviewing one finished agent run. Start your reply with the single word APPROVE (when the goal is genuinely met) or ISSUES (followed by each concrete, checkable finding). No verdict word, no approval.`,
+    },
+    {
+      role: "user",
+      content: `The agent was asked:
+${goal}
+
+Full execution log:
+${capChars(history, 4000)}
+
+Verify the result against the goal - read what you need, run what you may - and give your verdict.`,
+    },
+  ];
+}
+
 /* run store (beside the conversation store, plain JSON)               */
 
 export interface AgentRun {
@@ -324,6 +473,10 @@ export interface AgentRun {
   error: string;
   createdAt: number;
   updatedAt: number;
+  /** Multi-agent orchestration (agent.rs): "" default run, team/crew. */
+  profile?: string;
+  mode?: string;
+  crew?: string[];
 }
 
 export interface AgentStep {
@@ -387,6 +540,7 @@ export class RunStore {
   create(input: {
     projectId: string; goal: string; allowWrites: boolean; allowCommands: boolean;
     autoApprove: boolean; maxSteps: number;
+    profile?: string; mode?: string; crew?: string[];
   }): AgentRun {
     const now = Date.now() / 1000;
     const run: AgentRun = {
@@ -402,6 +556,9 @@ export class RunStore {
       error: "",
       createdAt: now,
       updatedAt: now,
+      profile: input.profile || "coding",
+      mode: input.mode || "",
+      crew: Array.isArray(input.crew) ? input.crew : [],
     };
     this.data.runs.push(run);
     this.save();
@@ -580,6 +737,9 @@ function runSummaryJson(run: AgentRun, stepCount: number): Record<string, unknow
     steps: stepCount,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
+    profile: run.profile || "coding",
+    mode: run.mode || "",
+    crew: run.mode === "crew" ? run.crew || [] : undefined,
   };
 }
 
@@ -595,6 +755,10 @@ function pendingSummaryJson(run: AgentRun): Record<string, unknown> | null {
 }
 
 function allowed(run: AgentRun, action: AgentAction): { kind: "allowed" | "needs-approval" | "denied"; need?: string } {
+  if (action.action === "write" && !profileCanWrite(run.profile || ""))
+    return { kind: "denied", need: "file writes (this profile never modifies files)" };
+  if (action.action === "command" && !profileCanCommand(run.profile || ""))
+    return { kind: "denied", need: "command execution (this profile never runs commands)" };
   if (action.action === "write" && !run.allowWrites) return { kind: "denied", need: "file writes" };
   if (action.action === "command" && !run.allowCommands) return { kind: "denied", need: "command execution" };
   if ((action.action === "write" || action.action === "command") && !run.autoApprove) return { kind: "needs-approval" };
@@ -659,7 +823,21 @@ export class AgentRuntime {
   create(input: {
     goal?: unknown; allowWrites?: unknown; allowCommands?: unknown;
     autoApprove?: unknown; maxSteps?: unknown; projectId?: string;
+    profile?: unknown; mode?: unknown; crew?: unknown;
   }): { ok: true; id: string } | { ok: false; error: string; status?: number } {
+    const profile = normalizeProfile(input.profile);
+    if (!profile) return { ok: false, error: "Unknown agent profile.", status: 400 };
+    const mode = normalizeMode(input.mode);
+    if (mode === null) {
+      return { ok: false, error: 'Unknown agent mode - use "hybrid", "team", "crew", or leave it out.', status: 400 };
+    }
+    // Hybrid executes on the desktop's local model runtime; the extension has
+    // none, so here the honest answer is a redirect, not a broken run.
+    if (mode === "hybrid") {
+      return { ok: false, error: "Hybrid mode needs the desktop app's local model runtime - start hybrid runs in the desktop app.", status: 400 };
+    }
+    const crew = parseCrew(input as { crew?: unknown }, mode, Boolean(input.allowWrites));
+    if (typeof crew === "string") return { ok: false, error: crew, status: 400 };
     const goal = String(input.goal || "").trim();
     if (!goal) return { ok: false, error: "Describe what the agent should do.", status: 400 };
     if ([...goal].length > 5_000) return { ok: false, error: "Goal is too long.", status: 400 };
@@ -678,6 +856,9 @@ export class AgentRuntime {
       allowCommands: Boolean(input.allowCommands),
       autoApprove: Boolean(input.autoApprove),
       maxSteps: Number(input.maxSteps) || DEFAULT_MAX_STEPS,
+      profile,
+      mode,
+      crew,
     });
     this.drive(run.id);
     this.deps.notify(run.id);
@@ -806,8 +987,35 @@ export class AgentRuntime {
 
   /** One model step. Returns false when the run reached a terminal state. */
   private async stepOnce(run: AgentRun): Promise<boolean> {
-    const history = buildHistory(this.store.steps(run.id));
-    const reply = await this.deps.callRouter(buildMessages(run, history));
+    // Crew/team orchestration (agent.rs): the log itself is the orchestrator
+    // state - stage k is the number of recorded handoffs, and the stage
+    // profile decides both the prompt and the tool gates.
+    const mode = run.mode || "";
+    const crew = mode === "crew" && Array.isArray(run.crew) ? run.crew : [];
+    const steps = this.store.steps(run.id);
+    const handoffs = mode === "crew"
+      ? steps.filter((step) => step.action === "handoff").length
+      : 0;
+    const stageProfile = mode === "crew"
+      ? crew[crewStageIndex(handoffs, crew.length)] || run.profile || ""
+      : run.profile || "";
+    const staged: AgentRun = {
+      ...run,
+      profile: stageProfile,
+      allowWrites: run.allowWrites && profileCanWrite(stageProfile),
+      allowCommands: run.allowCommands && profileCanCommand(stageProfile),
+    };
+    const lastStep = steps.length ? steps[steps.length - 1].action : "";
+    const messages = buildMessages(staged, buildHistory(steps));
+    // Team handoff: the run just came back from the REVIEWER with findings.
+    if (mode === "team" && (lastStep === "review" || lastStep === "handoff")) {
+      messages.push({ role: "user", content: TEAM_REPAIR_DIRECTIVE });
+    }
+    // Crew stage start: the model must know whose job it is now.
+    if (mode === "crew" && lastStep === "handoff") {
+      messages.push({ role: "user", content: crewStageStart(staged.profile || "") });
+    }
+    const reply = await this.deps.callRouter(messages);
     // A cancel can land while the model is thinking: a stopped run must not
     // act on the reply that arrives afterwards (mirrors agent.rs step_once).
     const live = this.store.load(run.id);
@@ -825,17 +1033,91 @@ export class AgentRuntime {
       case "think":
         this.store.appendStep(run.id, "think", parsed.action.summary || "", "");
         return true;
-      case "done":
-        this.store.appendStep(run.id, "done", "Run complete", parsed.action.summary || "");
+      case "done": {
+        const summary = parsed.action.summary || "";
+        // Crew advancing: a finished stage hands off to the next role and
+        // the run continues; only the last stage's done ends the run.
+        if (mode === "crew" && handoffs + 1 < crew.length) {
+          this.store.appendStep(
+            run.id,
+            "handoff",
+            `Stage ${staged.profile} finished; ${crew[handoffs + 1]} agent takes over.`,
+            summary,
+          );
+          return true;
+        }
+        // Team orchestration: the executor's done is not the run's end - the
+        // result goes to the REVIEWER agent through the same router.
+        if (mode === "team") {
+          return await this.teamReviewDone(run, summary, false);
+        }
+        this.store.appendStep(run.id, "done", "Run complete", summary);
         this.store.finish(run.id, SUCCEEDED, "");
         return false;
+      }
       case "fail":
+        // Team runs do not die on the executor's word alone: the failure
+        // claim itself goes to the REVIEWER, which reads the whole log.
+        if (mode === "team") {
+          return await this.teamReviewDone(run, parsed.action.reason || "", true);
+        }
         this.store.appendStep(run.id, "fail", "Model gave up", parsed.action.reason || "");
         this.store.finish(run.id, FAILED, parsed.action.reason || "");
         return false;
       default:
-        return this.executeStep(run, parsed.action);
+        return this.executeStep(staged, parsed.action);
     }
+  }
+
+  /** Team orchestration: the executor's done goes to the REVIEWER agent,
+   * which answers with APPROVE or ISSUES over the same shared model router
+   * (team_review_done in agent.rs). */
+  private async teamReviewDone(run: AgentRun, summary: string, executorFailed: boolean): Promise<boolean> {
+    const stopKind = executorFailed ? "fail" : "done";
+    const endStatus = executorFailed ? FAILED : SUCCEEDED;
+    const rounds = this.store.steps(run.id).filter((step) => step.action === "review").length;
+    if (rounds >= 2) {
+      // Both rounds failed the result: report that, do not loop forever.
+      this.store.appendStep(run.id, stopKind,
+        executorFailed
+          ? "Run stopped on the executor's fail plus unresolved review findings"
+          : "Run complete with unresolved review findings",
+        `${summary}
+Two review rounds reported findings and the run stopped there. Every finding is in the review steps of this log.`);
+      this.store.finish(run.id, endStatus, "");
+      return false;
+    }
+    const reply = await this.deps.callRouter(
+      reviewerMessages(run.goal, buildHistory(this.store.steps(run.id))),
+    );
+    if (!reply.trim()) throw new Error("The reviewer agent returned an empty reply.");
+    const { approved, findings } = interpretVerdict(reply);
+    if (approved) {
+      this.store.appendStep(run.id, "review", "The REVIEWER approved the executor's result.", reply);
+      this.store.appendStep(run.id, "done", "Run complete (reviewer-approved)", summary);
+      // The reviewer verified against the goal, so its approval also
+      // overrides the executor's failure claim.
+      this.store.finish(run.id, SUCCEEDED, "");
+      return false;
+    }
+    this.store.appendStep(run.id, "review", "The REVIEWER agent reports findings:", findings);
+    if (rounds === 0) {
+      this.store.appendStep(
+        run.id,
+        "handoff",
+        "Findings handed back to the EXECUTOR for one repair round.",
+        "Fix every finding above, re-verify the result, and only then claim done again.",
+      );
+      return true; // the loop continues: the executor acts on the findings
+    }
+    this.store.appendStep(run.id, stopKind,
+      executorFailed
+        ? "Run stopped on the executor's fail plus unresolved review findings"
+        : "Run complete with unresolved review findings",
+      `${summary}
+The second review round still reported findings. They are kept in this log verbatim; nothing was marked fixed that was not fixed.`);
+    this.store.finish(run.id, endStatus, "");
+    return false;
   }
 
   /** Permission gate, approval gate, execute, log — mirrors agent.rs. */

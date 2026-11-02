@@ -1529,6 +1529,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           autoApprove: body.autoApprove,
           maxSteps: Number(body.maxSteps) || DEFAULT_MAX_STEPS,
           projectId: activeProject() || "",
+          profile: body.profile,
+          mode: body.mode,
+          crew: body.crew,
         });
         if (!result.ok) {
           sendJson(response, result.status || 400, { ok: false, error: result.error });

@@ -687,3 +687,186 @@ test("agent runs: denied permission and cancellation", async () => {
   cleanupTemp(workspace);
   cleanupTemp(storage);
 });
+
+test("agent runs: crew mode hands off between specialist stages", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const answers = [
+    '{"action":"write","path":"hello.txt","content":"hi from coding"}',
+    '{"action":"done","summary":"hello.txt is written"}',
+    '{"action":"read","path":"hello.txt"}',
+    '{"action":"done","summary":"the file content checks out"}',
+  ];
+  const fetchImpl = async () => new Response(
+    JSON.stringify({
+      model: "auto", provider: "mock",
+      choices: [{ message: { content: answers.length ? answers.shift() : '{"action":"fail","reason":"mock out of replies"}' } }],
+    }),
+    { status: 200 },
+  );
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 8000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await get(`/api/runs/${id}`);
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const run = await post("/api/runs", {
+    goal: "write hello.txt, then have a reviewer verify it",
+    allowWrites: true,
+    autoApprove: true,
+    mode: "crew",
+  });
+  assert.equal(run.status, 200);
+  const id = run.body.run.id;
+  const done = await waitRun(id, (data) => data.status === "succeeded");
+  assert.deepEqual(done.stepList.map((step) => step.action), ["write", "handoff", "read", "done"]);
+  assert.equal(done.mode, "crew");
+  assert.deepEqual(done.crew, ["coding", "review"]);
+  assert.match(done.stepList.find((step) => step.action === "handoff").summary, /review agent takes over/);
+  assert.equal(fs.readFileSync(path.join(workspace, "hello.txt"), "utf8"), "hi from coding");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("agent runs: team mode rounds one repair through the reviewer", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const answers = [
+    '{"action":"write","path":"hi.txt","content":"helo"}',
+    '{"action":"done","summary":"wrote hi.txt"}',
+    // Reviewer round 1: findings go back to the executor as a handoff.
+    "ISSUES: hi.txt reads helo; it should read hello.",
+    // Repair round: real replaced content, then done again.
+    '{"action":"write","path":"hi.txt","content":"hello"}',
+    '{"action":"done","summary":"fixed the spelling"}',
+    // Reviewer round 2 approves.
+    "APPROVE - the finding is fixed.",
+  ];
+  const fetchImpl = async () => new Response(
+    JSON.stringify({
+      model: "auto", provider: "mock",
+      choices: [{ message: { content: answers.length ? answers.shift() : '{"action":"fail","reason":"mock out of replies"}' } }],
+    }),
+    { status: 200 },
+  );
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 8000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await get(`/api/runs/${id}`);
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const run = await post("/api/runs", {
+    goal: "create hi.txt containing the word hello",
+    allowWrites: true,
+    autoApprove: true,
+    mode: "team",
+  });
+  assert.equal(run.status, 200);
+  const id = run.body.run.id;
+  const done = await waitRun(id, (data) => data.status === "succeeded");
+  assert.deepEqual(done.stepList.map((step) => step.action), ["write", "review", "handoff", "write", "review", "done"]);
+  assert.equal(done.mode, "team");
+  assert.equal(fs.readFileSync(path.join(workspace, "hi.txt"), "utf8"), "hello");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("agent runs: mode, profile and roster validation mirrors the desktop", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl: async () => new Response("{}", { status: 200 }),
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "", model: "auto", contextBudgetTokens: 4000, historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const cases = [
+    [{ goal: "x", mode: "chef" }, 400, /Unknown agent mode/],
+    [{ goal: "x", mode: "hybrid" }, 400, /Hybrid mode needs the desktop app/],
+    [{ goal: "x", mode: "crew", crew: ["chef"] }, 400, /Known roles/],
+    [{ goal: "x", mode: "crew", crew: "coding" }, 400, /JSON array/],
+    [{ goal: "x", mode: "crew", crew: [] }, 400, /agent stages/],
+    [{ goal: "x", mode: "crew", crew: ["planner", "review"], allowWrites: true }, 400, /no building agent/],
+    [{ goal: "x", profile: "chef" }, 400, /Unknown agent profile/],
+  ];
+  for (const [payload, status, pattern] of cases) {
+    const result = await post("/api/runs", payload);
+    assert.equal(result.status, status, JSON.stringify(payload));
+    assert.match(result.body.error, pattern, JSON.stringify(payload));
+  }
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
