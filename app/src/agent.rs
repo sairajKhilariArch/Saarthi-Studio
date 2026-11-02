@@ -1870,6 +1870,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(prefix, post(create_run).get(list_runs))
         .route(format!("{prefix}/:id").as_str(), get(get_run))
         .route(format!("{prefix}/:id/approve").as_str(), post(approve_run))
+        .route(format!("{prefix}/:id/resume").as_str(), post(resume_run))
         .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
