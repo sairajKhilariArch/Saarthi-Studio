@@ -390,8 +390,10 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE agent_runs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_runs ADD COLUMN router_config TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_runs ADD COLUMN profile TEXT NOT NULL DEFAULT 'coding'",
-        // "" is a normal single-model run; "hybrid" is cloud-plan/local-execute.
+        // "" is the normal single-model run; "hybrid" is cloud-plan/local-execute.
         "ALTER TABLE agent_runs ADD COLUMN mode TEXT NOT NULL DEFAULT ''",
+        // Crew line-up for multi-agent runs (JSON array of role names).
+        "ALTER TABLE agent_runs ADD COLUMN crew TEXT NOT NULL DEFAULT ''",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -420,8 +422,11 @@ struct RunRow {
     model: String,
     profile: String,
     /// "" for a normal run, "hybrid" when the cloud plans and the local
-    /// runtime executes.
+    /// runtime executes, "team" for the executor→reviewer pipeline, "crew"
+    /// for a sequential multi-agent chain of specialist stages.
     mode: String,
+    /// Crew line-up for crew runs: JSON list of role names ("" elsewhere).
+    crew: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -442,6 +447,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         model: row.get(13)?,
         profile: row.get(14)?,
         mode: row.get(15)?,
+        crew: row.get(16)?,
     })
 }
 
@@ -542,7 +548,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -581,6 +587,10 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "createdAt": row.created_at, "updatedAt": row.updated_at,
         "model": row.model, "routerConfig": row.router_config,
         "profile": row.profile, "mode": row.mode,
+        "crew": serde_json::from_str::<Value>(&row.crew)
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default(),
     })
 }
 
@@ -1244,6 +1254,31 @@ fn interpret_verdict(reply: &str) -> (bool, String) {
     }
 }
 
+/// A run seen through one agent role: same row, different specialist. Used by
+/// crew stages so prompts and tool gates follow the acting agent, not the
+/// run's default profile.
+fn view_run(run: &RunRow, profile: &str) -> RunRow {
+    RunRow {
+        id: run.id.clone(),
+        project_id: run.project_id.clone(),
+        goal: run.goal.clone(),
+        status: run.status.clone(),
+        allow_writes: run.allow_writes,
+        allow_commands: run.allow_commands,
+        auto_approve: run.auto_approve,
+        max_steps: run.max_steps,
+        pending_action: run.pending_action.clone(),
+        error: run.error.clone(),
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+        router_config: run.router_config.clone(),
+        model: run.model.clone(),
+        profile: profile.to_string(),
+        mode: run.mode.clone(),
+        crew: run.crew.clone(),
+    }
+}
+
 fn last_step_kind(state: &AppState, run_id: &str) -> Result<(String, bool), String> {
     let conn = db(state)?;
     let last: Option<String> = conn
@@ -1289,7 +1324,28 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
         return Ok(false); // cancelled while we were working
     }
-    let mut messages = build_messages(run, &build_history(state, &run.id)?);
+    // Crew orchestration: the log itself is the orchestrator state. Stage k
+    // (number of recorded handoffs) decides which specialist agent acts, so
+    // prompts and tool gates always follow the stage, and the handoff steps
+    // hand work from one agent to the next through shared history.
+    let crew: Vec<String> = if run.mode == "crew" {
+        serde_json::from_str(&run.crew).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let handoffs: i64 = if run.mode == "crew" {
+        db(state)?
+            .query_row(
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='handoff'",
+                [&run.id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let staged_run = view_run(run, crew.get(crew_stage_index(handoffs, crew.len())).unwrap_or(&run.profile));
+    let mut messages = build_messages(&staged_run, &build_history(state, &run.id)?);
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
     // The step log already carries them; this message tells the executor what
@@ -1300,6 +1356,20 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             messages.push(json!({
                 "role": "user",
                 "content": "Your earlier result was reviewed and got findings (see the review step in the log). Address every finding now by writing real, fixed file content — never write instructions or issue summaries into the file — then re-verify and only then claim done again. Do not re-issue the same done summary."
+            }));
+        }
+    }
+    // Crew stage start: the model must know whose job it is now. Findings and
+    // prior work ride on in the log; only the role boundary needs stating.
+    if run.mode == "crew" {
+        let (last, _) = last_step_kind(state, &run.id)?;
+        if last == "handoff" {
+            messages.push(json!({
+                "role": "user",
+                "content": format!(
+                    "You are the {} agent in a crew. Earlier stages' actions and results are in the step log. Do your role's part of the goal now, and finish with done when your stage's work is complete — not the whole task unless your role is the last builder.",
+                    staged_run.profile
+                ),
             }));
         }
     }
@@ -1398,6 +1468,23 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             add_step(state, &run.id, "think", &summary, "")?;
         }
         ParsedAction::Ok(Action::Done { summary }) => {
+            // Crew advancing: a finished stage hands off to the next role and
+            // the run continues; only the last stage's done ends the run.
+            if run.mode == "crew" && handoffs + 1 < crew.len() {
+                let next_role = crew[(handoffs + 1) as usize].clone();
+                add_step(
+                    state,
+                    &run.id,
+                    "handoff",
+                    &format!(
+                        "Stage {} finished; {} agent takes over.",
+                        staged_run.profile, next_role
+                    ),
+                    &summary,
+                )?;
+                notify(state, Some(&run.id));
+                return Ok(true);
+            }
             // Honesty gate for hybrid executors: a run that says `done` while
             // nothing was ever written or executed has nothing real to show
             // for it. Reporting it as success would be a lie.
@@ -1823,15 +1910,65 @@ fn profile_can_command(profile: &str) -> bool {
 
 /// The run-mode picker: "" is the normal single-model run, "hybrid" is
 /// cloud-plans/local-executes, "team" runs the executor and then hands the
-/// result to the REVIEWER agent (a one-round repair loop). Anything else is
+/// result to the REVIEWER agent (a one-round repair loop), "crew" drives a
+/// sequential multi-agent pipeline of specialist stages. Anything else is
 /// rejected at the door.
 fn normalize_mode(input: &str) -> Option<String> {
     match input.trim().to_lowercase().as_str() {
         "" => Some(String::new()),
         "hybrid" => Some("hybrid".to_string()),
         "team" => Some("team".to_string()),
+        "crew" => Some("crew".to_string()),
         _ => None,
     }
+}
+
+/// Validated crew line-up for crew-mode runs: a JSON list of known profiles,
+/// 1–6 stages, defaults to executor → reviewer. Builders are required when
+/// the run is allowed to write files — an all-inspector crew cannot write.
+fn parse_crew(input: &Value, mode: &str, allow_writes: bool) -> Result<Vec<String>, String> {
+    if mode != "crew" {
+        return Ok(Vec::new());
+    }
+    let parsed: Vec<String> = match input.get("crew") {
+        None => vec!["coding".to_string(), "review".to_string()],
+        Some(Value::Array(items)) => {
+            let mut roles = Vec::new();
+            for item in items {
+                let profile = item
+                    .as_str()
+                    .map(normalize_profile)
+                    .unwrap_or_default();
+                if profile.is_empty() {
+                    return Err(format!(
+                        "Unknown crew agent role: {}. Known roles: {}.",
+                        item,
+                        PROFILES.join(", ")
+                    ));
+                }
+                roles.push(profile);
+            }
+            if roles.is_empty() || roles.len() > 6 {
+                return Err("A crew has 1–6 agent stages.".to_string());
+            }
+            roles
+        }
+        Some(_) => return Err("The crew field must be a JSON array of role names.".to_string()),
+    };
+    if allow_writes && !parsed.iter().any(|role| profile_can_write(role)) {
+        return Err(
+            "This crew has no building agent, but file writes are allowed — add a building role (coding, frontend, backend, database) or turn writes off."
+                .to_string(),
+        );
+    }
+    Ok(parsed)
+}
+
+/// Orchestrator state is the step log itself: each crew stage ends with a
+/// `handoff` step naming the next role, so the current stage index is simply
+/// how many handoffs have happened (clamped to the last stage).
+fn crew_stage_index(handoff_steps: i64, crew_len: usize) -> usize {
+    (handoff_steps as usize).min(crew_len.saturating_sub(1))
 }
 
 async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
@@ -1876,7 +2013,7 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         None => {
             return error_response(
                 StatusCode::BAD_REQUEST,
-                "Unknown agent mode — use \"hybrid\", \"team\", or leave it out.",
+                "Unknown agent mode — use \"hybrid\", \"team\", \"crew\", or leave it out.",
             )
         }
     };
@@ -1888,6 +2025,13 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
             "Hybrid mode needs a local model: pick and pull one on the Local AI page first.",
         );
     }
+    // Crew line-up validates before any run row exists: an unknown role or a
+    // write-permissionless crew should never leave a broken run behind.
+    let crew = match parse_crew(&input, &mode, allow_writes) {
+        Ok(crew) => crew,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let crew_json = serde_json::to_string(&crew).unwrap_or_default();
 
     // The agent works inside the open workspace folder; without one there is
     // nothing safe to read or edit.
@@ -1905,12 +2049,12 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14)",
             params![
                 id, project_id, goal, RUNNING,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
-                snapshot, base_model, profile, mode
+                snapshot, base_model, profile, mode, crew_json
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -1928,7 +2072,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     };
     let mut stmt = match conn.prepare(
         "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, r.allow_commands, r.auto_approve, \
-         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, r.mode, \
+         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, r.mode, r.crew, \
          (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
          FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50",
     ) {
@@ -1938,7 +2082,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(16)?;
+            let steps: i64 = row.get(17)?;
 
             Ok(run_json(&run, steps))
         })
