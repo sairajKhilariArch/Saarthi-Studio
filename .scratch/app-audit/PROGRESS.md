@@ -20,8 +20,22 @@
 - Context transfer is the existing bounded step log (`build_messages`/`build_history`, 300-char outputs, sanitized) — the cloud only ever sees the goal, outline, step log and error, never chat history.
 - UI: run composer gained a "Model mode" picker (`runMode`), payload sends `mode`; `run_json`/lists expose `mode`.
 
-## Next
-- Step 4 (master plan): multi-agent orchestration on top of this runtime.
+## Step 4 (master plan) — multi-agent orchestration (done)
+- Modes: `team` (executor → REVIEWER, one repair round on findings) and `crew` (sequential
+  specialist pipeline). `normalize_mode` accepts ""/hybrid/team/crew. Crew line-up is a JSON
+  list of known roles (1–6 stages, default executor → reviewer), validated at create time;
+  an all-inspector crew is refused when file writes are allowed.
+- Orchestrator state is the step log itself: stage k = number of recorded `handoff` steps
+  (`crew_stage_index`, clamped to the last stage). Each stage's done becomes a handoff step;
+  only the final stage's done ends the run. Team mode logs a `review` step with the reviewer
+  verdict and findings on ISSUES.
+- Desktop UI: run composer offers Default/Hybrid/Team/Crew with an optional comma-separated
+  roster field (shown only for crew); run cards display the mode and, for crew, the roster
+  chain. `/api/runs` runs expose `mode` + `crew`.
+- Tests: parse_crew defaults/role validation/writer rule, crew_stage_index clamping,
+  reviewer verdict interpretation, permission gates with the crew field (118 desktop tests).
+## Next
+- Release: push the round and tag (needs an explicit ask). Android/gradle unit tests can’t run on the current machine (no gradle/wrapper).
 
 ## Step 1 close-out (release pipeline repair)
 - Release failure diagnosis from the v1.25.0 workflow run 41007439650: deb job failed in the headless build (`build.rs` ran `tauri_build::build()` unconditionally — panic "missing cargo:dev" without the `gui` feature); Linux `release` job failed at `cargo deb`; vscode job failed at `npx tsc --noEmit` (2 real type errors). Also: every version in tree still said 1.22.0 while the tag said v1.25.0 (Windows zip asset was literally `free-ai-suite_1.22.0_windows-x86_64.zip`).

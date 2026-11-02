@@ -1470,7 +1470,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         ParsedAction::Ok(Action::Done { summary }) => {
             // Crew advancing: a finished stage hands off to the next role and
             // the run continues; only the last stage's done ends the run.
-            if run.mode == "crew" && handoffs + 1 < crew.len() {
+            if run.mode == "crew" && handoffs + 1 < crew.len() as i64 {
                 let next_role = crew[(handoffs + 1) as usize].clone();
                 add_step(
                     state,
@@ -2562,6 +2562,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             model: String::new(),
             profile: "coding".into(),
             mode: String::new(),
+            crew: String::new(),
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -2679,6 +2680,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             model: String::new(),
             profile: profile.into(),
             mode: String::new(),
+            crew: String::new(),
         }
     }
 
@@ -2729,6 +2731,40 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     }
 
     #[test]
+    fn crew_defaults_to_executor_then_reviewer() {
+        // No roster sent: the default line-up executes and then reviews.
+        assert_eq!(parse_crew(&json!({}), "crew", false).unwrap(), vec!["coding", "review"]);
+        // Crew bodies only exist for crew-mode runs.
+        assert_eq!(
+            parse_crew(&json!({ "crew": ["coding"] }), "", false).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn crew_validates_roles_counts_and_writers() {
+        let err = parse_crew(&json!({ "crew": ["chef", "review"] }), "crew", false);
+        assert!(err.unwrap_err().contains("Known roles"));
+        let err = parse_crew(&json!({ "crew": [] }), "crew", false);
+        assert!(err.unwrap_err().contains("1–6"));
+        let err = parse_crew(&json!({ "crew": { "0": "coding" } }), "crew", false);
+        assert!(err.unwrap_err().contains("JSON array"));
+        // Exact profile names survive case and spacing differences.
+        assert_eq!(parse_crew(&json!({ "crew": ["  CODING "] }), "crew", false).unwrap(), vec!["coding"]);
+        // Writes allowed but no builder role in the line-up is refused.
+        let err = parse_crew(&json!({ "crew": ["planner", "review"] }), "crew", true);
+        assert!(err.unwrap_err().contains("no building agent"));
+    }
+
+    #[test]
+    fn crew_stage_index_clamps_to_the_last_stage() {
+        assert_eq!(crew_stage_index(0, 3), 0);
+        assert_eq!(crew_stage_index(2, 3), 2);
+        assert_eq!(crew_stage_index(99, 3), 2);
+        assert_eq!(crew_stage_index(0, 0), 0);
+    }
+
+    #[test]
     fn permission_matrix_gate_writes_and_commands() {
         let run = RunRow {
             id: "r".into(),
@@ -2747,6 +2783,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             model: String::new(),
             profile: "coding".into(),
             mode: String::new(),
+            crew: String::new(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -2777,6 +2814,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             model: String::new(),
             profile: "coding".into(),
             mode: String::new(),
+            crew: String::new(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),

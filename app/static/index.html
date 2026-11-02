@@ -484,8 +484,10 @@
               <option value="" selected>Default — the configured cloud model does everything</option>
               <option value="hybrid">Hybrid — cloud model plans, local model executes (needs a local model; escalation to the cloud when stuck)</option>
               <option value="team">Team — the executor runs, then a REVIEWER agent checks the result (one repair round on findings)</option>
+              <option value="crew">Crew — a sequential pipeline of specialist agents, each stage handing off to the next</option>
             </select>
-            <small>Hybrid keeps your files on this machine: the cloud only writes the plan and answers when the local model gets stuck. Team adds an independent review pass before a run is called complete.</small>
+            <input id="runCrew" type="text" class="run-crew-input hidden" placeholder="Crew roles, comma separated — e.g. coding, database, review (blank = executor → reviewer)">
+            <small>Hybrid keeps your files on this machine: the cloud only writes the plan and answers when the local model gets stuck. Team adds an independent review pass before a run is called complete. Crew runs its stages one after another through the shared step log.</small>
           </div>
           <div class="run-perms">
             <label class="run-perm"><input id="runAllowWrites" type="checkbox" checked><span>May write files</span></label>

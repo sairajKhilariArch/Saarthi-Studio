@@ -4688,8 +4688,11 @@ function renderRunCard(run) {
   meta.className = "run-meta";
   // Adaptive runs record which model answered; base-model runs stay unlabelled.
   const modelTag = run.model ? ` · ${run.model}` : "";
+  const modeTag = run.mode === "crew" && Array.isArray(run.crew) && run.crew.length
+    ? ` · crew: ${run.crew.join(" → ")}`
+    : run.mode ? ` · ${run.mode}` : "";
   const profileTag = run.profile && run.profile !== "coding" ? ` · ${run.profile}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${profileTag}${modelTag}`;
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${profileTag}${modeTag}${modelTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
@@ -4858,6 +4861,8 @@ async function submitRun(event) {
   event.preventDefault();
   const goal = $("runGoal").value.trim();
   if (!goal) return;
+  const crewRoster = document.getElementById("runCrew");
+  if (crewRoster) crewRoster.classList.toggle("hidden", $("runMode").value !== "crew");
   const payload = {
     goal,
     profile: $("runProfile").value,
@@ -4866,6 +4871,10 @@ async function submitRun(event) {
     allowCommands: $("runAllowCommands").checked,
     autoApprove: $("runAutoApprove").checked,
   };
+  if ($("runMode").value === "crew") {
+    const roles = ($("runCrew").value || "").split(",").map((r) => r.trim()).filter(Boolean);
+    if (roles.length) payload.crew = roles;
+  }
   const result = await api("/api/runs", {
     method: "POST",
     body: JSON.stringify(payload),
