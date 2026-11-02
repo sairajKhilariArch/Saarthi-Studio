@@ -859,12 +859,78 @@ test("agent runs: mode, profile and roster validation mirrors the desktop", asyn
     [{ goal: "x", mode: "crew", crew: [] }, 400, /agent stages/],
     [{ goal: "x", mode: "crew", crew: ["planner", "review"], allowWrites: true }, 400, /no building agent/],
     [{ goal: "x", profile: "chef" }, 400, /Unknown agent profile/],
+    [{ goal: "x", mode: "crew", stagePolicy: "chew" }, 400, /Unknown stage policy/],
   ];
   for (const [payload, status, pattern] of cases) {
     const result = await post("/api/runs", payload);
     assert.equal(result.status, status, JSON.stringify(payload));
     assert.match(result.body.error, pattern, JSON.stringify(payload));
   }
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("agent runs: crew stage budgets skip an unfinished stage honestly", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const answers = [
+    '{"action":"think","summary":"looking at the goal"}',
+    '{"action":"done","summary":"the file content checks out"}',
+  ];
+  const fetchImpl = async () => new Response(
+    JSON.stringify({
+      model: "auto", provider: "mock",
+      choices: [{ message: { content: answers.length ? answers.shift() : '{"action":"fail","reason":"mock out of replies"}' } }],
+    }),
+    { status: 200 },
+  );
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "", model: "auto", contextBudgetTokens: 4000, historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 8000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await get(`/api/runs/${id}`);
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const run = await post("/api/runs", {
+    goal: "write hello.txt, then have a reviewer verify it",
+    allowWrites: true,
+    autoApprove: true,
+    mode: "crew",
+    stageMaxSteps: 1,
+    stagePolicy: "skip",
+  });
+  assert.equal(run.status, 200);
+  const id = run.body.run.id;
+  const done = await waitRun(id, (data) => data.status === "succeeded");
+  assert.deepEqual(done.stepList.map((step) => step.action), ["think", "handoff", "done"]);
+  assert.match(done.stepList.find((step) => step.action === "handoff").summary, /budget exhausted/);
+  assert.equal(done.stageMaxSteps, 1);
+  assert.equal(done.stagePolicy, "skip");
 
   await embedded.close();
   cleanupTemp(workspace);

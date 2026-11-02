@@ -477,6 +477,9 @@ export interface AgentRun {
   profile?: string;
   mode?: string;
   crew?: string[];
+  /** Crew stage budget (Step 5) and what happens when a stage exhausts it. */
+  stagePolicy?: string;
+  stageMaxSteps?: number;
 }
 
 export interface AgentStep {
@@ -541,6 +544,7 @@ export class RunStore {
     projectId: string; goal: string; allowWrites: boolean; allowCommands: boolean;
     autoApprove: boolean; maxSteps: number;
     profile?: string; mode?: string; crew?: string[];
+    stagePolicy?: string; stageMaxSteps?: number;
   }): AgentRun {
     const now = Date.now() / 1000;
     const run: AgentRun = {
@@ -559,6 +563,8 @@ export class RunStore {
       profile: input.profile || "coding",
       mode: input.mode || "",
       crew: Array.isArray(input.crew) ? input.crew : [],
+      stagePolicy: input.stagePolicy || "",
+      stageMaxSteps: Math.max(0, Math.round(Number(input.stageMaxSteps) || 0)),
     };
     this.data.runs.push(run);
     this.save();
@@ -740,6 +746,8 @@ function runSummaryJson(run: AgentRun, stepCount: number): Record<string, unknow
     profile: run.profile || "coding",
     mode: run.mode || "",
     crew: run.mode === "crew" ? run.crew || [] : undefined,
+    stagePolicy: run.stagePolicy || "",
+    stageMaxSteps: run.stageMaxSteps || 0,
   };
 }
 
@@ -824,6 +832,7 @@ export class AgentRuntime {
     goal?: unknown; allowWrites?: unknown; allowCommands?: unknown;
     autoApprove?: unknown; maxSteps?: unknown; projectId?: string;
     profile?: unknown; mode?: unknown; crew?: unknown;
+    stagePolicy?: unknown; stageMaxSteps?: unknown;
   }): { ok: true; id: string } | { ok: false; error: string; status?: number } {
     const profile = normalizeProfile(input.profile);
     if (!profile) return { ok: false, error: "Unknown agent profile.", status: 400 };
@@ -838,6 +847,12 @@ export class AgentRuntime {
     }
     const crew = parseCrew(input as { crew?: unknown }, mode, Boolean(input.allowWrites));
     if (typeof crew === "string") return { ok: false, error: crew, status: 400 };
+    const stagePolicy = String(input.stagePolicy || "").trim().toLowerCase();
+    if (stagePolicy && stagePolicy !== "fail" && stagePolicy !== "skip") {
+      return { ok: false, error: "Unknown stage policy - fail, skip, or leave it out.", status: 400 };
+    }
+    // The per-stage budget only exists for crew runs.
+    const stageMaxSteps = mode === "crew" ? Math.max(0, Math.round(Number(input.stageMaxSteps) || 0)) : 0;
     const goal = String(input.goal || "").trim();
     if (!goal) return { ok: false, error: "Describe what the agent should do.", status: 400 };
     if ([...goal].length > 5_000) return { ok: false, error: "Goal is too long.", status: 400 };
@@ -859,6 +874,8 @@ export class AgentRuntime {
       profile,
       mode,
       crew,
+      stagePolicy,
+      stageMaxSteps,
     });
     this.drive(run.id);
     this.deps.notify(run.id);
@@ -1014,6 +1031,38 @@ export class AgentRuntime {
     // Crew stage start: the model must know whose job it is now.
     if (mode === "crew" && lastStep === "handoff") {
       messages.push({ role: "user", content: crewStageStart(staged.profile || "") });
+    }
+    // Crew stage budgets (Step 5, mirrors run_loop in agent.rs): the count
+    // restarts at each handoff, so a stage that burns its ceiling is reported
+    // honestly instead of quietly eating the rest of the run.
+    const stageMax = mode === "crew" ? run.stageMaxSteps || 0 : 0;
+    if (stageMax > 0) {
+      let sinceKey = 0;
+      for (const step of steps) if (step.action === "handoff") sinceKey = step.seq;
+      const stageSteps = steps.filter((step) => step.seq > sinceKey).length;
+      if (stageSteps >= stageMax) {
+        const stageName = crew[handoffs] || "";
+        const nextRole = crew[handoffs + 1] || "";
+        // The final stage cannot be skipped: after it there is nobody left
+        // to deliver the goal, so the run stops here either way.
+        if (run.stagePolicy !== "skip" || handoffs + 1 >= crew.length) {
+          this.store.appendStep(
+            run.id,
+            "fail",
+            "Stage budget exhausted",
+            `The ${stageName} stage used its ${stageMax} step budget without finishing; the run stops there instead of pretending the stage completed.`,
+          );
+          this.store.finish(run.id, FAILED, "A crew stage ran over its step budget without finishing.");
+          return false;
+        }
+        this.store.appendStep(
+          run.id,
+          "handoff",
+          `Stage ${stageName} budget exhausted; ${nextRole} agent takes over.`,
+          `The ${stageName} stage did not finish inside its ${stageMax} step budget. Incomplete stage work is handed over recorded, not hidden.`,
+        );
+        return true;
+      }
     }
     const reply = await this.deps.callRouter(messages);
     // A cancel can land while the model is thinking: a stopped run must not

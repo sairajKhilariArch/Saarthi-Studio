@@ -4862,7 +4862,10 @@ async function submitRun(event) {
   const goal = $("runGoal").value.trim();
   if (!goal) return;
   const crewRoster = document.getElementById("runCrew");
-  if (crewRoster) crewRoster.classList.toggle("hidden", $("runMode").value !== "crew");
+  const stageBudget = document.getElementById("runStageMaxSteps");
+  const stagePolicy = document.getElementById("runStagePolicy");
+  const crewOnly = $("runMode").value !== "crew";
+  for (const el of [crewRoster, stageBudget, stagePolicy]) { if (el) el.classList.toggle("hidden", crewOnly); }
   const payload = {
     goal,
     profile: $("runProfile").value,
@@ -4874,6 +4877,9 @@ async function submitRun(event) {
   if ($("runMode").value === "crew") {
     const roles = ($("runCrew").value || "").split(",").map((r) => r.trim()).filter(Boolean);
     if (roles.length) payload.crew = roles;
+    const budget = Number($("runStageMaxSteps").value) || 0;
+    if (budget) payload.stageMaxSteps = budget;
+    if ($("runStagePolicy").value) payload.stagePolicy = $("runStagePolicy").value;
   }
   const result = await api("/api/runs", {
     method: "POST",

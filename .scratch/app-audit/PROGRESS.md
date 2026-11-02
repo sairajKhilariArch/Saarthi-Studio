@@ -45,9 +45,15 @@
 
 ## Step 5 (master plan) — DRAFT: resilient multi-agent runs
 Goal: crews survive real workloads without lying about progress.
-1. Per-stage budgets: a stage max-steps (default: run budget split across stages) enforced
-   in the loop; an exhausted stage logs an honest "stage incomplete" handoff and either
-   fails or moves on per a per-run policy stored on the run row and shown on the card.
+Status: budget item built end-to-end (2026-11-02); templates/resume/golden-run still open.
+1. DONE - Per-stage budgets: agent_runs.stage_max_steps (0=off) + stage_policy
+   (""/"fail" stops honestly, "skip" records the incomplete stage as a handoff and
+   continues; the FINAL stage can never be skipped). Enforced in run_loop (desktop)
+   and stepOnce (extension) with the step count restarting at each handoff. POST
+   /api/runs accepts stagePolicy/stageMaxSteps (crew-only); run summaries expose both;
+   composer sports a budget field + policy picker shown only for crew runs.
+   Tests: Rust E2E budget skip + budget fail, policy validator unit; extension E2E
+   budget skip + policy validation case (desktop 123/123, extension suite rerun pending).
 2. Resume from stage k: reuse the approval-resume path - the step log is already the
    orchestrator state, so "run again" continues the current stage without a new run.
 3. Crew templates: named rosters stored beside workflows; composer preset chips; POST

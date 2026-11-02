@@ -1532,6 +1532,8 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           profile: body.profile,
           mode: body.mode,
           crew: body.crew,
+          stagePolicy: body.stagePolicy,
+          stageMaxSteps: body.stageMaxSteps,
         });
         if (!result.ok) {
           sendJson(response, result.status || 400, { ok: false, error: result.error });
