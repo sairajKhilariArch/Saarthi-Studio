@@ -2983,4 +2983,210 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         // A second initialize must succeed against a database that already has the column.
         initialize(&conn).unwrap();
     }
+    // ---------------------------------------------------------------
+    // End-to-end orchestration: the real run loop against a mocked
+    // router, exercising the crew handoff and the team review round.
+
+    use std::path::PathBuf;
+    use tower::ServiceExt;
+
+    struct RunFixture {
+        state: AppState,
+        app: Router,
+        root: PathBuf,
+    }
+
+    fn run_fixture(tag: &str, base_url: &str) -> RunFixture {
+        let root =
+            std::env::temp_dir().join(format!("saarthi-agent-e2e-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let ws = root.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let state = AppState {
+            config_path: root.join("config.json"),
+            database_path: root.join("studio.db"),
+            static_dir: root.join("static"),
+            workspace: crate::workspace::WorkspaceStore::load(root.join("workspace.json")),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            terminal: crate::terminal::hub(),
+            events: crate::events::Hub::new(),
+            models_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+        };
+        let _ = crate::ensure_setup(&state);
+        // Point every model call at the scripted mock; local AI stays off.
+        let mut cfg = crate::load_config(&state);
+        cfg.base_url = base_url.to_string();
+        cfg.api_key = "test-key".to_string();
+        cfg.local_chat = false;
+        let _ = crate::save_config_file(&state.config_path, &cfg);
+        state
+            .workspace
+            .open(ws.to_str().unwrap())
+            .expect("open workspace root");
+        let app = router().with_state(state.clone());
+        RunFixture { state, app, root }
+    }
+
+    /// Spawns a router that answers /chat/completions with the scripted
+    /// replies in order; an empty queue answers with an honest `fail` so a
+    /// script mismatch shows up as a failed run instead of a hang.
+    async fn scripted_router(replies: &[&str]) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::from(
+                replies.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+            ),
+        ));
+        let app = Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |body: axum::Json<Value>| async move {
+                // Whatever string we return here becomes the parsed action.
+                let _ = body;
+                let reply = queue.lock().unwrap().pop_front().unwrap_or_else(|| {
+                    "{\"action\":\"fail\",\"reason\":\"mock out of replies\"}".to_string()
+                });
+                axum::Json(json!({
+                    "choices": [{ "message": { "role": "assistant", "content": reply } }]
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    async fn start_run(app: &Router, body: Value) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/runs")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["ok"], json!(true), "{payload}");
+        payload["run"]["id"]
+            .as_str()
+            .expect("create_run returns an id")
+            .to_string()
+    }
+
+    async fn wait_for_terminal(state: &AppState, id: &str) -> (String, Vec<String>) {
+        let terminal = [SUCCEEDED, FAILED, INTERRUPTED];
+        for _ in 0..250 {
+            if let Ok(conn) = db(state) {
+                if let Ok(status) = conn
+                    .query_row::<String, _, _>(
+                        "SELECT status FROM agent_runs WHERE id=?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                {
+                    if terminal.contains(&status.as_str()) {
+                        let mut stmt = conn
+                            .prepare("SELECT action FROM agent_steps WHERE run_id=?1 ORDER BY seq")
+                            .unwrap();
+                        let actions: Vec<String> = stmt
+                            .query_map([id], |row| row.get::<_, String>(0))
+                            .unwrap()
+                            .map(|res| res.expect("step row"))
+                            .collect();
+                        return (status, actions);
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the run never reached a terminal state: {id}");
+    }
+
+    #[tokio::test]
+    async fn crew_run_hands_off_between_stages_and_finishes() {
+        let base = scripted_router(&[
+            // Stage 1 (coding): write and declare the stage done.
+            "{\"action\":\"write\",\"path\":\"hello.txt\",\"content\":\"hi from coding\"}",
+            "{\"action\":\"done\",\"summary\":\"hello.txt is written\"}",
+            // Stage 2 (review): inspect and finish the whole run.
+            "{\"action\":\"read\",\"path\":\"hello.txt\"}",
+            "{\"action\":\"done\",\"summary\":\"the file content checks out\"}",
+        ])
+        .await;
+        let fixture = run_fixture("crew", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write hello.txt, then have a reviewer verify it",
+                "allowWrites": true,
+                "autoApprove": true,
+                "mode": "crew"
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        assert_eq!(actions, ["write", "handoff", "read", "done"]);
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.join("ws/hello.txt")).unwrap(),
+            "hi from coding"
+        );
+        let conn = db(&fixture.state).unwrap();
+        let handoff: String = conn
+            .query_row(
+                "SELECT summary FROM agent_steps WHERE run_id=?1 AND action='handoff'",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(handoff.contains("review agent takes over"), "{handoff}");
+    }
+
+    #[tokio::test]
+    async fn team_run_repairs_after_review_findings() {
+        let base = scripted_router(&[
+            "{\"action\":\"write\",\"path\":\"hi.txt\",\"content\":\"helo\"}",
+            "{\"action\":\"done\",\"summary\":\"wrote hi.txt\"}",
+            // Reviewer round 1: findings go back to the executor as a handoff.
+            "ISSUES: hi.txt reads helo; it should read hello.",
+            // Repair round: real replaced content, then done again.
+            "{\"action\":\"write\",\"path\":\"hi.txt\",\"content\":\"hello\"}",
+            "{\"action\":\"done\",\"summary\":\"fixed the spelling\"}",
+            // Reviewer round 2 approves.
+            "APPROVE - the finding is fixed.",
+        ])
+        .await;
+        let fixture = run_fixture("team", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "create hi.txt containing the word hello",
+                "allowWrites": true,
+                "autoApprove": true,
+                "mode": "team"
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        assert_eq!(
+            actions,
+            ["write", "review", "handoff", "write", "review", "done"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.root.join("ws/hi.txt")).unwrap(),
+            "hello"
+        );
+    }
 }

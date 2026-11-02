@@ -33,7 +33,9 @@
   roster field (shown only for crew); run cards display the mode and, for crew, the roster
   chain. `/api/runs` runs expose `mode` + `crew`.
 - Tests: parse_crew defaults/role validation/writer rule, crew_stage_index clamping,
-  reviewer verdict interpretation, permission gates with the crew field (118 desktop tests).
+  reviewer verdict interpretation, permission gates with the crew field (120 desktop tests).
+- E2E orchestration verified in-test against a scripted mock router (real run loop, real /api/runs route, real SQLite step log): crew handoff (write -> handoff -> read -> done, handoff names the next reviewer stage), and the team review round (review ISSUES -> handoff repair -> second review APPROVE -> succeeded, workspace file actually fixed).
+
 ## Next
 - Release: push the round and tag (needs an explicit ask). Android/gradle unit tests can’t run on the current machine (no gradle/wrapper).
 
