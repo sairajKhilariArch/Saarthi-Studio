@@ -487,6 +487,12 @@
               <option value="crew">Crew — a sequential pipeline of specialist agents, each stage handing off to the next</option>
             </select>
             <input id="runCrew" type="text" class="run-crew-input hidden" placeholder="Crew roles, comma separated — e.g. coding, database, review (blank = executor → reviewer)">
+          <input id="runStageMaxSteps" type="number" min="0" max="30" class="run-crew-input hidden" placeholder="Per-stage step budget (0 or blank = no per-stage limit)">
+          <select id="runStagePolicy" class="run-crew-input hidden">
+            <option value="" selected>When a stage cannot finish inside its budget: stop the run (default)</option>
+            <option value="fail">…stop the run (fail fast)</option>
+            <option value="skip">…record the incomplete stage and let the next stage continue</option>
+          </select>
             <small>Hybrid keeps your files on this machine: the cloud only writes the plan and answers when the local model gets stuck. Team adds an independent review pass before a run is called complete. Crew runs its stages one after another through the shared step log.</small>
           </div>
           <div class="run-perms">

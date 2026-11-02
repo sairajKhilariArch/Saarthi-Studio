@@ -394,6 +394,10 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE agent_runs ADD COLUMN mode TEXT NOT NULL DEFAULT ''",
         // Crew line-up for multi-agent runs (JSON array of role names).
         "ALTER TABLE agent_runs ADD COLUMN crew TEXT NOT NULL DEFAULT ''",
+        // Crew stage budgets (Step 5): per-stage step ceiling and what to do
+        // when a stage cannot finish inside it ("fail" is the default).
+        "ALTER TABLE agent_runs ADD COLUMN stage_policy TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE agent_runs ADD COLUMN stage_max_steps INTEGER NOT NULL DEFAULT 0",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -427,6 +431,11 @@ struct RunRow {
     mode: String,
     /// Crew line-up for crew runs: JSON list of role names ("" elsewhere).
     crew: String,
+    /// What happens when a crew stage hits its budget: ""/"fail" stops the
+    /// run honestly, "skip" records the incomplete stage and moves on.
+    stage_policy: String,
+    /// Per-stage step ceiling for crew runs (0 = disabled).
+    stage_max_steps: i64,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -448,6 +457,8 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         profile: row.get(14)?,
         mode: row.get(15)?,
         crew: row.get(16)?,
+        stage_policy: row.get(17)?,
+        stage_max_steps: row.get(18)?,
     })
 }
 
@@ -548,7 +559,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -587,6 +598,7 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "createdAt": row.created_at, "updatedAt": row.updated_at,
         "model": row.model, "routerConfig": row.router_config,
         "profile": row.profile, "mode": row.mode,
+        "stagePolicy": row.stage_policy, "stageMaxSteps": row.stage_max_steps,
         "crew": serde_json::from_str::<Value>(&row.crew)
             .ok()
             .and_then(|v| v.as_array().cloned())
@@ -1276,6 +1288,8 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         profile: profile.to_string(),
         mode: run.mode.clone(),
         crew: run.crew.clone(),
+        stage_policy: run.stage_policy.clone(),
+        stage_max_steps: run.stage_max_steps,
     }
 }
 
@@ -1746,6 +1760,59 @@ async fn run_loop(state: AppState, run_id: String) {
             Ok(_) => return, // cancelled, approved externally, or gone
             Err(_) => return,
         };
+        // Crew stage budgets (Step 5): the count restarts at each handoff, so
+        // a stage that burns its ceiling is reported honestly instead of
+        // quietly eating the rest of the run.
+        let stage_steps = if run.mode == "crew" && run.stage_max_steps > 0 {
+            db(&state)
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND \
+                         seq > COALESCE((SELECT MAX(seq) FROM agent_steps WHERE run_id=?1 AND action='handoff'), 0)",
+                        [&run.id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if run.mode == "crew" && run.stage_max_steps > 0 && stage_steps >= run.stage_max_steps {
+            let crew: Vec<String> = serde_json::from_str(&run.crew).unwrap_or_default();
+            let handoffs: i64 = db(&state)
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='handoff'",
+                        [&run.id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .unwrap_or(0);
+            let stage_name = crew.get(handoffs as usize).cloned().unwrap_or_default();
+            let next_role = crew.get((handoffs + 1) as usize).cloned().unwrap_or_default();
+            // The final stage cannot be skipped: after it there is nobody
+            // left to deliver the goal, so the run stops here either way.
+            if run.stage_policy != "skip" || handoffs + 1 >= crew.len() as i64 {
+                add_step(
+                    &state,
+                    &run.id,
+                    "fail",
+                    "Stage budget exhausted",
+                    &format!("The {} stage used its {} step budget without finishing; the run stops there instead of pretending the stage completed.", stage_name, run.stage_max_steps),
+                ).ok();
+                let _ = finish(&state, &run.id, FAILED, "A crew stage ran over its step budget without finishing.");
+                break;
+            }
+            add_step(
+                &state,
+                &run.id,
+                "handoff",
+                &format!("Stage {} budget exhausted; {} agent takes over.", stage_name, next_role),
+                &format!("The {} stage did not finish inside its {} step budget. Incomplete stage work is handed over recorded, not hidden.", stage_name, run.stage_max_steps),
+            ).ok();
+        }
         match step_once(&state, &run).await {
             Ok(true) => notify(&state, Some(&run_id)),
             Ok(false) => break,
@@ -1926,6 +1993,18 @@ fn normalize_mode(input: &str) -> Option<String> {
 /// Validated crew line-up for crew-mode runs: a JSON list of known profiles,
 /// 1–6 stages, defaults to executor → reviewer. Builders are required when
 /// the run is allowed to write files — an all-inspector crew cannot write.
+/// The crew stage-budget policy: ""/"fail" stops the run honestly when a
+/// stage cannot finish inside its budget; "skip" records the incomplete
+/// stage as a handoff and lets the next stage try.
+fn normalize_stage_policy(input: &str) -> Result<String, String> {
+    match input.trim().to_lowercase().as_str() {
+        "" => Ok(String::new()),
+        "fail" => Ok("fail".to_string()),
+        "skip" => Ok("skip".to_string()),
+        _ => Err("Unknown stage policy - use fail, skip, or leave it out.".to_string()),
+    }
+}
+
 fn parse_crew(input: &Value, mode: &str, allow_writes: bool) -> Result<Vec<String>, String> {
     if mode != "crew" {
         return Ok(Vec::new());
@@ -2032,6 +2111,22 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
     };
     let crew_json = serde_json::to_string(&crew).unwrap_or_default();
+    let stage_policy = match normalize_stage_policy(
+        input.get("stagePolicy").and_then(Value::as_str).unwrap_or(""),
+    ) {
+        Ok(policy) => policy,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    // The per-stage budget only exists for crew runs.
+    let stage_max_steps = if mode == "crew" {
+        input
+            .get("stageMaxSteps")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .clamp(0, HARD_MAX_STEPS)
+    } else {
+        0
+    };
 
     // The agent works inside the open workspace folder; without one there is
     // nothing safe to read or edit.
@@ -2049,12 +2144,12 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 id, project_id, goal, RUNNING,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
-                snapshot, base_model, profile, mode, crew_json
+                snapshot, base_model, profile, mode, crew_json, stage_policy, stage_max_steps
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -2072,7 +2167,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     };
     let mut stmt = match conn.prepare(
         "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, r.allow_commands, r.auto_approve, \
-         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, r.mode, r.crew, \
+         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, r.mode, r.crew, r.stage_policy, r.stage_max_steps, \
          (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
          FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50",
     ) {
@@ -2563,6 +2658,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             profile: "coding".into(),
             mode: String::new(),
             crew: String::new(),
+            stage_policy: String::new(),
+            stage_max_steps: 0,
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -2681,6 +2778,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             profile: profile.into(),
             mode: String::new(),
             crew: String::new(),
+            stage_policy: String::new(),
+            stage_max_steps: 0,
         }
     }
 
@@ -2694,6 +2793,14 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(normalize_profile(" database "), "database");
         assert_eq!(normalize_profile("Debugger"), "debugger");
         assert_eq!(normalize_profile("root"), "");
+    }
+
+    #[test]
+    fn stage_policy_accepts_only_fail_skip_or_blank() {
+        assert_eq!(normalize_stage_policy("").unwrap(), "");
+        assert_eq!(normalize_stage_policy("fail").unwrap(), "fail");
+        assert_eq!(normalize_stage_policy(" SKIP ").unwrap(), "skip");
+        assert!(normalize_stage_policy("chew").is_err());
     }
 
     #[test]
@@ -2784,6 +2891,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             profile: "coding".into(),
             mode: String::new(),
             crew: String::new(),
+            stage_policy: String::new(),
+            stage_max_steps: 0,
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -2815,6 +2924,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             profile: "coding".into(),
             mode: String::new(),
             crew: String::new(),
+            stage_policy: String::new(),
+            stage_max_steps: 0,
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
@@ -3151,6 +3262,74 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             )
             .unwrap();
         assert!(handoff.contains("review agent takes over"), "{handoff}");
+    }
+
+    #[tokio::test]
+    async fn crew_stage_budget_skip_records_the_incomplete_stage() {
+        let base = scripted_router(&[
+            // The coding stage never finishes: it only thinks.
+            "{\"action\":\"think\",\"summary\":\"looking at the goal\"}",
+            // Budget (1 step) hits; skip policy hands off to review.
+            "{\"action\":\"done\",\"summary\":\"the file content checks out\"}",
+        ])
+        .await;
+        let fixture = run_fixture("crew-budget-skip", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write hello.txt, then have a reviewer verify it",
+                "allowWrites": true,
+                "autoApprove": true,
+                "mode": "crew",
+                "stageMaxSteps": 1,
+                "stagePolicy": "skip"
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        assert_eq!(actions, ["think", "handoff", "done"]);
+        let conn = db(&fixture.state).unwrap();
+        let handoff: String = conn
+            .query_row(
+                "SELECT summary FROM agent_steps WHERE run_id=?1 AND action='handoff'",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(handoff.contains("budget exhausted"), "{handoff}");
+    }
+
+    #[tokio::test]
+    async fn crew_stage_budget_fail_stops_the_run_honestly() {
+        let base = scripted_router(&[
+            "{\"action\":\"think\",\"summary\":\"looking at the goal\"}",
+        ])
+        .await;
+        let fixture = run_fixture("crew-budget-fail", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write hello.txt, then have a reviewer verify it",
+                "allowWrites": true,
+                "autoApprove": true,
+                "mode": "crew",
+                "stageMaxSteps": 1
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, FAILED, "actions: {actions:?}");
+        assert_eq!(actions, ["think", "fail"]);
+        let conn = db(&fixture.state).unwrap();
+        let fail: String = conn
+            .query_row(
+                "SELECT output FROM agent_steps WHERE run_id=?1 AND action='fail'",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(fail.contains("without finishing"), "{fail}");
     }
 
     #[tokio::test]
