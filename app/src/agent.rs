@@ -1768,7 +1768,7 @@ async fn run_loop(state: AppState, run_id: String) {
                 .and_then(|conn| {
                     conn.query_row(
                         "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND \
-                         seq > COALESCE((SELECT MAX(seq) FROM agent_steps WHERE run_id=?1 AND action='handoff'), 0)",
+                         seq > COALESCE((SELECT MAX(seq) FROM agent_steps WHERE run_id=?1 AND action IN ('handoff', 'resume')), 0)",
                         [&run.id],
                         |r| r.get(0),
                     )
@@ -2331,6 +2331,78 @@ async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -
         Ok(()) => Json(json!({ "ok": true, "status": CANCELLED })).into_response(),
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
+}
+
+/// Resume from stage k: the step log IS the orchestrator state, so a
+/// failed, cancelled or interrupted run keeps its handoffs (finished
+/// stages), its saved plan and its current stage. "Run again"
+/// re-activates THIS run instead of starting a new one; the stage budget
+/// restarts at the resume marker exactly like it does at a handoff.
+async fn resume_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Response {
+    let run = match load_run(&state, &run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if run.status == RUNNING || run.status == AWAITING_APPROVAL {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "This run is still live - approve or cancel it instead.",
+        );
+    }
+    if run.status == SUCCEEDED {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "This run already delivered its goal - start a new run instead.",
+        );
+    }
+    let (steps_present, handoffs) = match db(&state) {
+        Ok(conn) => (
+            conn.query_row("SELECT COUNT(*) FROM agent_steps WHERE run_id=?1", [&run_id], |r| r.get(0))
+                .unwrap_or(0i64),
+            conn.query_row(
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='handoff',
+                [&run_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0i64),
+        ),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if steps_present == 0 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Nothing to resume: this run has no steps. Start a new run instead.",
+        );
+    }
+    let stage_note = if run.mode == "crew" {
+        let crew: Vec<String> = serde_json::from_str(&run.crew).unwrap_or_default();
+        match crew.get(handoffs as usize) {
+            Some(role) => format!(" Resuming the {} stage.", role),
+            None => {
+                " Every recorded handoff is in the log; resuming the final stage."
+                    .to_string()
+            }
+        }
+    } else {
+        " Resuming from the recorded step log.".to_string()
+    };
+    let _ = add_step(
+        &state,
+        &run_id,
+        "resume",
+        "Run resumed.",
+        "Picking up from the recorded step log: finished stages stay finished, unfinished work continues.",
+    );
+    if let Err(error) = set_run(&state, &run_id, RUNNING, None, Some("")) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    notify(&state, Some(&run_id));
+    spawn_run(state, run_id);
+    Json(json!({ "ok": true, "status": RUNNING })).into_response()
 }
 
 async fn approve_run(
