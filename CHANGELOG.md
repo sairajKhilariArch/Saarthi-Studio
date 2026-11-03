@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.22.1
+
+- Version bump on the website branch's own release line. The 1.26
+  desktop work lives on `main`; this branch is not part of it.
+
 ## 1.22.0
 
 ### Usage page: full analytics
