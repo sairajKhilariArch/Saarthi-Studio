@@ -112,7 +112,7 @@ jobs:
 
       - name: Read package version
         id: meta
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1 | tr -d '')" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary and run tests
         working-directory: app
@@ -211,7 +211,7 @@ jobs:
       - name: Read package version
         id: meta
         run: |
-          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value.Trim()
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build release binary and run tests
@@ -276,7 +276,7 @@ jobs:
 
       - name: Read package version
         id: meta
-        run: echo "version=$(sed -n 's/^version = "\\(.*\\)"/\\1/p' app/Cargo.toml | head -n1)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(sed -n 's/^version = "\\(.*\\)"/\\1/p' app/Cargo.toml | head -n1 | tr -d '')" >> "$GITHUB_OUTPUT"
 
       - name: Build release binaries and run tests
         working-directory: app

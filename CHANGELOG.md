@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.26.2
+
+- Fix the release pipeline: version reads now strip a trailing carriage
+  return, and the tracked manifests are back to LF, so artifacts are named
+  `free-ai-suite_1.26.2_*` instead of carrying an embedded `` that made
+  `upload-artifact` reject them (v1.26.0 and v1.26.1 built and tested fine
+  but never attached a single asset).
+
 ## 1.26.1
 
 ### IDE workbench shell (desktop)
