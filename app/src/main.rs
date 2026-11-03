@@ -1094,6 +1094,84 @@ async fn delete_workflow(
     Json(json!({ "ok": true })).into_response()
 }
 
+/* Crew templates: saved stage rosters for crew runs. Same pattern as
+workflows — a small JSON file next to the config, no schema migration;
+keyed by name, because that is what people type in the composer. */
+#[derive(Clone, Serialize, Deserialize)]
+struct CrewTemplate {
+    name: String,
+    crew: Vec<String>,
+}
+
+fn crew_templates_path(state: &AppState) -> PathBuf {
+    state.config_path.with_file_name("crew-templates.json")
+}
+
+fn load_crew_templates(state: &AppState) -> Vec<CrewTemplate> {
+    fs::read(crew_templates_path(state))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<CrewTemplate>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        // Malformed entries do not poison the whole list.
+        .filter(|t| !t.name.is_empty() && !t.crew.is_empty())
+        .collect()
+}
+
+fn save_crew_templates(state: &AppState, templates: &[CrewTemplate]) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(templates).map_err(|e| e.to_string())?;
+    let temp = crew_templates_path(state).with_extension("tmp");
+    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+    set_private_permissions(&temp, false).map_err(|e| e.to_string())?;
+    fs::rename(&temp, crew_templates_path(state)).map_err(|e| e.to_string())
+}
+
+async fn list_crew_templates(State(state): State<AppState>) -> Response<Body> {
+    Json(json!({ "ok": true, "templates": load_crew_templates(&state) })).into_response()
+}
+
+async fn save_crew_template(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let name = clean_title(input.get("name").and_then(Value::as_str).unwrap_or(""));
+    if name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "A crew template needs a name.");
+    }
+    let roles = match agent::validate_crew(&input.get("crew").cloned().unwrap_or(Value::Null)) {
+        Ok(roles) => roles,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+
+    let mut templates = load_crew_templates(&state);
+    templates.retain(|t| t.name != name);
+    templates.push(CrewTemplate {
+        name: name.clone(),
+        crew: roles,
+    });
+    templates.sort_by_key(|t| t.name.to_lowercase());
+    if let Err(e) = save_crew_templates(&state, &templates) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true, "name": name })).into_response()
+}
+
+async fn delete_crew_template(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+) -> Response<Body> {
+    let mut templates = load_crew_templates(&state);
+    let before = templates.len();
+    templates.retain(|t| t.name != name);
+    if templates.len() == before {
+        return json_error(StatusCode::NOT_FOUND, "No such crew template.");
+    }
+    if let Err(e) = save_crew_templates(&state, &templates) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
 async fn list_projects(State(state): State<AppState>) -> Response<Body> {
     let active = active_project_id(&state);
     let result = (|| -> rusqlite::Result<Vec<Value>> {
@@ -2625,6 +2703,14 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/projects/:id/activate", post(activate_project))
         .route("/api/workflows", get(list_workflows).post(save_workflow))
         .route("/api/workflows/:id/delete", post(delete_workflow))
+        .route(
+            "/api/crew-templates",
+            get(list_crew_templates).post(save_crew_template),
+        )
+        .route(
+            "/api/crew-templates/:name/delete",
+            post(delete_crew_template),
+        )
         .merge(skills::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

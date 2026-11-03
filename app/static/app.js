@@ -4761,6 +4761,14 @@ function buildRunDetail(detail) {
     stop.addEventListener('click', () => cancelAgentRun(detail.id));
     controls.appendChild(stop);
   }
+  if (detail.status === "failed" || detail.status === "interrupted" || detail.status === "cancelled") {
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = "btn btn-accent btn-small";
+    again.textContent = "Run again (resume)";
+    again.addEventListener('click', () => resumeAgentRun(detail.id));
+    controls.appendChild(again);
+  }
   const refresh = document.createElement("button");
   refresh.type = "button";
   refresh.className = "btn btn-quiet btn-small";
@@ -4864,8 +4872,9 @@ async function submitRun(event) {
   const crewRoster = document.getElementById("runCrew");
   const stageBudget = document.getElementById("runStageMaxSteps");
   const stagePolicy = document.getElementById("runStagePolicy");
+  const crewChips = document.getElementById("crewTemplates");
   const crewOnly = $("runMode").value !== "crew";
-  for (const el of [crewRoster, stageBudget, stagePolicy]) { if (el) el.classList.toggle("hidden", crewOnly); }
+  for (const el of [crewRoster, stageBudget, stagePolicy, crewChips]) { if (el) el.classList.toggle("hidden", crewOnly); }
   const payload = {
     goal,
     profile: $("runProfile").value,
@@ -4895,6 +4904,66 @@ async function submitRun(event) {
   state.runDetail = null;
   await loadRuns();
   if (state.openRun) await loadRunDetail();
+}
+
+async function loadCrewTemplates() {
+  const host = document.getElementById("crewTemplates");
+  if (!host) return;
+  const result = await api("/api/crew-templates");
+  const templates = result.ok && Array.isArray(result.data.templates) ? result.data.templates : [];
+  host.textContent = "";
+  for (const template of templates) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "btn btn-quiet btn-small run-crew-chip";
+    chip.textContent = `${template.name} · ${(template.crew || []).join(" → ")}`;
+    chip.title = "Fill the crew roster with this template";
+    chip.addEventListener("click", () => {
+      $("runCrew").value = (template.crew || []).join(", ");
+    });
+    host.appendChild(chip);
+  }
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn btn-quiet btn-small run-crew-chip";
+  save.textContent = "Save current roles";
+  save.title = "Save the roster in the field above as a reusable template";
+  save.addEventListener("click", saveCrewTemplate);
+  host.appendChild(save);
+}
+
+async function saveCrewTemplate() {
+  const roles = ($("runCrew").value || "").split(",").map((r) => r.trim()).filter(Boolean);
+  if (!roles.length) {
+    toast("Type crew roles above first, then save them as a template.");
+    return;
+  }
+  const name = (window.prompt("Name for this crew template:") || "").trim();
+  if (!name) return;
+  const result = await api("/api/crew-templates", {
+    method: "POST",
+    body: JSON.stringify({ name, crew: roles }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not save the template.");
+    return;
+  }
+  toast("Crew template saved.");
+  await loadCrewTemplates();
+}
+
+async function resumeAgentRun(runId) {
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/resume`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not resume the run.");
+  } else {
+    toast("Run resumed — finished stages stay finished.");
+  }
+  await loadRuns();
+  if (runId === state.openRun) await loadRunDetail();
 }
 
 async function answerApproval(runId, approve) {
@@ -4944,7 +5013,7 @@ async function cancelAgentRun(runId) {
   state.lastContextTokens = null;
   setTimeout(updateContextMeter, 50);
   await Promise.all([loadSettings(), loadProjects(), loadConversations(), loadWorkspace()]);
-  await Promise.all([loadUsage(), loadSkills()]);
+  await Promise.all([  loadUsage(), loadSkills(), loadCrewTemplates()]);
   probeRouter();
   setupMirroring();
   if (state.conversations.length) {

@@ -1376,6 +1376,7 @@ kbd {
 
 /* agent runs */
 .run-perms { display: flex; gap: 18px; flex-wrap: wrap; }
+.crew-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .run-perm { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); cursor: pointer; }
 .run-perm input { width: 15px; height: 15px; accent-color: var(--accent); }
 .run-card { padding: 0; overflow: hidden; }

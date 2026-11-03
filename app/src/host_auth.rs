@@ -407,7 +407,7 @@ fn replace_verifier_file(temporary_path: &Path, destination: &Path) -> io::Resul
 
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
-    File::open(parent_directory(path))?.sync_all()
+    fs::File::open(parent_directory(path))?.sync_all()
 }
 
 #[cfg(not(unix))]

@@ -1,0 +1,96 @@
+    #[tokio::test]
+    async fn crew_run_resumes_from_stage_after_budget_fail() {
+        let base = scripted_router(&[
+            // Stage 1 (coding) burns its whole budget on a write, then fails.
+            "{\"action\":\"write\",\"path\":\"hello.txt\",\"content\":\"hi from coding\"}",
+            // Resumed coding stage finishes; the reviewer then verifies.
+            "{\"action\":\"done\",\"summary\":\"hello.txt is written\"}",
+            "{\"action\":\"done\",\"summary\":\"the file content checks out\"}",
+        ])
+        .await;
+        let fixture = run_fixture("crew-resume", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write hello.txt, then have a reviewer verify it",
+                "allowWrites": true,
+                "autoApprove": true,
+                "mode": "crew",
+                "stageMaxSteps": 1
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, FAILED, "actions: {actions:?}");
+        assert_eq!(actions, ["write", "fail"]);
+
+        // The step log is the orchestrator state: resuming re-activates THIS
+        // run and the coding stage gets a fresh budget after the marker.
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        let (resumed_status, resumed_actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(resumed_status, SUCCEEDED, "actions: {resumed_actions:?}");
+        assert_eq!(
+            resumed_actions,
+            ["write", "fail", "resume", "done", "handoff", "done"]
+        );
+
+        // A finished run must not be resumed again.
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("already delivered"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_live_and_empty_runs() {
+        // A write that waits for approval keeps the run live.
+        let base = scripted_router(&[
+            "{\"action\":\"write\",\"path\":\"a.txt\",\"content\":\"x\"}",
+        ])
+        .await;
+        let fixture = run_fixture("resume-live", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write a.txt",
+                "allowWrites": true,
+                "autoApprove": false,
+                "mode": "crew",
+                "stageMaxSteps": 9
+            }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("still live"), "{body}");
+        let _ = fixture
+            .app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/runs/{id}/cancel"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // A recorded-but-empty run has nothing to resume.
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("resume-empty", &base);
+        let conn = db(&fixture.state).unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
+             VALUES('r-empty', 'p', 'a goal that never ran', 'failed', 0, 0, 0, 5, '', '', 1.0, 1.0)",
+            params![],
+        )
+        .unwrap();
+        let (code, body) = post_resume(&fixture.app, "r-empty").await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("no steps"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn team_run_repairs_after_review_findings() {

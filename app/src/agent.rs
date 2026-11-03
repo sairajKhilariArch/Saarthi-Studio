@@ -1358,7 +1358,11 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     } else {
         0
     };
-    let staged_run = view_run(run, crew.get(crew_stage_index(handoffs, crew.len())).unwrap_or(&run.profile));
+    let staged_run = view_run(
+        run,
+        crew.get(crew_stage_index(handoffs, crew.len()))
+            .unwrap_or(&run.profile),
+    );
     let mut messages = build_messages(&staged_run, &build_history(state, &run.id)?);
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
@@ -1791,7 +1795,10 @@ async fn run_loop(state: AppState, run_id: String) {
                 })
                 .unwrap_or(0);
             let stage_name = crew.get(handoffs as usize).cloned().unwrap_or_default();
-            let next_role = crew.get((handoffs + 1) as usize).cloned().unwrap_or_default();
+            let next_role = crew
+                .get((handoffs + 1) as usize)
+                .cloned()
+                .unwrap_or_default();
             // The final stage cannot be skipped: after it there is nobody
             // left to deliver the goal, so the run stops here either way.
             if run.stage_policy != "skip" || handoffs + 1 >= crew.len() as i64 {
@@ -1802,7 +1809,12 @@ async fn run_loop(state: AppState, run_id: String) {
                     "Stage budget exhausted",
                     &format!("The {} stage used its {} step budget without finishing; the run stops there instead of pretending the stage completed.", stage_name, run.stage_max_steps),
                 ).ok();
-                let _ = finish(&state, &run.id, FAILED, "A crew stage ran over its step budget without finishing.");
+                let _ = finish(
+                    &state,
+                    &run.id,
+                    FAILED,
+                    "A crew stage ran over its step budget without finishing.",
+                );
                 break;
             }
             add_step(
@@ -2015,10 +2027,7 @@ fn parse_crew(input: &Value, mode: &str, allow_writes: bool) -> Result<Vec<Strin
         Some(Value::Array(items)) => {
             let mut roles = Vec::new();
             for item in items {
-                let profile = item
-                    .as_str()
-                    .map(normalize_profile)
-                    .unwrap_or_default();
+                let profile = item.as_str().map(normalize_profile).unwrap_or_default();
                 if profile.is_empty() {
                     return Err(format!(
                         "Unknown crew agent role: {}. Known roles: {}.",
@@ -2042,6 +2051,12 @@ fn parse_crew(input: &Value, mode: &str, allow_writes: bool) -> Result<Vec<Strin
         );
     }
     Ok(parsed)
+}
+
+/// Validate a saved crew roster without a full run payload: templates live
+/// as { name, crew } pairs and are edited as plain JSON.
+pub(crate) fn validate_crew(crew: &Value) -> Result<Vec<String>, String> {
+    parse_crew(&json!({ "crew": crew }), "crew", false)
 }
 
 /// Orchestrator state is the step log itself: each crew stage ends with a
@@ -2113,7 +2128,10 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     };
     let crew_json = serde_json::to_string(&crew).unwrap_or_default();
     let stage_policy = match normalize_stage_policy(
-        input.get("stagePolicy").and_then(Value::as_str).unwrap_or(""),
+        input
+            .get("stagePolicy")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
     ) {
         Ok(policy) => policy,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
@@ -2338,10 +2356,7 @@ async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -
 /// stages), its saved plan and its current stage. "Run again"
 /// re-activates THIS run instead of starting a new one; the stage budget
 /// restarts at the resume marker exactly like it does at a handoff.
-async fn resume_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Response {
+async fn resume_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
     let run = match load_run(&state, &run_id) {
         Ok(Some(run)) => run,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
@@ -2361,10 +2376,14 @@ async fn resume_run(
     }
     let (steps_present, handoffs) = match db(&state) {
         Ok(conn) => (
-            conn.query_row("SELECT COUNT(*) FROM agent_steps WHERE run_id=?1", [&run_id], |r| r.get(0))
-                .unwrap_or(0i64),
             conn.query_row(
-                "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='handoff',
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1",
+                [&run_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0i64),
+            conn.query_row(
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='handoff'",
                 [&run_id],
                 |r| r.get(0),
             )
@@ -2382,10 +2401,7 @@ async fn resume_run(
         let crew: Vec<String> = serde_json::from_str(&run.crew).unwrap_or_default();
         match crew.get(handoffs as usize) {
             Some(role) => format!(" Resuming the {} stage.", role),
-            None => {
-                " Every recorded handoff is in the log; resuming the final stage."
-                    .to_string()
-            }
+            None => " Every recorded handoff is in the log; resuming the final stage.".to_string(),
         }
     } else {
         " Resuming from the recorded step log.".to_string()
@@ -2394,7 +2410,7 @@ async fn resume_run(
         &state,
         &run_id,
         "resume",
-        "Run resumed.",
+        &format!("Run resumed.{}", stage_note),
         "Picking up from the recorded step log: finished stages stay finished, unfinished work continues.",
     );
     if let Err(error) = set_run(&state, &run_id, RUNNING, None, Some("")) {
@@ -2913,7 +2929,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     #[test]
     fn crew_defaults_to_executor_then_reviewer() {
         // No roster sent: the default line-up executes and then reviews.
-        assert_eq!(parse_crew(&json!({}), "crew", false).unwrap(), vec!["coding", "review"]);
+        assert_eq!(
+            parse_crew(&json!({}), "crew", false).unwrap(),
+            vec!["coding", "review"]
+        );
         // Crew bodies only exist for crew-mode runs.
         assert_eq!(
             parse_crew(&json!({ "crew": ["coding"] }), "", false).unwrap(),
@@ -2930,7 +2949,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let err = parse_crew(&json!({ "crew": { "0": "coding" } }), "crew", false);
         assert!(err.unwrap_err().contains("JSON array"));
         // Exact profile names survive case and spacing differences.
-        assert_eq!(parse_crew(&json!({ "crew": ["  CODING "] }), "crew", false).unwrap(), vec!["coding"]);
+        assert_eq!(
+            parse_crew(&json!({ "crew": ["  CODING "] }), "crew", false).unwrap(),
+            vec!["coding"]
+        );
         // Writes allowed but no builder role in the line-up is refused.
         let err = parse_crew(&json!({ "crew": ["planner", "review"] }), "crew", true);
         assert!(err.unwrap_err().contains("no building agent"));
@@ -3222,11 +3244,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     async fn scripted_router(replies: &[&str]) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let queue = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::VecDeque::from(
-                replies.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
-            ),
-        ));
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+            replies.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+        )));
         let app = Router::new().route(
             "/chat/completions",
             axum::routing::post(move |body: axum::Json<Value>| async move {
@@ -3259,7 +3279,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
         let payload: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(payload["ok"], json!(true), "{payload}");
         payload["run"]["id"]
@@ -3272,13 +3294,11 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let terminal = [SUCCEEDED, FAILED, INTERRUPTED];
         for _ in 0..250 {
             if let Ok(conn) = db(state) {
-                if let Ok(status) = conn
-                    .query_row::<String, _, _>(
-                        "SELECT status FROM agent_runs WHERE id=?1",
-                        [id],
-                        |r| r.get(0),
-                    )
-                {
+                if let Ok(status) = conn.query_row::<String, _, _>(
+                    "SELECT status FROM agent_runs WHERE id=?1",
+                    [id],
+                    |r| r.get(0),
+                ) {
                     if terminal.contains(&status.as_str()) {
                         let mut stmt = conn
                             .prepare("SELECT action FROM agent_steps WHERE run_id=?1 ORDER BY seq")
@@ -3295,6 +3315,43 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("the run never reached a terminal state: {id}");
+    }
+
+    async fn wait_until_status(state: &AppState, id: &str, wanted: &str) {
+        for _ in 0..250 {
+            if let Ok(conn) = db(state) {
+                if let Ok(status) = conn.query_row::<String, _, _>(
+                    "SELECT status FROM agent_runs WHERE id=?1",
+                    [id],
+                    |r| r.get(0),
+                ) {
+                    if status == wanted {
+                        return;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the run never reached {wanted}: {id}");
+    }
+
+    async fn post_resume(app: &Router, id: &str) -> (StatusCode, String) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/resume"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
     }
 
     #[tokio::test]
@@ -3375,10 +3432,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     #[tokio::test]
     async fn crew_stage_budget_fail_stops_the_run_honestly() {
-        let base = scripted_router(&[
-            "{\"action\":\"think\",\"summary\":\"looking at the goal\"}",
-        ])
-        .await;
+        let base =
+            scripted_router(&["{\"action\":\"think\",\"summary\":\"looking at the goal\"}"]).await;
         let fixture = run_fixture("crew-budget-fail", &base);
         let id = start_run(
             &fixture.app,
@@ -3403,6 +3458,98 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             )
             .unwrap();
         assert!(fail.contains("without finishing"), "{fail}");
+    }
+
+    #[tokio::test]
+    async fn crew_run_resumes_from_stage_after_budget_fail() {
+        let base = scripted_router(&[
+            // Stage 1 (coding) burns its whole budget on a write, then fails.
+            "{\"action\":\"write\",\"path\":\"hello.txt\",\"content\":\"hi from coding\"}",
+            // Resumed coding stage finishes; the reviewer then verifies.
+            "{\"action\":\"done\",\"summary\":\"hello.txt is written\"}",
+            "{\"action\":\"done\",\"summary\":\"the file content checks out\"}",
+        ])
+        .await;
+        let fixture = run_fixture("crew-resume", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write hello.txt, then have a reviewer verify it",
+                "allowWrites": true,
+                "autoApprove": true,
+                "mode": "crew",
+                "stageMaxSteps": 1
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, FAILED, "actions: {actions:?}");
+        assert_eq!(actions, ["write", "fail"]);
+
+        // The step log is the orchestrator state: resuming re-activates THIS
+        // run and the coding stage gets a fresh budget after the marker.
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        let (resumed_status, resumed_actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(resumed_status, SUCCEEDED, "actions: {resumed_actions:?}");
+        assert_eq!(
+            resumed_actions,
+            ["write", "fail", "resume", "handoff", "done"]
+        );
+
+        // A finished run must not be resumed again.
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("already delivered"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_live_and_empty_runs() {
+        // A write that waits for approval keeps the run live.
+        let base =
+            scripted_router(&["{\"action\":\"write\",\"path\":\"a.txt\",\"content\":\"x\"}"]).await;
+        let fixture = run_fixture("resume-live", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write a.txt",
+                "allowWrites": true,
+                "autoApprove": false,
+                "mode": "crew",
+                "stageMaxSteps": 9
+            }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("still live"), "{body}");
+        let _ = fixture
+            .app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/cancel"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // A recorded-but-empty run has nothing to resume.
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("resume-empty", &base);
+        let conn = db(&fixture.state).unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
+             VALUES('r-empty', 'p', 'a goal that never ran', 'failed', 0, 0, 0, 5, '', '', 1.0, 1.0)",
+            params![],
+        )
+        .unwrap();
+        let (code, body) = post_resume(&fixture.app, "r-empty").await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("no steps"), "{body}");
     }
 
     #[tokio::test]
