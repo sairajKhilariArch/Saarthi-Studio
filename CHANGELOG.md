@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.26.1
+
+### IDE workbench shell (desktop)
+
+- The UI is now a VS Code-style workbench: an activity bar (Explorer, Search,
+  Source control, Run, Modules, Agents, Skills, Projects, Settings), breadcrumbs,
+  tab context menus, a docked AI panel, a five-tab bottom panel (Terminal,
+  Problems, AI runs, Tasks, Output) and a live status bar.
+- Chat no longer competes with file tabs: the assistant lives in the right dock
+  with an Assistant/Router tab pair, so code and conversation stay side by side.
+- The editor gained syntax highlighting (Rust, JS/TS/Java, Python, shell, SQL),
+  in-file find with a match count and F3/Shift+F3, jump-to-line from search, and
+  font size / tab size / wrap preferences.
+- Two new read-only routes: `/api/workspace/search` (bounded text grep that
+  skips build output, binaries and symlinks) and `/api/workspace/vcs` (parsed
+  `git status --porcelain=v2`, honest when the folder is not a repository).
+- Problems records real failed requests and saves; Output logs real mutations.
+  No pane fabricates data: folding, split editors, debugging and a test runner
+  are absent because the backend has no such capability yet.
+
 ## 1.26.0
 
 ### Hybrid AI (Step 3): cloud plans, local executes

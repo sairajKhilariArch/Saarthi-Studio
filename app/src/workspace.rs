@@ -914,6 +914,237 @@ async fn remove(
     delete_entry(&root, path).map(Json)
 }
 
+/* ------------------------------------------------------------------ */
+/* IDE panes: bounded workspace search and read-only git status        */
+/* ------------------------------------------------------------------ */
+
+/// One search may walk this many files and return this many matches; both are
+/// hard stops so a search in a huge folder returns quickly instead of hanging
+/// the sidebar.
+const MAX_SEARCH_FILES: usize = 1500;
+const MAX_SEARCH_MATCHES: usize = 200;
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Serialize)]
+struct SearchHit {
+    path: String,
+    line: usize,
+    column: usize,
+    text: String,
+}
+
+/// Recursive plain-text scan behind the sidebar's Search pane. Build output
+/// and dependency folders are skipped, symlinks are ignored, and files larger
+/// than the editor's limit or containing NUL bytes are treated as binary.
+fn search_tree(
+    dir: &FsPath,
+    base: &str,
+    needle: &str,
+    hits: &mut Vec<SearchHit>,
+    scanned: &mut usize,
+    truncated: &mut bool,
+) {
+    if *scanned >= MAX_SEARCH_FILES || hits.len() >= MAX_SEARCH_MATCHES {
+        *truncated = true;
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut items: Vec<fs::DirEntry> = read.flatten().collect();
+    items.sort_by_key(|item| item.file_name());
+    for item in items {
+        if *scanned >= MAX_SEARCH_FILES || hits.len() >= MAX_SEARCH_MATCHES {
+            *truncated = true;
+            return;
+        }
+        let name = item.file_name().to_string_lossy().to_string();
+        let relative = if base.is_empty() {
+            name.clone()
+        } else {
+            format!("{base}/{name}")
+        };
+        let Ok(file_type) = item.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let full = dir.join(&name);
+        if file_type.is_dir() {
+            if OUTLINE_SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            search_tree(&full, &relative, needle, hits, scanned, truncated);
+            continue;
+        }
+        let Ok(meta) = item.metadata() else {
+            continue;
+        };
+        if meta.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        *scanned += 1;
+        let Ok(bytes) = fs::read(&full) else {
+            continue;
+        };
+        if bytes.contains(&0) {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            let lower = line.to_lowercase();
+            let Some(column) = lower.find(needle) else {
+                continue;
+            };
+            hits.push(SearchHit {
+                path: relative.clone(),
+                line: index + 1,
+                column: column + 1,
+                text: line.trim().chars().take(240).collect(),
+            });
+            if hits.len() >= MAX_SEARCH_MATCHES {
+                *truncated = true;
+                return;
+            }
+        }
+    }
+}
+
+async fn search_workspace(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Value>, WorkspaceError> {
+    let root = state.workspace.root()?;
+    let needle = query.q.trim().to_lowercase();
+    if needle.chars().count() < 2 {
+        return Err(bad_request("Type at least two characters to search."));
+    }
+    let base = query.path.trim().trim_matches('/').to_string();
+    let start = if base.is_empty() {
+        root.clone()
+    } else {
+        resolve_inside(&root, &base)?
+    };
+    let mut hits = Vec::new();
+    let mut scanned = 0;
+    let mut truncated = false;
+    search_tree(
+        &start,
+        &base,
+        &needle,
+        &mut hits,
+        &mut scanned,
+        &mut truncated,
+    );
+    Ok(Json(json!({
+        "query": query.q.trim(),
+        "matches": hits,
+        "scanned": scanned,
+        "truncated": truncated,
+    })))
+}
+
+/// `git status --porcelain=v2` parsed into the shape the Source Control pane
+/// renders. Nothing here stages, commits, fetches or writes.
+fn parse_git_status(output: &str) -> (Option<String>, Vec<Value>) {
+    let mut branch = None;
+    let mut changes = Vec::new();
+    for line in output.lines() {
+        if let Some(head) = line.strip_prefix("# branch.head ") {
+            let name = head.trim();
+            branch = Some(if name == "(detached)" {
+                "detached".to_string()
+            } else {
+                name.to_string()
+            });
+            continue;
+        }
+        let (code, path) = if let Some(path) = line.strip_prefix("? ") {
+            ("?".to_string(), path.trim().to_string())
+        } else if let Some(rest) = line.strip_prefix("1 ").or_else(|| line.strip_prefix("u ")) {
+            let mut parts = rest.splitn(8, ' ');
+            let xy = parts.next().unwrap_or_default().to_string();
+            (xy, parts.nth(6).unwrap_or_default().trim().to_string())
+        } else if let Some(rest) = line.strip_prefix("2 ") {
+            let mut parts = rest.splitn(9, ' ');
+            let xy = parts.next().unwrap_or_default().to_string();
+            let tail = parts.nth(7).unwrap_or_default();
+            (
+                xy,
+                tail.split('\t')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            )
+        } else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let mut letters = code.chars();
+        let index_state = letters.next().unwrap_or('.');
+        let worktree_state = letters.next().unwrap_or('.');
+        changes.push(json!({
+            "path": path,
+            "code": code,
+            "staged": index_state != '.' && index_state != '?',
+            "unstaged": worktree_state != '.' || index_state == '?',
+        }));
+    }
+    (branch, changes)
+}
+
+async fn vcs_status(State(state): State<AppState>) -> Result<Json<Value>, WorkspaceError> {
+    let root = state.workspace.root()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["status", "--porcelain=v2", "--branch"])
+        .output();
+    match output {
+        Ok(result) if result.status.success() => {
+            let text = String::from_utf8_lossy(&result.stdout);
+            let (branch, changes) = parse_git_status(&text);
+            Ok(Json(json!({
+                "available": true,
+                "branch": branch,
+                "changes": changes,
+                "clean": changes.is_empty(),
+            })))
+        }
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            let first = stderr.lines().next().unwrap_or_default().trim().to_string();
+            Ok(Json(json!({
+                "available": false,
+                "message": if first.is_empty() {
+                    "This folder is not a Git repository.".to_string()
+                } else {
+                    first
+                },
+                "changes": [],
+            })))
+        }
+        Err(_) => Ok(Json(json!({
+            "available": false,
+            "message": "Git is not installed, or not on PATH.",
+            "changes": [],
+        }))),
+    }
+}
+
 /// Blocks cross-site requests and DNS-rebinding: the request must target the
 /// loopback listener by name, and a browser-supplied `Origin` must be loopback.
 pub(crate) async fn guard_local_origin(
@@ -1001,6 +1232,8 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/workspace/create", post(create))
         .route("/api/workspace/rename", post(rename))
         .route("/api/workspace/delete", post(remove))
+        .route("/api/workspace/search", get(search_workspace))
+        .route("/api/workspace/vcs", get(vcs_status))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(
             LocalOriginGuard { port },
@@ -1068,6 +1301,58 @@ fn run_folder_picker() -> PickerResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_returns_hits_and_skips_build_output() {
+        let fixture = Fixture::new("search");
+        fs::create_dir_all(fixture.path("src")).unwrap();
+        fs::create_dir_all(fixture.path("target")).unwrap();
+        fs::write(
+            fixture.path("src/app.rs"),
+            "fn main() {}\nlet needle = 1;\n",
+        )
+        .unwrap();
+        fs::write(fixture.path("target/built.rs"), "needle\n").unwrap();
+        fs::write(
+            fixture.path("blob.bin"),
+            [0u8, 110, 101, 101, 100, 108, 101],
+        )
+        .unwrap();
+        let root = fs::canonicalize(&fixture.root).unwrap();
+
+        let mut hits = Vec::new();
+        let mut scanned = 0;
+        let mut truncated = false;
+        search_tree(&root, "", "needle", &mut hits, &mut scanned, &mut truncated);
+
+        assert_eq!(hits.len(), 1, "only the source file should match");
+        assert_eq!(hits[0].path, "src/app.rs");
+        assert_eq!(hits[0].line, 2);
+        assert_eq!(hits[0].column, 5);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn parses_git_status_branch_and_changes() {
+        let output = concat!(
+            "# branch.oid 1234abcd\n",
+            "# branch.head feature/ide\n",
+            "1 .M N... 100644 100644 100644 abcdef abcdef src/main.rs\n",
+            "2 R. N... 100644 100644 100644 abcdef abcdef R100 src/new name.rs\tsrc/old name.rs\n",
+            "? notes.txt\n",
+        );
+        let (branch, changes) = parse_git_status(output);
+        assert_eq!(branch.as_deref(), Some("feature/ide"));
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0]["path"], "src/main.rs");
+        assert_eq!(changes[0]["code"], ".M");
+        assert_eq!(changes[0]["staged"], false);
+        assert_eq!(changes[0]["unstaged"], true);
+        assert_eq!(changes[1]["path"], "src/new name.rs");
+        assert_eq!(changes[1]["code"], "R.");
+        assert_eq!(changes[2]["code"], "?");
+        assert_eq!(changes[2]["path"], "notes.txt");
+    }
 
     struct Fixture {
         root: PathBuf,
