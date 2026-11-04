@@ -9,8 +9,8 @@ android {
         applicationId = "com.saarthi.studio"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "1.26.3"
+        versionCode = 23
+        versionName = "1.26.4"
     }
 
     buildTypes {

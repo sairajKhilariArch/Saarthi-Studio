@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for the AppImage and the deb's desktop entry.
+     appimagetool warns (and some desktops hide the app) when an AppImage has
+     no metainfo file, so this ships at usr/share/metainfo/ inside the AppDir. -->
+<component type="desktop-application">
+  <id>free-ai-suite</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Saarthi Studio</name>
+  <summary>Local-first AI chat and coding workspace</summary>
+  <developer_name>SAIRAJ KHILARI</developer_name>
+  <description>
+    <p>
+      Saarthi Studio runs a private HTTP service on your own machine and opens a
+      browser UI for chat, code editing, agent runs and terminals. Chat requests
+      are routed to a self-hosted FreeLLMAPI router or a local Ollama runtime;
+      conversations, projects and settings stay in your home directory.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Multi-provider chat with token-budgeted context</li>
+      <li>Workspace browsing, editing, search and git status</li>
+      <li>Autonomous agent runs with approvals and checkpoints</li>
+      <li>Real PTY terminals and bundled skills</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">free-ai-suite.desktop</launchable>
+  <url type="homepage">https://github.com/sairajKhilariArch/Saarthi-Studio</url>
+  <url type="bugtracker">https://github.com/sairajKhilariArch/Saarthi-Studio/issues</url>
+  <categories>
+    <category>Development</category>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>AI</keyword>
+    <keyword>LLM</keyword>
+    <keyword>chat</keyword>
+    <keyword>code</keyword>
+    <keyword>assistant</keyword>
+  </keywords>
+  <releases>
+    <release version="1.26.4" date="2026-11-04"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

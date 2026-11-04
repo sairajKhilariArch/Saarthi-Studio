@@ -58,7 +58,13 @@ jobs:
           test -f app/static/app.js
           test -f app/static/styles.css
           test -f app/packaging/free-ai-suite.desktop
+          test -f app/packaging/free-ai-suite.appdata.xml
           test -f app/packaging/icons/free-ai-suite.svg
+
+      # Pipeline regressions (v1.26.0/v1.26.1 shipped no assets because of a CR
+      # in an artifact filename) are caught here on every push, not only on a tag.
+      - name: Test release version parsing and artifact gate
+        run: bash scripts/ci/test-version.sh
 
       - name: Build debug binary
         working-directory: app

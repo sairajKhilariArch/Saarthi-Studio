@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.26.4
+
+- Phase 1 release reliability: one version parser for Linux, macOS and Windows
+  (`scripts/ci/version.sh`) strips CR/LF/whitespace and validates semver, so a
+  CRLF checkout can no longer corrupt an artifact name.
+- New artifact gate (`scripts/ci/verify-artifacts.sh`) rejects control characters
+  and spaces in artifact names and verifies `SHA256SUMS.txt` before each upload;
+  `scripts/ci/test-version.sh` runs those regressions in Desktop CI on every push.
+- Release runs are serialised per ref, and the AppImage now ships AppStream
+  metadata (`app/packaging/free-ai-suite.appdata.xml`).
+- Added the audit and engineering docs: `docs/ARCHITECTURE.md`,
+  `docs/FEATURE-STATUS.md`, `docs/IMPLEMENTATION-SPECIFICATION.md`,
+  `docs/MASTER-ROADMAP.md`, `docs/TESTING-STRATEGY.md`, `docs/KNOWN-ISSUES.md`,
+  `docs/PROGRESS.md`.
+
 ## 1.26.3
 
 - Repair the release workflow's version read. An earlier bump left a raw

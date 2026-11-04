@@ -15,6 +15,12 @@ on:
 permissions:
   contents: write
 
+# Two tag pushes must never build the same release at once: assets are keyed by
+# filename on a single release, so an overlapping run races the attachment.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deb:
     # The .deb is built headless (--no-default-features: no Tauri/GTK links)
@@ -69,6 +75,11 @@ jobs:
           dpkg-deb -c "$DEB" | grep -q usr/share/free-ai-suite/static/skills/debug/SKILL.md || { echo "ERROR: bundled skills missing from the deb"; exit 1; }
           dpkg-deb -c "$DEB"
 
+      # Reject control characters/spaces in names and verify checksums before
+      # anything is handed to upload-artifact or the release API.
+      - name: Validate artifact names
+        run: bash scripts/ci/verify-artifacts.sh dist
+
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
@@ -110,10 +121,14 @@ jobs:
         with:
           workspaces: app
 
+      # One parser on every OS (scripts/ci/version.sh): it strips CR/LF/tab and
+      # refuses an empty or malformed version. A raw CR here is what produced
+      # unusable artifact filenames in the v1.26.0/v1.26.1 runs.
       - name: Read package version
         id: meta
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1 | tr -d '[[:space:]]')
+          set -eu
+          version="$(bash scripts/ci/version.sh app/Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary and run tests
@@ -153,6 +168,10 @@ jobs:
           cp app/target/release/free-ai-studio AppDir/usr/bin/
           cp -r app/static/. AppDir/usr/share/free-ai-suite/static/
           cp app/packaging/free-ai-suite.desktop AppDir/free-ai-suite.desktop
+          # AppStream metadata: without it appimagetool warns and some desktops
+          # show the AppImage as an unnamed binary.
+          mkdir -p AppDir/usr/share/metainfo
+          cp app/packaging/free-ai-suite.appdata.xml AppDir/usr/share/metainfo/free-ai-suite.appdata.xml
           cp app/packaging/icons/free-ai-suite.svg AppDir/free-ai-suite.svg
           # appimagetool does not generate AppRun; provide it explicitly so the
           # AppImage has an entry point that resolves usr/ relative to itself.
@@ -172,6 +191,9 @@ jobs:
           cd dist
           sha256sum ./* > SHA256SUMS.txt
           cat SHA256SUMS.txt
+
+      - name: Validate artifact names and checksums
+        run: bash scripts/ci/verify-artifacts.sh dist
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -210,10 +232,13 @@ jobs:
         with:
           workspaces: app
 
+      # Git Bash ships on every Windows runner, so the same parser runs here
+      # instead of a second regex that can drift from the Linux/macOS one.
       - name: Read package version
         id: meta
         run: |
-          $version = (Select-String -Path app/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value.Trim()
+          $version = (bash scripts/ci/version.sh app/Cargo.toml).Trim()
+          if (-not $version) { throw "version extraction returned an empty string" }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build release binary and run tests
@@ -234,6 +259,9 @@ jobs:
           Copy-Item README.md, app/LICENSE "$stage/"
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/free-ai-suite_${version}_windows-x86_64.zip" -Force
           Remove-Item -Recurse -Force $stage
+
+      - name: Validate artifact names
+        run: bash scripts/ci/verify-artifacts.sh dist
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -276,10 +304,14 @@ jobs:
         with:
           workspaces: app
 
+      # One parser on every OS (scripts/ci/version.sh): it strips CR/LF/tab and
+      # refuses an empty or malformed version. A raw CR here is what produced
+      # unusable artifact filenames in the v1.26.0/v1.26.1 runs.
       - name: Read package version
         id: meta
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1 | tr -d '[[:space:]]')
+          set -eu
+          version="$(bash scripts/ci/version.sh app/Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build release binaries and run tests
@@ -335,6 +367,9 @@ jobs:
           STAGE="$(cat dist/stage-name.txt)"
           tar -C dist -czf "${STAGE}.tar.gz" "$(basename "$STAGE")"
           rm -rf "$STAGE" dist/stage-name.txt
+
+      - name: Validate artifact names
+        run: bash scripts/ci/verify-artifacts.sh dist
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
