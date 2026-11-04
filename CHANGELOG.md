@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.26.15
+
+- Phase 2 slice 3: the Router view can test one router on demand.
+  `POST /api/routers/:id/test` sends a real request to that router's documented
+  health path (`GET /v1/models` for FreeLLMAPI and OmniRoute, `GET /api/tags` for
+  the local runtime) and reports the status code and measured latency, so "up but
+  not answering" is distinguishable from "wants a key": a 401 counts as an
+  answered endpoint and the message says so. Checked against
+  `scripts/mock-router.py` — HTTP 200 in 1 ms — and against nothing listening on
+  port 11434, which reports no answer after the 3 s timeout.
+- `POST /api/routers/:id/restart` composes the existing explicit stop and start
+  paths, so the ownership rules are unchanged: OmniRoute still refuses to stop a
+  gateway Studio did not start, and the local runtime has no lifecycle here to
+  restart (502 with the reason). An unknown id answers 404, and both routes sit
+  behind the loopback-origin guard (a foreign `Origin` gets 403).
+- The registry documented `GET /health` for OmniRoute while its probe has always
+  called `GET /v1/models`. The tester sends exactly what the probe sends, so the
+  entry now reads `/v1/models` and the two cannot drift apart again.
+- Tests: `every_health_probe_is_a_get_path`, `connection_test_separates_an_answer_from_no_answer`,
+  `connection_test_serialises_what_the_ui_renders`, `restart_refuses_what_this_build_cannot_own`
+  (144 Rust tests pass).
+
 ## 1.26.14
 
 - `GET /api/routers` probes FreeLLMAPI, OmniRoute and the local runtime

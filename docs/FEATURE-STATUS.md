@@ -28,12 +28,12 @@ release run `41861357127` published 8 non-macOS assets.
 |---|---|---|
 | Detect/start/stop FreeLLMAPI compose project | Working | `router.rs`, `/api/router*`, ownership file, stop-only-if-owned |
 | OmniRoute router | Partial | `main.rs` `/api/omniroute*`; same compose mechanism, no registry abstraction |
-| Router registry (multiple routers, install methods, min versions) | Missing | hard-coded FreeLLMAPI/OmniRoute paths |
-| OS/arch detection, dependency checks, package-manager awareness | Missing | Linux/Ubuntu assumed in `install.sh` |
+| Router registry (multiple routers, install methods, min versions) | Working | `router_registry.rs` + `/api/routers`; only routers with a real lifecycle in the crate are listed |
+| OS/arch detection, dependency checks, package-manager awareness | Partial | registry gates OS/arch and lists methods per platform; no dependency probing or package-manager detection |
 | Install flow with approval, download, checksum, configure | Missing | installer script is out-of-app |
-| Health check distinguishing "process alive" from "healthy" | Partial | status endpoint checks HTTP reachability; lifecycle does not gate on health |
+| Health check distinguishing "process alive" from "healthy" | Working | `healthy` means "the health probe answered"; a container that is up but silent is `running: true, healthy: false` (unit-tested) |
 | Auto-start on launch | Partial | start on demand + CLI; no startup sweep with per-router preferences |
-| Router UI (list, logs, update, uninstall, connection tester) | Partial | console proxy + start/stop buttons |
+| Router UI (list, logs, update, uninstall, connection tester) | Partial | list, health, start/stop, restart and the connection tester; logs, update, uninstall and a config editor still missing |
 
 ## Phase 3 — Model and provider manager
 

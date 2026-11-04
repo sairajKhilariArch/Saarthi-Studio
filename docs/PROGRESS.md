@@ -54,9 +54,10 @@ partial, `[ ]` not started.
 
 ## Phase 2 — Router Manager
 
-Slice 1 (`app/src/router_registry.rs`, this commit): the registry and platform
-capability layer, with 10 unit tests. It reuses `router.rs` for lifecycle and
-points at its facts rather than re-deriving them.
+Slices 1–3: `app/src/router_registry.rs` holds the registry and platform
+capability layer (slice 1), the live probes behind `/api/routers` (slice 2) and
+the per-router connection tester and restart (slice 3). It reuses `router.rs` for
+lifecycle and points at its facts rather than re-deriving them.
 
 - [x] Router registry with the §5.1 fields (id, name, description, OS, arch, install methods, config location, health probe, docs)
 - [x] Architecture normalisation for real release-asset spellings (`aarch64`/`amd64`/`x64`)
@@ -66,15 +67,17 @@ points at its facts rather than re-deriving them.
 - [x] Live probes per router (installed / version / runtime / healthy / ownership) reusing `router::status`, `router::omniroute_status` and `local::fetch_version`
 - [x] `healthy` is "the health probe answered", never "the process exists" (unit-tested both ways)
 - [x] `/api/routers` route returning capabilities + measured state + host platform (smoked: HTTP 200, three routers, real Windows host values)
-- [ ] Probe latency: the three probes run sequentially (~6.5 s on this host); run them concurrently and cache briefly
-- [ ] UI: the router list does not render this yet — the endpoint exists, the panel does not
-- [ ] Router UI: list, health, start/stop/restart, logs, connection tester
+- [x] Probe latency: the three probes run concurrently (1.26.14), so the endpoint costs the slowest probe instead of their sum
+- [x] UI: the Router view lists every registered router with its measured state (1.26.13)
+- [x] Router UI: list, health, start/stop (1.26.13)
+- [x] Router UI: connection tester and restart — real status code and latency per router, restart through the existing stop/start paths so ownership rules are unchanged (1.26.15; verified against `scripts/mock-router.py`, 200 in 1 ms, plus the no-answer and no-lifecycle paths)
+- [ ] Router UI: logs, update, uninstall, configuration editor
 - [ ] Install workflow with approval, checksum verification and recorded install info
-- [ ] Auto-start on launch that never stops externally owned routers
+- [ ] Auto-start on launch that never stops externally owned routers (needs per-router preferences first)
 
 ## Next up
 
-1. Phase 2 slice 2 — live probes (`installed`/`version`/`healthy`/`owned`) and the
-   `/api/routers` route on top of the registry.
+1. Phase 2 slice 4 — router logs and the install/auto-start path, which needs
+   per-router preferences before the startup sweep can exist.
 2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
 3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

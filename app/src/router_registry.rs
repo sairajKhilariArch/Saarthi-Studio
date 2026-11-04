@@ -13,6 +13,7 @@
 
 use crate::AppState;
 use serde::Serialize;
+use std::time::{Duration, Instant};
 
 /// How a router can be obtained on a platform. A router may offer several.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -80,7 +81,10 @@ const ROUTERS: &[RouterSpec] = &[
         arches: &["x86_64", "arm64"],
         methods: &[InstallMethod::DockerCompose, InstallMethod::Remote],
         config: ".config/free-ai-suite/omniroute-dir",
-        health: "GET /health",
+        // The probe in `router.rs` calls /v1/models and counts any answer as
+        // reachable (401 included), so the registry documents that same path:
+        // the connection tester sends exactly what the health probe sends.
+        health: "GET /v1/models",
         docs: "https://github.com/sairajKhilariArch/Saarthi-Studio#router",
     },
     RouterSpec {
@@ -105,7 +109,6 @@ pub(crate) fn registry() -> &'static [RouterSpec] {
     ROUTERS
 }
 
-#[allow(dead_code)] // used by the CLI/UI wiring in the next slice
 pub(crate) fn find(id: &str) -> Option<&'static RouterSpec> {
     ROUTERS.iter().find(|spec| spec.id == id)
 }
@@ -278,12 +281,7 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
     // endpoint costs roughly the slowest one instead of their sum. Each still
     // returns exactly what its own endpoint returns, so nothing here can
     // disagree with /api/router, /api/omniroute or /api/local/status.
-    let selection = crate::local::selection_of(state);
-    let base_url = if selection.base_url.trim().is_empty() {
-        "http://127.0.0.1:11434".to_string()
-    } else {
-        selection.base_url.trim().trim_end_matches('/').to_string()
-    };
+    let base_url = local_base_url(state);
     let (router_status, omni_status, local_version) = tokio::join!(
         crate::router::status(),
         crate::router::omniroute_status(),
@@ -338,6 +336,162 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
         out.push(view(cap, probe));
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Per-router actions
+
+/// The local runtime's base URL, resolved the way `/api/routers` and the local
+/// probes resolve it, so a hand-configured Ollama address is tested where it
+/// actually lives instead of a guessed default.
+pub(crate) fn local_base_url(state: &AppState) -> String {
+    let base_url = crate::local::selection_of(state).base_url;
+    if base_url.trim().is_empty() {
+        "http://127.0.0.1:11434".to_string()
+    } else {
+        base_url.trim().trim_end_matches('/').to_string()
+    }
+}
+
+/// The endpoint this router is addressed at right now: the port the installer
+/// recorded for the gateways, the configured base URL for the local runtime.
+fn endpoint_for(state: &AppState, id: &str) -> String {
+    match id {
+        "freellmapi" => format!("http://127.0.0.1:{}", crate::router::router_port()),
+        "omniroute" => format!("http://127.0.0.1:{}", crate::router::omniroute_port()),
+        _ => local_base_url(state),
+    }
+}
+
+/// The method and path out of a registry `health` string, e.g. `GET /v1/models`.
+/// Only GET probes exist today; a different method is not silently sent as GET.
+fn health_path(spec: &RouterSpec) -> Result<&'static str, String> {
+    spec.health
+        .strip_prefix("GET ")
+        .map(str::trim)
+        .filter(|path| path.starts_with('/'))
+        .ok_or_else(|| format!("{} has no usable health probe ({})", spec.name, spec.health))
+}
+
+/// Outcome of the connection tester. `ok` means the endpoint answered, which is
+/// what an HTTP status code proves; the status itself is reported so a 401 (a
+/// listener that wants a key) is not mistaken for a dead router.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct ConnectionTest {
+    pub id: &'static str,
+    pub endpoint: String,
+    pub path: String,
+    pub ok: bool,
+    pub status: Option<u16>,
+    pub latency_ms: u64,
+    pub message: String,
+}
+
+impl ConnectionTest {
+    fn from_response(
+        spec: &'static RouterSpec,
+        endpoint: String,
+        path: &str,
+        status: u16,
+        latency_ms: u64,
+    ) -> Self {
+        let message = if (200..300).contains(&status) {
+            format!("{endpoint}{path} answered {status} in {latency_ms} ms.")
+        } else {
+            format!(
+                "{endpoint}{path} answered {status} in {latency_ms} ms: the endpoint is listening but refused the request, so a key or dashboard sign-in is probably missing."
+            )
+        };
+        ConnectionTest {
+            id: spec.id,
+            endpoint,
+            path: path.to_string(),
+            ok: true,
+            status: Some(status),
+            latency_ms,
+            message,
+        }
+    }
+
+    fn from_error(
+        spec: &'static RouterSpec,
+        endpoint: String,
+        path: &str,
+        latency_ms: u64,
+        error: &str,
+    ) -> Self {
+        ConnectionTest {
+            id: spec.id,
+            endpoint: endpoint.clone(),
+            path: path.to_string(),
+            ok: false,
+            status: None,
+            latency_ms,
+            message: format!("No answer from {endpoint}{path} in {latency_ms} ms: {error}"),
+        }
+    }
+}
+
+/// Probe one router on demand, with the latency and status code the periodic
+/// probe throws away. This is a real request to the documented health path; it
+/// never reports success from a config file or a running process.
+pub(crate) async fn test_connection(state: &AppState, id: &str) -> Result<ConnectionTest, String> {
+    let spec = find(id).ok_or_else(|| format!("Unknown router id: {id}"))?;
+    let path = health_path(spec)?;
+    let endpoint = endpoint_for(state, id);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|error| format!("Could not build an HTTP client: {error}"))?;
+    let started = Instant::now();
+    let response = client.get(format!("{endpoint}{path}")).send().await;
+    // Measure before formatting: the message must not inflate the latency it
+    // reports.
+    let elapsed = started.elapsed().as_millis() as u64;
+    Ok(match response {
+        Ok(response) => {
+            ConnectionTest::from_response(spec, endpoint, path, response.status().as_u16(), elapsed)
+        }
+        Err(error) => ConnectionTest::from_error(spec, endpoint, path, elapsed, &error.to_string()),
+    })
+}
+
+/// Restart a router through the lifecycle this build already owns. Composed
+/// from the same explicit stop/start paths the buttons use, so the ownership
+/// rules are unchanged: OmniRoute still refuses to stop a gateway Studio did
+/// not start, and the local runtime has no lifecycle here to restart.
+pub(crate) async fn restart(id: &str) -> Result<String, String> {
+    match id {
+        "freellmapi" => {
+            crate::router::manual_stop().await?;
+            let status = crate::router::manual_start().await?;
+            Ok(if status.reachable {
+                format!("FreeLLMAPI restarted and is answering on port {}.", status.port)
+            } else {
+                format!(
+                    "FreeLLMAPI was restarted but is not answering yet on port {}.",
+                    status.port
+                )
+            })
+        }
+        "omniroute" => {
+            crate::router::omniroute_stop().await?;
+            let status = crate::router::omniroute_start().await?;
+            Ok(if status.reachable {
+                format!("OmniRoute restarted and is answering on port {}.", status.port)
+            } else {
+                format!(
+                    "OmniRoute was restarted but is not answering yet on port {}.",
+                    status.port
+                )
+            })
+        }
+        "ollama" => Err(
+            "Studio does not manage the Ollama runtime's lifecycle. Restart it with your own service manager (`ollama serve`, systemd, or the desktop app)."
+                .to_string(),
+        ),
+        other => Err(format!("Unknown router id: {other}")),
+    }
 }
 
 #[cfg(test)]
@@ -591,5 +745,105 @@ mod tests {
             matches!(current_arch(), "x86_64" | "arm64" | "x86" | "unknown"),
             "unexpected host arch"
         );
+    }
+
+    #[test]
+    fn every_health_probe_is_a_get_path() {
+        for spec in specs() {
+            let path = health_path(spec).unwrap_or_else(|error| panic!("{error}"));
+            assert!(
+                path.starts_with('/'),
+                "{} health path {path} is not absolute",
+                spec.id
+            );
+        }
+        // A probe with no method or a PUT cannot be sent by a GET tester.
+        let base = *find("freellmapi").unwrap();
+        let no_method = RouterSpec {
+            health: "/v1/models",
+            ..base
+        };
+        assert!(health_path(&no_method).is_err());
+        let wrong_method = RouterSpec {
+            health: "POST /v1/models",
+            ..base
+        };
+        assert!(health_path(&wrong_method).is_err());
+    }
+
+    #[test]
+    fn connection_test_separates_an_answer_from_no_answer() {
+        let spec = find("freellmapi").unwrap();
+
+        // A 401 still proves a listener, so it is ok with the status recorded.
+        let refused = ConnectionTest::from_response(
+            spec,
+            "http://127.0.0.1:3001".into(),
+            "/v1/models",
+            401,
+            12,
+        );
+        assert!(refused.ok);
+        assert_eq!(refused.status, Some(401));
+        assert_eq!(refused.latency_ms, 12);
+        assert!(refused.message.contains("401"));
+        assert!(refused.message.contains("listening"));
+
+        let answered = ConnectionTest::from_response(
+            spec,
+            "http://127.0.0.1:3001".into(),
+            "/v1/models",
+            200,
+            7,
+        );
+        assert!(answered.ok);
+        assert_eq!(answered.status, Some(200));
+
+        let silent = ConnectionTest::from_error(
+            spec,
+            "http://127.0.0.1:3001".into(),
+            "/v1/models",
+            3000,
+            "operation timed out",
+        );
+        assert!(!silent.ok, "no answer is never a passing test");
+        assert_eq!(silent.status, None);
+        assert!(silent.message.contains("operation timed out"));
+        assert!(silent.message.contains("3000 ms"));
+    }
+
+    #[test]
+    fn connection_test_serialises_what_the_ui_renders() {
+        let value = serde_json::to_value(ConnectionTest::from_response(
+            find("omniroute").unwrap(),
+            "http://127.0.0.1:20128".into(),
+            "/v1/models",
+            200,
+            3,
+        ))
+        .unwrap();
+        for key in [
+            "id",
+            "endpoint",
+            "path",
+            "ok",
+            "status",
+            "latency_ms",
+            "message",
+        ] {
+            assert!(value.get(key).is_some(), "test result lacks {key}");
+        }
+        assert_eq!(value["id"], "omniroute");
+        assert_eq!(value["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn restart_refuses_what_this_build_cannot_own() {
+        // The local runtime is the user's process, so no restart path exists.
+        let error = restart("ollama").await.unwrap_err();
+        assert!(error.contains("does not manage"), "got: {error}");
+
+        let unknown = restart("nope").await.unwrap_err();
+        assert!(unknown.contains("Unknown router id"), "got: {unknown}");
     }
 }

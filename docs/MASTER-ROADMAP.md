@@ -58,11 +58,17 @@ Remaining for Phase 1 sign-off:
 1. Replace the hard-coded FreeLLMAPI/OmniRoute paths in `router.rs` with a
    registry of descriptors (id, name, OS/arch support, install methods, min
    version, config location, health probe, start/stop/update/uninstall).
+   **Done (1.26.9)** — `router_registry.rs`; update/uninstall remain part of (3).
 2. Add detection: installed? version? runtime? healthy? owned?
-3. Add an approval-gated install flow with checksum verification.
+   **Done (1.26.9)** — `/api/routers`, rebuilt from the existing probes;
+   `healthy` is "the probe answered".
+3. Add an approval-gated install flow with checksum verification. **Open.**
 4. Add a startup sweep honouring per-router auto-start preferences, and keep
-   the ownership rule (never stop what the app did not start).
-5. UI: list, status, logs, connection tester, update/uninstall.
+   the ownership rule (never stop what the app did not start). **Open** — needs
+   per-router preferences stored before the sweep can honour them.
+5. UI: list, status, logs, connection tester, update/uninstall. **Partial** —
+   list, health, start/stop (1.26.13), connection tester and restart (1.26.15);
+   logs, update, uninstall and a config editor still open.
 
 ## Phase 3 — Model and provider manager
 

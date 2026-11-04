@@ -3696,15 +3696,36 @@ function routerRow(entry) {
     ? "Started by Studio, so Studio may stop it."
     : entry.message || "";
   main.appendChild(detail);
+
+  // Result of the connection tester, replaced on every run: the server's real
+  // request, reported with the status and latency it measured.
+  const testLine = document.createElement("small");
+  testLine.className = "muted";
+  main.appendChild(testLine);
   row.appendChild(main);
 
-  // Only routers with a lifecycle in this build get buttons, and only where the
-  // registry says a local install is possible; an external runtime is never
-  // started or stopped from here.
+  const actions = document.createElement("div");
+  actions.className = "console-row-actions";
+  actions.appendChild(rowButton("Test", async () => {
+    testLine.className = "muted";
+    testLine.textContent = "Testing…";
+    const result = await api(`/api/routers/${entry.id}/test`, {
+      method: "POST",
+      body: "{}",
+    });
+    if (!result.ok) {
+      testLine.textContent = result.data.error || "Could not run the test.";
+      return;
+    }
+    testLine.className = result.data.ok ? "console-tag" : "muted";
+    testLine.textContent = result.data.message || "";
+  }));
+
+  // Only routers with a lifecycle in this build get lifecycle buttons, and only
+  // where the registry says a local install is possible; an external runtime is
+  // never started or stopped from here.
   const endpoints = ROUTER_ACTIONS[entry.id];
   if (endpoints && entry.installable_here) {
-    const actions = document.createElement("div");
-    actions.className = "console-row-actions";
     const stopping = entry.healthy || entry.owned_by_app;
     actions.appendChild(rowButton(stopping ? "Stop" : "Start", async () => {
       const result = await api(stopping ? endpoints.stop : endpoints.start, {
@@ -3714,8 +3735,22 @@ function routerRow(entry) {
       if (!result.ok) toast(result.data.error || "That router action failed.");
       await loadRouterList();
     }));
-    row.appendChild(actions);
+    // Restarting a stopped router would only start it, so the button appears
+    // when there is something running to restart.
+    if (stopping) {
+      actions.appendChild(rowButton("Restart", async () => {
+        const result = await api(`/api/routers/${entry.id}/restart`, {
+          method: "POST",
+          body: "{}",
+        });
+        toast(result.ok
+          ? result.data.message || "Restarted."
+          : result.data.error || "That router action failed.");
+        await loadRouterList();
+      }));
+    }
   }
+  row.appendChild(actions);
   return row;
 }
 

@@ -830,6 +830,32 @@ async fn routers(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// Connection tester: a real request to the router's documented health path,
+/// reporting latency and status instead of only healthy/unhealthy.
+async fn routers_test(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
+    match router_registry::test_connection(&state, &id).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap_or(Value::Null)).into_response(),
+        Err(error) if error.starts_with("Unknown router id") => {
+            json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+/// Restart through the existing stop/start paths, so the ownership rules apply
+/// unchanged (an OmniRoute Studio did not start is still not stopped by Studio).
+async fn routers_restart(Path(id): Path<String>) -> Response<Body> {
+    if router_registry::find(&id).is_none() {
+        return json_error(StatusCode::NOT_FOUND, format!("Unknown router id: {id}"));
+    }
+    match router_registry::restart(&id).await {
+        Ok(message) => {
+            Json(json!({"id": id, "restarted": true, "message": message})).into_response()
+        }
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
 async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
     let mut cfg = load_config(&state);
     let base_url = input
@@ -2689,6 +2715,8 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/omniroute/start", post(omniroute_start))
         .route("/api/omniroute/stop", post(omniroute_stop))
         .route("/api/routers", get(routers))
+        .route("/api/routers/:id/test", post(routers_test))
+        .route("/api/routers/:id/restart", post(routers_restart))
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
