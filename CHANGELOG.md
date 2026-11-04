@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.26.3
+
+- Repair the release workflow's version read. An earlier bump left a raw
+  carriage return in the `sed` line, which made the YAML invalid, so v1.26.2
+  produced no run and no artifacts. Same step is now a block scalar that
+  strips whitespace, and 1.26.3 is the first tag built by the fixed pipeline.
+
 ## 1.26.2
 
 - Fix the release pipeline: version reads now strip a trailing carriage

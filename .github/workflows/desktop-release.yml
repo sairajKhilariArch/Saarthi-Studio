@@ -112,7 +112,9 @@ jobs:
 
       - name: Read package version
         id: meta
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1 | tr -d '')" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1 | tr -d '[[:space:]]')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build release binary and run tests
         working-directory: app
@@ -276,7 +278,9 @@ jobs:
 
       - name: Read package version
         id: meta
-        run: echo "version=$(sed -n 's/^version = "\\(.*\\)"/\\1/p' app/Cargo.toml | head -n1 | tr -d '')" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -n1 | tr -d '[[:space:]]')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build release binaries and run tests
         working-directory: app
