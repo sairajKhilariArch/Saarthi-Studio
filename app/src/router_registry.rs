@@ -2152,7 +2152,11 @@ mod tests {
         assert_eq!(plan.steps[0].program, "docker");
         assert_eq!(plan.steps[0].args[0], "run");
         assert!(plan.steps[0].args.iter().any(|arg| arg == &plan.source));
-        assert!(plan.steps[0].args.iter().any(|arg| arg == "20128:20128"));
+        // Loopback only: a bare `-p` would bind every interface.
+        assert!(plan.steps[0]
+            .args
+            .iter()
+            .any(|arg| arg == "127.0.0.1:20128:20128"));
         assert_eq!(plan.writes.len(), 2);
         assert_eq!(plan.digest.len(), 64);
         assert!(plan.digest.chars().all(|c| c.is_ascii_hexdigit()));

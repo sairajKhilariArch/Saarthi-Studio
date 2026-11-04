@@ -27,7 +27,7 @@ release run `41861357127` published 8 non-macOS assets.
 | Item | Status | Notes |
 |---|---|---|
 | Detect/start/stop FreeLLMAPI compose project | Working | `router.rs`, `/api/router*`, ownership file, stop-only-if-owned; start/stop work on the compose project or on the container Studio installed (1.26.21) |
-| OmniRoute router | Partial | `main.rs` `/api/omniroute*`; same compose mechanism, no registry abstraction |
+| OmniRoute router | Partial | `main.rs` `/api/omniroute*`; a pinned container published on loopback only, started/stopped under the same ownership rule (1.26.19, 1.26.22) |
 | Router registry (multiple routers, install methods, min versions) | Working | `router_registry.rs` + `/api/routers`; only routers with a real lifecycle in the crate are listed |
 | OS/arch detection, dependency checks, package-manager awareness | Partial | registry gates OS/arch and lists methods per platform; no dependency probing or package-manager detection |
 | Install flow with approval, download, checksum, configure | Partial | plan preview + digest-bound approval + install records (1.26.18), image installs pinned to the registry manifest digest for both gateways (1.26.19, 1.26.21), and verified downloads that are hashed while streaming and unpacked only after they match the release's published sha256 (1.26.20); update and uninstall are still missing |

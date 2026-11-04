@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.26.22
+
+- OmniRoute's install publishes its port on loopback only. A bare
+  `-p 20128:20128` lets Docker bind every interface, so a gateway this app only
+  ever reaches over `127.0.0.1` was answering the whole network. The command is
+  now `127.0.0.1:20128:20128`, the same shape FreeLLMAPI's plan already used.
+- The "router is not running" hint no longer tells people to `npm i -g omniroute`
+  now that Studio has an install path for it.
+- Tests: the pinned argv assertion names the loopback binding (173 tests pass).
+
 ## 1.26.21
 
 - FreeLLMAPI installs from the image its own compose file names. The plan

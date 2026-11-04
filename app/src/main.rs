@@ -529,7 +529,7 @@ pub(crate) fn reach_error(base_url: &str, detail: String) -> String {
     let prefix = "Could not reach router at ".to_string();
     let mut message = format!("{prefix}{base_url}: {detail}");
     if base_url.contains("localhost:20128") {
-        message += "\n\nOmniRoute (port 20128) is not running. Start it in the Integrations view, or install it once with `npm i -g omniroute`.";
+        message += "\n\nOmniRoute (port 20128) is not running. Start it in the Integrations view, or install it once from the Router panel in Studio.";
     } else if base_url.contains("localhost:3001") {
         message += "\n\nFreeLLMAPI (port 3001) is not running. Start the Docker Compose router (`cd ~/freellmapi && sudo docker compose up -d`), then try again.";
     }

@@ -469,8 +469,10 @@ pub(crate) fn omniroute_run_args(port: u16, image_ref: &str) -> Vec<String> {
         OMNIROUTE_CONTAINER.to_string(),
         "--restart".to_string(),
         "unless-stopped".to_string(),
+        // Loopback only, like the other gateway: this app talks to the router
+        // over 127.0.0.1, and a bare `-p` would publish it on every interface.
         "-p".to_string(),
-        format!("{port}:{port}"),
+        format!("127.0.0.1:{port}:{port}"),
         "-v".to_string(),
         "omniroute-data:/app/data".to_string(),
         image_ref.to_string(),
