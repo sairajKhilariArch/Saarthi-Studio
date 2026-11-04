@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.26.12
+
+- Android CI: "Check committed whitespace" runs `git show --check HEAD`, which
+  treats a carriage return as trailing whitespace. `android-ci.yml` (and
+  `AGENTS.md` in 1.26.10) were committed with CRLF while git stores LF, so every
+  line of those files counted as a violation and the release gate failed on an
+  otherwise fully green job. Both are LF now, and `git diff --cached --check`
+  is run before committing so the same mistake cannot ship again.
+
 ## 1.26.11
 
 - Fix the desktop CI regression: clippy's `manual_contains` lint rejected the
