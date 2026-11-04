@@ -797,6 +797,15 @@
           </div>
         </div>
 
+        <div class="card">
+          <div class="console-toolbar">
+            <strong>Managed routers</strong>
+            <button id="routerListRefresh" class="btn btn-quiet btn-small">Refresh</button>
+            <small id="routerListNote" class="muted">State comes from the server's own health probes.</small>
+          </div>
+          <div id="routerList" class="console-list"><p class="muted">Checking routers…</p></div>
+        </div>
+
         <form id="consoleLogin" class="card form-card hidden">
           <h2>Sign in to the router dashboard</h2>
           <p class="muted">A server install of FreeLLMAPI asks for the dashboard account once. The session token is cached locally with owner-only permissions.</p>

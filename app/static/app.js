@@ -777,7 +777,10 @@ function setView(view) {
   $("scrim").classList.add("hidden");
   if (view === "chat") setTimeout(() => $("prompt").focus(), 30);
   if (view === "usage") loadUsage();
-  if (view === "router") loadConsoleStatus();
+  if (view === "router") {
+    loadConsoleStatus();
+    loadRouterList();
+  }
   if (view === "local") void loadLocal();
   if (view === "skills") renderSkillsOverview();
   if (view === "workspaces") renderWorkspaces();
@@ -3645,6 +3648,97 @@ function renderConsoleAuth(authenticated, message) {
   $("consoleMessage").textContent = message || "";
 }
 
+/* Phase 2 router manager: every registered router with the state the server
+   measured. /api/routers reuses the same probes as /api/router,
+   /api/omniroute and /api/local/status, so this list cannot disagree with the
+   console status card above it. */
+const ROUTER_ACTIONS = {
+  freellmapi: { start: "/api/router/start", stop: "/api/router/stop" },
+  omniroute: { start: "/api/omniroute/start", stop: "/api/omniroute/stop" },
+};
+
+function routerStateLabel(entry) {
+  if (entry.healthy) return "Healthy";
+  if (entry.running) return "Up, not answering";
+  if (entry.installed) return "Stopped";
+  return "Not installed";
+}
+
+function routerRow(entry) {
+  const row = document.createElement("div");
+  row.className = "console-row" + (entry.installed ? "" : " off");
+
+  const main = document.createElement("div");
+  main.className = "console-row-main";
+
+  const name = document.createElement("strong");
+  name.textContent = entry.name;
+  main.appendChild(name);
+
+  const state = document.createElement("span");
+  state.className = entry.healthy ? "console-tag" : "muted";
+  state.textContent = routerStateLabel(entry);
+  main.appendChild(state);
+
+  if (entry.endpoint) {
+    const endpoint = document.createElement("code");
+    endpoint.textContent = entry.endpoint;
+    main.appendChild(endpoint);
+  }
+  if (entry.version) {
+    const version = document.createElement("code");
+    version.textContent = `v${entry.version}`;
+    main.appendChild(version);
+  }
+
+  const detail = document.createElement("small");
+  detail.textContent = entry.owned_by_app
+    ? "Started by Studio, so Studio may stop it."
+    : entry.message || "";
+  main.appendChild(detail);
+  row.appendChild(main);
+
+  // Only routers with a lifecycle in this build get buttons, and only where the
+  // registry says a local install is possible; an external runtime is never
+  // started or stopped from here.
+  const endpoints = ROUTER_ACTIONS[entry.id];
+  if (endpoints && entry.installable_here) {
+    const actions = document.createElement("div");
+    actions.className = "console-row-actions";
+    const stopping = entry.healthy || entry.owned_by_app;
+    actions.appendChild(rowButton(stopping ? "Stop" : "Start", async () => {
+      const result = await api(stopping ? endpoints.stop : endpoints.start, {
+        method: "POST",
+        body: "{}",
+      });
+      if (!result.ok) toast(result.data.error || "That router action failed.");
+      await loadRouterList();
+    }));
+    row.appendChild(actions);
+  }
+  return row;
+}
+
+async function loadRouterList() {
+  const list = $("routerList");
+  if (!list) return;
+  const result = await api("/api/routers");
+  if (!result.ok) {
+    list.replaceChildren(pageNote(result.data.error || "Could not read the router list."));
+    return;
+  }
+  const entries = (result.data && result.data.routers) || [];
+  if (!entries.length) {
+    list.replaceChildren(pageNote("No routers are registered in this build."));
+    return;
+  }
+  list.replaceChildren(...entries.map(routerRow));
+  const note = $("routerListNote");
+  if (note && result.data.platform) {
+    note.textContent = `Probed on ${result.data.platform.os}/${result.data.platform.arch}.`;
+  }
+}
+
 async function loadConsoleStatus() {
   const result = await api("/api/router/console/status");
   if (!result.ok) {
@@ -4250,6 +4344,7 @@ function bindEvents() {
     $(id).addEventListener("click", () => setView(view));
   });
   $("consoleRefresh").addEventListener("click", loadConsoleStatus);
+  $("routerListRefresh").addEventListener("click", loadRouterList);
   $("consoleDashboard").addEventListener("click", openProviderDashboard);
   $("consoleStart").addEventListener("click", async () => {
     $("consoleState").textContent = "Starting the router…";

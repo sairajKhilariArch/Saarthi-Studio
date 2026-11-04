@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.26.13
+
+- The Router view now lists every registered router from `GET /api/routers` with
+  the state its probe measured: healthy, up but not answering, stopped, or not
+  installed, plus endpoint, reported version and whether Studio started it.
+  Start/Stop are offered only for routers this build can manage locally, and
+  Stop only for one Studio started or one that is healthy, so an external
+  runtime is never started or stopped from here.
+- The panel reuses the console status card's probes, so the list and the card
+  cannot disagree.
+
 ## 1.26.12
 
 - Android CI: "Check committed whitespace" runs `git show --check HEAD`, which
