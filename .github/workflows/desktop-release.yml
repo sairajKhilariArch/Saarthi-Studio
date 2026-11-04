@@ -167,11 +167,17 @@ jobs:
           mkdir -p AppDir/usr/bin AppDir/usr/share/free-ai-suite/static
           cp app/target/release/free-ai-studio AppDir/usr/bin/
           cp -r app/static/. AppDir/usr/share/free-ai-suite/static/
+          # A full freedesktop tree: appimagetool runs `appstreamcli
+          # validate-tree` over the AppDir, and that resolves the desktop entry
+          # from usr/share/applications and the icon from the hicolor theme.
+          # The root-level copies are what appimagetool itself requires.
           cp app/packaging/free-ai-suite.desktop AppDir/free-ai-suite.desktop
-          # AppStream metadata: without it appimagetool warns and some desktops
-          # show the AppImage as an unnamed binary.
-          mkdir -p AppDir/usr/share/metainfo
+          mkdir -p AppDir/usr/share/applications AppDir/usr/share/metainfo \
+            AppDir/usr/share/icons/hicolor/256x256/apps
+          cp app/packaging/free-ai-suite.desktop AppDir/usr/share/applications/free-ai-suite.desktop
           cp app/packaging/free-ai-suite.appdata.xml AppDir/usr/share/metainfo/free-ai-suite.appdata.xml
+          cp app/packaging/icons/free-ai-suite-256.png \
+            AppDir/usr/share/icons/hicolor/256x256/apps/free-ai-suite.png
           cp app/packaging/icons/free-ai-suite.svg AppDir/free-ai-suite.svg
           # appimagetool does not generate AppRun; provide it explicitly so the
           # AppImage has an entry point that resolves usr/ relative to itself.
@@ -181,6 +187,16 @@ jobs:
           # PNG is committed so no SVG rasterizer is needed on the runner.
           cp app/packaging/icons/free-ai-suite-256.png AppDir/free-ai-suite.png
           ln -s free-ai-suite.png AppDir/.DirIcon
+          # appimagetool aborts on a non-zero `appstreamcli validate-tree` and
+          # prints only a one-line summary, which hides the actual finding.
+          # Run the check ourselves first and emit each line as an annotation so
+          # a failure here is diagnosable from the run page.
+          command -v appstreamcli >/dev/null || sudo apt-get install -y appstream
+          if ! report="$(appstreamcli validate-tree AppDir 2>&1)"; then
+            printf '%s\n' "$report" | sed 's/^/::error::/'
+            exit 1
+          fi
+          printf '%s\n' "$report"
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "dist/free-ai-suite_${VERSION}_x86_64.AppImage"
@@ -287,7 +303,13 @@ jobs:
     # README. The headless smoke below proves the merged binary actually
     # boots and serves HTTP, not merely that lipo succeeded.
     name: Build macOS release package (universal, unsigned)
-    runs-on: macos-latest
+    # GitHub's own annotation on run 41869072420 was "The job was not acquired
+    # by Runner of type hosted even after multiple attempts" plus notices about
+    # macOS arm64 capacity: macos-latest is an arm64 image, so this job sat in
+    # the queue until the run was cancelled. macos-15-intel is the Intel image
+    # (still supported), and the job cross-builds the aarch64 slice anyway, so
+    # the universal binary is unchanged.
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - name: Check out source

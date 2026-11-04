@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.26.5
+
+- Linux AppImage: the AppStream file is now valid AppStream 1.x (`<developer>`
+  instead of the deprecated `<developer_name>`, a `<provides><binary>` entry and
+  real screenshots), and the AppDir is a complete freedesktop tree, because
+  `appimagetool` runs `appstreamcli validate-tree` over it and aborts on a
+  non-zero result. The check now runs first and echoes each finding as an
+  annotation, so a failure is diagnosable from the run page.
+- macOS: `runs-on: macos-15-intel`. The v1.26.4 job was never acquired by an
+  arm64 hosted runner ("not acquired ... after multiple attempts", with GitHub's
+  macOS-arm64 capacity notices) and was cancelled; the job cross-builds the
+  aarch64 slice anyway, so the universal binary is unchanged.
+
 ## 1.26.4
 
 - Phase 1 release reliability: one version parser for Linux, macOS and Windows

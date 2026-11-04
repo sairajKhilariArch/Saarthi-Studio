@@ -1,14 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AppStream metadata for the AppImage and the deb's desktop entry.
-     appimagetool warns (and some desktops hide the app) when an AppImage has
-     no metainfo file, so this ships at usr/share/metainfo/ inside the AppDir. -->
+     appimagetool runs `appstreamcli validate-tree` over the whole AppDir and
+     aborts the build when it exits non-zero, so this file has to be valid
+     AppStream 1.x: no deprecated <developer_name> (use <developer>), a
+     <provides> entry for the installed binary, and media that really exists
+     (screenshots/local-ai-*.png in this repository). -->
 <component type="desktop-application">
   <id>free-ai-suite</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>Saarthi Studio</name>
   <summary>Local-first AI chat and coding workspace</summary>
-  <developer_name>SAIRAJ KHILARI</developer_name>
+  <developer id="io.github.sairajkhilariarch">
+    <name>SAIRAJ KHILARI</name>
+  </developer>
   <description>
     <p>
       Saarthi Studio runs a private HTTP service on your own machine and opens a
@@ -25,8 +30,21 @@
     </ul>
   </description>
   <launchable type="desktop-id">free-ai-suite.desktop</launchable>
+  <provides>
+    <binary>free-ai-studio</binary>
+  </provides>
   <url type="homepage">https://github.com/sairajKhilariArch/Saarthi-Studio</url>
   <url type="bugtracker">https://github.com/sairajKhilariArch/Saarthi-Studio/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The chat workspace in its dark theme</caption>
+      <image type="source">https://raw.githubusercontent.com/sairajKhilariArch/Saarthi-Studio/main/screenshots/local-ai-dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Local runtime and hardware readout</caption>
+      <image type="source">https://raw.githubusercontent.com/sairajKhilariArch/Saarthi-Studio/main/screenshots/local-ai-hardware.png</image>
+    </screenshot>
+  </screenshots>
   <categories>
     <category>Development</category>
     <category>Utility</category>
@@ -39,7 +57,6 @@
     <keyword>assistant</keyword>
   </keywords>
   <releases>
-    <release version="1.26.4" date="2026-11-04"/>
+    <release version="1.26.5" date="2026-11-04"/>
   </releases>
-  <content_rating type="oars-1.1"/>
 </component>
