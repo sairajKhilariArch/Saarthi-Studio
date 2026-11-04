@@ -817,6 +817,19 @@ async fn omniroute_stop(State(_state): State<AppState>) -> Response<Body> {
     }
 }
 
+/// Every registered router with its measured state. Each field comes from the
+/// probe that already backs /api/router, /api/omniroute and /api/local/status.
+async fn routers(State(state): State<AppState>) -> Json<Value> {
+    let routers = router_registry::views(&state).await;
+    Json(json!({
+        "platform": {
+            "os": router_registry::current_os(),
+            "arch": router_registry::current_arch(),
+        },
+        "routers": routers,
+    }))
+}
+
 async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
     let mut cfg = load_config(&state);
     let base_url = input
@@ -2675,6 +2688,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/omniroute", get(omniroute_status))
         .route("/api/omniroute/start", post(omniroute_start))
         .route("/api/omniroute/stop", post(omniroute_stop))
+        .route("/api/routers", get(routers))
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

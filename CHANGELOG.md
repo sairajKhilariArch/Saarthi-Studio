@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.26.9
+
+- Phase 2 slice 2: `GET /api/routers` returns every registered router with its
+  measured state — installed, reachable, running, owned-by-app, endpoint,
+  version and message — next to its capabilities and the host OS/architecture.
+  The probes are the existing ones (`router::status`, `router::omniroute_status`,
+  `local::fetch_version`), so the list cannot disagree with `/api/router`,
+  `/api/omniroute` or `/api/local/status`.
+- `healthy` is defined as "the health probe answered"; a container that is up but
+  silent reports `running: true, healthy: false`. Both cases are unit-tested.
+- Verified locally: HTTP 200 with three routers and real host values on Windows;
+  140 Rust tests pass.
+
 ## 1.26.8
 
 - Phase 2 slice 1: `app/src/router_registry.rs` adds the router registry the

@@ -63,8 +63,11 @@ points at its facts rather than re-deriving them.
 - [x] Platform gating: Android never claims a local install; remote stays available
 - [x] Only routers with an existing lifecycle in the crate are listed (no aspirational entries)
 - [x] Tests: unique slug ids, required fields, health probe present, HOME-relative config, Android exclusion, unknown arch rejection, stable JSON keys
-- [ ] Live probes per router (installed / version / runtime / healthy / ownership) — reuse `router::status`, `router::omniroute_*`, Ollama probe
-- [ ] `/api/routers` route returning probes + capabilities
+- [x] Live probes per router (installed / version / runtime / healthy / ownership) reusing `router::status`, `router::omniroute_status` and `local::fetch_version`
+- [x] `healthy` is "the health probe answered", never "the process exists" (unit-tested both ways)
+- [x] `/api/routers` route returning capabilities + measured state + host platform (smoked: HTTP 200, three routers, real Windows host values)
+- [ ] Probe latency: the three probes run sequentially (~6.5 s on this host); run them concurrently and cache briefly
+- [ ] UI: the router list does not render this yet — the endpoint exists, the panel does not
 - [ ] Router UI: list, health, start/stop/restart, logs, connection tester
 - [ ] Install workflow with approval, checksum verification and recorded install info
 - [ ] Auto-start on launch that never stops externally owned routers

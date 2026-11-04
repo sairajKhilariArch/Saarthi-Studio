@@ -11,8 +11,7 @@
 //! without Docker, without a network and without a GUI. The `/api/routers`
 //! route and the live probes build on it next.
 
-#![allow(dead_code)] // wired into the API in the next slice of Phase 2
-
+use crate::AppState;
 use serde::Serialize;
 
 /// How a router can be obtained on a platform. A router may offer several.
@@ -101,10 +100,12 @@ const ROUTERS: &[RouterSpec] = &[
     },
 ];
 
+#[allow(dead_code)] // used by the CLI listing in slice 3
 pub(crate) fn registry() -> &'static [RouterSpec] {
     ROUTERS
 }
 
+#[allow(dead_code)] // used by the CLI/UI wiring in the next slice
 pub(crate) fn find(id: &str) -> Option<&'static RouterSpec> {
     ROUTERS.iter().find(|spec| spec.id == id)
 }
@@ -127,6 +128,7 @@ pub(crate) fn current_arch() -> &'static str {
 
 /// Normalise an architecture string from `uname`, a release asset name or the
 /// registry into the registry's spelling.
+#[allow(dead_code)] // consumed by the version/compatibility checks in slice 3
 pub(crate) fn normalise_arch(arch: &str) -> &'static str {
     let lower = arch.trim().to_ascii_lowercase();
     match lower.as_str() {
@@ -158,7 +160,7 @@ pub(crate) fn local_install_supported(spec: &RouterSpec, os: &str, arch: &str) -
 /// Presentation-ready view of one registry entry for a given platform. Contains
 /// only what the registry can prove: no installed/running/healthy claims, which
 /// come from the probes in the next slice.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct Capability {
     pub id: &'static str,
     pub name: &'static str,
@@ -192,6 +194,138 @@ pub(crate) fn capability(spec: &'static RouterSpec, os: &str, arch: &str) -> Cap
 /// Every registry entry described for the given platform.
 pub(crate) fn capabilities(os: &str, arch: &str) -> Vec<Capability> {
     ROUTERS.iter().map(|spec| capability(spec, os, arch)).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Live state
+
+/// What the existing probes can prove about one router right now. Every field
+/// is measured; nothing here is guessed from the presence of a config file.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct Probe {
+    /// A usable installation or a configured remote endpoint was found.
+    pub installed: bool,
+    /// The health probe answered just now.
+    pub reachable: bool,
+    /// The container or process is up, whether or not it answers yet.
+    pub running: bool,
+    /// This app started it, so this app may stop it again.
+    pub owned_by_app: bool,
+    pub endpoint: String,
+    pub version: String,
+    pub message: String,
+}
+
+impl Probe {
+    fn not_installed(endpoint: &str, message: &str) -> Self {
+        Probe {
+            installed: false,
+            reachable: false,
+            running: false,
+            owned_by_app: false,
+            endpoint: endpoint.to_string(),
+            version: String::new(),
+            message: message.to_string(),
+        }
+    }
+}
+
+/// Registry capability plus live state, as the router list renders it.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct RouterView {
+    #[serde(flatten)]
+    pub capability: Capability,
+    pub installed: bool,
+    pub reachable: bool,
+    /// The only acceptable definition of "up": the health probe answered.
+    pub healthy: bool,
+    pub running: bool,
+    pub owned_by_app: bool,
+    pub endpoint: String,
+    pub version: String,
+    pub message: String,
+}
+
+/// Combine capability with a measured probe. Kept pure so it is testable: the
+/// rule that matters is that a process which has not answered is not healthy.
+pub(crate) fn view(capability: Capability, probe: Probe) -> RouterView {
+    RouterView {
+        installed: probe.installed,
+        reachable: probe.reachable,
+        healthy: probe.reachable,
+        running: probe.running,
+        owned_by_app: probe.owned_by_app,
+        endpoint: probe.endpoint,
+        version: probe.version,
+        message: probe.message,
+        capability,
+    }
+}
+
+/// Live state of every registered router, using the probes that already exist in
+/// `router.rs` and `local.rs` rather than new ones that could disagree with them.
+pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
+    let os = current_os();
+    let arch = current_arch();
+    let mut out = Vec::with_capacity(ROUTERS.len());
+    let caps = capabilities(os, arch);
+    for (spec, cap) in ROUTERS.iter().zip(caps) {
+        let probe = match spec.id {
+            "freellmapi" => {
+                let status = crate::router::status().await;
+                let endpoint = format!("http://127.0.0.1:{}", status.port);
+                Probe {
+                    installed: status.compose_dir.is_some(),
+                    reachable: status.reachable,
+                    running: status.running,
+                    owned_by_app: status.owned_by_app,
+                    endpoint,
+                    version: String::new(),
+                    message: status.message,
+                }
+            }
+            "omniroute" => {
+                let status = crate::router::omniroute_status().await;
+                let endpoint = format!("http://127.0.0.1:{}", status.port);
+                Probe {
+                    // No compose project to look for: the container or an
+                    // answered endpoint is the installation evidence.
+                    installed: status.running || status.reachable,
+                    reachable: status.reachable,
+                    running: status.running,
+                    owned_by_app: status.owned_by_app,
+                    endpoint,
+                    version: String::new(),
+                    message: status.message,
+                }
+            }
+            "ollama" => {
+                let selection = crate::local::selection_of(state);
+                let base_url = if selection.base_url.trim().is_empty() {
+                    "http://127.0.0.1:11434".to_string()
+                } else {
+                    selection.base_url.trim().trim_end_matches('/').to_string()
+                };
+                match crate::local::fetch_version(&base_url).await {
+                    Ok(version) => Probe {
+                        installed: true,
+                        reachable: true,
+                        running: true,
+                        // The runtime is installed and run by the user; Studio
+                        // never owns its lifecycle.
+                        owned_by_app: false,
+                        endpoint: base_url,
+                        version,
+                        message: "Local runtime is responding.".to_string(),
+                    },
+                    Err(error) => Probe::not_installed(&base_url, &error),
+                }
+            }
+            other => Probe::not_installed("", &format!("No probe is implemented for {other} yet.")),
+        };
+        out.push(view(cap, probe));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -336,6 +470,66 @@ mod tests {
             assert!(value.get(key).is_some(), "serialised capability lacks {key}");
         }
         assert_eq!(value["id"], "freellmapi");
+    }
+
+    fn reachable_probe() -> Probe {
+        Probe {
+            installed: true,
+            reachable: true,
+            running: true,
+            owned_by_app: true,
+            endpoint: "http://127.0.0.1:3001".into(),
+            version: "1.2.3".into(),
+            message: "Router is responding.".into(),
+        }
+    }
+
+    #[test]
+    fn healthy_means_the_probe_answered() {
+        let spec = find("freellmapi").unwrap();
+        let cap = capability(spec, "linux", "x86_64");
+
+        let up = view(cap.clone(), reachable_probe());
+        assert!(up.healthy && up.reachable && up.installed);
+
+        // Containers up but nothing answering: running, not healthy.
+        let mut half = reachable_probe();
+        half.reachable = false;
+        half.message = "Router containers are up but the API is not answering yet.".into();
+        let not_yet = view(cap.clone(), half);
+        assert!(not_yet.running);
+        assert!(!not_yet.healthy, "a process that has not answered is not healthy");
+        assert!(!not_yet.reachable);
+
+        let missing = view(cap, Probe::not_installed("http://127.0.0.1:3001", "no project"));
+        assert!(!missing.installed && !missing.healthy && !missing.running);
+        assert!(!missing.owned_by_app);
+        assert_eq!(missing.message, "no project");
+    }
+
+    #[test]
+    fn ownership_and_version_are_passed_through_untouched() {
+        let spec = find("ollama").unwrap();
+        let mut probe = reachable_probe();
+        probe.owned_by_app = false;
+        probe.version = "0.3.14".into();
+        let view = view(capability(spec, "macos", "arm64"), probe);
+        assert!(!view.owned_by_app, "an external runtime is never owned");
+        assert_eq!(view.version, "0.3.14");
+    }
+
+    #[test]
+    fn view_serialises_capability_and_state_side_by_side() {
+        let spec = find("freellmapi").unwrap();
+        let value = serde_json::to_value(view(capability(spec, "linux", "x86_64"), reachable_probe()))
+            .unwrap();
+        for key in ["id", "name", "methods", "health", "installable_here", "remote_here"] {
+            assert!(value.get(key).is_some(), "view lacks capability field {key}");
+        }
+        for key in ["installed", "reachable", "healthy", "running", "owned_by_app", "endpoint", "version", "message"] {
+            assert!(value.get(key).is_some(), "view lacks state field {key}");
+        }
+        assert_eq!(value["healthy"], true);
     }
 
     #[test]
