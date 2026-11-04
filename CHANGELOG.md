@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.26.19
+
+- Image installs are now pinned. The plan resolves the tag's manifest digest from
+  the registry (`sha256:…`) and names it in both the displayed command and the
+  executed one, so an install cannot silently fetch a different image than the
+  one that was approved. If the digest cannot be resolved the install is refused
+  with that reason instead of falling back to the moving tag.
+- Start no longer creates containers. Creating one is an install, and installing
+  is the reviewed act added in 1.26.18 — `docker run` now happens only through the
+  approved plan, so Start either starts an existing container or says that
+  OmniRoute is not installed yet and points at Install.
+- Tests: `plan_pins_the_image_to_the_registry_digest`,
+  `tag_digest_parsing_reads_the_manifest_list`, `image_split_defaults_to_the_latest_tag`
+  (163 Rust tests pass).
+
 ## 1.26.18
 
 - Phase 2 slice 6: installing a router is now a reviewed act. `GET

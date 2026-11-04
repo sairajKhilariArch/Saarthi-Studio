@@ -76,7 +76,8 @@ lifecycle and points at its facts rather than re-deriving them.
 - [x] Install plan preview per router — exact argv, writes, verification wording and measured prerequisites, with no side effects (1.26.18)
 - [x] Approval gate — the install POST needs `approve` plus the plan digest, and refuses before spawning anything when unsupported, blocked or changed; failed installs are recorded too (1.26.18)
 - [x] Install records (`router-installs.json`) with a read route (1.26.18)
-- [ ] Checksum/digest-pinned downloads — no Studio-side downloader exists for FreeLLMAPI or Ollama, and the image tag is not pinned to a digest, so their plans refuse rather than pretend to verify
+- [x] Image installs pinned to the registry manifest digest, with the unresolved-digest refusal and Start no longer creating containers (1.26.19)
+- [ ] Checksum-verified downloads for FreeLLMAPI and Ollama — no Studio-side downloader exists, so their plans refuse rather than pretend to verify
 - [ ] Router UI: update, uninstall, configuration editor
 - [x] Per-router launch preferences stored atomically, with `auto_start` in `/api/routers` and a "Start with Studio" checkbox (1.26.17)
 - [x] Auto-start on launch that never stops externally owned routers — the sweep starts only an enabled, installed, not-already-answering router, and the rule is unit-tested both ways (1.26.17). A boot with Docker down records the failure per router and the app still opens

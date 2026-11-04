@@ -879,6 +879,55 @@ pub(crate) fn plan_digest(
         .collect()
 }
 
+/// The registry's tag endpoint reports the manifest-list digest for a tag: the
+/// identity a pinned install names. Parsing is pure so the network shape is
+/// testable without a network.
+fn parse_tag_digest(body: &serde_json::Value) -> Result<String, String> {
+    match body.get("digest").and_then(serde_json::Value::as_str) {
+        Some(digest) if digest.starts_with("sha256:") && digest.len() > "sha256:".len() => {
+            Ok(digest.to_string())
+        }
+        Some(other) => Err(format!("The registry reported an unusable digest: {other}")),
+        None => Err("The registry did not report a manifest digest for this tag.".to_string()),
+    }
+}
+
+/// Split `repo[:tag]` for the registry API. No tag means `latest`, which is what
+/// Docker means by it.
+fn split_image(image: &str) -> (String, String) {
+    match image.rsplit_once(':') {
+        Some((repo, tag)) if !tag.contains('/') => (repo.to_string(), tag.to_string()),
+        _ => (image.to_string(), "latest".to_string()),
+    }
+}
+
+/// Ask the registry what a tag points at right now, so an install can name that
+/// exact image instead of a tag that may move under it.
+pub(crate) async fn resolve_image_digest(image: &str) -> Result<String, String> {
+    let (repo, tag) = split_image(image);
+    let url = format!("https://hub.docker.com/v2/repositories/{repo}/tags/{tag}");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("Could not build an HTTP client: {error}"))?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach the registry at {url}: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "The registry at {url} answered {}.",
+            response.status().as_u16()
+        ));
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| format!("Could not read the registry answer: {error}"))?;
+    parse_tag_digest(&body)
+}
+
 /// Build the plan for one router from measured facts, so the whole thing is
 /// testable without Docker, a network or a GUI.
 fn build_plan(
@@ -886,6 +935,7 @@ fn build_plan(
     docker: bool,
     container_exists: bool,
     port: u16,
+    pinned: &Result<String, String>,
 ) -> InstallPlan {
     let docker_prerequisite = Prerequisite {
         key: "docker",
@@ -900,14 +950,30 @@ fn build_plan(
 
     let (method, source, writes, verification, prerequisites, steps, blocked) = match spec.id {
         "omniroute" => {
+            let image = crate::router::omniroute_image();
+            // The pinned reference is what both the plan and the run name. An
+            // unresolved digest keeps the tag in `source` for display but blocks
+            // the install, because a tag is not a promise about content.
+            let image_ref = match pinned {
+                Ok(digest) => format!("{image}@{digest}"),
+                Err(_) => image.to_string(),
+            };
             let steps = vec![InstallStep {
                 program: "docker".to_string(),
-                args: crate::router::omniroute_run_args(port),
+                args: crate::router::omniroute_run_args(port, &image_ref),
                 purpose: format!(
-                    "Pull {} and create the omniroute container on port {port}",
-                    crate::router::omniroute_image()
+                    "Pull {image_ref} and create the omniroute container on port {port}"
                 ),
             }];
+            let digest_prerequisite = Prerequisite {
+                key: "image_digest",
+                what: "A manifest digest for the image, resolved from the registry".to_string(),
+                satisfied: pinned.is_ok(),
+                detail: match pinned {
+                    Ok(digest) => format!("resolved {digest}"),
+                    Err(error) => error.clone(),
+                },
+            };
             let blocked = if !docker {
                 Some(
                     "Docker was not found, so nothing can be pulled or started. Install Docker first."
@@ -918,19 +984,29 @@ fn build_plan(
                     "An OmniRoute container already exists. Start it from this panel instead of installing it again."
                         .to_string(),
                 )
+            } else if let Err(error) = pinned {
+                Some(format!(
+                    "The image could not be pinned to a digest, so the install would fetch whatever the tag points at. {error}"
+                ))
             } else {
                 None
             };
+            let verification = match pinned {
+                Ok(digest) => format!(
+                    "Pinned to the manifest digest {digest}: Docker verifies every layer against it, so this install cannot silently become a different image."
+                ),
+                Err(_) => "Not pinned: the registry digest could not be resolved, so there is nothing to verify against."
+                    .to_string(),
+            };
             (
                 "docker-image".to_string(),
-                crate::router::omniroute_image().to_string(),
+                image_ref,
                 vec![
                     "docker container omniroute".to_string(),
                     "docker volume omniroute-data".to_string(),
                 ],
-                "Docker verifies image layers against the registry as it pulls. The image tag is not pinned to a digest, so a later install may fetch a newer image than this one."
-                    .to_string(),
-                vec![docker_prerequisite],
+                verification,
+                vec![docker_prerequisite, digest_prerequisite],
                 steps,
                 blocked,
             )
@@ -1009,11 +1085,19 @@ pub(crate) async fn install_plan(id: &str) -> Result<InstallPlan, InstallError> 
     })
     .await
     .map_err(|error| InstallError::Failed(format!("Install plan task failed: {error}")))?;
+    // Only the Docker router has an image to pin; the others must not wait on a
+    // registry they never use.
+    let pinned = if spec.id == "omniroute" {
+        resolve_image_digest(crate::router::omniroute_image()).await
+    } else {
+        Ok(String::new())
+    };
     Ok(build_plan(
         spec,
         docker,
         container_exists,
         crate::router::omniroute_port(),
+        &pinned,
     ))
 }
 
@@ -1613,7 +1697,13 @@ mod tests {
     }
 
     fn plan_for(id: &str, docker: bool, container: bool) -> InstallPlan {
-        build_plan(find(id).unwrap(), docker, container, 20128)
+        build_plan(
+            find(id).unwrap(),
+            docker,
+            container,
+            20128,
+            &Ok("sha256:abc123".to_string()),
+        )
     }
 
     #[test]
@@ -1624,10 +1714,7 @@ mod tests {
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(plan.steps[0].program, "docker");
         assert_eq!(plan.steps[0].args[0], "run");
-        assert!(plan.steps[0]
-            .args
-            .iter()
-            .any(|arg| arg == crate::router::omniroute_image()));
+        assert!(plan.steps[0].args.iter().any(|arg| arg == &plan.source));
         assert!(plan.steps[0].args.iter().any(|arg| arg == "20128:20128"));
         assert_eq!(plan.writes.len(), 2);
         assert_eq!(plan.digest.len(), 64);
@@ -1671,7 +1758,13 @@ mod tests {
             plan_for("omniroute", true, false).digest
         );
         // A different port is a different command, so a different digest.
-        let other = build_plan(find("omniroute").unwrap(), true, false, 20129);
+        let other = build_plan(
+            find("omniroute").unwrap(),
+            true,
+            false,
+            20129,
+            &Ok("sha256:abc123".to_string()),
+        );
         assert_ne!(plan_for("omniroute", true, false).digest, other.digest);
     }
 
@@ -1699,6 +1792,78 @@ mod tests {
             approval_error(&unsupported, true, &unsupported.digest),
             Some(InstallError::Blocked(_))
         ));
+    }
+
+    #[test]
+    fn plan_pins_the_image_to_the_registry_digest() {
+        let plan = build_plan(
+            find("omniroute").unwrap(),
+            true,
+            false,
+            20128,
+            &Ok("sha256:feed".to_string()),
+        );
+        assert!(plan.ready());
+        assert_eq!(
+            plan.source,
+            format!("{}@sha256:feed", crate::router::omniroute_image())
+        );
+        // The argv names the pinned reference, not the moving tag.
+        assert_eq!(plan.steps[0].args.last().unwrap(), &plan.source);
+        assert!(plan.verification.contains("Pinned"));
+        assert!(plan
+            .prerequisites
+            .iter()
+            .any(|item| item.key == "image_digest" && item.satisfied));
+
+        // An unresolved digest refuses the install rather than fetching a tag.
+        let unpinned = build_plan(
+            find("omniroute").unwrap(),
+            true,
+            false,
+            20128,
+            &Err("the registry is unreachable".to_string()),
+        );
+        assert!(!unpinned.ready());
+        assert!(unpinned
+            .blocked
+            .expect("a blocked plan says why")
+            .contains("could not be pinned"));
+        assert!(unpinned
+            .prerequisites
+            .iter()
+            .any(|item| item.key == "image_digest" && !item.satisfied));
+    }
+
+    #[test]
+    fn tag_digest_parsing_reads_the_manifest_list() {
+        let ok = serde_json::json!({"digest": "sha256:abc123", "name": "latest"});
+        assert_eq!(parse_tag_digest(&ok).unwrap(), "sha256:abc123");
+
+        assert!(parse_tag_digest(&serde_json::json!({"name": "latest"})).is_err());
+        assert!(parse_tag_digest(&serde_json::json!({"digest": "md5:abc"})).is_err());
+        assert!(parse_tag_digest(&serde_json::json!({"digest": "sha256:"})).is_err());
+    }
+
+    #[test]
+    fn image_split_defaults_to_the_latest_tag() {
+        assert_eq!(
+            split_image("diegosouzapw/omniroute:latest"),
+            ("diegosouzapw/omniroute".to_string(), "latest".to_string())
+        );
+        assert_eq!(
+            split_image("diegosouzapw/omniroute"),
+            ("diegosouzapw/omniroute".to_string(), "latest".to_string())
+        );
+        assert_eq!(
+            split_image("ghcr.io/a/b:1.2"),
+            ("ghcr.io/a/b".to_string(), "1.2".to_string())
+        );
+        // A registry host with a port is not a tag.
+        assert_eq!(
+            split_image("localhost:5000/img"),
+            ("localhost:5000/img".to_string(), "latest".to_string())
+        );
     }
 
     #[test]

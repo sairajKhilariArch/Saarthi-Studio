@@ -380,10 +380,10 @@ pub(crate) fn omniroute_image() -> &'static str {
     OMNIROUTE_IMAGE
 }
 
-/// The exact `docker run` argv for a fresh OmniRoute container. The install plan
+/// The exact `docker run` argv for a pinned OmniRoute image. The install plan
 /// shows these arguments and the installer executes this same list, so an
 /// approval names what actually runs.
-pub(crate) fn omniroute_run_args(port: u16) -> Vec<String> {
+pub(crate) fn omniroute_run_args(port: u16, image_ref: &str) -> Vec<String> {
     vec![
         "run".to_string(),
         "-d".to_string(),
@@ -395,7 +395,7 @@ pub(crate) fn omniroute_run_args(port: u16) -> Vec<String> {
         format!("{port}:{port}"),
         "-v".to_string(),
         "omniroute-data:/app/data".to_string(),
-        OMNIROUTE_IMAGE.to_string(),
+        image_ref.to_string(),
     ]
 }
 
@@ -518,8 +518,9 @@ pub(crate) async fn omniroute_status() -> OmniStatus {
     }
 }
 
-/// Start OmniRoute: reuse a stopped container, create one if Docker is there,
-/// and otherwise explain the npm path instead of failing silently.
+/// Start OmniRoute from a container that already exists. Studio deliberately does
+/// not create containers here: that is an install, and installing is a reviewed
+/// act in the Router panel where the pinned command is shown before it runs.
 pub(crate) async fn omniroute_start() -> Result<OmniStatus, String> {
     if omniroute_reachable(omniroute_port()).await {
         // Already answering: never adopt a gateway the user started.
@@ -534,20 +535,17 @@ pub(crate) async fn omniroute_start() -> Result<OmniStatus, String> {
                 .into(),
         );
     }
-    let created = if omniroute_container_running() {
-        run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
-    } else {
-        // A stopped container with the same name must be started, not recreated.
-        let exists = omniroute_container_exists();
-        if exists {
-            run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
-        } else {
-            let args = omniroute_run_args(OMNIROUTE_PORT);
-            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-            run_cmd("docker", &argv)
-        }
-    };
-    match created {
+    if !omniroute_container_exists() {
+        return Err(
+            "OmniRoute is not installed yet. Use Install in the Router panel: it shows the exact pinned command before anything runs."
+                .into(),
+        );
+    }
+    if omniroute_container_running() {
+        return Ok(omniroute_status().await);
+    }
+    let started = run_cmd("docker", &["start", OMNIROUTE_CONTAINER]);
+    match started {
         Ok(_) => {
             save_omniroute_ownership(true);
             Ok(omniroute_status().await)
