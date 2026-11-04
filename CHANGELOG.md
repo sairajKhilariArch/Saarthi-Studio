@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.26.20
+
+- Installs can now fetch. A plan carries its downloads explicitly — the release
+  asset URL together with the sha256 that release publishes — and the installer
+  streams the archive while hashing it, discards it on any mismatch, and only
+  then unpacks it (`zip`, or `tar.zst` through zstd). What was approved is the
+  bytes that get extracted.
+- Ollama has a real in-app install path. The plan resolves the latest official
+  release, picks this platform's asset, reads the hash from that release's own
+  `sha256sum.txt`, downloads into the app's data directory, verifies, unpacks,
+  and runs the binary once with `--version`. An archive already on disk that
+  still hashes correctly is not downloaded again.
+- When the release or its published hash cannot be resolved the plan blocks with
+  that reason instead of installing unverified bytes. FreeLLMAPI keeps its
+  documented manual route: it now publishes a `ghcr.io` image, but giving it a
+  second lifecycle is not done, so its plan still refuses rather than half-work.
+- Tests: a local HTTP round trip proves a matching download is kept and a
+  mismatching one is discarded, plus traversal-safe zip extraction, checksum-file
+  parsing, the asset table and the pinned-plan digest (171 tests pass, plus one
+  `#[ignore]`d network test that was run separately: it verifies a real release
+  asset against the hash that release publishes).
+
 ## 1.26.19
 
 - Image installs are now pinned. The plan resolves the tag's manifest digest from

@@ -37,6 +37,7 @@ mod host_api;
 mod host_auth;
 mod host_security;
 mod host_transport;
+mod installer;
 mod local;
 mod media;
 mod privacy;
@@ -844,8 +845,11 @@ async fn routers_test(State(state): State<AppState>, Path(id): Path<String>) -> 
 
 /// What installing a router would run, with measured prerequisites. No side
 /// effects: this is the plan an approval names.
-async fn routers_install_plan(Path(id): Path<String>) -> Response<Body> {
-    match router_registry::install_plan(&id).await {
+async fn routers_install_plan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    match router_registry::install_plan(&state, &id).await {
         Ok(plan) => Json(serde_json::to_value(plan).unwrap_or(Value::Null)).into_response(),
         Err(error) => json_error(StatusCode::NOT_FOUND, error.message()),
     }

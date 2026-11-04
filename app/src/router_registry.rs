@@ -346,7 +346,20 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
                     version: version.clone(),
                     message: "Local runtime is responding.".to_string(),
                 },
-                Err(error) => Probe::not_installed(&base_url, error),
+                Err(error) => {
+                    // An install this app performed counts as installed even when
+                    // the runtime is not running: pressing Install again would
+                    // only re-download it.
+                    let mut probe = Probe::not_installed(&base_url, error);
+                    if let Some(binary) = installed_ollama_binary(state) {
+                        probe.installed = true;
+                        probe.message = format!(
+                            "Installed at {}, and not answering yet. Studio does not own the local runtime's lifecycle, so start it yourself.",
+                            binary.display()
+                        );
+                    }
+                    probe
+                }
             },
             other => Probe::not_installed("", &format!("No probe is implemented for {other} yet.")),
         };
@@ -811,6 +824,19 @@ pub(crate) struct InstallStep {
     pub purpose: String,
 }
 
+/// One fetch the install would make, shown before anything executes. The URL
+/// travels with the vendor's published sha256, so approving a plan approves
+/// exact bytes rather than whatever the server happens to serve later.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct DownloadStep {
+    pub url: String,
+    pub sha256: String,
+    /// The asset name, which is also the file it is saved as.
+    pub file: String,
+    pub archive: crate::installer::Archive,
+    pub purpose: String,
+}
+
 /// What installing one router would do. Building a plan has no side effects.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct InstallPlan {
@@ -824,6 +850,7 @@ pub(crate) struct InstallPlan {
     /// How the fetched content is checked, in plain words.
     pub verification: String,
     pub prerequisites: Vec<Prerequisite>,
+    pub downloads: Vec<DownloadStep>,
     pub steps: Vec<InstallStep>,
     /// Set when the install cannot proceed, with the reason a person needs.
     pub blocked: Option<String>,
@@ -849,6 +876,7 @@ pub(crate) fn plan_digest(
     method: &str,
     source: &str,
     writes: &[String],
+    downloads: &[DownloadStep],
     steps: &[InstallStep],
 ) -> String {
     let mut canonical = String::new();
@@ -860,6 +888,18 @@ pub(crate) fn plan_digest(
     for write in writes {
         canonical.push('\u{1f}');
         canonical.push_str(write);
+    }
+    // A download is part of the operation: its URL, the hash it must match, how
+    // it is unpacked and where it lands all have to survive an approval.
+    for download in downloads {
+        canonical.push('\u{1f}');
+        canonical.push_str(&download.url);
+        canonical.push('\u{1e}');
+        canonical.push_str(&download.sha256);
+        canonical.push('\u{1e}');
+        canonical.push_str(download.archive.label());
+        canonical.push('\u{1e}');
+        canonical.push_str(&download.file);
     }
     for step in steps {
         canonical.push('\u{1f}');
@@ -930,13 +970,16 @@ pub(crate) async fn resolve_image_digest(image: &str) -> Result<String, String> 
 
 /// Build the plan for one router from measured facts, so the whole thing is
 /// testable without Docker, a network or a GUI.
-fn build_plan(
-    spec: &'static RouterSpec,
-    docker: bool,
-    container_exists: bool,
-    port: u16,
-    pinned: &Result<String, String>,
-) -> InstallPlan {
+fn build_plan(spec: &'static RouterSpec, facts: &Facts) -> InstallPlan {
+    let docker = facts.docker;
+    let container_exists = facts.container_exists;
+    let port = facts.port;
+    let pinned = &facts.pinned;
+    // The local runtime is neither a container nor a compose project: its plan
+    // is a verified archive download, built on its own.
+    if spec.id == "ollama" {
+        return ollama_plan(spec, facts);
+    }
     let docker_prerequisite = Prerequisite {
         key: "docker",
         what: "Docker Engine or Docker Desktop on PATH".to_string(),
@@ -1039,7 +1082,6 @@ fn build_plan(
         ),
     };
 
-    let digest = plan_digest(spec.id, &method, &source, &writes, &steps);
     InstallPlan {
         id: spec.id,
         supported: !steps.is_empty(),
@@ -1048,10 +1090,218 @@ fn build_plan(
         writes,
         verification,
         prerequisites,
+        downloads: Vec::new(),
         steps,
         blocked,
-        digest,
+        digest: String::new(),
     }
+    .with_digest()
+}
+
+impl InstallPlan {
+    /// Fill in the digest that binds an approval to exactly this operation.
+    fn with_digest(mut self) -> Self {
+        self.digest = plan_digest(
+            self.id,
+            &self.method,
+            &self.source,
+            &self.writes,
+            &self.downloads,
+            &self.steps,
+        );
+        self
+    }
+}
+
+/// Everything a plan is built from, collected once. Keeping the measurements in
+/// one value is what lets the whole plan be a pure function of facts, testable
+/// without Docker, a network or a GUI.
+#[derive(Clone, Debug)]
+struct Facts {
+    docker: bool,
+    container_exists: bool,
+    port: u16,
+    pinned: Result<String, String>,
+    release: Result<Release, String>,
+    install_root: PathBuf,
+}
+
+/// One OS/architecture's official Ollama asset: the file name, how it is packed,
+/// and the binary the archive is expected to contain.
+pub(crate) fn ollama_asset(
+    os: &str,
+    arch: &str,
+) -> Option<(&'static str, crate::installer::Archive, &'static str)> {
+    use crate::installer::Archive;
+    match (os, normalise_arch(arch)) {
+        ("windows", "x86_64") => Some(("ollama-windows-amd64.zip", Archive::Zip, "ollama.exe")),
+        ("windows", "arm64") => Some(("ollama-windows-arm64.zip", Archive::Zip, "ollama.exe")),
+        ("macos", _) => Some((
+            "Ollama-darwin.zip",
+            Archive::Zip,
+            "Ollama.app/Contents/MacOS/ollama",
+        )),
+        ("linux", "x86_64") => Some(("ollama-linux-amd64.tar.zst", Archive::TarZst, "bin/ollama")),
+        ("linux", "arm64") => Some(("ollama-linux-arm64.tar.zst", Archive::TarZst, "bin/ollama")),
+        _ => None,
+    }
+}
+
+/// The release asset a plan would fetch, with the hash published beside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Release {
+    pub tag: String,
+    pub asset: &'static str,
+    pub url: String,
+    pub sha256: String,
+    pub archive: crate::installer::Archive,
+    pub binary: &'static str,
+}
+
+const RELEASES_API: &str = "https://api.github.com/repos/ollama/ollama/releases/latest";
+
+async fn github_text(url: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|error| format!("Could not build an HTTP client: {error}"))?;
+    let response = client
+        .get(url)
+        // GitHub rejects API requests that carry no User-Agent.
+        .header("User-Agent", "saarthi-studio")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach {url}: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("{url} answered {}.", response.status().as_u16()));
+    }
+    response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read {url}: {error}"))
+}
+
+/// Resolve this platform's official asset and the sha256 published beside it.
+/// Nothing is downloaded here: the plan only names what it would fetch, so a
+/// preview stays free of side effects.
+pub(crate) async fn resolve_ollama_release(os: &str, arch: &str) -> Result<Release, String> {
+    let (asset, archive, binary) = ollama_asset(os, arch)
+        .ok_or_else(|| format!("Ollama publishes no release asset for {os}/{arch}."))?;
+    let latest: serde_json::Value = serde_json::from_str(&github_text(RELEASES_API).await?)
+        .map_err(|error| format!("Could not read the release list: {error}"))?;
+    let tag = latest
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|tag| {
+            !tag.is_empty()
+                && tag
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+        })
+        .ok_or_else(|| "The release list did not name a usable tag.".to_string())?
+        .to_string();
+    // The sums live in the release itself, so the hash a plan names is the one
+    // that release publishes, not a value this app carries around.
+    let sums_url =
+        format!("https://github.com/ollama/ollama/releases/download/{tag}/sha256sum.txt");
+    let sums = crate::installer::parse_sha256sums(&github_text(&sums_url).await?);
+    let sha256 = sums
+        .get(&asset.to_ascii_lowercase())
+        .cloned()
+        .ok_or_else(|| format!("{tag} publishes no sha256 for {asset}."))?;
+    Ok(Release {
+        url: format!("https://github.com/ollama/ollama/releases/download/{tag}/{asset}"),
+        tag,
+        asset,
+        sha256,
+        archive,
+        binary,
+    })
+}
+
+/// The local runtime's plan: one archive whose hash is published, then the binary
+/// it contains. Nothing here claims the runtime will be started: Studio does not
+/// own that process.
+fn ollama_plan(spec: &'static RouterSpec, facts: &Facts) -> InstallPlan {
+    let dest = facts.install_root.join("ollama");
+    let writes = vec![dest.display().to_string()];
+    match &facts.release {
+        Ok(release) => InstallPlan {
+            id: spec.id,
+            supported: true,
+            method: "native-binary".to_string(),
+            source: release.url.clone(),
+            writes,
+            verification: format!(
+                "The download must hash to {} — the value {} publishes in its own sha256sum.txt. A mismatch is discarded before anything is unpacked.",
+                release.sha256, release.tag
+            ),
+            prerequisites: vec![Prerequisite {
+                key: "release_sha256",
+                what: "A sha256 published beside the release asset".to_string(),
+                satisfied: true,
+                detail: format!("{} for {}", release.sha256, release.asset),
+            }],
+            downloads: vec![DownloadStep {
+                url: release.url.clone(),
+                sha256: release.sha256.clone(),
+                file: release.asset.to_string(),
+                archive: release.archive,
+                purpose: format!(
+                    "Download {} from the {} release and check it against the published sha256",
+                    release.asset, release.tag
+                ),
+            }],
+            steps: vec![InstallStep {
+                program: dest.join(release.binary).display().to_string(),
+                args: vec!["--version".to_string()],
+                purpose: "Run the unpacked binary once, so the install proves it starts".to_string(),
+            }],
+            blocked: None,
+            digest: String::new(),
+        },
+        Err(error) => InstallPlan {
+            id: spec.id,
+            supported: true,
+            method: "native-binary".to_string(),
+            source: "https://ollama.com/download".to_string(),
+            writes,
+            verification: "Nothing was fetched, so there was nothing to verify.".to_string(),
+            prerequisites: vec![Prerequisite {
+                key: "release_sha256",
+                what: "A sha256 published beside the release asset".to_string(),
+                satisfied: false,
+                detail: error.clone(),
+            }],
+            downloads: Vec::new(),
+            steps: Vec::new(),
+            blocked: Some(format!(
+                "Studio installs Ollama from its official release asset and checks it against that release's published sha256, but neither could be resolved, so it would have nothing to verify. Download it from https://ollama.com/download, or try again when GitHub is reachable. {error}"
+            )),
+            digest: String::new(),
+        },
+    }
+    .with_digest()
+}
+
+/// Where a router Studio installed from a release archive keeps its files.
+fn install_root(state: &AppState) -> PathBuf {
+    state.database_path.with_file_name("routers")
+}
+
+/// The Ollama binary a Studio install left behind, if any. Its presence means
+/// "installed but not started", which the probe reports separately from
+/// `reachable`.
+fn installed_ollama_binary(state: &AppState) -> Option<PathBuf> {
+    let dir = install_root(state).join("ollama");
+    [
+        dir.join("ollama.exe"),
+        dir.join("bin/ollama"),
+        dir.join("Ollama.app/Contents/MacOS/ollama"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 /// A refusal, kept as a type so the route can answer with the right status
@@ -1076,7 +1326,7 @@ impl InstallError {
 
 /// The plan as the app would run it now: Docker and the container are measured
 /// live, so a stale page cannot install against a machine that changed.
-pub(crate) async fn install_plan(id: &str) -> Result<InstallPlan, InstallError> {
+pub(crate) async fn install_plan(state: &AppState, id: &str) -> Result<InstallPlan, InstallError> {
     let spec = find(id).ok_or_else(|| InstallError::Unknown(format!("Unknown router id: {id}")))?;
     let (docker, container_exists) = tokio::task::spawn_blocking(|| {
         let docker = crate::router::run_cmd("docker", &["--version"]).is_ok();
@@ -1092,12 +1342,23 @@ pub(crate) async fn install_plan(id: &str) -> Result<InstallPlan, InstallError> 
     } else {
         Ok(String::new())
     };
+    // The local runtime is installed from a release archive, so it waits on the
+    // release feed instead of a registry. Neither is asked when unused.
+    let release = if spec.id == "ollama" {
+        resolve_ollama_release(current_os(), current_arch()).await
+    } else {
+        Err("this router is not installed from a release archive".to_string())
+    };
     Ok(build_plan(
         spec,
-        docker,
-        container_exists,
-        crate::router::omniroute_port(),
-        &pinned,
+        &Facts {
+            docker,
+            container_exists,
+            port: crate::router::omniroute_port(),
+            pinned,
+            release,
+            install_root: install_root(state),
+        },
     ))
 }
 
@@ -1192,6 +1453,23 @@ pub(crate) fn install_record(
         .cloned())
 }
 
+/// Record a failed attempt and turn it into the error the route answers with. A
+/// failure is recorded too: the panel should not pretend the router was never
+/// attempted.
+fn record_failure(state: &AppState, plan: &InstallPlan, message: String) -> InstallError {
+    let record = InstallRecord {
+        id: plan.id.to_string(),
+        method: plan.method.clone(),
+        source: plan.source.clone(),
+        digest: plan.digest.clone(),
+        installed_at_unix: now_unix(),
+        outcome: "failed".to_string(),
+        message: message.clone(),
+    };
+    let _ = record_install_at(&installs_path(state), &record);
+    InstallError::Failed(format!("Install failed: {message}"))
+}
+
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1207,9 +1485,36 @@ pub(crate) async fn install(
     approve: bool,
     digest: &str,
 ) -> Result<InstallRecord, InstallError> {
-    let plan = install_plan(id).await?;
+    let plan = install_plan(state, id).await?;
     if let Some(error) = approval_error(&plan, approve, digest) {
         return Err(error);
+    }
+
+    // Downloads come first: a verified archive is what the commands afterwards
+    // are allowed to trust. A hash mismatch stops the install before unpacking.
+    let dest = install_root(state).join(plan.id);
+    for download in &plan.downloads {
+        let archive = dest.join(&download.file);
+        // An archive already on disk that still hashes correctly is not fetched
+        // again; a damaged one fails this check and is downloaded afresh.
+        let reused = archive.is_file()
+            && crate::installer::sha256_file(&archive)
+                .map(|actual| actual.eq_ignore_ascii_case(download.sha256.trim()))
+                .unwrap_or(false);
+        let fetched = if reused {
+            Ok(())
+        } else {
+            match crate::installer::download_verified(&download.url, &download.sha256, &archive)
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
+        .and_then(|_| crate::installer::extract(download.archive, &archive, &dest).map(|_| ()));
+        if let Err(error) = fetched {
+            return Err(record_failure(state, &plan, error));
+        }
     }
 
     for step in &plan.steps {
@@ -1223,19 +1528,7 @@ pub(crate) async fn install(
         .map_err(|error| InstallError::Failed(format!("Install task failed: {error}")))?;
 
         if let Err(error) = outcome {
-            // A failed install is recorded too: the panel should not pretend the
-            // router was never attempted.
-            let record = InstallRecord {
-                id: plan.id.to_string(),
-                method: plan.method.clone(),
-                source: plan.source.clone(),
-                digest: plan.digest.clone(),
-                installed_at_unix: now_unix(),
-                outcome: "failed".to_string(),
-                message: error.clone(),
-            };
-            let _ = record_install_at(&installs_path(state), &record);
-            return Err(InstallError::Failed(format!("Install failed: {error}")));
+            return Err(record_failure(state, &plan, error));
         }
     }
 
@@ -1696,14 +1989,32 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    fn plan_for(id: &str, docker: bool, container: bool) -> InstallPlan {
-        build_plan(
-            find(id).unwrap(),
+    fn facts(docker: bool, container: bool, port: u16) -> Facts {
+        Facts {
             docker,
-            container,
-            20128,
-            &Ok("sha256:abc123".to_string()),
-        )
+            container_exists: container,
+            port,
+            pinned: Ok("sha256:abc123".to_string()),
+            release: Err("no release was asked for".to_string()),
+            install_root: PathBuf::from("/tmp/studio-routers"),
+        }
+    }
+
+    fn plan_for(id: &str, docker: bool, container: bool) -> InstallPlan {
+        build_plan(find(id).unwrap(), &facts(docker, container, 20128))
+    }
+
+    fn sample_release() -> Release {
+        Release {
+            tag: "v1.2.3".to_string(),
+            asset: "ollama-windows-amd64.zip",
+            url:
+                "https://github.com/ollama/ollama/releases/download/v1.2.3/ollama-windows-amd64.zip"
+                    .to_string(),
+            sha256: "ab".repeat(32),
+            archive: crate::installer::Archive::Zip,
+            binary: "ollama.exe",
+        }
     }
 
     #[test]
@@ -1741,14 +2052,74 @@ mod tests {
 
     #[test]
     fn plans_without_an_in_app_path_say_so() {
-        for id in ["freellmapi", "ollama"] {
-            let plan = plan_for(id, true, false);
-            assert!(!plan.supported, "{id} claims an install path it lacks");
-            assert!(plan.steps.is_empty());
-            assert!(!plan.ready());
-            let blocked = plan.blocked.expect("a refused plan must say why");
-            assert!(blocked.contains("does not"), "{id}: {blocked}");
-        }
+        // The compose router has no Studio-side downloader, so it must refuse
+        // rather than run an installer it cannot verify.
+        let plan = plan_for("freellmapi", true, false);
+        assert!(
+            !plan.supported,
+            "freellmapi claims an install path it lacks"
+        );
+        assert!(plan.steps.is_empty());
+        assert!(plan.downloads.is_empty());
+        assert!(!plan.ready());
+        let blocked = plan.blocked.expect("a refused plan must say why");
+        assert!(blocked.contains("does not"), "{blocked}");
+    }
+
+    #[test]
+    fn ollama_plan_downloads_a_hash_checked_asset() {
+        let mut measured = facts(true, false, 20128);
+        measured.release = Ok(sample_release());
+        let plan = build_plan(find("ollama").unwrap(), &measured);
+        assert!(plan.supported);
+        assert!(plan.ready(), "blocked: {:?}", plan.blocked);
+        assert_eq!(plan.downloads.len(), 1);
+        assert_eq!(plan.downloads[0].sha256, "ab".repeat(32));
+        assert!(plan.downloads[0]
+            .url
+            .ends_with("v1.2.3/ollama-windows-amd64.zip"));
+        // The command it runs is the binary the archive contains, and the plan
+        // fetches nothing else.
+        assert_eq!(plan.steps.len(), 1);
+        assert!(plan.steps[0].program.ends_with("ollama.exe"));
+        assert_eq!(plan.steps[0].args, vec!["--version".to_string()]);
+
+        // The digest covers the URL and the hash, so an approval names exact
+        // bytes: swapping the hash is a different plan.
+        let mut swapped = facts(true, false, 20128);
+        let mut other_release = sample_release();
+        other_release.sha256 = "cd".repeat(32);
+        swapped.release = Ok(other_release);
+        assert_ne!(
+            plan.digest,
+            build_plan(find("ollama").unwrap(), &swapped).digest
+        );
+    }
+
+    #[test]
+    fn an_unresolved_release_blocks_instead_of_guessing() {
+        let plan = build_plan(find("ollama").unwrap(), &facts(true, false, 20128));
+        assert!(!plan.ready());
+        assert!(plan.downloads.is_empty(), "nothing may be fetched unpinned");
+        assert!(plan.steps.is_empty());
+        let blocked = plan.blocked.expect("a blocked plan must say why");
+        assert!(blocked.contains("nothing to verify"), "{blocked}");
+        assert!(plan
+            .prerequisites
+            .iter()
+            .any(|item| item.key == "release_sha256" && !item.satisfied));
+    }
+
+    #[test]
+    fn asset_table_covers_only_published_platforms() {
+        assert!(ollama_asset("windows", "x86_64").is_some());
+        assert!(ollama_asset("windows", "arm64").is_some());
+        // `aarch64` is the same architecture under its other spelling.
+        assert!(ollama_asset("linux", "aarch64").is_some());
+        assert!(ollama_asset("macos", "arm64").is_some());
+        // Nothing is published for these, so no asset may be invented.
+        assert!(ollama_asset("android", "arm64").is_none());
+        assert!(ollama_asset("linux", "i686").is_none());
     }
 
     #[test]
@@ -1758,13 +2129,7 @@ mod tests {
             plan_for("omniroute", true, false).digest
         );
         // A different port is a different command, so a different digest.
-        let other = build_plan(
-            find("omniroute").unwrap(),
-            true,
-            false,
-            20129,
-            &Ok("sha256:abc123".to_string()),
-        );
+        let other = build_plan(find("omniroute").unwrap(), &facts(true, false, 20129));
         assert_ne!(plan_for("omniroute", true, false).digest, other.digest);
     }
 
@@ -1796,13 +2161,9 @@ mod tests {
 
     #[test]
     fn plan_pins_the_image_to_the_registry_digest() {
-        let plan = build_plan(
-            find("omniroute").unwrap(),
-            true,
-            false,
-            20128,
-            &Ok("sha256:feed".to_string()),
-        );
+        let mut measured = facts(true, false, 20128);
+        measured.pinned = Ok("sha256:feed".to_string());
+        let plan = build_plan(find("omniroute").unwrap(), &measured);
         assert!(plan.ready());
         assert_eq!(
             plan.source,
@@ -1817,13 +2178,9 @@ mod tests {
             .any(|item| item.key == "image_digest" && item.satisfied));
 
         // An unresolved digest refuses the install rather than fetching a tag.
-        let unpinned = build_plan(
-            find("omniroute").unwrap(),
-            true,
-            false,
-            20128,
-            &Err("the registry is unreachable".to_string()),
-        );
+        let mut unpinned_facts = facts(true, false, 20128);
+        unpinned_facts.pinned = Err("the registry is unreachable".to_string());
+        let unpinned = build_plan(find("omniroute").unwrap(), &unpinned_facts);
         assert!(!unpinned.ready());
         assert!(unpinned
             .blocked

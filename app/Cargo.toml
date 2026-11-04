@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.26.19"
+version = "1.26.20"
 edition = "2021"
 rust-version = "1.80"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -20,6 +20,10 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.138"
 sha2 = "=0.10.9"
 subtle = "=2.6.1"
+# Verified native installs: unpack exactly the archive the checksum covers.
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
 tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "process", "io-util"] }
 # Broadcast wrappers feed the live thread-mirroring SSE bus.
 tokio-stream = { version = "0.1", features = ["sync"] }

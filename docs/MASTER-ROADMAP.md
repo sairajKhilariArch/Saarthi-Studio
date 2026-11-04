@@ -63,10 +63,11 @@ Remaining for Phase 1 sign-off:
    **Done (1.26.9)** — `/api/routers`, rebuilt from the existing probes;
    `healthy` is "the probe answered".
 3. Add an approval-gated install flow with checksum verification. **Partial
-   (1.26.18–1.26.19)** — plan preview with measured prerequisites, a digest-bound
-   approval, recorded installs and a registry-digest-pinned image; execution
-   exists only for OmniRoute, since a downloader for FreeLLMAPI/Ollama would have
-   to fetch and verify vendor archives (not built yet).
+   (1.26.18–1.26.20)** — plan preview with measured prerequisites, a digest-bound
+   approval, recorded installs, a registry-digest-pinned image and verified
+   release downloads (streamed through sha256 and unpacked only on a match).
+   OmniRoute and Ollama install for real; FreeLLMAPI still refuses because
+   giving its compose project a Studio-owned install path is not done.
 4. Add a startup sweep honouring per-router auto-start preferences, and keep
    the ownership rule (never stop what the app did not start). **Done (1.26.17)**
    — preferences in `router-prefs.json`, sweep starts only an enabled, installed,

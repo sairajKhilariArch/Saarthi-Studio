@@ -3768,6 +3768,12 @@ function routerRow(entry) {
       (plan.prerequisites || []).forEach((item) => {
         lines.push(`${item.satisfied ? "ok      " : "missing "} ${item.what} — ${item.detail}`);
       });
+      // A download is not a command, so it is printed as what it is: the URL,
+      // the published hash it must match, and how the archive is unpacked.
+      (plan.downloads || []).forEach((item, index) => {
+        lines.push(`fetch ${index + 1}: ${item.url}`);
+        lines.push(`        sha256 ${item.sha256} · ${item.archive}`);
+      });
       (plan.steps || []).forEach((step, index) => {
         lines.push(`step ${index + 1}: ${step.program} ${step.args.join(" ")}`);
       });
