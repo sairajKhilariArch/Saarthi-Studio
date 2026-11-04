@@ -32,7 +32,7 @@ release run `41861357127` published 8 non-macOS assets.
 | OS/arch detection, dependency checks, package-manager awareness | Partial | registry gates OS/arch and lists methods per platform; no dependency probing or package-manager detection |
 | Install flow with approval, download, checksum, configure | Missing | installer script is out-of-app |
 | Health check distinguishing "process alive" from "healthy" | Working | `healthy` means "the health probe answered"; a container that is up but silent is `running: true, healthy: false` (unit-tested) |
-| Auto-start on launch | Partial | start on demand + CLI; no startup sweep with per-router preferences |
+| Auto-start on launch | Working | per-router preference (`router-prefs.json`) + startup sweep; only an enabled, installed, not-already-answering router is started, so nothing is adopted (1.26.17) |
 | Router UI (list, logs, update, uninstall, connection tester) | Partial | list, health, start/stop, restart, connection tester and container logs; update, uninstall and a config editor still missing |
 
 ## Phase 3 — Model and provider manager

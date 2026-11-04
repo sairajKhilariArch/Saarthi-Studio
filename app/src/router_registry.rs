@@ -12,7 +12,10 @@
 //! route and the live probes build on it next.
 
 use crate::AppState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path as FsPath, PathBuf};
 use std::time::{Duration, Instant};
 
 /// How a router can be obtained on a platform. A router may offer several.
@@ -51,6 +54,10 @@ pub(crate) struct RouterSpec {
     /// CPU architectures with a supported local install ("x86_64", "arm64").
     pub arches: &'static [&'static str],
     pub methods: &'static [InstallMethod],
+    /// Whether Studio starts this router at launch when the user has not chosen.
+    /// FreeLLMAPI keeps the behaviour it has always had; the gateways were never
+    /// started on launch, so enabling one is an explicit choice.
+    pub auto_start_default: bool,
     /// Path of the configuration the app reads or writes, relative to `$HOME`.
     pub config: &'static str,
     /// Health probe the manager uses; a running process is not proof of health.
@@ -69,6 +76,7 @@ const ROUTERS: &[RouterSpec] = &[
         os: &["linux", "macos", "windows"],
         arches: &["x86_64", "arm64"],
         methods: &[InstallMethod::DockerCompose, InstallMethod::Remote],
+        auto_start_default: true,
         config: ".config/free-ai-suite/freellmapi-dir",
         health: "GET /v1/models",
         docs: "https://github.com/sairajKhilariArch/Saarthi-Studio#router",
@@ -80,6 +88,7 @@ const ROUTERS: &[RouterSpec] = &[
         os: &["linux", "macos", "windows"],
         arches: &["x86_64", "arm64"],
         methods: &[InstallMethod::DockerCompose, InstallMethod::Remote],
+        auto_start_default: false,
         config: ".config/free-ai-suite/omniroute-dir",
         // The probe in `router.rs` calls /v1/models and counts any answer as
         // reachable (401 included), so the registry documents that same path:
@@ -98,6 +107,7 @@ const ROUTERS: &[RouterSpec] = &[
             InstallMethod::PackageManager,
             InstallMethod::Remote,
         ],
+        auto_start_default: false,
         config: ".config/free-ai-studio/local.json",
         health: "GET /api/tags",
         docs: "https://github.com/sairajKhilariArch/Saarthi-Studio#local-runtime",
@@ -249,6 +259,8 @@ pub(crate) struct RouterView {
     pub healthy: bool,
     pub running: bool,
     pub owned_by_app: bool,
+    /// The user's launch preference for this router, defaulted by the registry.
+    pub auto_start: bool,
     pub endpoint: String,
     pub version: String,
     pub message: String,
@@ -256,13 +268,14 @@ pub(crate) struct RouterView {
 
 /// Combine capability with a measured probe. Kept pure so it is testable: the
 /// rule that matters is that a process which has not answered is not healthy.
-pub(crate) fn view(capability: Capability, probe: Probe) -> RouterView {
+pub(crate) fn view(capability: Capability, probe: Probe, auto_start: bool) -> RouterView {
     RouterView {
         installed: probe.installed,
         reachable: probe.reachable,
         healthy: probe.reachable,
         running: probe.running,
         owned_by_app: probe.owned_by_app,
+        auto_start,
         endpoint: probe.endpoint,
         version: probe.version,
         message: probe.message,
@@ -282,6 +295,7 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
     // returns exactly what its own endpoint returns, so nothing here can
     // disagree with /api/router, /api/omniroute or /api/local/status.
     let base_url = local_base_url(state);
+    let prefs = preferences(state);
     let (router_status, omni_status, local_version) = tokio::join!(
         crate::router::status(),
         crate::router::omniroute_status(),
@@ -306,9 +320,12 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
             "omniroute" => {
                 let endpoint = format!("http://127.0.0.1:{}", omni_status.port);
                 Probe {
-                    // No compose project to look for: the container or an
-                    // answered endpoint is the installation evidence.
-                    installed: omni_status.running || omni_status.reachable,
+                    // No compose project to look for: a running container, a
+                    // stopped container or an answered endpoint is the
+                    // installation evidence.
+                    installed: omni_status.running
+                        || omni_status.reachable
+                        || crate::router::omniroute_container_exists(),
                     reachable: omni_status.reachable,
                     running: omni_status.running,
                     owned_by_app: omni_status.owned_by_app,
@@ -333,7 +350,7 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
             },
             other => Probe::not_installed("", &format!("No probe is implemented for {other} yet.")),
         };
-        out.push(view(cap, probe));
+        out.push(view(cap, probe, prefs.auto_start_for(spec)));
     }
     out
 }
@@ -578,6 +595,201 @@ pub(crate) async fn restart(id: &str) -> Result<String, String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Launch preferences
+
+/// Stored beside `config.json` rather than under the real `$HOME`, so
+/// `FREE_AI_STUDIO_HOME` keeps sandboxed runs off the user's own settings.
+const PREFS_FILE: &str = "router-prefs.json";
+
+/// Per-router settings the user chose. Only what this build can honour is
+/// stored: an id the registry does not know is never written, and a missing id
+/// falls back to that router's own default instead of a guess.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct Preferences {
+    #[serde(default)]
+    auto_start: BTreeMap<String, bool>,
+}
+
+impl Preferences {
+    pub(crate) fn auto_start_for(&self, spec: &RouterSpec) -> bool {
+        self.auto_start
+            .get(spec.id)
+            .copied()
+            .unwrap_or(spec.auto_start_default)
+    }
+
+    fn set_auto_start(&mut self, id: &str, enabled: bool) {
+        self.auto_start.insert(id.to_string(), enabled);
+    }
+}
+
+fn prefs_path(state: &AppState) -> PathBuf {
+    state.config_path.with_file_name(PREFS_FILE)
+}
+
+/// Read from an explicit path so a test never touches the real `$HOME`. A missing
+/// or corrupt file means "no choices yet", never a failed launch.
+fn load_prefs_from(path: &FsPath) -> Preferences {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_prefs_to(path: &FsPath, prefs: &Preferences) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(prefs)
+        .map_err(|error| format!("Could not encode preferences: {error}"))?;
+    crate::router::write_private_json(path, &bytes)
+        .map_err(|error| format!("Could not save preferences to {}: {error}", path.display()))
+}
+
+pub(crate) fn preferences(state: &AppState) -> Preferences {
+    load_prefs_from(&prefs_path(state))
+}
+
+/// Store one router's launch preference in an explicit file. Unknown ids are
+/// rejected before anything is written, so the file only ever names routers this
+/// build can act on.
+fn set_auto_start_at(path: &FsPath, id: &str, enabled: bool) -> Result<bool, String> {
+    let spec = find(id).ok_or_else(|| format!("Unknown router id: {id}"))?;
+    let mut prefs = load_prefs_from(path);
+    prefs.set_auto_start(spec.id, enabled);
+    save_prefs_to(path, &prefs)?;
+    Ok(enabled)
+}
+
+/// Store one router's launch preference and return the value as stored.
+pub(crate) fn set_auto_start(state: &AppState, id: &str, enabled: bool) -> Result<bool, String> {
+    set_auto_start_at(&prefs_path(state), id, enabled)
+}
+
+// ---------------------------------------------------------------------------
+// Launch sweep
+
+/// Routers this build can start by itself. The local runtime is absent on
+/// purpose: Studio never owns that process.
+fn can_start_locally(id: &str) -> bool {
+    matches!(id, "freellmapi" | "omniroute")
+}
+
+/// The auto-start rule, pure so it needs neither Docker nor a network. Only a
+/// router the user enabled, that this build can start, that is installed here and
+/// that is not already answering is started — a router that answers is never
+/// adopted, so closing Studio cannot stop something the user started.
+pub(crate) fn should_auto_start(
+    pref: bool,
+    startable: bool,
+    installable_here: bool,
+    installed: bool,
+    healthy: bool,
+) -> bool {
+    pref && startable && installable_here && installed && !healthy
+}
+
+/// Why an enabled router was left alone, in the words the boot log uses.
+fn skip_reason(entry: &RouterView) -> String {
+    if entry.healthy {
+        "it is already answering, and Studio does not adopt a router it did not start".to_string()
+    } else if !entry.installed {
+        "it is not installed here".to_string()
+    } else if !entry.capability.installable_here {
+        "this build cannot run it locally".to_string()
+    } else {
+        "this build has no start path for it".to_string()
+    }
+}
+
+/// What the sweep did with one router.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct StartupOutcome {
+    pub id: &'static str,
+    pub started: bool,
+    pub message: String,
+}
+
+/// Start the routers whose preference says so. One router failing is recorded and
+/// the sweep continues: a broken gateway must not stop the app from opening.
+pub(crate) async fn startup_sweep(state: &AppState) -> Vec<StartupOutcome> {
+    let prefs = preferences(state);
+    let mut out = Vec::new();
+    for entry in views(state).await {
+        let Some(spec) = find(entry.capability.id) else {
+            continue;
+        };
+        let enabled = prefs.auto_start_for(spec);
+        if !should_auto_start(
+            enabled,
+            can_start_locally(spec.id),
+            entry.capability.installable_here,
+            entry.installed,
+            entry.healthy,
+        ) {
+            if enabled {
+                out.push(StartupOutcome {
+                    id: spec.id,
+                    started: false,
+                    message: format!(
+                        "{} is set to start with Studio, but {}.",
+                        spec.name,
+                        skip_reason(&entry)
+                    ),
+                });
+            }
+            continue;
+        }
+        out.push(match spec.id {
+            "freellmapi" => match crate::router::ensure_started().await {
+                status if status.reachable => StartupOutcome {
+                    id: spec.id,
+                    started: true,
+                    message: format!(
+                        "Started FreeLLMAPI at launch; it answers on port {}.",
+                        status.port
+                    ),
+                },
+                status => StartupOutcome {
+                    id: spec.id,
+                    started: false,
+                    message: format!(
+                        "Tried to start FreeLLMAPI at launch; nothing answers on port {} yet.",
+                        status.port
+                    ),
+                },
+            },
+            "omniroute" => match crate::router::omniroute_start().await {
+                Ok(status) if status.reachable => StartupOutcome {
+                    id: spec.id,
+                    started: true,
+                    message: format!(
+                        "Started OmniRoute at launch; it answers on port {}.",
+                        status.port
+                    ),
+                },
+                Ok(status) => StartupOutcome {
+                    id: spec.id,
+                    started: false,
+                    message: format!(
+                        "Tried to start OmniRoute at launch; nothing answers on port {} yet.",
+                        status.port
+                    ),
+                },
+                Err(error) => StartupOutcome {
+                    id: spec.id,
+                    started: false,
+                    message: format!("Could not start OmniRoute at launch: {error}"),
+                },
+            },
+            other => StartupOutcome {
+                id: spec.id,
+                started: false,
+                message: format!("{other} has no launch path in this build."),
+            },
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,14 +962,14 @@ mod tests {
         let spec = find("freellmapi").unwrap();
         let cap = capability(spec, "linux", "x86_64");
 
-        let up = view(cap.clone(), reachable_probe());
+        let up = view(cap.clone(), reachable_probe(), true);
         assert!(up.healthy && up.reachable && up.installed);
 
         // Containers up but nothing answering: running, not healthy.
         let mut half = reachable_probe();
         half.reachable = false;
         half.message = "Router containers are up but the API is not answering yet.".into();
-        let not_yet = view(cap.clone(), half);
+        let not_yet = view(cap.clone(), half, true);
         assert!(not_yet.running);
         assert!(
             !not_yet.healthy,
@@ -768,6 +980,7 @@ mod tests {
         let missing = view(
             cap,
             Probe::not_installed("http://127.0.0.1:3001", "no project"),
+            false,
         );
         assert!(!missing.installed && !missing.healthy && !missing.running);
         assert!(!missing.owned_by_app);
@@ -780,7 +993,7 @@ mod tests {
         let mut probe = reachable_probe();
         probe.owned_by_app = false;
         probe.version = "0.3.14".into();
-        let view = view(capability(spec, "macos", "arm64"), probe);
+        let view = view(capability(spec, "macos", "arm64"), probe, false);
         assert!(!view.owned_by_app, "an external runtime is never owned");
         assert_eq!(view.version, "0.3.14");
     }
@@ -788,9 +1001,12 @@ mod tests {
     #[test]
     fn view_serialises_capability_and_state_side_by_side() {
         let spec = find("freellmapi").unwrap();
-        let value =
-            serde_json::to_value(view(capability(spec, "linux", "x86_64"), reachable_probe()))
-                .unwrap();
+        let value = serde_json::to_value(view(
+            capability(spec, "linux", "x86_64"),
+            reachable_probe(),
+            true,
+        ))
+        .unwrap();
         for key in [
             "id",
             "name",
@@ -810,12 +1026,14 @@ mod tests {
             "healthy",
             "running",
             "owned_by_app",
+            "auto_start",
             "endpoint",
             "version",
             "message",
         ] {
             assert!(value.get(key).is_some(), "view lacks state field {key}");
         }
+        assert_eq!(value["auto_start"], true);
         assert_eq!(value["healthy"], true);
     }
 
@@ -919,6 +1137,101 @@ mod tests {
         }
         assert_eq!(value["id"], "omniroute");
         assert_eq!(value["ok"], true);
+    }
+
+    fn temp_prefs(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "free-ai-studio-prefs-{}-{name}.json",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn registry_defaults_keep_freellmapi_launching() {
+        assert!(find("freellmapi").unwrap().auto_start_default);
+        assert!(!find("omniroute").unwrap().auto_start_default);
+        assert!(
+            !find("ollama").unwrap().auto_start_default,
+            "the local runtime is the user's to start"
+        );
+    }
+
+    #[test]
+    fn preferences_round_trip_and_keep_registry_defaults() {
+        let path = temp_prefs("round-trip");
+        let _ = fs::remove_file(&path);
+
+        // Nothing stored: each router keeps its own default.
+        let empty = load_prefs_from(&path);
+        assert!(empty.auto_start_for(find("freellmapi").unwrap()));
+        assert!(!empty.auto_start_for(find("omniroute").unwrap()));
+
+        let mut prefs = empty.clone();
+        prefs.set_auto_start("freellmapi", false);
+        save_prefs_to(&path, &prefs).unwrap();
+
+        let reloaded = load_prefs_from(&path);
+        assert!(!reloaded.auto_start_for(find("freellmapi").unwrap()));
+        assert!(!reloaded.auto_start_for(find("ollama").unwrap()));
+
+        // A corrupt file means "no choices yet", not a failed launch.
+        fs::write(&path, b"{not json").unwrap();
+        assert!(load_prefs_from(&path).auto_start_for(find("freellmapi").unwrap()));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn auto_start_rule_never_adopts_what_already_answers() {
+        // pref, startable, installable_here, installed, healthy
+        assert!(should_auto_start(true, true, true, true, false));
+        assert!(
+            !should_auto_start(true, true, true, true, true),
+            "a router that already answers is never adopted"
+        );
+        assert!(
+            !should_auto_start(false, true, true, true, false),
+            "not enabled"
+        );
+        assert!(
+            !should_auto_start(true, false, true, true, false),
+            "no start path"
+        );
+        assert!(
+            !should_auto_start(true, true, false, true, false),
+            "cannot install here"
+        );
+        assert!(
+            !should_auto_start(true, true, true, false, false),
+            "not installed"
+        );
+    }
+
+    #[test]
+    fn only_routers_with_a_lifecycle_can_auto_start() {
+        assert!(can_start_locally("freellmapi"));
+        assert!(can_start_locally("omniroute"));
+        assert!(
+            !can_start_locally("ollama"),
+            "the local runtime belongs to the user"
+        );
+        assert!(!can_start_locally("nope"));
+    }
+
+    #[test]
+    fn set_auto_start_writes_only_known_routers() {
+        let path = temp_prefs("set");
+        let _ = fs::remove_file(&path);
+
+        let error = set_auto_start_at(&path, "nope", true).unwrap_err();
+        assert!(error.contains("Unknown router id"), "got: {error}");
+        assert!(!path.exists(), "a rejected id must not create the file");
+
+        assert!(set_auto_start_at(&path, "omniroute", true).unwrap());
+        let stored = load_prefs_from(&path);
+        assert!(stored.auto_start_for(find("omniroute").unwrap()));
+        // FreeLLMAPI was never mentioned, so it keeps its registry default.
+        assert!(stored.auto_start_for(find("freellmapi").unwrap()));
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

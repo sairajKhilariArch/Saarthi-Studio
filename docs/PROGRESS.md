@@ -74,11 +74,12 @@ lifecycle and points at its facts rather than re-deriving them.
 - [x] Router UI: logs — `GET /api/routers/:id/logs` reads the real container output (both streams), clamps the tail to 1–1000 lines and caps the response at 64 KiB; the local runtime is refused with its reason instead of showing an empty box (1.26.16)
 - [ ] Router UI: update, uninstall, configuration editor
 - [ ] Install workflow with approval, checksum verification and recorded install info
-- [ ] Auto-start on launch that never stops externally owned routers (needs per-router preferences first)
+- [x] Per-router launch preferences stored atomically, with `auto_start` in `/api/routers` and a "Start with Studio" checkbox (1.26.17)
+- [x] Auto-start on launch that never stops externally owned routers — the sweep starts only an enabled, installed, not-already-answering router, and the rule is unit-tested both ways (1.26.17). A boot with Docker down records the failure per router and the app still opens
 
 ## Next up
 
-1. Phase 2 slice 5 — the approval-gated install flow, which needs per-router
-   preferences stored first so the startup sweep can honour auto-start.
+1. Phase 2 slice 6 — the approval-gated install flow with checksum verification,
+   the last open Phase 2 item besides update/uninstall.
 2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
 3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

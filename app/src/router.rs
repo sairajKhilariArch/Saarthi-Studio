@@ -50,18 +50,23 @@ fn save_ownership_file(path: &FsPath, ownership: &Ownership) {
     let Ok(bytes) = serde_json::to_vec(ownership) else {
         return;
     };
+    let _ = write_private_json(path, &bytes);
+}
+
+/// Write small private state atomically: temp file, owner-only permissions, then
+/// rename, so a crash cannot leave a half-written file behind.
+pub(crate) fn write_private_json(path: &FsPath, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
     let temp = path.with_extension("tmp");
-    if fs::write(&temp, bytes).is_ok() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&temp, fs::Permissions::from_mode(0o600));
-        }
-        let _ = fs::rename(&temp, path);
+    fs::write(&temp, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
     }
+    fs::rename(&temp, path)
 }
 
 fn has_compose_file(dir: &FsPath) -> bool {
@@ -435,6 +440,18 @@ fn omniroute_container_running() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether a container called OmniRoute exists at all, running or stopped. The
+/// routers list reports `installed` from this, so a stopped gateway reads as
+/// "stopped" instead of "not installed", and auto-start has something to start.
+pub(crate) fn omniroute_container_exists() -> bool {
+    run_cmd(
+        "docker",
+        &["ps", "-a", "-q", "--filter", "name=^omniroute$"],
+    )
+    .map(|ids| !ids.is_empty())
+    .unwrap_or(false)
+}
+
 pub(crate) struct OmniStatus {
     pub port: u16,
     pub reachable: bool,
@@ -497,12 +514,7 @@ pub(crate) async fn omniroute_start() -> Result<OmniStatus, String> {
         run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
     } else {
         // A stopped container with the same name must be started, not recreated.
-        let exists = run_cmd(
-            "docker",
-            &["ps", "-a", "-q", "--filter", "name=^omniroute$"],
-        )
-        .map(|ids| !ids.is_empty())
-        .unwrap_or(false);
+        let exists = omniroute_container_exists();
         if exists {
             run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
         } else {

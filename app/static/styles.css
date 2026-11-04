@@ -989,7 +989,17 @@ kbd {
   border-radius: 4px;
 }
 .console-row-main small { color: var(--mute); font-size: 11px; }
-.console-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.console-row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.console-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--mute);
+  cursor: pointer;
+  user-select: none;
+}
+.console-toggle input { margin: 0; accent-color: var(--accent); }
 .console-logs {
   flex: 1 0 100%;
   margin: 0;

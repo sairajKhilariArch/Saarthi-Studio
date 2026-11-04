@@ -64,8 +64,9 @@ Remaining for Phase 1 sign-off:
    `healthy` is "the probe answered".
 3. Add an approval-gated install flow with checksum verification. **Open.**
 4. Add a startup sweep honouring per-router auto-start preferences, and keep
-   the ownership rule (never stop what the app did not start). **Open** — needs
-   per-router preferences stored before the sweep can honour them.
+   the ownership rule (never stop what the app did not start). **Done (1.26.17)**
+   — preferences in `router-prefs.json`, sweep starts only an enabled, installed,
+   not-already-answering router, so nothing is ever adopted.
 5. UI: list, status, logs, connection tester, update/uninstall. **Partial** —
    list, health, start/stop (1.26.13), connection tester and restart (1.26.15),
    container logs (1.26.16); update, uninstall and a config editor still open.

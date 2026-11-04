@@ -842,6 +842,27 @@ async fn routers_test(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
+/// Store a router's launch preference. Only ids the registry knows are stored.
+async fn routers_auto_start(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let Some(enabled) = input.get("enabled").and_then(Value::as_bool) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Send {\"enabled\": true} or {\"enabled\": false}.",
+        );
+    };
+    match router_registry::set_auto_start(&state, &id, enabled) {
+        Ok(value) => Json(json!({"id": id, "auto_start": value})).into_response(),
+        Err(error) if error.starts_with("Unknown router id") => {
+            json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
 /// Recent output of one router's container, tail-limited by the query and by the
 /// registry's own cap.
 async fn routers_logs(
@@ -2718,6 +2739,14 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     ensure_setup(&state)?;
+    // Auto-start runs once the state exists, because it applies the same measured
+    // state the Router view shows: only a router that is enabled, installed here
+    // and not already answering is started, and one that answers is never adopted.
+    if env::var_os("FREE_AI_STUDIO_SKIP_ROUTER").is_none() {
+        for outcome in router_registry::startup_sweep(&state).await {
+            println!("{}", outcome.message);
+        }
+    }
     agent::mark_interrupted(&state);
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
         .ok()
@@ -2736,6 +2765,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/routers/:id/test", post(routers_test))
         .route("/api/routers/:id/restart", post(routers_restart))
         .route("/api/routers/:id/logs", get(routers_logs))
+        .route("/api/routers/:id/auto-start", post(routers_auto_start))
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
@@ -2905,18 +2935,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && env::var_os("FREE_AI_STUDIO_NO_GUI").is_none();
 
     let runtime = tokio::runtime::Runtime::new()?;
-    let boot = runtime.block_on(async {
-        if env::var_os("FREE_AI_STUDIO_SKIP_ROUTER").is_none() {
-            let status = router::ensure_started().await;
-            if status.reachable {
-                println!(
-                    "FreeLLMAPI router is responding at http://127.0.0.1:{}.",
-                    status.port
-                );
-            }
-        }
-        bootstrap().await
-    })?;
+    let boot = runtime.block_on(bootstrap())?;
 
     if gui_mode {
         println!("Application window: http://127.0.0.1:{}", boot.port);

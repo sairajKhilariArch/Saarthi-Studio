@@ -3758,6 +3758,28 @@ function routerRow(entry) {
       if (!result.ok) toast(result.data.error || "That router action failed.");
       await loadRouterList();
     }));
+    // Launch preference, stored server-side and honoured by the startup sweep,
+    // which still never adopts a router it did not start.
+    const toggle = document.createElement("label");
+    toggle.className = "console-toggle";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = Boolean(entry.auto_start);
+    box.addEventListener("change", async () => {
+      const result = await api(`/api/routers/${entry.id}/auto-start`, {
+        method: "POST",
+        body: JSON.stringify({ enabled: box.checked }),
+      });
+      if (!result.ok) {
+        box.checked = !box.checked;
+        toast(result.data.error || "Could not save that preference.");
+      }
+    });
+    const toggleText = document.createElement("span");
+    toggleText.textContent = "Start with Studio";
+    toggle.append(box, toggleText);
+    actions.appendChild(toggle);
+
     // Restarting a stopped router would only start it, so the button appears
     // when there is something running to restart.
     if (stopping) {

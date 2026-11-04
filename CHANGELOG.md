@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.26.17
+
+- Phase 2 slice 5: per-router launch preferences, and a startup sweep that
+  honours them. `POST /api/routers/:id/auto-start` stores the choice in
+  `~/.config/free-ai-studio/router-prefs.json` (written atomically, owner-only),
+  and `/api/routers` now reports `auto_start` per router, shown as a
+  "Start with Studio" checkbox in the Router view.
+- The sweep replaces the unconditional FreeLLMAPI start at boot. It starts a
+  router only when the user enabled it, this build can start it, it is installed
+  here and it is **not already answering** — so a router the user started is
+  never adopted, and closing Studio still cannot stop it. FreeLLMAPI keeps its
+  old default of starting at launch; the other entries default to off.
+- A stopped OmniRoute container now counts as installed (`docker ps -a`), so it
+  reads as "Stopped" instead of "Not installed" and auto-start has something to
+  start. The inline duplicate of that `docker ps -a` check is gone.
+- Tests: `registry_defaults_keep_freellmapi_launching`,
+  `preferences_round_trip_and_keep_registry_defaults` (including a corrupt file),
+  `auto_start_rule_never_adopts_what_already_answers`,
+  `only_routers_with_a_lifecycle_can_auto_start`,
+  `set_auto_start_refuses_an_unknown_router` (153 Rust tests pass).
+
 ## 1.26.16
 
 - Phase 2 slice 4: the Router view can show a router's own recent output.
