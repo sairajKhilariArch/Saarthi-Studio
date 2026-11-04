@@ -140,7 +140,7 @@ pub(crate) fn normalise_arch(arch: &str) -> &'static str {
 }
 
 fn lists(list: &[&str], value: &str) -> bool {
-    list.iter().any(|candidate| *candidate == value)
+    list.contains(&value)
 }
 
 /// Whether this router can run locally on the given OS/architecture.

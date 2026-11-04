@@ -209,12 +209,21 @@ jobs:
           INSTRUMENTED_OUTCOME: ${{ steps.instrumented.outcome }}
         run: |
           failed=0
-          for result in "$WHITESPACE_OUTCOME" "$UNIT_OUTCOME" "$LINT_OUTCOME" "$ASSEMBLE_OUTCOME" "$ASSEMBLE_TESTS_OUTCOME" "$RELEASE_OUTCOME" "$INSTRUMENTED_OUTCOME"; do
-            if [ "$result" != "success" ]; then
-              echo "Validation step failed: $result"
+          # Name the step that failed, not just its outcome string: the job log
+          # is not always available, and an annotation is readable on the run page.
+          check() {
+            if [ "$2" != "success" ]; then
+              echo "::error::$1 outcome was '$2'"
               failed=1
             fi
-          done
+          }
+          check WHITESPACE "$WHITESPACE_OUTCOME"
+          check UNIT "$UNIT_OUTCOME"
+          check LINT "$LINT_OUTCOME"
+          check ASSEMBLE "$ASSEMBLE_OUTCOME"
+          check ASSEMBLE_TESTS "$ASSEMBLE_TESTS_OUTCOME"
+          check RELEASE "$RELEASE_OUTCOME"
+          check INSTRUMENTED "$INSTRUMENTED_OUTCOME"
           if [ "$failed" -ne 0 ]; then
             echo "Android validation failed. Inspect the test and diagnostics artifacts above."
             exit 1

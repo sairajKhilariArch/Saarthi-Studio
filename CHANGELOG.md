@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.26.11
+
+- Fix the desktop CI regression: clippy's `manual_contains` lint rejected the
+  registry's `lists()` helper, so `Run clippy` exited 101 on 1.26.9 and 1.26.10.
+  `cargo build` and `cargo test` do not run that lint, which is why local runs
+  were green. `cargo clippy --locked --all-targets -- -D warnings` now passes.
+- Restore `AGENTS.md` to LF. The 1.26.10 edit committed the whole file as CRLF,
+  turning a four-line addition into a 92-line diff.
+- Android CI: the aggregate gate now names the failing step in an annotation
+  instead of printing only its outcome string, because the job log is not always
+  readable. The underlying gate failure is still open and is not yet diagnosed.
+
 ## 1.26.10
 
 - Repository convention: commit subjects start with the version number, and no
