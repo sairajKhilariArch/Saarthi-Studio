@@ -1035,7 +1035,7 @@ pub(crate) async fn resolve_image_digest(image: &str) -> Result<String, String> 
 /// testable without Docker, a network or a GUI.
 fn build_plan(spec: &'static RouterSpec, facts: &Facts) -> InstallPlan {
     let docker = facts.docker;
-    let container_exists = facts.container_exists;
+    let container_exists = facts.container_exists && !facts.allow_existing;
     let port = facts.port;
     let pinned = &facts.pinned;
     // The local runtime is neither a container nor a compose project: its plan
@@ -1232,6 +1232,8 @@ struct Facts {
     port: u16,
     pinned: Result<String, String>,
     release: Result<Release, String>,
+    /// An update runs against a container that exists by definition.
+    allow_existing: bool,
     install_root: PathBuf,
 }
 
@@ -1445,6 +1447,21 @@ fn install_port(id: &str) -> u16 {
 /// The plan as the app would run it now: Docker and the container are measured
 /// live, so a stale page cannot install against a machine that changed.
 pub(crate) async fn install_plan(state: &AppState, id: &str) -> Result<InstallPlan, InstallError> {
+    plan_with(state, id, false).await
+}
+
+/// The plan to move an existing install onto what is published now. It is the
+/// install plan with one exception: the container that already exists is the
+/// reason to update, not a reason to refuse.
+pub(crate) async fn update_plan(state: &AppState, id: &str) -> Result<InstallPlan, InstallError> {
+    plan_with(state, id, true).await
+}
+
+async fn plan_with(
+    state: &AppState,
+    id: &str,
+    allow_existing: bool,
+) -> Result<InstallPlan, InstallError> {
     let spec = find(id).ok_or_else(|| InstallError::Unknown(format!("Unknown router id: {id}")))?;
     let target = spec.id.to_string();
     let (docker, container_exists) = tokio::task::spawn_blocking(move || {
@@ -1483,6 +1500,7 @@ pub(crate) async fn install_plan(state: &AppState, id: &str) -> Result<InstallPl
             port: install_port(spec.id),
             pinned,
             release,
+            allow_existing,
             install_root: install_root(state),
         },
     ))
@@ -1524,6 +1542,10 @@ pub(crate) struct InstallRecord {
     pub id: String,
     pub method: String,
     pub source: String,
+    /// The identity of what was installed — an image digest, or the sha256 of a
+    /// release asset — so a later update can be compared against it.
+    #[serde(default)]
+    pub artifact: String,
     pub digest: String,
     pub installed_at_unix: u64,
     /// "ok" or "failed"; a failed install is recorded too, with its error.
@@ -1582,18 +1604,24 @@ pub(crate) fn install_record(
 /// Record a failed attempt and turn it into the error the route answers with. A
 /// failure is recorded too: the panel should not pretend the router was never
 /// attempted.
-fn record_failure(state: &AppState, plan: &InstallPlan, message: String) -> InstallError {
+fn record_failure(
+    state: &AppState,
+    plan: &InstallPlan,
+    message: String,
+    verb: &str,
+) -> InstallError {
     let record = InstallRecord {
         id: plan.id.to_string(),
         method: plan.method.clone(),
         source: plan.source.clone(),
+        artifact: plan.artifact(),
         digest: plan.digest.clone(),
         installed_at_unix: now_unix(),
         outcome: "failed".to_string(),
         message: message.clone(),
     };
     let _ = record_install_at(&installs_path(state), &record);
-    InstallError::Failed(format!("Install failed: {message}"))
+    InstallError::Failed(format!("{verb} failed: {message}"))
 }
 
 fn now_unix() -> u64 {
@@ -1615,7 +1643,51 @@ pub(crate) async fn install(
     if let Some(error) = approval_error(&plan, approve, digest) {
         return Err(error);
     }
+    run_plan(state, &plan, "Install").await
+}
 
+/// Update an install that already exists. The new artifact is pulled first, so a
+/// failed pull leaves the running deployment exactly as it was; only then is the
+/// container replaced.
+pub(crate) async fn update(
+    state: &AppState,
+    id: &str,
+    approve: bool,
+    digest: &str,
+) -> Result<InstallRecord, InstallError> {
+    let plan = update_plan(state, id).await?;
+    if let Some(error) = approval_error(&plan, approve, digest) {
+        return Err(error);
+    }
+    if let Some((container, _)) = crate::router::gateway_container(plan.id) {
+        let image = plan.source.clone();
+        let pulled = tokio::task::spawn_blocking(move || {
+            crate::router::run_cmd("docker", &["pull", &image])
+        })
+        .await
+        .map_err(|error| InstallError::Failed(format!("Update task failed: {error}")))?;
+        if let Err(error) = pulled {
+            return Err(record_failure(state, &plan, error, "Update"));
+        }
+        let removed = tokio::task::spawn_blocking(move || {
+            crate::router::run_cmd("docker", &["rm", "-f", container])
+        })
+        .await
+        .map_err(|error| InstallError::Failed(format!("Update task failed: {error}")))?;
+        if let Err(error) = removed {
+            return Err(record_failure(state, &plan, error, "Update"));
+        }
+    }
+    run_plan(state, &plan, "Update").await
+}
+
+/// Run a plan the caller already approved: verified downloads, then commands.
+/// Install and update share exactly this path, so neither can drift.
+async fn run_plan(
+    state: &AppState,
+    plan: &InstallPlan,
+    verb: &str,
+) -> Result<InstallRecord, InstallError> {
     // Downloads come first: a verified archive is what the commands afterwards
     // are allowed to trust. A hash mismatch stops the install before unpacking.
     let dest = install_root(state).join(plan.id);
@@ -1639,7 +1711,7 @@ pub(crate) async fn install(
         }
         .and_then(|_| crate::installer::extract(download.archive, &archive, &dest).map(|_| ()));
         if let Err(error) = fetched {
-            return Err(record_failure(state, &plan, error));
+            return Err(record_failure(state, plan, error, verb));
         }
     }
 
@@ -1654,7 +1726,7 @@ pub(crate) async fn install(
         .map_err(|error| InstallError::Failed(format!("Install task failed: {error}")))?;
 
         if let Err(error) = outcome {
-            return Err(record_failure(state, &plan, error));
+            return Err(record_failure(state, plan, error, verb));
         }
     }
 
@@ -1662,13 +1734,165 @@ pub(crate) async fn install(
         id: plan.id.to_string(),
         method: plan.method.clone(),
         source: plan.source.clone(),
+        artifact: plan.artifact(),
         digest: plan.digest.clone(),
         installed_at_unix: now_unix(),
         outcome: "ok".to_string(),
-        message: format!("Installed {} from {}.", plan.id, plan.source),
+        message: if verb == "Update" {
+            format!("Updated {} to {}.", plan.id, plan.artifact())
+        } else {
+            format!("Installed {} from {}.", plan.id, plan.source)
+        },
     };
     record_install_at(&installs_path(state), &record).map_err(InstallError::Failed)?;
     Ok(record)
+}
+
+impl InstallPlan {
+    /// What installing this plan puts on the machine, as one comparable string:
+    /// an image digest, or the sha256 of the release asset.
+    pub(crate) fn artifact(&self) -> String {
+        if let Some(download) = self.downloads.first() {
+            return download.sha256.clone();
+        }
+        pinned_digest(&self.source).unwrap_or_default()
+    }
+}
+
+/// The digest a pinned reference names, if it names one.
+fn pinned_digest(reference: &str) -> Option<String> {
+    reference
+        .split_once('@')
+        .map(|(_, digest)| digest.trim().to_string())
+        .filter(|digest| digest.starts_with("sha256:") && digest.len() > "sha256:".len())
+}
+
+/// How an installed router compares with what is published now. Read-only: the
+/// plan it carries is the one an update must be approved against.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct UpdateStatus {
+    pub id: &'static str,
+    pub installed: Option<String>,
+    pub latest: Option<String>,
+    pub update_available: bool,
+    pub message: String,
+    pub plan: InstallPlan,
+}
+
+pub(crate) async fn update_status(
+    state: &AppState,
+    id: &str,
+) -> Result<UpdateStatus, InstallError> {
+    let spec = find(id).ok_or_else(|| InstallError::Unknown(format!("Unknown router id: {id}")))?;
+    let record = install_record(state, id)?;
+    let plan = update_plan(state, id).await?;
+    let installed = record
+        .as_ref()
+        .map(|record| record.artifact.clone())
+        .filter(|artifact| !artifact.is_empty());
+    let latest = Some(plan.artifact()).filter(|artifact| !artifact.is_empty());
+    let update_available = match (&installed, &latest) {
+        (Some(installed), Some(latest)) => installed != latest,
+        // Nothing to compare means nothing is called out of date.
+        _ => false,
+    };
+    let message = if latest.is_none() {
+        format!(
+            "Nothing could be resolved for {} right now, so there is nothing to compare.",
+            spec.name
+        )
+    } else if installed.is_none() {
+        format!(
+            "Studio has no install record for {}, so it cannot say whether it is current.",
+            spec.name
+        )
+    } else if update_available {
+        format!(
+            "{} is installed at an older artifact than the one published now.",
+            spec.name
+        )
+    } else {
+        format!("{} is current.", spec.name)
+    };
+    Ok(UpdateStatus {
+        id: spec.id,
+        installed,
+        latest,
+        update_available,
+        message,
+        plan,
+    })
+}
+
+/// What an uninstall removed, in the words the panel shows.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct UninstallOutcome {
+    pub id: String,
+    pub removed: Vec<String>,
+    pub message: String,
+}
+
+/// Stop and remove an install. The named volume holds the user's data, so it is
+/// kept unless `purge` says otherwise.
+pub(crate) async fn uninstall(
+    state: &AppState,
+    id: &str,
+    purge: bool,
+) -> Result<UninstallOutcome, InstallError> {
+    let spec = find(id).ok_or_else(|| InstallError::Unknown(format!("Unknown router id: {id}")))?;
+    let mut removed: Vec<String> = Vec::new();
+    if let Some((container, volume)) = crate::router::gateway_container(spec.id) {
+        match tokio::task::spawn_blocking(move || {
+            crate::router::run_cmd("docker", &["rm", "-f", container])
+        })
+        .await
+        .map_err(|error| InstallError::Failed(format!("Uninstall task failed: {error}")))?
+        {
+            Ok(_) => removed.push(format!("container {container}")),
+            // Already absent is the goal, not a failure.
+            Err(error) if error.to_lowercase().contains("no such container") => {}
+            Err(error) => return Err(InstallError::Failed(format!("Uninstall failed: {error}"))),
+        }
+        if purge {
+            match tokio::task::spawn_blocking(move || {
+                crate::router::run_cmd("docker", &["volume", "rm", volume])
+            })
+            .await
+            .map_err(|error| InstallError::Failed(format!("Uninstall task failed: {error}")))?
+            {
+                Ok(_) => removed.push(format!("volume {volume} and its data")),
+                Err(error) if error.to_lowercase().contains("no such volume") => {}
+                Err(error) => {
+                    return Err(InstallError::Failed(format!("Uninstall failed: {error}")))
+                }
+            }
+        }
+    } else {
+        let dir = install_root(state).join(spec.id);
+        if dir.exists() {
+            let target = dir.clone();
+            tokio::task::spawn_blocking(move || fs::remove_dir_all(&target))
+                .await
+                .map_err(|error| InstallError::Failed(format!("Uninstall task failed: {error}")))?
+                .map_err(|error| InstallError::Failed(format!("Uninstall failed: {error}")))?;
+            removed.push(dir.display().to_string());
+        }
+    }
+    crate::router::forget_ownership(spec.id);
+    // The record described something that no longer exists here.
+    let mut installs = load_installs_from(&installs_path(state));
+    installs.records.remove(spec.id);
+    save_installs_to(&installs_path(state), &installs).map_err(InstallError::Failed)?;
+    let message = if removed.is_empty() {
+        format!("Nothing was installed for {}.", spec.name)
+    } else {
+        format!("Removed {}: {}.", spec.name, removed.join(", "))
+    };
+    Ok(UninstallOutcome {
+        id: spec.id.to_string(),
+        removed,
+        message,
+    })
 }
 
 #[cfg(test)]
@@ -2122,6 +2346,7 @@ mod tests {
             port,
             pinned: Ok("sha256:abc123".to_string()),
             release: Err("no release was asked for".to_string()),
+            allow_existing: false,
             install_root: PathBuf::from("/tmp/studio-routers"),
         }
     }
@@ -2218,6 +2443,38 @@ mod tests {
         assert!(parse_registry_digest("sha256:abc").is_err());
         assert!(parse_registry_digest("md5:22fb").is_err());
         assert!(parse_registry_digest("").is_err());
+    }
+
+    #[test]
+    fn update_plan_treats_an_existing_container_as_the_reason_to_update() {
+        let mut measured = facts(true, true, 20128);
+        measured.pinned = Ok("sha256:new".to_string());
+        let spec = find("omniroute").unwrap();
+        let install = build_plan(spec, &measured);
+        assert!(
+            !install.ready(),
+            "an install must not overwrite a container"
+        );
+        measured.allow_existing = true;
+        let update = build_plan(spec, &measured);
+        assert!(update.ready(), "blocked: {:?}", update.blocked);
+        assert!(update.source.ends_with("@sha256:new"));
+    }
+
+    #[test]
+    fn an_install_names_what_it_put_there() {
+        let mut measured = facts(true, false, 20128);
+        measured.pinned = Ok("sha256:feed".to_string());
+        let image = build_plan(find("omniroute").unwrap(), &measured);
+        assert_eq!(image.artifact(), "sha256:feed");
+
+        let mut local = facts(true, false, 20128);
+        local.release = Ok(sample_release());
+        let native = build_plan(find("ollama").unwrap(), &local);
+        assert_eq!(native.artifact(), "ab".repeat(32));
+
+        assert!(pinned_digest("ghcr.io/a/b:1@sha256:abc").is_some());
+        assert!(pinned_digest("ghcr.io/a/b:1").is_none());
     }
 
     #[test]
@@ -2393,6 +2650,7 @@ mod tests {
             id: "omniroute".into(),
             method: "docker-image".into(),
             source: "diegosouzapw/omniroute:latest".into(),
+            artifact: "sha256:abc".into(),
             digest: "abc".into(),
             installed_at_unix: 1_760_000_000,
             outcome: "ok".into(),

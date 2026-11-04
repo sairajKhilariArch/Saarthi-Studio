@@ -107,6 +107,28 @@ pub(crate) fn freellmapi_image() -> &'static str {
     FREELLMAPI_IMAGE
 }
 
+/// Forget that this app started or owns a router, which uninstall must do: the
+/// object it referred to is gone, so shutdown has nothing to stop.
+pub(crate) fn forget_ownership(id: &str) {
+    match id {
+        "freellmapi" => save_ownership(&Ownership {
+            owned_by_app: false,
+        }),
+        "omniroute" => save_omniroute_ownership(false),
+        _ => {}
+    }
+}
+
+/// The container and named volume a gateway's install creates, so update and
+/// uninstall address the same objects the install argv named.
+pub(crate) fn gateway_container(id: &str) -> Option<(&'static str, &'static str)> {
+    match id {
+        "omniroute" => Some((OMNIROUTE_CONTAINER, "omniroute-data")),
+        "freellmapi" => Some((FREELLMAPI_CONTAINER, "freellmapi-data")),
+        _ => None,
+    }
+}
+
 /// The exact `docker run` argv for a pinned FreeLLMAPI image. The install plan
 /// shows these arguments and the installer executes this same list, so an
 /// approval names what actually runs.

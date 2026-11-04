@@ -33,7 +33,7 @@ release run `41861357127` published 8 non-macOS assets.
 | Install flow with approval, download, checksum, configure | Partial | plan preview + digest-bound approval + install records (1.26.18), image installs pinned to the registry manifest digest for both gateways (1.26.19, 1.26.21), and verified downloads that are hashed while streaming and unpacked only after they match the release's published sha256 (1.26.20); update and uninstall are still missing |
 | Health check distinguishing "process alive" from "healthy" | Working | `healthy` means "the health probe answered"; a container that is up but silent is `running: true, healthy: false` (unit-tested) |
 | Auto-start on launch | Working | per-router preference (`router-prefs.json`) + startup sweep; only an enabled, installed, not-already-answering router is started, so nothing is adopted (1.26.17) |
-| Router UI (list, logs, update, uninstall, connection tester) | Partial | list, health, start/stop, restart, connection tester and container logs; update, uninstall and a config editor still missing |
+| Router UI (list, logs, update, uninstall, connection tester) | Partial | list, health, start/stop, restart, connection tester, container logs, an update check plus approval-gated update, and uninstall that keeps data unless `purge` is asked for (1.26.23); a config editor is still missing |
 
 ## Phase 3 — Model and provider manager
 

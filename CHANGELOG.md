@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.26.23
+
+- The install flow is no longer one-way. `GET /api/routers/:id/update` compares
+  the recorded artifact (an image digest, or a release asset's sha256) with what
+  is published now, and returns the plan an update would run so the approval can
+  name it. Nothing is downloaded or replaced by the check.
+- `POST /api/routers/:id/update` needs that plan's digest. It pulls the newly
+  pinned image **before** touching the running container, so a failed pull leaves
+  the deployment exactly as it was; the named volume is kept across the replace.
+- `POST /api/routers/:id/uninstall` removes the container (or an extracted
+  runtime's directory), keeps the data volume by default, and needs `purge: true`
+  to delete it. It also forgets the ownership flag, so shutdown cannot try to
+  stop something that no longer exists.
+- Install records now carry the artifact they installed, which is what makes an
+  update comparable; older records simply read as "cannot say".
+- Tests: the update plan tolerates an existing container where install refuses,
+  and an install's artifact is the digest or the asset hash (175 tests pass).
+
 ## 1.26.22
 
 - OmniRoute's install publishes its port on loopback only. A bare

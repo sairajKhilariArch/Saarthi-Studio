@@ -895,6 +895,81 @@ async fn routers_install(
     }
 }
 
+/// Compare an install with what is published now. Read-only, and the plan it
+/// carries is the one a subsequent update must be approved against.
+async fn routers_update_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    match router_registry::update_status(&state, &id).await {
+        Ok(status) => Json(serde_json::to_value(status).unwrap_or(Value::Null)).into_response(),
+        Err(error) => json_error(StatusCode::NOT_FOUND, error.message()),
+    }
+}
+
+/// One mapping for the install-shaped routes, so each refusal gets the status it
+/// deserves instead of every failure looking the same.
+fn install_outcome(
+    result: Result<router_registry::InstallRecord, router_registry::InstallError>,
+) -> Response<Body> {
+    match result {
+        Ok(record) => Json(json!({"record": record})).into_response(),
+        Err(router_registry::InstallError::Unknown(message)) => {
+            json_error(StatusCode::NOT_FOUND, message)
+        }
+        Err(router_registry::InstallError::Blocked(message)) => {
+            json_error(StatusCode::CONFLICT, message)
+        }
+        Err(router_registry::InstallError::NotApproved(message)) => {
+            json_error(StatusCode::BAD_REQUEST, message)
+        }
+        Err(router_registry::InstallError::Failed(message)) => {
+            json_error(StatusCode::BAD_GATEWAY, message)
+        }
+    }
+}
+
+/// Replace an existing install with the plan the caller approved.
+async fn routers_update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let digest = input.get("digest").and_then(Value::as_str).unwrap_or("");
+    install_outcome(router_registry::update(&state, &id, approve, digest).await)
+}
+
+/// Remove an install. `purge` is the explicit "and delete its data" switch, so
+/// the default removes the container and keeps the volume.
+async fn routers_uninstall(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let purge = input.get("purge").and_then(Value::as_bool).unwrap_or(false);
+    if !approve {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "The uninstall was not approved. Send {\"approve\": true} to remove an install.",
+        );
+    }
+    match router_registry::uninstall(&state, &id, purge).await {
+        Ok(outcome) => Json(serde_json::to_value(outcome).unwrap_or(Value::Null)).into_response(),
+        Err(router_registry::InstallError::Unknown(message)) => {
+            json_error(StatusCode::NOT_FOUND, message)
+        }
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error.message()),
+    }
+}
+
 /// Store a router's launch preference. Only ids the registry knows are stored.
 async fn routers_auto_start(
     State(state): State<AppState>,
@@ -2824,6 +2899,11 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             "/api/routers/:id/install",
             get(routers_install_record).post(routers_install),
         )
+        .route(
+            "/api/routers/:id/update",
+            get(routers_update_status).post(routers_update),
+        )
+        .route("/api/routers/:id/uninstall", post(routers_uninstall))
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

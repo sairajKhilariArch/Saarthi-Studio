@@ -66,7 +66,9 @@ Remaining for Phase 1 sign-off:
    (1.26.18–1.26.21)** — plan preview with measured prerequisites, a digest-bound
    approval, recorded installs, registry-digest-pinned images for both gateways
    and verified release downloads (streamed through sha256, unpacked only on a
-   match). All three routers have a real path; update and uninstall remain.
+   match). All three routers have a real path, plus an update check, a gated
+   update that pulls before replacing, and an uninstall that keeps data unless
+   told to purge it (1.26.23). A config editor remains.
 4. Add a startup sweep honouring per-router auto-start preferences, and keep
    the ownership rule (never stop what the app did not start). **Done (1.26.17)**
    — preferences in `router-prefs.json`, sweep starts only an enabled, installed,

@@ -3797,6 +3797,46 @@ function routerRow(entry) {
     actions.appendChild(installBtn);
   }
 
+  // Update and Uninstall act on an install that already exists. Both ask the
+  // server first: the update plan's digest is what the approval names, and the
+  // uninstall is approved explicitly rather than implied by a click.
+  if (entry.installable_here && entry.installed) {
+    actions.appendChild(rowButton("Update", async () => {
+      const status = await api(`/api/routers/${entry.id}/update`);
+      if (!status.ok) {
+        toast(status.data.error || "Could not check for an update.");
+        return;
+      }
+      if (!status.data.update_available) {
+        toast(status.data.message || "Already current.");
+        return;
+      }
+      const plan = status.data.plan || {};
+      const proceed = confirm(
+        `Update ${entry.name} to ${status.data.latest}?\n\n` +
+          `${plan.source || ""}\n\nThe running container is replaced; its data volume is kept.`,
+      );
+      if (!proceed) return;
+      const done = await api(`/api/routers/${entry.id}/update`, {
+        method: "POST",
+        body: JSON.stringify({ approve: true, digest: plan.digest }),
+      });
+      toast(done.ok
+        ? done.data.record.message
+        : done.data.error || "That update failed.");
+      await loadRouterList();
+    }));
+    actions.appendChild(rowButton("Uninstall", async () => {
+      if (!confirm(`Remove the ${entry.name} install? Its saved data is kept.`)) return;
+      const done = await api(`/api/routers/${entry.id}/uninstall`, {
+        method: "POST",
+        body: JSON.stringify({ approve: true, purge: false }),
+      });
+      toast(done.ok ? done.data.message : done.data.error || "That uninstall failed.");
+      await loadRouterList();
+    }));
+  }
+
   // Only routers with a lifecycle in this build get lifecycle buttons, and only
   // where the registry says a local install is possible; an external runtime is
   // never started or stopped from here.
