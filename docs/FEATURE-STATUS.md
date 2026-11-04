@@ -193,5 +193,5 @@ logging, no correlation IDs, no log export/support bundle, no health dashboard.
 | B. CR in Linux version → bad artifact name | Root cause CRLF rewrite; **fixed at the source** (LF manifests + `scripts/ci/version.sh` strips whitespace/control chars) |
 | C. Over-escaped macOS `sed` | Fixed; macOS now uses the same helper as Linux |
 | D. Artifact upload failure | Fixed for 8 assets; now guarded by `verify-artifacts.sh` before upload |
-| E. AppImage AppStream warning | Fixed in 1.26.4 (`app/packaging/free-ai-suite.appdata.xml` copied to `usr/share/metainfo`) |
+| E. AppImage AppStream warning | Fixed in 1.26.6: `appstreamcli validate-tree` (fatal for appimagetool, fails on warnings) needs an RDNS component id, matching file names and an OARS rating — `io.github.sairajkhilariarch.SaarthiStudio.{desktop,appdata.xml}` |
 | F. macOS cancellation/queue | **Unresolved**: no cancellation cause found in API data; the 1.26.3 job was never scheduled (queued ~35 min). Needs a runner-availability decision, not a code patch |

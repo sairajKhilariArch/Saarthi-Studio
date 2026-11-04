@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.26.7
+
+- Documentation only: Phase 1 is signed off in `docs/PROGRESS.md` with the run
+  IDs and per-issue verdicts, `docs/KNOWN-ISSUES.md` records the real cause of
+  the macOS cancellation and of the fatal AppStream check, and
+  `docs/FEATURE-STATUS.md` matches. No behaviour change, so this commit is not
+  tagged.
+
 ## 1.26.6
 
 - AppImage (Linux) builds again. The v1.26.5 run failed `appstreamcli
