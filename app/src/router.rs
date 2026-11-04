@@ -130,6 +130,56 @@ pub(crate) fn stop_compose(dir: &FsPath) -> Result<String, String> {
     run_compose(dir, &["down"])
 }
 
+/// Run a log-reading command and keep both streams: a container's stderr is part
+/// of its log, so dropping it would hide exactly the failures people open logs
+/// to find.
+fn logs_output(program: &str, args: &[&str], dir: Option<&FsPath>) -> Result<String, String> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("Could not run {program}: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("{program} {} failed", args.join(" "))
+        } else {
+            stderr
+        });
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(text)
+}
+
+/// Recent compose output for the router, without following it: `--tail` reads
+/// what the containers already wrote, so this cannot hang on a live gateway.
+pub(crate) fn compose_logs(dir: &FsPath, tail: usize) -> Result<String, String> {
+    logs_output(
+        "docker",
+        &["compose", "logs", "--no-color", "--tail", &tail.to_string()],
+        Some(dir),
+    )
+}
+
+/// Recent output of the OmniRoute container. `docker logs` refuses when there is
+/// no such container, which is the honest answer for a router that was never
+/// installed here.
+pub(crate) fn omniroute_logs(tail: usize) -> Result<String, String> {
+    logs_output(
+        "docker",
+        &["logs", "--tail", &tail.to_string(), OMNIROUTE_CONTAINER],
+        None,
+    )
+}
+
 /// Is the router answering on its port right now?
 pub(crate) async fn reachable(port: u16) -> bool {
     let client = match reqwest::Client::builder()

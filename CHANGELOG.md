@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.26.16
+
+- Phase 2 slice 4: the Router view can show a router's own recent output.
+  `GET /api/routers/:id/logs?tail=N` reads `docker compose logs --tail` for
+  FreeLLMAPI and `docker logs --tail` for OmniRoute. Both streams are kept,
+  because a container's stderr is part of its log and dropping it would hide the
+  failures people open logs to find.
+- The tail is clamped (1–1000 lines, 200 by default) and the result is capped at
+  64 KiB, so one read cannot pull an unbounded log into the response; `truncated`
+  reports when newer lines displaced older ones.
+- Asking for the local runtime's logs is refused with the reason rather than
+  answered with an empty box: that output belongs to the user's own service
+  manager, not to Studio.
+- Tests: `tail_is_clamped_to_what_one_read_may_ask_for`,
+  `tail_keeps_the_newest_lines_and_says_what_it_cut`,
+  `logs_refuse_routers_without_a_managed_process`,
+  `router_logs_serialise_what_the_panel_renders` (148 Rust tests pass).
+
 ## 1.26.15
 
 - Phase 2 slice 3: the Router view can test one router on demand.

@@ -3721,6 +3721,29 @@ function routerRow(entry) {
     testLine.textContent = result.data.message || "";
   }));
 
+  // Recent container output. The server refuses for a runtime it does not manage
+  // (the local runtime belongs to the user's service manager), so the box shows
+  // that reason instead of an empty pane.
+  const logBox = document.createElement("pre");
+  logBox.className = "console-logs hidden";
+  actions.appendChild(rowButton("Logs", async () => {
+    if (!logBox.classList.contains("hidden")) {
+      logBox.classList.add("hidden");
+      return;
+    }
+    logBox.classList.remove("hidden");
+    logBox.textContent = "Reading the router's output…";
+    const result = await api(`/api/routers/${entry.id}/logs?tail=200`);
+    if (!result.ok) {
+      logBox.textContent = result.data.error || "Could not read the router's output.";
+      return;
+    }
+    const lines = result.data.lines || [];
+    logBox.textContent = lines.length
+      ? lines.join("\n")
+      : "The router has not written any output yet.";
+  }));
+
   // Only routers with a lifecycle in this build get lifecycle buttons, and only
   // where the registry says a local install is possible; an external runtime is
   // never started or stopped from here.
@@ -3751,6 +3774,7 @@ function routerRow(entry) {
     }
   }
   row.appendChild(actions);
+  row.appendChild(logBox);
   return row;
 }
 

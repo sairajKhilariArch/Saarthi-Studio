@@ -71,13 +71,14 @@ lifecycle and points at its facts rather than re-deriving them.
 - [x] UI: the Router view lists every registered router with its measured state (1.26.13)
 - [x] Router UI: list, health, start/stop (1.26.13)
 - [x] Router UI: connection tester and restart — real status code and latency per router, restart through the existing stop/start paths so ownership rules are unchanged (1.26.15; verified against `scripts/mock-router.py`, 200 in 1 ms, plus the no-answer and no-lifecycle paths)
-- [ ] Router UI: logs, update, uninstall, configuration editor
+- [x] Router UI: logs — `GET /api/routers/:id/logs` reads the real container output (both streams), clamps the tail to 1–1000 lines and caps the response at 64 KiB; the local runtime is refused with its reason instead of showing an empty box (1.26.16)
+- [ ] Router UI: update, uninstall, configuration editor
 - [ ] Install workflow with approval, checksum verification and recorded install info
 - [ ] Auto-start on launch that never stops externally owned routers (needs per-router preferences first)
 
 ## Next up
 
-1. Phase 2 slice 4 — router logs and the install/auto-start path, which needs
-   per-router preferences before the startup sweep can exist.
+1. Phase 2 slice 5 — the approval-gated install flow, which needs per-router
+   preferences stored first so the startup sweep can honour auto-start.
 2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
 3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

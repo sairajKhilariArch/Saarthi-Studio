@@ -67,8 +67,8 @@ Remaining for Phase 1 sign-off:
    the ownership rule (never stop what the app did not start). **Open** — needs
    per-router preferences stored before the sweep can honour them.
 5. UI: list, status, logs, connection tester, update/uninstall. **Partial** —
-   list, health, start/stop (1.26.13), connection tester and restart (1.26.15);
-   logs, update, uninstall and a config editor still open.
+   list, health, start/stop (1.26.13), connection tester and restart (1.26.15),
+   container logs (1.26.16); update, uninstall and a config editor still open.
 
 ## Phase 3 — Model and provider manager
 

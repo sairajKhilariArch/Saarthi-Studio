@@ -842,6 +842,24 @@ async fn routers_test(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
+/// Recent output of one router's container, tail-limited by the query and by the
+/// registry's own cap.
+async fn routers_logs(
+    Path(id): Path<String>,
+    AxumQuery(params): AxumQuery<HashMap<String, String>>,
+) -> Response<Body> {
+    let tail = params
+        .get("tail")
+        .and_then(|value| value.trim().parse::<usize>().ok());
+    match router_registry::logs(&id, tail).await {
+        Ok(logs) => Json(serde_json::to_value(logs).unwrap_or(Value::Null)).into_response(),
+        Err(error) if error.starts_with("Unknown router id") => {
+            json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
 /// Restart through the existing stop/start paths, so the ownership rules apply
 /// unchanged (an OmniRoute Studio did not start is still not stopped by Studio).
 async fn routers_restart(Path(id): Path<String>) -> Response<Body> {
@@ -2717,6 +2735,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/routers", get(routers))
         .route("/api/routers/:id/test", post(routers_test))
         .route("/api/routers/:id/restart", post(routers_restart))
+        .route("/api/routers/:id/logs", get(routers_logs))
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

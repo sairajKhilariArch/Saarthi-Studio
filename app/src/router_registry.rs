@@ -456,6 +456,90 @@ pub(crate) async fn test_connection(state: &AppState, id: &str) -> Result<Connec
     })
 }
 
+const DEFAULT_LOG_LINES: usize = 200;
+const MAX_LOG_LINES: usize = 1000;
+/// One read may not pull an unbounded log into the response.
+const MAX_LOG_BYTES: usize = 64 * 1024;
+
+/// `?tail=` is user input, so it is clamped rather than trusted.
+pub(crate) fn clamp_tail(requested: Option<usize>) -> usize {
+    requested
+        .unwrap_or(DEFAULT_LOG_LINES)
+        .clamp(1, MAX_LOG_LINES)
+}
+
+/// Keep the newest `limit` lines within a byte cap. Docker is already asked for
+/// a tail, so this is the guard that still holds if it sends more than asked.
+fn tail_lines(text: &str, limit: usize) -> (Vec<String>, bool) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
+    let mut truncated = false;
+    for line in text.lines().rev() {
+        if lines.len() >= limit || bytes + line.len() > MAX_LOG_BYTES {
+            truncated = true;
+            break;
+        }
+        bytes += line.len() + 1;
+        lines.push(line.to_string());
+    }
+    lines.reverse();
+    (lines, truncated)
+}
+
+/// A router's own recent output, as the panel prints it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct RouterLogs {
+    pub id: &'static str,
+    /// Where the lines were read from, named for the command that produced them.
+    pub source: String,
+    pub tail: usize,
+    pub lines: Vec<String>,
+    /// Earlier lines were cut, either by the tail or by the byte cap.
+    pub truncated: bool,
+}
+
+/// Read one router's recent output. Only routers whose process Studio drives
+/// have logs here; the local runtime's output belongs to the user's own service
+/// manager, so asking for it is refused instead of returning an empty box.
+pub(crate) async fn logs(id: &str, requested: Option<usize>) -> Result<RouterLogs, String> {
+    let spec = find(id).ok_or_else(|| format!("Unknown router id: {id}"))?;
+    let tail = clamp_tail(requested);
+    let (source, text) = match id {
+        "freellmapi" => {
+            let dir = crate::router::compose_dir().ok_or_else(|| {
+                "No FreeLLMAPI compose project was found on this machine, so there is no container output to read."
+                    .to_string()
+            })?;
+            let read_dir = dir.clone();
+            let text =
+                tokio::task::spawn_blocking(move || crate::router::compose_logs(&read_dir, tail))
+                    .await
+                    .map_err(|error| format!("Log task failed: {error}"))??;
+            (format!("docker compose logs · {}", dir.display()), text)
+        }
+        "omniroute" => {
+            let text = tokio::task::spawn_blocking(move || crate::router::omniroute_logs(tail))
+                .await
+                .map_err(|error| format!("Log task failed: {error}"))??;
+            ("docker logs omniroute".to_string(), text)
+        }
+        _ => {
+            return Err(format!(
+            "Studio does not read the {} runtime's output: it belongs to your own service manager.",
+            spec.name
+        ))
+        }
+    };
+    let (lines, truncated) = tail_lines(&text, tail);
+    Ok(RouterLogs {
+        id: spec.id,
+        source,
+        tail,
+        lines,
+        truncated,
+    })
+}
+
 /// Restart a router through the lifecycle this build already owns. Composed
 /// from the same explicit stop/start paths the buttons use, so the ownership
 /// rules are unchanged: OmniRoute still refuses to stop a gateway Studio did
@@ -835,6 +919,56 @@ mod tests {
         }
         assert_eq!(value["id"], "omniroute");
         assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn tail_is_clamped_to_what_one_read_may_ask_for() {
+        assert_eq!(clamp_tail(None), 200);
+        assert_eq!(clamp_tail(Some(50)), 50);
+        assert_eq!(clamp_tail(Some(0)), 1, "a zero tail still shows a line");
+        assert_eq!(clamp_tail(Some(usize::MAX)), 1000);
+    }
+
+    #[test]
+    fn tail_keeps_the_newest_lines_and_says_what_it_cut() {
+        let text = "one\ntwo\nthree\n";
+        let (all, truncated) = tail_lines(text, 3);
+        assert_eq!(all, vec!["one", "two", "three"]);
+        assert!(!truncated, "nothing was dropped");
+
+        let (newest, truncated) = tail_lines(text, 2);
+        assert_eq!(newest, vec!["two", "three"]);
+        assert!(truncated);
+
+        let (empty, truncated) = tail_lines("", 10);
+        assert!(empty.is_empty());
+        assert!(!truncated);
+    }
+
+    #[tokio::test]
+    async fn logs_refuse_routers_without_a_managed_process() {
+        // The local runtime is the user's process, so Studio has no logs for it.
+        let error = logs("ollama", None).await.unwrap_err();
+        assert!(error.contains("service manager"), "got: {error}");
+
+        let unknown = logs("nope", None).await.unwrap_err();
+        assert!(unknown.contains("Unknown router id"), "got: {unknown}");
+    }
+
+    #[test]
+    fn router_logs_serialise_what_the_panel_renders() {
+        let value = serde_json::to_value(RouterLogs {
+            id: "omniroute",
+            source: "docker logs omniroute".into(),
+            tail: 200,
+            lines: vec!["listening on 20128".to_string()],
+            truncated: false,
+        })
+        .unwrap();
+        for key in ["id", "source", "tail", "lines", "truncated"] {
+            assert!(value.get(key).is_some(), "logs respond without {key}");
+        }
+        assert_eq!(value["lines"][0], "listening on 20128");
     }
 
     #[tokio::test]
