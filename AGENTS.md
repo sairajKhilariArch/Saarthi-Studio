@@ -40,3 +40,7 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agen
   (`free-ai-studio` crate/package/app paths) must stay.
 - Frontend has no build step or package manager: hand-written ES modules served
   from `app/static/`. Style through CSS custom-property tokens in `styles.css`.
+- Commit subjects put the version number first, then a short description:
+  `1.26.10: fix the release gate`. Bump the version in every commit.
+- Commit messages carry no AI attribution: no `Co-Authored-By`, no
+  "Generated with" trailer, no bot co-author line.

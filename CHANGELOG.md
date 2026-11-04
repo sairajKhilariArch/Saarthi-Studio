@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.26.10
+
+- Repository convention: commit subjects start with the version number, and no
+  commit carries AI attribution (no `Co-Authored-By` or "Generated with"
+  trailer). Recorded in `AGENTS.md` so it survives across sessions.
+
 ## 1.26.9
 
 - Phase 2 slice 2: `GET /api/routers` returns every registered router with its
