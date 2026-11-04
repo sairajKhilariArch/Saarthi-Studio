@@ -3744,6 +3744,53 @@ function routerRow(entry) {
       : "The router has not written any output yet.";
   }));
 
+  // Install: the server builds a plan with no side effects, the panel prints its
+  // exact commands and prerequisites, and only that plan's digest can be
+  // approved. A blocked plan explains itself and offers nothing to click.
+  if (entry.installable_here && !entry.installed) {
+    const installBtn = rowButton("Install", async () => {
+      const previous = actions.querySelector(".approve-install");
+      if (previous) previous.remove();
+      logBox.classList.remove("hidden");
+      logBox.textContent = "Building the install plan…";
+      const result = await api(`/api/routers/${entry.id}/install-plan`);
+      if (!result.ok) {
+        logBox.textContent = result.data.error || "Could not build an install plan.";
+        return;
+      }
+      const plan = result.data;
+      const lines = [
+        `${entry.name} · ${plan.method} · ${plan.supported ? "installable here" : "no in-app install"}`,
+        `source: ${plan.source}`,
+        `verification: ${plan.verification}`,
+      ];
+      if (plan.writes && plan.writes.length) lines.push(`writes: ${plan.writes.join(", ")}`);
+      (plan.prerequisites || []).forEach((item) => {
+        lines.push(`${item.satisfied ? "ok      " : "missing "} ${item.what} — ${item.detail}`);
+      });
+      (plan.steps || []).forEach((step, index) => {
+        lines.push(`step ${index + 1}: ${step.program} ${step.args.join(" ")}`);
+      });
+      if (plan.blocked) lines.push(`blocked: ${plan.blocked}`);
+      logBox.textContent = lines.join("\n");
+      if (plan.blocked || !plan.supported) return;
+      const confirm = rowButton("Approve and install", async () => {
+        confirm.disabled = true;
+        const done = await api(`/api/routers/${entry.id}/install`, {
+          method: "POST",
+          body: JSON.stringify({ approve: true, digest: plan.digest }),
+        });
+        toast(done.ok
+          ? done.data.record.message
+          : done.data.error || "That install failed.");
+        await loadRouterList();
+      });
+      confirm.classList.add("approve-install");
+      actions.insertBefore(confirm, installBtn);
+    });
+    actions.appendChild(installBtn);
+  }
+
   // Only routers with a lifecycle in this build get lifecycle buttons, and only
   // where the registry says a local install is possible; an external runtime is
   // never started or stopped from here.

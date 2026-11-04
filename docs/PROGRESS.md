@@ -73,13 +73,19 @@ lifecycle and points at its facts rather than re-deriving them.
 - [x] Router UI: connection tester and restart — real status code and latency per router, restart through the existing stop/start paths so ownership rules are unchanged (1.26.15; verified against `scripts/mock-router.py`, 200 in 1 ms, plus the no-answer and no-lifecycle paths)
 - [x] Router UI: logs — `GET /api/routers/:id/logs` reads the real container output (both streams), clamps the tail to 1–1000 lines and caps the response at 64 KiB; the local runtime is refused with its reason instead of showing an empty box (1.26.16)
 - [ ] Router UI: update, uninstall, configuration editor
-- [ ] Install workflow with approval, checksum verification and recorded install info
+- [x] Install plan preview per router — exact argv, writes, verification wording and measured prerequisites, with no side effects (1.26.18)
+- [x] Approval gate — the install POST needs `approve` plus the plan digest, and refuses before spawning anything when unsupported, blocked or changed; failed installs are recorded too (1.26.18)
+- [x] Install records (`router-installs.json`) with a read route (1.26.18)
+- [ ] Checksum/digest-pinned downloads — no Studio-side downloader exists for FreeLLMAPI or Ollama, and the image tag is not pinned to a digest, so their plans refuse rather than pretend to verify
+- [ ] Router UI: update, uninstall, configuration editor
 - [x] Per-router launch preferences stored atomically, with `auto_start` in `/api/routers` and a "Start with Studio" checkbox (1.26.17)
 - [x] Auto-start on launch that never stops externally owned routers — the sweep starts only an enabled, installed, not-already-answering router, and the rule is unit-tested both ways (1.26.17). A boot with Docker down records the failure per router and the app still opens
 
 ## Next up
 
-1. Phase 2 slice 6 — the approval-gated install flow with checksum verification,
-   the last open Phase 2 item besides update/uninstall.
+1. Phase 2 close-out — update/uninstall and a configuration editor on top of the
+   install records, or move to Phase 3 (model capability table) since the
+   router manager now covers detection, lifecycle, logs, launch and install.
+2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
 2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
 3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

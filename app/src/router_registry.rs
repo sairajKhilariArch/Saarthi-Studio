@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How a router can be obtained on a platform. A router may offer several.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -790,6 +790,384 @@ pub(crate) async fn startup_sweep(state: &AppState) -> Vec<StartupOutcome> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Installation
+
+/// One measured prerequisite. Nothing here is assumed: Docker is asked and the
+/// container is looked up when the plan is built, not when it is written.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct Prerequisite {
+    pub key: &'static str,
+    pub what: String,
+    pub satisfied: bool,
+    pub detail: String,
+}
+
+/// One command the install would run, shown before anything executes.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct InstallStep {
+    pub program: String,
+    pub args: Vec<String>,
+    pub purpose: String,
+}
+
+/// What installing one router would do. Building a plan has no side effects.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct InstallPlan {
+    pub id: &'static str,
+    /// Whether this build can install it at all.
+    pub supported: bool,
+    pub method: String,
+    pub source: String,
+    /// Files or Docker objects the install creates.
+    pub writes: Vec<String>,
+    /// How the fetched content is checked, in plain words.
+    pub verification: String,
+    pub prerequisites: Vec<Prerequisite>,
+    pub steps: Vec<InstallStep>,
+    /// Set when the install cannot proceed, with the reason a person needs.
+    pub blocked: Option<String>,
+    /// Binds an approval to exactly these steps: the installer rebuilds the plan
+    /// and refuses if the digest it was given no longer matches.
+    pub digest: String,
+}
+
+impl InstallPlan {
+    /// Whether pressing Install would actually run the steps.
+    pub(crate) fn ready(&self) -> bool {
+        self.supported
+            && self.blocked.is_none()
+            && self.prerequisites.iter().all(|item| item.satisfied)
+    }
+}
+
+/// SHA-256 over the material fields only: the operation, not the measurements.
+/// Two plans with the same id, method, source, writes and steps digest the same
+/// even if a prerequisite flipped, so an approval can never cover other steps.
+pub(crate) fn plan_digest(
+    id: &str,
+    method: &str,
+    source: &str,
+    writes: &[String],
+    steps: &[InstallStep],
+) -> String {
+    let mut canonical = String::new();
+    canonical.push_str(id);
+    canonical.push('\u{1f}');
+    canonical.push_str(method);
+    canonical.push('\u{1f}');
+    canonical.push_str(source);
+    for write in writes {
+        canonical.push('\u{1f}');
+        canonical.push_str(write);
+    }
+    for step in steps {
+        canonical.push('\u{1f}');
+        canonical.push_str(&step.program);
+        for arg in &step.args {
+            canonical.push('\u{1e}');
+            canonical.push_str(arg);
+        }
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Build the plan for one router from measured facts, so the whole thing is
+/// testable without Docker, a network or a GUI.
+fn build_plan(
+    spec: &'static RouterSpec,
+    docker: bool,
+    container_exists: bool,
+    port: u16,
+) -> InstallPlan {
+    let docker_prerequisite = Prerequisite {
+        key: "docker",
+        what: "Docker Engine or Docker Desktop on PATH".to_string(),
+        satisfied: docker,
+        detail: if docker {
+            "docker answered on PATH".to_string()
+        } else {
+            "docker was not found on PATH".to_string()
+        },
+    };
+
+    let (method, source, writes, verification, prerequisites, steps, blocked) = match spec.id {
+        "omniroute" => {
+            let steps = vec![InstallStep {
+                program: "docker".to_string(),
+                args: crate::router::omniroute_run_args(port),
+                purpose: format!(
+                    "Pull {} and create the omniroute container on port {port}",
+                    crate::router::omniroute_image()
+                ),
+            }];
+            let blocked = if !docker {
+                Some(
+                    "Docker was not found, so nothing can be pulled or started. Install Docker first."
+                        .to_string(),
+                )
+            } else if container_exists {
+                Some(
+                    "An OmniRoute container already exists. Start it from this panel instead of installing it again."
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            (
+                "docker-image".to_string(),
+                crate::router::omniroute_image().to_string(),
+                vec![
+                    "docker container omniroute".to_string(),
+                    "docker volume omniroute-data".to_string(),
+                ],
+                "Docker verifies image layers against the registry as it pulls. The image tag is not pinned to a digest, so a later install may fetch a newer image than this one."
+                    .to_string(),
+                vec![docker_prerequisite],
+                steps,
+                blocked,
+            )
+        }
+        "freellmapi" => (
+            "docker-compose".to_string(),
+            "https://github.com/sairajKhilariArch/Saarthi-Studio#router".to_string(),
+            Vec::new(),
+            "Nothing is downloaded by Studio, so there is nothing for Studio to verify."
+                .to_string(),
+            vec![docker_prerequisite.clone()],
+            Vec::new(),
+            Some(
+                "Studio starts FreeLLMAPI from its compose project but does not download the project. Install it as the project documents, then Studio will find it and offer Start."
+                    .to_string(),
+            ),
+        ),
+        _ => (
+            "native-binary".to_string(),
+            spec.docs.to_string(),
+            Vec::new(),
+            "The vendor's installer is not re-signed or checksummed by Studio, so treating it as verified would be a claim Studio cannot check."
+                .to_string(),
+            Vec::new(),
+            Vec::new(),
+            Some(format!(
+                "Studio does not run an installer for {}. Download it from the official page, then Studio will use the runtime it finds.",
+                spec.name
+            )),
+        ),
+    };
+
+    let digest = plan_digest(spec.id, &method, &source, &writes, &steps);
+    InstallPlan {
+        id: spec.id,
+        supported: !steps.is_empty(),
+        method,
+        source,
+        writes,
+        verification,
+        prerequisites,
+        steps,
+        blocked,
+        digest,
+    }
+}
+
+/// A refusal, kept as a type so the route can answer with the right status
+/// instead of guessing from a message.
+pub(crate) enum InstallError {
+    Unknown(String),
+    Blocked(String),
+    NotApproved(String),
+    Failed(String),
+}
+
+impl InstallError {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            InstallError::Unknown(message)
+            | InstallError::Blocked(message)
+            | InstallError::NotApproved(message)
+            | InstallError::Failed(message) => message,
+        }
+    }
+}
+
+/// The plan as the app would run it now: Docker and the container are measured
+/// live, so a stale page cannot install against a machine that changed.
+pub(crate) async fn install_plan(id: &str) -> Result<InstallPlan, InstallError> {
+    let spec = find(id).ok_or_else(|| InstallError::Unknown(format!("Unknown router id: {id}")))?;
+    let (docker, container_exists) = tokio::task::spawn_blocking(|| {
+        let docker = crate::router::run_cmd("docker", &["--version"]).is_ok();
+        let exists = docker && crate::router::omniroute_container_exists();
+        (docker, exists)
+    })
+    .await
+    .map_err(|error| InstallError::Failed(format!("Install plan task failed: {error}")))?;
+    Ok(build_plan(
+        spec,
+        docker,
+        container_exists,
+        crate::router::omniroute_port(),
+    ))
+}
+
+/// The refusals that must happen before anything runs, as pure checks.
+fn approval_error(plan: &InstallPlan, approve: bool, digest: &str) -> Option<InstallError> {
+    if !plan.supported {
+        return Some(InstallError::Blocked(plan.blocked.clone().unwrap_or_else(
+            || "This build has no install path for that router.".to_string(),
+        )));
+    }
+    if !plan.ready() {
+        return Some(InstallError::Blocked(plan.blocked.clone().unwrap_or_else(
+            || "The install prerequisites are not met.".to_string(),
+        )));
+    }
+    if !approve {
+        return Some(InstallError::NotApproved(
+            "The install was not approved. Show the plan, then send {\"approve\": true} with the digest it returned."
+                .to_string(),
+        ));
+    }
+    if digest != plan.digest {
+        return Some(InstallError::Blocked(
+            "The plan changed since it was shown, so nothing was installed. Review the plan again and approve it."
+                .to_string(),
+        ));
+    }
+    None
+}
+
+const INSTALLS_FILE: &str = "router-installs.json";
+
+/// What an install did, recorded so the panel can show when and how a router was
+/// installed instead of only that it exists.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct InstallRecord {
+    pub id: String,
+    pub method: String,
+    pub source: String,
+    pub digest: String,
+    pub installed_at_unix: u64,
+    /// "ok" or "failed"; a failed install is recorded too, with its error.
+    pub outcome: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct Installs {
+    #[serde(default)]
+    records: BTreeMap<String, InstallRecord>,
+}
+
+fn installs_path(state: &AppState) -> PathBuf {
+    state.config_path.with_file_name(INSTALLS_FILE)
+}
+
+fn load_installs_from(path: &FsPath) -> Installs {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_installs_to(path: &FsPath, installs: &Installs) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(installs)
+        .map_err(|error| format!("Could not encode install records: {error}"))?;
+    crate::router::write_private_json(path, &bytes).map_err(|error| {
+        format!(
+            "Could not save install records to {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn record_install_at(path: &FsPath, record: &InstallRecord) -> Result<(), String> {
+    let mut installs = load_installs_from(path);
+    installs.records.insert(record.id.clone(), record.clone());
+    save_installs_to(path, &installs)
+}
+
+/// The last install attempt for one router, if this app made one.
+pub(crate) fn install_record(
+    state: &AppState,
+    id: &str,
+) -> Result<Option<InstallRecord>, InstallError> {
+    if find(id).is_none() {
+        return Err(InstallError::Unknown(format!("Unknown router id: {id}")));
+    }
+    Ok(load_installs_from(&installs_path(state))
+        .records
+        .get(id)
+        .cloned())
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+/// Install a router, but only when the caller approved the plan that now runs.
+/// Every refusal happens before the first command is spawned.
+pub(crate) async fn install(
+    state: &AppState,
+    id: &str,
+    approve: bool,
+    digest: &str,
+) -> Result<InstallRecord, InstallError> {
+    let plan = install_plan(id).await?;
+    if let Some(error) = approval_error(&plan, approve, digest) {
+        return Err(error);
+    }
+
+    for step in &plan.steps {
+        let program = step.program.clone();
+        let args = step.args.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            crate::router::run_cmd(&program, &argv)
+        })
+        .await
+        .map_err(|error| InstallError::Failed(format!("Install task failed: {error}")))?;
+
+        if let Err(error) = outcome {
+            // A failed install is recorded too: the panel should not pretend the
+            // router was never attempted.
+            let record = InstallRecord {
+                id: plan.id.to_string(),
+                method: plan.method.clone(),
+                source: plan.source.clone(),
+                digest: plan.digest.clone(),
+                installed_at_unix: now_unix(),
+                outcome: "failed".to_string(),
+                message: error.clone(),
+            };
+            let _ = record_install_at(&installs_path(state), &record);
+            return Err(InstallError::Failed(format!("Install failed: {error}")));
+        }
+    }
+
+    let record = InstallRecord {
+        id: plan.id.to_string(),
+        method: plan.method.clone(),
+        source: plan.source.clone(),
+        digest: plan.digest.clone(),
+        installed_at_unix: now_unix(),
+        outcome: "ok".to_string(),
+        message: format!("Installed {} from {}.", plan.id, plan.source),
+    };
+    record_install_at(&installs_path(state), &record).map_err(InstallError::Failed)?;
+    Ok(record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1232,6 +1610,138 @@ mod tests {
         // FreeLLMAPI was never mentioned, so it keeps its registry default.
         assert!(stored.auto_start_for(find("freellmapi").unwrap()));
         let _ = fs::remove_file(&path);
+    }
+
+    fn plan_for(id: &str, docker: bool, container: bool) -> InstallPlan {
+        build_plan(find(id).unwrap(), docker, container, 20128)
+    }
+
+    #[test]
+    fn omniroute_plan_names_the_exact_command() {
+        let plan = plan_for("omniroute", true, false);
+        assert!(plan.supported && plan.ready());
+        assert_eq!(plan.method, "docker-image");
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].program, "docker");
+        assert_eq!(plan.steps[0].args[0], "run");
+        assert!(plan.steps[0]
+            .args
+            .iter()
+            .any(|arg| arg == crate::router::omniroute_image()));
+        assert!(plan.steps[0].args.iter().any(|arg| arg == "20128:20128"));
+        assert_eq!(plan.writes.len(), 2);
+        assert_eq!(plan.digest.len(), 64);
+        assert!(plan.digest.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn omniroute_plan_is_blocked_without_docker_or_when_installed() {
+        let no_docker = plan_for("omniroute", false, false);
+        assert!(!no_docker.ready());
+        assert!(no_docker
+            .blocked
+            .expect("a blocked plan says why")
+            .contains("Docker was not found"));
+        assert!(!no_docker.prerequisites[0].satisfied);
+
+        let installed = plan_for("omniroute", true, true);
+        assert!(!installed.ready());
+        assert!(installed
+            .blocked
+            .expect("a blocked plan says why")
+            .contains("already exists"));
+    }
+
+    #[test]
+    fn plans_without_an_in_app_path_say_so() {
+        for id in ["freellmapi", "ollama"] {
+            let plan = plan_for(id, true, false);
+            assert!(!plan.supported, "{id} claims an install path it lacks");
+            assert!(plan.steps.is_empty());
+            assert!(!plan.ready());
+            let blocked = plan.blocked.expect("a refused plan must say why");
+            assert!(blocked.contains("does not"), "{id}: {blocked}");
+        }
+    }
+
+    #[test]
+    fn digest_is_stable_and_binds_the_steps() {
+        assert_eq!(
+            plan_for("omniroute", true, false).digest,
+            plan_for("omniroute", true, false).digest
+        );
+        // A different port is a different command, so a different digest.
+        let other = build_plan(find("omniroute").unwrap(), true, false, 20129);
+        assert_ne!(plan_for("omniroute", true, false).digest, other.digest);
+    }
+
+    #[test]
+    fn approval_must_match_the_plan_that_runs() {
+        let plan = plan_for("omniroute", true, false);
+        assert!(approval_error(&plan, true, &plan.digest).is_none());
+        assert!(matches!(
+            approval_error(&plan, false, &plan.digest),
+            Some(InstallError::NotApproved(_))
+        ));
+        assert!(matches!(
+            approval_error(&plan, true, "00"),
+            Some(InstallError::Blocked(_))
+        ));
+
+        let blocked = plan_for("omniroute", false, false);
+        assert!(matches!(
+            approval_error(&blocked, true, &blocked.digest),
+            Some(InstallError::Blocked(_))
+        ));
+
+        let unsupported = plan_for("ollama", true, false);
+        assert!(matches!(
+            approval_error(&unsupported, true, &unsupported.digest),
+            Some(InstallError::Blocked(_))
+        ));
+    }
+
+    #[test]
+    fn install_record_round_trips_per_router() {
+        let path = temp_prefs("installs");
+        let _ = fs::remove_file(&path);
+        let record = InstallRecord {
+            id: "omniroute".into(),
+            method: "docker-image".into(),
+            source: "diegosouzapw/omniroute:latest".into(),
+            digest: "abc".into(),
+            installed_at_unix: 1_760_000_000,
+            outcome: "ok".into(),
+            message: "done".into(),
+        };
+        record_install_at(&path, &record).unwrap();
+        assert_eq!(
+            load_installs_from(&path).records.get("omniroute"),
+            Some(&record)
+        );
+        assert!(!load_installs_from(&path).records.contains_key("freellmapi"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn install_plan_serialises_every_field_the_ui_shows() {
+        let value = serde_json::to_value(plan_for("omniroute", true, false)).unwrap();
+        for key in [
+            "id",
+            "supported",
+            "method",
+            "source",
+            "writes",
+            "verification",
+            "prerequisites",
+            "steps",
+            "blocked",
+            "digest",
+        ] {
+            assert!(value.get(key).is_some(), "plan lacks {key}");
+        }
+        assert!(value["steps"][0]["program"].is_string());
+        assert!(value["prerequisites"][0]["satisfied"].is_boolean());
     }
 
     #[test]

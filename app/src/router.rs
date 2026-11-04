@@ -375,6 +375,30 @@ const OMNIROUTE_OWNERSHIP_FILE: &str = ".config/free-ai-studio/omniroute-owned.j
 const OMNIROUTE_CONTAINER: &str = "omniroute";
 const OMNIROUTE_IMAGE: &str = "diegosouzapw/omniroute:latest";
 
+/// The image an install fetches, named once so the plan and the run cannot drift.
+pub(crate) fn omniroute_image() -> &'static str {
+    OMNIROUTE_IMAGE
+}
+
+/// The exact `docker run` argv for a fresh OmniRoute container. The install plan
+/// shows these arguments and the installer executes this same list, so an
+/// approval names what actually runs.
+pub(crate) fn omniroute_run_args(port: u16) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        OMNIROUTE_CONTAINER.to_string(),
+        "--restart".to_string(),
+        "unless-stopped".to_string(),
+        "-p".to_string(),
+        format!("{port}:{port}"),
+        "-v".to_string(),
+        "omniroute-data:/app/data".to_string(),
+        OMNIROUTE_IMAGE.to_string(),
+    ]
+}
+
 fn omniroute_ownership_path() -> PathBuf {
     home_dir().join(OMNIROUTE_OWNERSHIP_FILE)
 }
@@ -415,7 +439,7 @@ pub(crate) async fn omniroute_reachable(port: u16) -> bool {
         .is_ok()
 }
 
-fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
+pub(crate) fn run_cmd(program: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -518,22 +542,9 @@ pub(crate) async fn omniroute_start() -> Result<OmniStatus, String> {
         if exists {
             run_cmd("docker", &["start", OMNIROUTE_CONTAINER])
         } else {
-            run_cmd(
-                "docker",
-                &[
-                    "run",
-                    "-d",
-                    "--name",
-                    OMNIROUTE_CONTAINER,
-                    "--restart",
-                    "unless-stopped",
-                    "-p",
-                    &format!("{OMNIROUTE_PORT}:{OMNIROUTE_PORT}"),
-                    "-v",
-                    "omniroute-data:/app/data",
-                    OMNIROUTE_IMAGE,
-                ],
-            )
+            let args = omniroute_run_args(OMNIROUTE_PORT);
+            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            run_cmd("docker", &argv)
         }
     };
     match created {

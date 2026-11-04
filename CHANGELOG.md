@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.26.18
+
+- Phase 2 slice 6: installing a router is now a reviewed act. `GET
+  /api/routers/:id/install-plan` returns what an install would do without doing
+  any of it — the exact argv per step, what gets written, how the content is
+  verified, and the prerequisites it measured (Docker on PATH, whether a
+  container already exists).
+- `POST /api/routers/:id/install` runs nothing unless the caller sends
+  `{"approve": true}` **and** the digest of the plan it was shown. The plan is
+  rebuilt first, so a machine that changed since the page loaded refuses instead
+  of installing something else (409). Unsupported routers, unmet prerequisites
+  and missing approval answer 409/409/400 before any process is spawned.
+- Only OmniRoute has an in-app install path (the `docker run` argv is now built
+  once and shared with Start, so the plan cannot name different commands than
+  the ones that execute). FreeLLMAPI and Ollama have no Studio-side downloader,
+  so their plans refuse and name the documented route instead of running an
+  installer Studio cannot verify. Image tags are not pinned to digests yet, and
+  the plan says so rather than implying a checksum it does not check.
+- Installs are recorded per router in `router-installs.json` (method, source,
+  digest, epoch time, outcome, message), including failures; `GET
+  /api/routers/:id/install` reads the record back.
+- Tests: `omniroute_plan_names_the_exact_command`,
+  `omniroute_plan_is_blocked_without_docker_or_when_installed`,
+  `plans_without_an_in_app_path_say_so`, `digest_is_stable_and_binds_the_steps`,
+  `approval_must_match_the_plan_that_runs`, `install_record_round_trips_per_router`,
+  `install_plan_serialises_every_field_the_ui_shows` (160 Rust tests pass).
+
 ## 1.26.17
 
 - Phase 2 slice 5: per-router launch preferences, and a startup sweep that

@@ -842,6 +842,55 @@ async fn routers_test(State(state): State<AppState>, Path(id): Path<String>) -> 
     }
 }
 
+/// What installing a router would run, with measured prerequisites. No side
+/// effects: this is the plan an approval names.
+async fn routers_install_plan(Path(id): Path<String>) -> Response<Body> {
+    match router_registry::install_plan(&id).await {
+        Ok(plan) => Json(serde_json::to_value(plan).unwrap_or(Value::Null)).into_response(),
+        Err(error) => json_error(StatusCode::NOT_FOUND, error.message()),
+    }
+}
+
+/// The last install this app recorded for a router, if any.
+async fn routers_install_record(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    match router_registry::install_record(&state, &id) {
+        Ok(record) => Json(json!({"id": id, "record": record})).into_response(),
+        Err(error) => json_error(StatusCode::NOT_FOUND, error.message()),
+    }
+}
+
+/// Run an install, but only for the plan the caller was shown. Every refusal is
+/// answered before a single command is spawned.
+async fn routers_install(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let digest = input.get("digest").and_then(Value::as_str).unwrap_or("");
+    match router_registry::install(&state, &id, approve, digest).await {
+        Ok(record) => Json(json!({"record": record})).into_response(),
+        Err(router_registry::InstallError::Unknown(message)) => {
+            json_error(StatusCode::NOT_FOUND, message)
+        }
+        Err(router_registry::InstallError::Blocked(message)) => {
+            json_error(StatusCode::CONFLICT, message)
+        }
+        Err(router_registry::InstallError::NotApproved(message)) => {
+            json_error(StatusCode::BAD_REQUEST, message)
+        }
+        Err(router_registry::InstallError::Failed(message)) => {
+            json_error(StatusCode::BAD_GATEWAY, message)
+        }
+    }
+}
+
 /// Store a router's launch preference. Only ids the registry knows are stored.
 async fn routers_auto_start(
     State(state): State<AppState>,
@@ -2766,6 +2815,11 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/routers/:id/restart", post(routers_restart))
         .route("/api/routers/:id/logs", get(routers_logs))
         .route("/api/routers/:id/auto-start", post(routers_auto_start))
+        .route("/api/routers/:id/install-plan", get(routers_install_plan))
+        .route(
+            "/api/routers/:id/install",
+            get(routers_install_record).post(routers_install),
+        )
         .route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

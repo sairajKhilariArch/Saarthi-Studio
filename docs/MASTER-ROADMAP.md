@@ -62,7 +62,10 @@ Remaining for Phase 1 sign-off:
 2. Add detection: installed? version? runtime? healthy? owned?
    **Done (1.26.9)** — `/api/routers`, rebuilt from the existing probes;
    `healthy` is "the probe answered".
-3. Add an approval-gated install flow with checksum verification. **Open.**
+3. Add an approval-gated install flow with checksum verification. **Partial
+   (1.26.18)** — plan preview with measured prerequisites, a digest-bound approval
+   and recorded installs; execution exists only for OmniRoute's `docker run`,
+   since no Studio-side downloader or image-digest pinning exists yet.
 4. Add a startup sweep honouring per-router auto-start preferences, and keep
    the ownership rule (never stop what the app did not start). **Done (1.26.17)**
    — preferences in `router-prefs.json`, sweep starts only an enabled, installed,
