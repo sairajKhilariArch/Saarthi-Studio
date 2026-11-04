@@ -171,11 +171,15 @@ jobs:
           # validate-tree` over the AppDir, and that resolves the desktop entry
           # from usr/share/applications and the icon from the hicolor theme.
           # The root-level copies are what appimagetool itself requires.
-          cp app/packaging/free-ai-suite.desktop AppDir/free-ai-suite.desktop
+          DESKTOP=io.github.sairajkhilariarch.SaarthiStudio.desktop
+          META=io.github.sairajkhilariarch.SaarthiStudio.appdata.xml
+          cp "app/packaging/$DESKTOP" "AppDir/$DESKTOP"
           mkdir -p AppDir/usr/share/applications AppDir/usr/share/metainfo \
             AppDir/usr/share/icons/hicolor/256x256/apps
-          cp app/packaging/free-ai-suite.desktop AppDir/usr/share/applications/free-ai-suite.desktop
-          cp app/packaging/free-ai-suite.appdata.xml AppDir/usr/share/metainfo/free-ai-suite.appdata.xml
+          cp "app/packaging/$DESKTOP" "AppDir/usr/share/applications/$DESKTOP"
+          # validate-tree cross-checks the metainfo file name against the
+          # component ID, which is why both carry the reverse-DNS name.
+          cp "app/packaging/$META" "AppDir/usr/share/metainfo/$META"
           cp app/packaging/icons/free-ai-suite-256.png \
             AppDir/usr/share/icons/hicolor/256x256/apps/free-ai-suite.png
           cp app/packaging/icons/free-ai-suite.svg AppDir/free-ai-suite.svg
@@ -318,8 +322,11 @@ jobs:
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
 
-      - name: Add the Intel target for the universal merge
-        run: rustup target add x86_64-apple-darwin
+      # Both slices, whichever host arch the runner has: on an Intel runner the
+      # aarch64 std is the one that is missing (that is what failed the v1.26.5
+      # job with exit 101), on arm64 the x86_64 one is.
+      - name: Add both targets for the universal merge
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

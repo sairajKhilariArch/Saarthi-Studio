@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AppStream metadata for the AppImage and the deb's desktop entry.
+<!-- AppStream metadata for the AppImage and the .deb.
+
      appimagetool runs `appstreamcli validate-tree` over the whole AppDir and
-     aborts the build when it exits non-zero, so this file has to be valid
-     AppStream 1.x: no deprecated <developer_name> (use <developer>), a
-     <provides> entry for the installed binary, and media that really exists
-     (screenshots/local-ai-*.png in this repository). -->
+     aborts the build when it exits non-zero. validate-tree treats a *warning*
+     as failure, so the v1.26.5 run still died on:
+       W: cid-desktopapp-is-not-rdns free-ai-suite
+       I: content-rating-missing
+     The component ID therefore has a real TLD and three dot-separated parts,
+     the file name and the launchable desktop-id have to match that ID
+     (metainfo-filename-cid-mismatch), and an OARS rating is declared. -->
 <component type="desktop-application">
-  <id>free-ai-suite</id>
+  <id>io.github.sairajkhilariarch.SaarthiStudio</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>Saarthi Studio</name>
@@ -29,7 +33,7 @@
       <li>Real PTY terminals and bundled skills</li>
     </ul>
   </description>
-  <launchable type="desktop-id">free-ai-suite.desktop</launchable>
+  <launchable type="desktop-id">io.github.sairajkhilariarch.SaarthiStudio.desktop</launchable>
   <provides>
     <binary>free-ai-studio</binary>
   </provides>
@@ -56,7 +60,8 @@
     <keyword>code</keyword>
     <keyword>assistant</keyword>
   </keywords>
+  <content_rating type="oars-1.1"/>
   <releases>
-    <release version="1.26.5" date="2026-11-04"/>
+    <release version="1.26.6" date="2026-11-04"/>
   </releases>
 </component>

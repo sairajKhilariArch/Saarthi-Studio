@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.26.5"
+version = "1.26.6"
 edition = "2021"
 rust-version = "1.80"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -71,7 +71,11 @@ assets = [
     ["static/skills/code-review/SKILL.md", "usr/share/free-ai-suite/static/skills/code-review/SKILL.md", "644"],
     ["static/skills/debug/SKILL.md", "usr/share/free-ai-suite/static/skills/debug/SKILL.md", "644"],
     ["static/skills/tests/SKILL.md", "usr/share/free-ai-suite/static/skills/tests/SKILL.md", "644"],
-    ["packaging/free-ai-suite.desktop", "usr/share/applications/free-ai-suite.desktop", "644"],
+    # The desktop entry and its AppStream metadata carry the reverse-DNS name:
+    # appstreamcli rejects a non-RDNS component ID, and the two file names must
+    # match that ID or validate-tree reports a mismatch.
+    ["packaging/io.github.sairajkhilariarch.SaarthiStudio.desktop", "usr/share/applications/io.github.sairajkhilariarch.SaarthiStudio.desktop", "644"],
+    ["packaging/io.github.sairajkhilariarch.SaarthiStudio.appdata.xml", "usr/share/metainfo/io.github.sairajkhilariarch.SaarthiStudio.appdata.xml", "644"],
     ["packaging/icons/free-ai-suite.svg", "usr/share/icons/hicolor/scalable/apps/free-ai-suite.svg", "644"],
 ]
 [build-dependencies]

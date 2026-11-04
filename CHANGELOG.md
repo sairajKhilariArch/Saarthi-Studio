@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.26.6
+
+- AppImage (Linux) builds again. The v1.26.5 run failed `appstreamcli
+  validate-tree`, which appimagetool now treats as fatal and which fails on
+  warnings as well as errors: `cid-desktopapp-is-not-rdns` and
+  `content-rating-missing`. The desktop entry, the AppStream file and the
+  component ID now all use `io.github.sairajkhilariarch.SaarthiStudio`, and an
+  OARS 1.1 age rating is declared, so the tree validates clean.
+- The .deb now installs the AppStream metadata as well
+  (`usr/share/metainfo/...`), so software centres can show the app.
+- macOS: the job installs both `aarch64-apple-darwin` and
+  `x86_64-apple-darwin` targets. On the new Intel runner only the x86_64 std was
+  present, so the arm64 slice build exited 101.
+
 ## 1.26.5
 
 - Linux AppImage: the AppStream file is now valid AppStream 1.x (`<developer>`

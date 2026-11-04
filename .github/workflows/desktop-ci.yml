@@ -57,8 +57,8 @@ jobs:
           test -f app/static/index.html
           test -f app/static/app.js
           test -f app/static/styles.css
-          test -f app/packaging/free-ai-suite.desktop
-          test -f app/packaging/free-ai-suite.appdata.xml
+          test -f app/packaging/io.github.sairajkhilariarch.SaarthiStudio.desktop
+          test -f app/packaging/io.github.sairajkhilariarch.SaarthiStudio.appdata.xml
           test -f app/packaging/icons/free-ai-suite.svg
 
       # Pipeline regressions (v1.26.0/v1.26.1 shipped no assets because of a CR
