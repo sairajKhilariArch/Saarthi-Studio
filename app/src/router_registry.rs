@@ -308,7 +308,10 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
             "freellmapi" => {
                 let endpoint = format!("http://127.0.0.1:{}", router_status.port);
                 Probe {
-                    installed: router_status.compose_dir.is_some(),
+                    // Either deployment counts: the user's compose project, or the
+                    // container Studio installed for them.
+                    installed: router_status.compose_dir.is_some()
+                        || crate::router::freellmapi_container_exists(),
                     reachable: router_status.reachable,
                     running: router_status.running,
                     owned_by_app: router_status.owned_by_app,
@@ -919,6 +922,66 @@ pub(crate) fn plan_digest(
         .collect()
 }
 
+const GHCR_ACCEPT: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json";
+
+/// A `sha256:…` digest as a registry reports it. Pure, so the shape is testable
+/// without a registry.
+pub(crate) fn parse_registry_digest(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    match value.strip_prefix("sha256:") {
+        Some(hex) if hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) => {
+            Ok(format!("sha256:{}", hex.to_ascii_lowercase()))
+        }
+        _ => Err(format!("{value} is not a sha256 manifest digest")),
+    }
+}
+
+/// Resolve a tag's manifest digest from a registry that hands out an anonymous
+/// pull token first, which is what `ghcr.io` requires. Only the digest is read:
+/// no layer is downloaded here.
+pub(crate) async fn resolve_ghcr_digest(image: &str) -> Result<String, String> {
+    let (repo, tag) = split_image(image);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("Could not build an HTTP client: {error}"))?;
+    let token_url = format!("https://ghcr.io/token?scope=repository:{repo}:pull");
+    let token: serde_json::Value = client
+        .get(&token_url)
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach {token_url}: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("Could not read the registry token: {error}"))?;
+    let token = token
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "The registry issued no pull token.".to_string())?;
+
+    let manifest_url = format!("https://ghcr.io/v2/{repo}/manifests/{tag}");
+    let response = client
+        .head(&manifest_url)
+        .bearer_auth(token)
+        .header("Accept", GHCR_ACCEPT)
+        .send()
+        .await
+        .map_err(|error| format!("Could not reach {manifest_url}: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "{manifest_url} answered {}.",
+            response.status().as_u16()
+        ));
+    }
+    let digest = response
+        .headers()
+        .get("docker-content-digest")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| format!("{manifest_url} reported no manifest digest."))?;
+    parse_registry_digest(digest)
+}
+
 /// The registry's tag endpoint reports the manifest-list digest for a tag: the
 /// identity a pinned install names. Parsing is pure so the network shape is
 /// testable without a network.
@@ -1054,19 +1117,65 @@ fn build_plan(spec: &'static RouterSpec, facts: &Facts) -> InstallPlan {
                 blocked,
             )
         }
-        "freellmapi" => (
-            "docker-compose".to_string(),
-            "https://github.com/sairajKhilariArch/Saarthi-Studio#router".to_string(),
-            Vec::new(),
-            "Nothing is downloaded by Studio, so there is nothing for Studio to verify."
-                .to_string(),
-            vec![docker_prerequisite.clone()],
-            Vec::new(),
-            Some(
-                "Studio starts FreeLLMAPI from its compose project but does not download the project. Install it as the project documents, then Studio will find it and offer Start."
+        "freellmapi" => {
+            let image = crate::router::freellmapi_image();
+            let image_ref = match pinned {
+                Ok(digest) => format!("{image}@{digest}"),
+                Err(_) => image.to_string(),
+            };
+            let steps = vec![InstallStep {
+                program: "docker".to_string(),
+                args: crate::router::freellmapi_run_args(port, &image_ref),
+                purpose: format!(
+                    "Pull {image_ref} and create the freellmapi container on port {port}, bound to loopback like the project's own compose file"
+                ),
+            }];
+            let digest_prerequisite = Prerequisite {
+                key: "image_digest",
+                what: "A manifest digest for the image, resolved from the registry".to_string(),
+                satisfied: pinned.is_ok(),
+                detail: match pinned {
+                    Ok(digest) => format!("resolved {digest}"),
+                    Err(error) => error.clone(),
+                },
+            };
+            let verification = match pinned {
+                Ok(digest) => format!(
+                    "Pinned to the manifest digest {digest}: Docker verifies every layer against it, so this install cannot silently become a different image."
+                ),
+                Err(_) => "Not pinned: the registry digest could not be resolved, so there is nothing to verify against."
                     .to_string(),
-            ),
-        ),
+            };
+            let blocked = if !docker {
+                Some(
+                    "Docker was not found, so nothing can be pulled or started. Install Docker first."
+                        .to_string(),
+                )
+            } else if container_exists {
+                Some(
+                    "A FreeLLMAPI container already exists. Start it from this panel instead of installing it again."
+                        .to_string(),
+                )
+            } else if let Err(error) = pinned {
+                Some(format!(
+                    "The image could not be pinned to a digest, so the install would fetch whatever the tag points at. {error}"
+                ))
+            } else {
+                None
+            };
+            (
+                "docker-image".to_string(),
+                image_ref,
+                vec![
+                    "docker container freellmapi".to_string(),
+                    "docker volume freellmapi-data".to_string(),
+                ],
+                verification,
+                vec![docker_prerequisite.clone(), digest_prerequisite],
+                steps,
+                blocked,
+            )
+        }
         _ => (
             "native-binary".to_string(),
             spec.docs.to_string(),
@@ -1324,23 +1433,40 @@ impl InstallError {
     }
 }
 
+/// The port a router is installed onto. Each gateway has its own: planning
+/// FreeLLMAPI against OmniRoute's port would publish it where nothing looks.
+fn install_port(id: &str) -> u16 {
+    match id {
+        "freellmapi" => crate::router::router_port(),
+        _ => crate::router::omniroute_port(),
+    }
+}
+
 /// The plan as the app would run it now: Docker and the container are measured
 /// live, so a stale page cannot install against a machine that changed.
 pub(crate) async fn install_plan(state: &AppState, id: &str) -> Result<InstallPlan, InstallError> {
     let spec = find(id).ok_or_else(|| InstallError::Unknown(format!("Unknown router id: {id}")))?;
-    let (docker, container_exists) = tokio::task::spawn_blocking(|| {
+    let target = spec.id.to_string();
+    let (docker, container_exists) = tokio::task::spawn_blocking(move || {
         let docker = crate::router::run_cmd("docker", &["--version"]).is_ok();
-        let exists = docker && crate::router::omniroute_container_exists();
+        // Only the router being planned is looked up: another router's container
+        // must never decide whether this install is blocked.
+        let exists = docker
+            && match target.as_str() {
+                "omniroute" => crate::router::omniroute_container_exists(),
+                "freellmapi" => crate::router::freellmapi_container_exists(),
+                _ => false,
+            };
         (docker, exists)
     })
     .await
     .map_err(|error| InstallError::Failed(format!("Install plan task failed: {error}")))?;
     // Only the Docker router has an image to pin; the others must not wait on a
     // registry they never use.
-    let pinned = if spec.id == "omniroute" {
-        resolve_image_digest(crate::router::omniroute_image()).await
-    } else {
-        Ok(String::new())
+    let pinned = match spec.id {
+        "omniroute" => resolve_image_digest(crate::router::omniroute_image()).await,
+        "freellmapi" => resolve_ghcr_digest(crate::router::freellmapi_image()).await,
+        _ => Ok(String::new()),
     };
     // The local runtime is installed from a release archive, so it waits on the
     // release feed instead of a registry. Neither is asked when unused.
@@ -1354,7 +1480,7 @@ pub(crate) async fn install_plan(state: &AppState, id: &str) -> Result<InstallPl
         &Facts {
             docker,
             container_exists,
-            port: crate::router::omniroute_port(),
+            port: install_port(spec.id),
             pinned,
             release,
             install_root: install_root(state),
@@ -2051,19 +2177,51 @@ mod tests {
     }
 
     #[test]
-    fn plans_without_an_in_app_path_say_so() {
-        // The compose router has no Studio-side downloader, so it must refuse
-        // rather than run an installer it cannot verify.
+    fn freellmapi_plan_mirrors_the_project_deployment() {
         let plan = plan_for("freellmapi", true, false);
-        assert!(
-            !plan.supported,
-            "freellmapi claims an install path it lacks"
+        assert!(plan.supported);
+        assert!(plan.ready(), "blocked: {:?}", plan.blocked);
+        assert_eq!(plan.method, "docker-image");
+        // The approved reference is pinned, not the moving tag.
+        assert!(plan.source.ends_with("@sha256:abc123"), "{}", plan.source);
+        let args = &plan.steps[0].args;
+        // Loopback only, the project's own volume and container port.
+        assert!(args.iter().any(|arg| arg == "127.0.0.1:20128:3001"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "freellmapi-data:/app/server/data"));
+        assert!(args.iter().any(|arg| arg == "PORT=3001"));
+        assert_eq!(args.last().unwrap(), &plan.source);
+
+        // Missing Docker, or a container that already exists, blocks instead.
+        let no_docker = plan_for("freellmapi", false, false);
+        assert!(!no_docker.ready());
+        assert!(no_docker.blocked.unwrap().contains("Docker"));
+        let exists = plan_for("freellmapi", true, true);
+        assert!(!exists.ready());
+        assert!(exists.blocked.unwrap().contains("already exists"));
+    }
+
+    #[test]
+    fn registry_digests_are_validated_before_they_are_trusted() {
+        assert_eq!(
+            parse_registry_digest(
+                "sha256:22FB2364A629C72B735C802942366AB2D737FA72E84B74F16FBD72715186E5E1"
+            )
+            .unwrap(),
+            "sha256:22fb2364a629c72b735c802942366ab2d737fa72e84b74f16fbd72715186e5e1"
         );
-        assert!(plan.steps.is_empty());
-        assert!(plan.downloads.is_empty());
-        assert!(!plan.ready());
-        let blocked = plan.blocked.expect("a refused plan must say why");
-        assert!(blocked.contains("does not"), "{blocked}");
+        assert!(parse_registry_digest("sha256:abc").is_err());
+        assert!(parse_registry_digest("md5:22fb").is_err());
+        assert!(parse_registry_digest("").is_err());
+    }
+
+    #[test]
+    fn each_gateway_is_planned_on_its_own_port() {
+        // Regression: both plans were once built with OmniRoute's port, which
+        // would have published FreeLLMAPI where the app never looks for it.
+        assert_eq!(install_port("freellmapi"), crate::router::router_port());
+        assert_eq!(install_port("omniroute"), crate::router::omniroute_port());
     }
 
     #[test]

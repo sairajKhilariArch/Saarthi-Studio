@@ -78,7 +78,7 @@ lifecycle and points at its facts rather than re-deriving them.
 - [x] Install records (`router-installs.json`) with a read route (1.26.18)
 - [x] Image installs pinned to the registry manifest digest, with the unresolved-digest refusal and Start no longer creating containers (1.26.19)
 - [x] Checksum-verified downloads: an asset is fetched while hashing, discarded on mismatch, and unpacked only after it verifies; Ollama installs from its official release and the hash that release publishes (1.26.20)
-- [ ] FreeLLMAPI in-app install — it publishes a `ghcr.io` image now, but its compose lifecycle would need a second ownership model before an install could be offered
+- [x] FreeLLMAPI installs from its published `ghcr.io` image pinned by digest, and its lifecycle brings up whichever deployment exists — compose project or Studio's container (1.26.21)
 - [ ] Router UI: update, uninstall, configuration editor
 - [x] Per-router launch preferences stored atomically, with `auto_start` in `/api/routers` and a "Start with Studio" checkbox (1.26.17)
 - [x] Auto-start on launch that never stops externally owned routers — the sweep starts only an enabled, installed, not-already-answering router, and the rule is unit-tested both ways (1.26.17). A boot with Docker down records the failure per router and the app still opens

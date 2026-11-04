@@ -25,6 +25,12 @@ const COMPOSE_FILES: [&str; 4] = [
     "compose.yml",
     "compose.yaml",
 ];
+/// The image and container Studio creates when it installs FreeLLMAPI itself.
+/// The shape mirrors the project's own compose file — loopback binding, the same
+/// volume, the same runtime env — so both install routes are one deployment.
+const FREELLMAPI_IMAGE: &str = "ghcr.io/tashfeenahmed/freellmapi:latest";
+const FREELLMAPI_CONTAINER: &str = "freellmapi";
+const FREELLMAPI_CONTAINER_PORT: u16 = 3001;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct Ownership {
@@ -95,6 +101,93 @@ pub(crate) fn router_port() -> u16 {
                 .and_then(|value| value.trim().parse().ok())
         })
         .unwrap_or(3001)
+}
+
+pub(crate) fn freellmapi_image() -> &'static str {
+    FREELLMAPI_IMAGE
+}
+
+/// The exact `docker run` argv for a pinned FreeLLMAPI image. The install plan
+/// shows these arguments and the installer executes this same list, so an
+/// approval names what actually runs.
+pub(crate) fn freellmapi_run_args(port: u16, image_ref: &str) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        FREELLMAPI_CONTAINER.to_string(),
+        "--restart".to_string(),
+        "unless-stopped".to_string(),
+        // Loopback only: FreeLLMAPI is single-user and its own docs say not to
+        // expose it. The host port Studio talks to maps onto the port it serves.
+        "-p".to_string(),
+        format!("127.0.0.1:{port}:{FREELLMAPI_CONTAINER_PORT}"),
+        "-v".to_string(),
+        "freellmapi-data:/app/server/data".to_string(),
+        "-e".to_string(),
+        "NODE_ENV=production".to_string(),
+        "-e".to_string(),
+        format!("PORT={FREELLMAPI_CONTAINER_PORT}"),
+        "-e".to_string(),
+        "FREELLMAPI_INSTALL_METHOD=docker".to_string(),
+        image_ref.to_string(),
+    ]
+}
+
+/// Whether a FreeLLMAPI container exists at all, running or stopped, so a
+/// stopped container reads as "stopped" instead of "not installed".
+pub(crate) fn freellmapi_container_exists() -> bool {
+    run_cmd(
+        "docker",
+        &["ps", "-a", "-q", "--filter", "name=^freellmapi$"],
+    )
+    .map(|ids| !ids.is_empty())
+    .unwrap_or(false)
+}
+
+fn freellmapi_container_running() -> bool {
+    run_cmd("docker", &["ps", "-q", "--filter", "name=^freellmapi$"])
+        .map(|ids| !ids.is_empty())
+        .unwrap_or(false)
+}
+
+/// Bring up whichever deployment exists: the user's compose project when there
+/// is one, else the container Studio installed itself.
+async fn bring_up() -> Result<(), String> {
+    match compose_dir() {
+        Some(dir) => tokio::task::spawn_blocking(move || start_compose(&dir))
+            .await
+            .map_err(|error| format!("Router task failed: {error}"))?
+            .map(|_| ()),
+        None if freellmapi_container_exists() => tokio::task::spawn_blocking(|| {
+            run_cmd("docker", &["start", FREELLMAPI_CONTAINER])
+        })
+        .await
+        .map_err(|error| format!("Router task failed: {error}"))?
+        .map(|_| ()),
+        None => Err(
+            "No FreeLLMAPI compose project or container was found. Install it from the Router panel in Studio, or follow the project's own instructions."
+                .to_string(),
+        ),
+    }
+}
+
+async fn bring_down() -> Result<(), String> {
+    match compose_dir() {
+        Some(dir) => tokio::task::spawn_blocking(move || stop_compose(&dir))
+            .await
+            .map_err(|error| format!("Router task failed: {error}"))?
+            .map(|_| ()),
+        None if freellmapi_container_exists() => {
+            tokio::task::spawn_blocking(|| run_cmd("docker", &["stop", FREELLMAPI_CONTAINER]))
+                .await
+                .map_err(|error| format!("Router task failed: {error}"))?
+                .map(|_| ())
+        }
+        None => {
+            Err("No FreeLLMAPI compose project or container was found on this machine.".to_string())
+        }
+    }
 }
 
 fn run_compose(dir: &FsPath, args: &[&str]) -> Result<String, String> {
@@ -228,24 +321,26 @@ pub(crate) async fn status() -> Status {
     let port = router_port();
     let reachable_now = reachable(port).await;
     let dir = compose_dir();
+    // A container Studio installed has no compose project, so the container is
+    // what "up" means there.
     let running = dir
         .as_ref()
         .map(|dir| compose_running(dir))
-        .unwrap_or(false);
+        .unwrap_or_else(freellmapi_container_running);
     let owned = load_ownership().owned_by_app;
     let message = if reachable_now {
         "Router is responding.".to_string()
+    } else if running {
+        "Router containers are up but the API is not answering yet.".to_string()
     } else if let Some(dir) = &dir {
-        if running {
-            "Router containers are up but the API is not answering yet.".to_string()
-        } else {
-            format!(
-                "Router is stopped. Start it with `free-ai-studio router start` or from {}.",
-                dir.display()
-            )
-        }
+        format!(
+            "Router is stopped. Start it with `free-ai-studio router start` or from {}.",
+            dir.display()
+        )
+    } else if freellmapi_container_exists() {
+        "Router is stopped. Start it from the Router panel in Studio.".to_string()
     } else {
-        "No FreeLLMAPI compose project was found on this machine.".to_string()
+        "No FreeLLMAPI compose project or container was found on this machine.".to_string()
     };
     Status {
         port,
@@ -270,13 +365,11 @@ pub(crate) async fn ensure_started() -> Status {
         }
         return status().await;
     }
-    let Some(dir) = compose_dir() else {
+    // Nothing installed means nothing to start, and no noise in the boot log.
+    if compose_dir().is_none() && !freellmapi_container_exists() {
         return status().await;
-    };
-    let started = tokio::task::spawn_blocking(move || start_compose(&dir))
-        .await
-        .unwrap_or_else(|error| Err(format!("Router task failed: {error}")));
-    match started {
+    }
+    match bring_up().await {
         Ok(_) => save_ownership(&Ownership { owned_by_app: true }),
         Err(error) => println!("Could not start the router automatically: {error}"),
     }
@@ -288,14 +381,9 @@ pub(crate) async fn shutdown_cleanup() {
     if !load_ownership().owned_by_app {
         return;
     }
-    if let Some(dir) = compose_dir() {
-        let stopped = tokio::task::spawn_blocking(move || stop_compose(&dir))
-            .await
-            .unwrap_or_else(|error| Err(format!("Router task failed: {error}")));
-        match stopped {
-            Ok(_) => println!("Stopped the FreeLLMAPI router this app started."),
-            Err(error) => println!("Could not stop the router this app started: {error}"),
-        }
+    match bring_down().await {
+        Ok(_) => println!("Stopped the FreeLLMAPI router this app started."),
+        Err(error) => println!("Could not stop the router this app started: {error}"),
     }
     save_ownership(&Ownership {
         owned_by_app: false,
@@ -304,29 +392,19 @@ pub(crate) async fn shutdown_cleanup() {
 
 /// Explicit start/stop for the CLI and the UI buttons.
 pub(crate) async fn manual_start() -> Result<Status, String> {
-    let Some(dir) = compose_dir() else {
-        return Err("No FreeLLMAPI compose project was found on this machine.".into());
-    };
     if reachable(router_port()).await {
         // The router is already answering, so this app is not what brings it
         // up: never adopt it, otherwise closing the app would stop a router the
         // user started themselves.
         return Ok(status().await);
     }
-    tokio::task::spawn_blocking(move || start_compose(&dir))
-        .await
-        .map_err(|error| format!("Router task failed: {error}"))??;
+    bring_up().await?;
     save_ownership(&Ownership { owned_by_app: true });
     Ok(status().await)
 }
 
 pub(crate) async fn manual_stop() -> Result<Status, String> {
-    let Some(dir) = compose_dir() else {
-        return Err("No FreeLLMAPI compose project was found on this machine.".into());
-    };
-    tokio::task::spawn_blocking(move || stop_compose(&dir))
-        .await
-        .map_err(|error| format!("Router task failed: {error}"))??;
+    bring_down().await?;
     save_ownership(&Ownership {
         owned_by_app: false,
     });

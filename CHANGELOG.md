@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.26.21
+
+- FreeLLMAPI installs from the image its own compose file names. The plan
+  resolves the tag's manifest digest from `ghcr.io` (an anonymous pull token
+  first), names `…freellmapi:latest@sha256:…` in both the displayed and executed
+  command, and blocks when the digest cannot be resolved.
+- The container is the deployment the project documents: published on loopback
+  only, `PORT=3001` inside, the `freellmapi-data` volume at `/app/server/data`,
+  `NODE_ENV=production`. Install, Start, Stop, Restart, auto-start and the boot
+  sweep now work with whichever deployment exists — the user's compose project
+  when there is one, else the container Studio installed — and shutdown still
+  stops only what Studio started.
+- A stopped container now reads as installed rather than missing, so the panel
+  offers Start instead of a second install.
+- Each gateway's plan is built on its own port; FreeLLMAPI was briefly planned
+  against OmniRoute's port, which would have published it where the app never
+  looks for it.
+- Tests: the pinned FreeLLMAPI argv, both block cases (no Docker, container
+  already there), registry-digest validation and the per-gateway port (173 tests
+  pass).
+
 ## 1.26.20
 
 - Installs can now fetch. A plan carries its downloads explicitly — the release
