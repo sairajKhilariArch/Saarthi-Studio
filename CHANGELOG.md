@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.26.8
+
+- Phase 2 slice 1: `app/src/router_registry.rs` adds the router registry the
+  Router Manager builds on — description, supported OS and architectures,
+  install methods, configuration location, HTTP health probe and docs per
+  router, plus platform gating (Android never claims a local install, remote
+  stays available) and architecture normalisation for real release-asset
+  spellings. It is data plus tests only: lifecycle still lives in `router.rs`,
+  which this module points at instead of replacing. 10 new unit tests.
+- Not tagged: the registry is not reachable from the API yet (slice 2 adds the
+  live probes and `/api/routers`), so there is nothing user-visible to release.
+
 ## 1.26.7
 
 - Documentation only: Phase 1 is signed off in `docs/PROGRESS.md` with the run

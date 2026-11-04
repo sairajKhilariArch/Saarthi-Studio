@@ -42,6 +42,7 @@ mod media;
 mod privacy;
 mod router;
 mod router_console;
+mod router_registry;
 mod skills;
 mod terminal;
 mod workspace;

@@ -52,9 +52,26 @@ partial, `[ ]` not started.
 - [ ] Frontend test runner
 - [ ] End-to-end harness (headless launch + mock router)
 
+## Phase 2 — Router Manager
+
+Slice 1 (`app/src/router_registry.rs`, this commit): the registry and platform
+capability layer, with 10 unit tests. It reuses `router.rs` for lifecycle and
+points at its facts rather than re-deriving them.
+
+- [x] Router registry with the §5.1 fields (id, name, description, OS, arch, install methods, config location, health probe, docs)
+- [x] Architecture normalisation for real release-asset spellings (`aarch64`/`amd64`/`x64`)
+- [x] Platform gating: Android never claims a local install; remote stays available
+- [x] Only routers with an existing lifecycle in the crate are listed (no aspirational entries)
+- [x] Tests: unique slug ids, required fields, health probe present, HOME-relative config, Android exclusion, unknown arch rejection, stable JSON keys
+- [ ] Live probes per router (installed / version / runtime / healthy / ownership) — reuse `router::status`, `router::omniroute_*`, Ollama probe
+- [ ] `/api/routers` route returning probes + capabilities
+- [ ] Router UI: list, health, start/stop/restart, logs, connection tester
+- [ ] Install workflow with approval, checksum verification and recorded install info
+- [ ] Auto-start on launch that never stops externally owned routers
+
 ## Next up
 
-1. Phase 2 — Router Manager: extract the registry from `router.rs`, add OS/arch capability
-   detection and a health check that is not "process exists".
+1. Phase 2 slice 2 — live probes (`installed`/`version`/`healthy`/`owned`) and the
+   `/api/routers` route on top of the registry.
 2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
 3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.
