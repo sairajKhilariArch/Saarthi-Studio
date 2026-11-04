@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.26.14
+
+- `GET /api/routers` probes FreeLLMAPI, OmniRoute and the local runtime
+  concurrently instead of one after another, so the endpoint costs roughly the
+  slowest probe rather than their sum (it took about 6.5 s with nothing
+  installed). Each probe is still the very function its own endpoint calls, so
+  the registry cannot report a state the individual endpoints disagree with.
+
 ## 1.26.13
 
 - The Router view now lists every registered router from `GET /api/routers` with

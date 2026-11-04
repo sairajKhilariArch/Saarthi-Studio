@@ -154,7 +154,9 @@ pub(crate) fn runs_locally(spec: &RouterSpec, os: &str, arch: &str) -> bool {
 /// API or a remote endpoint instead (spec §14). Callers should present the
 /// remote method rather than an install wizard.
 pub(crate) fn local_install_supported(spec: &RouterSpec, os: &str, arch: &str) -> bool {
-    os != "android" && runs_locally(spec, os, arch) && spec.methods.iter().any(|m| *m != InstallMethod::Remote)
+    os != "android"
+        && runs_locally(spec, os, arch)
+        && spec.methods.iter().any(|m| *m != InstallMethod::Remote)
 }
 
 /// Presentation-ready view of one registry entry for a given platform. Contains
@@ -193,7 +195,10 @@ pub(crate) fn capability(spec: &'static RouterSpec, os: &str, arch: &str) -> Cap
 
 /// Every registry entry described for the given platform.
 pub(crate) fn capabilities(os: &str, arch: &str) -> Vec<Capability> {
-    ROUTERS.iter().map(|spec| capability(spec, os, arch)).collect()
+    ROUTERS
+        .iter()
+        .map(|spec| capability(spec, os, arch))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -267,60 +272,67 @@ pub(crate) fn view(capability: Capability, probe: Probe) -> RouterView {
 pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
     let os = current_os();
     let arch = current_arch();
-    let mut out = Vec::with_capacity(ROUTERS.len());
     let caps = capabilities(os, arch);
+
+    // The three probes are independent network calls; run them together so the
+    // endpoint costs roughly the slowest one instead of their sum. Each still
+    // returns exactly what its own endpoint returns, so nothing here can
+    // disagree with /api/router, /api/omniroute or /api/local/status.
+    let selection = crate::local::selection_of(state);
+    let base_url = if selection.base_url.trim().is_empty() {
+        "http://127.0.0.1:11434".to_string()
+    } else {
+        selection.base_url.trim().trim_end_matches('/').to_string()
+    };
+    let (router_status, omni_status, local_version) = tokio::join!(
+        crate::router::status(),
+        crate::router::omniroute_status(),
+        crate::local::fetch_version(&base_url),
+    );
+
+    let mut out = Vec::with_capacity(ROUTERS.len());
     for (spec, cap) in ROUTERS.iter().zip(caps) {
         let probe = match spec.id {
             "freellmapi" => {
-                let status = crate::router::status().await;
-                let endpoint = format!("http://127.0.0.1:{}", status.port);
+                let endpoint = format!("http://127.0.0.1:{}", router_status.port);
                 Probe {
-                    installed: status.compose_dir.is_some(),
-                    reachable: status.reachable,
-                    running: status.running,
-                    owned_by_app: status.owned_by_app,
+                    installed: router_status.compose_dir.is_some(),
+                    reachable: router_status.reachable,
+                    running: router_status.running,
+                    owned_by_app: router_status.owned_by_app,
                     endpoint,
                     version: String::new(),
-                    message: status.message,
+                    message: router_status.message.clone(),
                 }
             }
             "omniroute" => {
-                let status = crate::router::omniroute_status().await;
-                let endpoint = format!("http://127.0.0.1:{}", status.port);
+                let endpoint = format!("http://127.0.0.1:{}", omni_status.port);
                 Probe {
                     // No compose project to look for: the container or an
                     // answered endpoint is the installation evidence.
-                    installed: status.running || status.reachable,
-                    reachable: status.reachable,
-                    running: status.running,
-                    owned_by_app: status.owned_by_app,
+                    installed: omni_status.running || omni_status.reachable,
+                    reachable: omni_status.reachable,
+                    running: omni_status.running,
+                    owned_by_app: omni_status.owned_by_app,
                     endpoint,
                     version: String::new(),
-                    message: status.message,
+                    message: omni_status.message.clone(),
                 }
             }
-            "ollama" => {
-                let selection = crate::local::selection_of(state);
-                let base_url = if selection.base_url.trim().is_empty() {
-                    "http://127.0.0.1:11434".to_string()
-                } else {
-                    selection.base_url.trim().trim_end_matches('/').to_string()
-                };
-                match crate::local::fetch_version(&base_url).await {
-                    Ok(version) => Probe {
-                        installed: true,
-                        reachable: true,
-                        running: true,
-                        // The runtime is installed and run by the user; Studio
-                        // never owns its lifecycle.
-                        owned_by_app: false,
-                        endpoint: base_url,
-                        version,
-                        message: "Local runtime is responding.".to_string(),
-                    },
-                    Err(error) => Probe::not_installed(&base_url, &error),
-                }
-            }
+            "ollama" => match &local_version {
+                Ok(version) => Probe {
+                    installed: true,
+                    reachable: true,
+                    running: true,
+                    // The runtime is installed and run by the user; Studio
+                    // never owns its lifecycle.
+                    owned_by_app: false,
+                    endpoint: base_url.clone(),
+                    version: version.clone(),
+                    message: "Local runtime is responding.".to_string(),
+                },
+                Err(error) => Probe::not_installed(&base_url, error),
+            },
             other => Probe::not_installed("", &format!("No probe is implemented for {other} yet.")),
         };
         out.push(view(cap, probe));
@@ -363,7 +375,11 @@ mod tests {
             );
             assert!(!spec.os.is_empty(), "{} lists no OS", spec.id);
             assert!(!spec.arches.is_empty(), "{} lists no architecture", spec.id);
-            assert!(!spec.methods.is_empty(), "{} lists no install method", spec.id);
+            assert!(
+                !spec.methods.is_empty(),
+                "{} lists no install method",
+                spec.id
+            );
             // A router the manager cannot health-check cannot be called running.
             assert!(
                 spec.health.starts_with("GET "),
@@ -375,7 +391,11 @@ mod tests {
                 "{} config must be HOME-relative",
                 spec.id
             );
-            assert!(spec.docs.starts_with("https://"), "{} docs must be a URL", spec.id);
+            assert!(
+                spec.docs.starts_with("https://"),
+                "{} docs must be a URL",
+                spec.id
+            );
         }
     }
 
@@ -467,7 +487,10 @@ mod tests {
             "installable_here",
             "remote_here",
         ] {
-            assert!(value.get(key).is_some(), "serialised capability lacks {key}");
+            assert!(
+                value.get(key).is_some(),
+                "serialised capability lacks {key}"
+            );
         }
         assert_eq!(value["id"], "freellmapi");
     }
@@ -498,10 +521,16 @@ mod tests {
         half.message = "Router containers are up but the API is not answering yet.".into();
         let not_yet = view(cap.clone(), half);
         assert!(not_yet.running);
-        assert!(!not_yet.healthy, "a process that has not answered is not healthy");
+        assert!(
+            !not_yet.healthy,
+            "a process that has not answered is not healthy"
+        );
         assert!(!not_yet.reachable);
 
-        let missing = view(cap, Probe::not_installed("http://127.0.0.1:3001", "no project"));
+        let missing = view(
+            cap,
+            Probe::not_installed("http://127.0.0.1:3001", "no project"),
+        );
         assert!(!missing.installed && !missing.healthy && !missing.running);
         assert!(!missing.owned_by_app);
         assert_eq!(missing.message, "no project");
@@ -521,12 +550,32 @@ mod tests {
     #[test]
     fn view_serialises_capability_and_state_side_by_side() {
         let spec = find("freellmapi").unwrap();
-        let value = serde_json::to_value(view(capability(spec, "linux", "x86_64"), reachable_probe()))
-            .unwrap();
-        for key in ["id", "name", "methods", "health", "installable_here", "remote_here"] {
-            assert!(value.get(key).is_some(), "view lacks capability field {key}");
+        let value =
+            serde_json::to_value(view(capability(spec, "linux", "x86_64"), reachable_probe()))
+                .unwrap();
+        for key in [
+            "id",
+            "name",
+            "methods",
+            "health",
+            "installable_here",
+            "remote_here",
+        ] {
+            assert!(
+                value.get(key).is_some(),
+                "view lacks capability field {key}"
+            );
         }
-        for key in ["installed", "reachable", "healthy", "running", "owned_by_app", "endpoint", "version", "message"] {
+        for key in [
+            "installed",
+            "reachable",
+            "healthy",
+            "running",
+            "owned_by_app",
+            "endpoint",
+            "version",
+            "message",
+        ] {
             assert!(value.get(key).is_some(), "view lacks state field {key}");
         }
         assert_eq!(value["healthy"], true);
@@ -534,7 +583,10 @@ mod tests {
 
     #[test]
     fn host_detection_returns_registry_spellings() {
-        assert!(lists(&["linux", "macos", "windows"], current_os()), "unexpected host OS");
+        assert!(
+            lists(&["linux", "macos", "windows"], current_os()),
+            "unexpected host OS"
+        );
         assert!(
             matches!(current_arch(), "x86_64" | "arm64" | "x86" | "unknown"),
             "unexpected host arch"
