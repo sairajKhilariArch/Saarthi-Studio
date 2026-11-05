@@ -2,10 +2,11 @@
 //! session, tool discovery with schema validation, and every call bound to the
 //! permission store.
 //!
-//! Scope is stated plainly rather than implied: a server is a local child
-//! process spoken to over stdio, and one operation = one session. There is no
-//! persistent connection pool, no SSE/HTTP transport and no sandbox beyond the
-//! command the user wrote into the registry. Those gaps are recorded in
+//! Scope is stated plainly rather than implied: a server is either a local
+//! child process spoken to over stdio, or a remote endpoint reached over
+//! streamable HTTP or the older HTTP+SSE transport. One operation = one
+//! session; there is no persistent connection pool, and no sandbox beyond what
+//! the transport itself gives. Those gaps are recorded in
 //! `docs/FEATURE-STATUS.md`, not faked here.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -53,6 +54,12 @@ const PROMPT_DESCRIPTION_CAP: usize = 200;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Server {
     pub name: String,
+    /// How this server is reached: `stdio` (a local child process), `http`
+    /// (streamable HTTP) or `sse` (the older HTTP+SSE transport). A registry
+    /// written before this field existed reads as the stdio server it was.
+    #[serde(default = "default_transport")]
+    pub transport: String,
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -60,8 +67,19 @@ pub(crate) struct Server {
     /// never appear in an API response — only the names do.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Where an `http`/`sse` server lives. Empty for a stdio server.
+    #[serde(default)]
+    pub url: String,
+    /// Extra request headers for a remote server. Values are secrets in exactly
+    /// the way env values are, so the API returns names only.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+}
+
+fn default_transport() -> String {
+    "stdio".to_string()
 }
 
 fn default_enabled() -> bool {
@@ -119,6 +137,26 @@ pub(crate) fn tool_target(server: &str, tool: &str) -> String {
     format!("{server}.{tool}")
 }
 
+fn valid_transport(transport: &str) -> bool {
+    matches!(transport, "stdio" | "http" | "sse")
+}
+
+/// A shape check, not a URL parser: the scheme must be http(s), the rest must
+/// be non-empty, and neither whitespace nor control characters may appear.
+fn valid_url(url: &str) -> bool {
+    if url.is_empty() || url.len() > 2048 {
+        return false;
+    }
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or("");
+    !rest.is_empty()
+}
+
 /// Enabled servers only: a disabled server never runs for a route or a run.
 pub(crate) fn enabled_servers(state: &AppState) -> Vec<Server> {
     read_servers(&registry_path(state))
@@ -131,9 +169,12 @@ pub(crate) fn enabled_servers(state: &AppState) -> Vec<Server> {
 fn server_json(server: &Server) -> Value {
     json!({
         "name": server.name,
+        "transport": server.transport,
         "command": server.command,
         "args": server.args,
+        "url": server.url,
         "environment": server.env.keys().cloned().collect::<Vec<_>>(),
+        "headers": server.headers.keys().cloned().collect::<Vec<_>>(),
         "enabled": server.enabled,
     })
 }
@@ -278,8 +319,7 @@ fn encode(message: &Value) -> String {
 /// The answer to *our* id, if this line is one. Anything else — a
 /// notification, another request, a log line a server wrote to stdout — is not
 /// ours and reads as `None`, so the session keeps waiting instead of failing.
-fn reply_for(line: &str, id: u64) -> Option<Result<Value, String>> {
-    let value: Value = serde_json::from_str(line.trim()).ok()?;
+fn match_reply(value: Value, id: u64) -> Option<Result<Value, String>> {
     if value.get("id").and_then(Value::as_u64) != Some(id) {
         return None;
     }
@@ -291,6 +331,11 @@ fn reply_for(line: &str, id: u64) -> Option<Result<Value, String>> {
         return Some(Err(message.to_string()));
     }
     Some(Ok(value.get("result").cloned().unwrap_or(Value::Null)))
+}
+
+fn reply_for(line: &str, id: u64) -> Option<Result<Value, String>> {
+    let value: Value = serde_json::from_str(line.trim()).ok()?;
+    match_reply(value, id)
 }
 
 impl Session {
@@ -393,16 +438,383 @@ impl Session {
     }
 }
 
+/// One MCP conversation, however it is carried. The transport changes how a
+/// message travels; the handshake, the catalogue and every call are the same.
+enum Connection {
+    /// Boxed because a live child process plus its two pipes is far larger than
+    /// the remote sessions, and every `Connection` would otherwise carry that
+    /// size even when it is a URL.
+    Stdio(Box<Session>),
+    Http(HttpSession),
+    Sse(SseSession),
+}
+
+impl Connection {
+    /// Open the transport the registry names. A remote server is a URL and a
+    /// few headers; a stdio server is a child process.
+    async fn open(server: &Server) -> Result<Connection, String> {
+        match server.transport.as_str() {
+            "http" => Ok(Connection::Http(HttpSession::start(server)?)),
+            "sse" => Ok(Connection::Sse(SseSession::start(server).await?)),
+            _ => Ok(Connection::Stdio(Box::new(Session::start(server)?))),
+        }
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        match self {
+            Connection::Stdio(session) => session.request(method, params).await,
+            Connection::Http(session) => session.request(method, params).await,
+            Connection::Sse(session) => session.request(method, params).await,
+        }
+    }
+
+    async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
+        match self {
+            Connection::Stdio(session) => session.notify(method, params).await,
+            Connection::Http(session) => session.notify(method, params).await,
+            Connection::Sse(session) => session.notify(method, params).await,
+        }
+    }
+
+    async fn close(self) {
+        match self {
+            Connection::Stdio(session) => (*session).close().await,
+            Connection::Http(_) => {}
+            Connection::Sse(session) => session.close().await,
+        }
+    }
+}
+
+/// Streamable HTTP: one POST per message, and the answer comes back either as
+/// JSON or as an SSE stream on that same response. The handshake may hand back
+/// an `Mcp-Session-Id` that later requests must carry.
+struct HttpSession {
+    client: reqwest::Client,
+    url: String,
+    headers: BTreeMap<String, String>,
+    session_id: Option<String>,
+    next_id: u64,
+}
+
+impl HttpSession {
+    fn start(server: &Server) -> Result<HttpSession, String> {
+        let client = reqwest::Client::builder()
+            .timeout(OPERATION_TIMEOUT)
+            .build()
+            .map_err(|e| format!("Could not build an HTTP client: {e}"))?;
+        Ok(HttpSession {
+            client,
+            url: server.url.clone(),
+            headers: server.headers.clone(),
+            session_id: None,
+            next_id: 1,
+        })
+    }
+
+    async fn post(&mut self, message: &Value) -> Result<reqwest::Response, String> {
+        let mut request = self
+            .client
+            .post(&self.url)
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        for (key, value) in &self.headers {
+            request = request.header(key, value);
+        }
+        if let Some(id) = &self.session_id {
+            request = request.header("mcp-session-id", id);
+        }
+        let response = request
+            .body(message.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Talking to the MCP server failed: {e}"))?;
+        if let Some(id) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+        {
+            self.session_id = Some(id.to_string());
+        }
+        Ok(response)
+    }
+
+    async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
+        let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        let response = self.post(&message).await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "The MCP server answered {method} with HTTP {}.",
+                response.status()
+            ))
+        }
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        let response = self.post(&message).await?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The MCP server answered {method} with HTTP {}.",
+                response.status()
+            ));
+        }
+        let is_sse = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream"));
+        let body = response
+            .text()
+            .await
+            .map_err(|e| format!("Reading the MCP server's answer failed: {e}"))?;
+        let answers = if is_sse {
+            sse_messages(&body)
+        } else {
+            serde_json::from_str::<Value>(&body)
+                .ok()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        for value in answers {
+            if let Some(answer) = match_reply(value, id) {
+                return answer;
+            }
+        }
+        Err(format!(
+            "The MCP server answered {method} without a JSON-RPC result."
+        ))
+    }
+}
+
+/// The older HTTP+SSE transport: one GET stream carries every server message,
+/// and requests are POSTed to the `endpoint` the server announces on it.
+struct SseSession {
+    client: reqwest::Client,
+    endpoint: String,
+    headers: BTreeMap<String, String>,
+    incoming: tokio::sync::mpsc::UnboundedReceiver<Value>,
+    reader: tokio::task::JoinHandle<()>,
+    next_id: u64,
+}
+
+impl SseSession {
+    async fn start(server: &Server) -> Result<SseSession, String> {
+        use futures_util::StreamExt;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| format!("Could not build an HTTP client: {e}"))?;
+        let mut request = client
+            .get(&server.url)
+            .header("accept", "text/event-stream");
+        for (key, value) in &server.headers {
+            request = request.header(key, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("Connecting to the MCP server failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The MCP server's event stream answered HTTP {}.",
+                response.status()
+            ));
+        }
+        let base = server.url.clone();
+        let (endpoint_tx, endpoint_rx) = tokio::sync::oneshot::channel::<String>();
+        let (incoming_tx, incoming) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        // The stream stays open for the life of the session; the task ends when
+        // the server closes it, and `close` aborts it if the server never does.
+        let reader = tokio::spawn(async move {
+            let mut endpoint_tx = Some(endpoint_tx);
+            let mut buffer = String::new();
+            let mut event = String::new();
+            let mut data: Vec<String> = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let Ok(bytes) = chunk else { break };
+                buffer.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(index) = buffer.find('\n') {
+                    let mut line = buffer[..index].to_string();
+                    buffer.drain(..=index);
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                    if line.is_empty() {
+                        if event == "endpoint" && !data.is_empty() {
+                            if let Some(tx) = endpoint_tx.take() {
+                                let _ = tx.send(resolve_endpoint(&base, &data.join("\n")));
+                            }
+                        } else if !data.is_empty() {
+                            if let Ok(value) = serde_json::from_str::<Value>(&data.join("\n")) {
+                                if incoming_tx.send(value).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        event.clear();
+                        data.clear();
+                        continue;
+                    }
+                    if let Some(value) = line.strip_prefix("event:") {
+                        event = value.trim().to_string();
+                    } else if let Some(value) = line.strip_prefix("data:") {
+                        data.push(value.trim_start().to_string());
+                    }
+                }
+            }
+        });
+        let endpoint = tokio::time::timeout(Duration::from_secs(10), endpoint_rx)
+            .await
+            .map_err(|_| "The MCP server never announced its message endpoint.".to_string())?
+            .map_err(|_| {
+                "The MCP server closed its event stream before announcing an endpoint."
+                    .to_string()
+            })?;
+        Ok(SseSession {
+            client,
+            endpoint,
+            headers: server.headers.clone(),
+            incoming,
+            reader,
+            next_id: 1,
+        })
+    }
+
+    async fn send(&self, message: &Value) -> Result<reqwest::Response, String> {
+        let mut request = self
+            .client
+            .post(&self.endpoint)
+            .header("content-type", "application/json");
+        for (key, value) in &self.headers {
+            request = request.header(key, value);
+        }
+        request
+            .body(message.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("Talking to the MCP server failed: {e}"))
+    }
+
+    async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
+        let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        let response = self.send(&message).await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "The MCP server answered {method} with HTTP {}.",
+                response.status()
+            ))
+        }
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        let response = self.send(&message).await?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The MCP server answered {method} with HTTP {}.",
+                response.status()
+            ));
+        }
+        let answer = async {
+            loop {
+                let value = self
+                    .incoming
+                    .recv()
+                    .await
+                    .ok_or_else(|| "The MCP server closed its event stream.".to_string())?;
+                if let Some(answer) = match_reply(value, id) {
+                    return answer;
+                }
+            }
+        };
+        match tokio::time::timeout(OPERATION_TIMEOUT, answer).await {
+            Err(_) => Err(format!(
+                "The MCP server did not answer {method} within {}s.",
+                OPERATION_TIMEOUT.as_secs()
+            )),
+            Ok(answer) => answer,
+        }
+    }
+
+    async fn close(self) {
+        self.reader.abort();
+    }
+}
+
+/// Every JSON payload in an SSE body. `data:` lines within one event are joined
+/// with a newline, which is what the transport specifies.
+fn sse_messages(body: &str) -> Vec<Value> {
+    let mut messages = Vec::new();
+    let mut data: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() {
+            flush_sse_data(&mut data, &mut messages);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("data:") {
+            data.push(value.trim_start());
+        }
+    }
+    flush_sse_data(&mut data, &mut messages);
+    messages
+}
+
+fn flush_sse_data(data: &mut Vec<&str>, messages: &mut Vec<Value>) {
+    if data.is_empty() {
+        return;
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(&data.join("\n")) {
+        messages.push(value);
+    }
+    data.clear();
+}
+
+/// The endpoint event carries either an absolute URL or a path relative to the
+/// stream. Both are legal, so both are handled.
+fn resolve_endpoint(base: &str, endpoint: &str) -> String {
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        return endpoint.to_string();
+    }
+    let (scheme, rest) = base.split_once("://").unwrap_or(("http", base));
+    let host = rest.split('/').next().unwrap_or(rest);
+    if endpoint.starts_with('/') {
+        format!("{scheme}://{host}{endpoint}")
+    } else {
+        format!("{scheme}://{host}/{endpoint}")
+    }
+}
+
 /// What a successful handshake taught us about the server.
 struct Handshake {
-    session: Session,
+    session: Connection,
     tools: Vec<Value>,
     protocol: String,
     version: String,
 }
 
 async fn connect_once(server: &Server) -> Result<Handshake, String> {
-    let mut session = Session::start(server)?;
+    let mut session = Connection::open(server).await?;
     let init = session
         .request(
             "initialize",
@@ -868,6 +1280,43 @@ fn merge_env(
     }
 }
 
+/// Header values are secrets in exactly the way env values are: an absent
+/// `headers` keeps what was saved, so editing a URL cannot silently wipe an
+/// authorization token.
+fn merge_headers(
+    input: Option<&Value>,
+    existing: Option<&Server>,
+) -> Result<BTreeMap<String, String>, String> {
+    match input {
+        None | Some(Value::Null) => Ok(existing
+            .map(|entry| entry.headers.clone())
+            .unwrap_or_default()),
+        Some(Value::Object(values)) => {
+            let mut headers = BTreeMap::new();
+            for (key, value) in values {
+                let Some(value) = value.as_str() else {
+                    return Err(format!("Header value for {key} must be a string."));
+                };
+                if key.is_empty()
+                    || !key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+                {
+                    return Err(format!(
+                        "Header name {key} must be letters, digits, dash, underscore or dot."
+                    ));
+                }
+                if value.contains('\r') || value.contains('\n') {
+                    return Err(format!("Header value for {key} must be one line."));
+                }
+                headers.insert(key.clone(), value.to_string());
+            }
+            Ok(headers)
+        }
+        Some(_) => Err("Headers must be an object of NAME: value pairs.".to_string()),
+    }
+}
+
 async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let name = input
         .get("name")
@@ -882,15 +1331,44 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
         )
         .into_response();
     }
+    let transport = input
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or("stdio")
+        .trim()
+        .to_string();
+    if !valid_transport(&transport) {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "Transport must be stdio, http or sse.",
+        )
+        .into_response();
+    }
     let command = input
         .get("command")
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim()
         .to_string();
-    if command.is_empty() {
-        return crate::json_error(StatusCode::BAD_REQUEST, "A server needs a command to run.")
-            .into_response();
+    if transport == "stdio" && command.is_empty() {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "A stdio server needs a command to run.",
+        )
+        .into_response();
+    }
+    let url = input
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if transport != "stdio" && !valid_url(&url) {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "A remote server needs an http:// or https:// URL.",
+        )
+        .into_response();
     }
     let args = match clean_args(input.get("args")) {
         Ok(args) => args,
@@ -903,15 +1381,23 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
         Ok(env) => env,
         Err(error) => return crate::json_error(StatusCode::BAD_REQUEST, error).into_response(),
     };
+    let headers = match merge_headers(input.get("headers"), existing.as_ref()) {
+        Ok(headers) => headers,
+        Err(error) => return crate::json_error(StatusCode::BAD_REQUEST, error).into_response(),
+    };
     let enabled = input
         .get("enabled")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let stdio = transport == "stdio";
     let server = Server {
         name: name.clone(),
-        command,
+        transport,
+        command: if stdio { command } else { String::new() },
         args,
         env,
+        url: if stdio { String::new() } else { url },
+        headers,
         enabled,
     };
     match servers.iter_mut().find(|entry| entry.name == name) {
@@ -937,9 +1423,10 @@ async fn remove_server(State(state): State<AppState>, Json(input): Json<Value>) 
     Json(json!({ "ok": true, "removed": removed })).into_response()
 }
 
-/// Every route that can start a child process asks the policy first. Testing a
-/// server *is* starting it, so it answers to `mcp_tool` on the server name —
-/// one rule can keep a server from ever running.
+/// Every route that can start a child process or reach a remote server asks
+/// the policy first. Testing a server *is* using it, so it answers to
+/// `mcp_tool` on the server name — one rule can keep a server from ever being
+/// contacted.
 fn gate(state: &AppState, target: &str, approve: bool, detail: &str) -> Option<Response> {
     let verdict = permissions::check(state, PolicyAction::McpTool, target, "");
     match verdict.decision {
@@ -1159,9 +1646,12 @@ mod tests {
     fn server(name: &str) -> Server {
         Server {
             name: name.to_string(),
+            transport: "stdio".to_string(),
             command: "true".to_string(),
             args: Vec::new(),
             env: BTreeMap::new(),
+            url: String::new(),
+            headers: BTreeMap::new(),
             enabled: true,
         }
     }
@@ -1373,6 +1863,103 @@ mod tests {
             state.logs.back().expect("last").text,
             format!("line {}", LOG_LINES + 24)
         );
+    }
+
+    #[test]
+    fn an_old_registry_entry_reads_as_a_stdio_server() {
+        let parsed: Server = serde_json::from_str(
+            r#"{"name":"files","command":"mcp-files","args":[],"enabled":true}"#,
+        )
+        .expect("old entry");
+        assert_eq!(parsed.transport, "stdio");
+        assert!(parsed.url.is_empty());
+        assert!(parsed.headers.is_empty());
+    }
+
+    #[test]
+    fn transport_names_are_a_closed_set() {
+        assert!(valid_transport("stdio"));
+        assert!(valid_transport("http"));
+        assert!(valid_transport("sse"));
+        assert!(!valid_transport("websocket"));
+        assert!(!valid_transport(""));
+    }
+
+    #[test]
+    fn remote_urls_must_be_http_and_free_of_whitespace() {
+        assert!(valid_url("http://127.0.0.1:8821/mcp"));
+        assert!(valid_url("https://example.com/mcp"));
+        assert!(!valid_url("ftp://example.com/mcp"));
+        assert!(!valid_url("example.com/mcp"));
+        assert!(!valid_url("https://"));
+        assert!(!valid_url("https://example.com/a b"));
+        assert!(!valid_url(&format!("https://example.com/{}", "x".repeat(2048))));
+    }
+
+    #[test]
+    fn sse_bodies_yield_their_json_payloads() {
+        let body = "event: endpoint\ndata: /messages?sessionId=1\n\n\
+                    event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n\
+                    : keep-alive\n\n\
+                    data: not json\n\n";
+        let messages = sse_messages(body);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["id"], json!(1));
+    }
+
+    #[test]
+    fn sse_data_lines_in_one_event_are_joined() {
+        let body = "data: {\"jsonrpc\":\"2.0\",\ndata: \"id\":7,\"result\":[]}\n\n";
+        let messages = sse_messages(body);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["id"], json!(7));
+    }
+
+    #[test]
+    fn an_endpoint_is_resolved_against_the_stream_it_came_from() {
+        assert_eq!(
+            resolve_endpoint("http://127.0.0.1:8822/sse", "/messages?sessionId=9"),
+            "http://127.0.0.1:8822/messages?sessionId=9"
+        );
+        assert_eq!(
+            resolve_endpoint("https://example.com/mcp", "messages"),
+            "https://example.com/messages"
+        );
+        assert_eq!(
+            resolve_endpoint("https://example.com/mcp", "https://other.test/x"),
+            "https://other.test/x"
+        );
+    }
+
+    #[test]
+    fn header_values_never_reach_an_api_response() {
+        let mut entry = server("remote");
+        entry.transport = "http".to_string();
+        entry.url = "https://example.com/mcp".to_string();
+        entry
+            .headers
+            .insert("Authorization".to_string(), "Bearer secret".to_string());
+        let rendered = server_json(&entry).to_string();
+        assert!(rendered.contains("Authorization"));
+        assert!(!rendered.contains("Bearer secret"));
+        assert!(rendered.contains("https://example.com/mcp"));
+    }
+
+    #[test]
+    fn saving_without_headers_keeps_the_saved_values() {
+        let mut existing = server("remote");
+        existing
+            .headers
+            .insert("Authorization".to_string(), "Bearer secret".to_string());
+        assert_eq!(
+            merge_headers(None, Some(&existing)),
+            Ok(existing.headers.clone())
+        );
+        let replaced = merge_headers(Some(&json!({ "X-Trace": "1" })), Some(&existing))
+            .expect("object");
+        assert_eq!(replaced.len(), 1);
+        assert!(merge_headers(Some(&json!({ "Bad Name": "x" })), None).is_err());
+        assert!(merge_headers(Some(&json!(["nope"])), None).is_err());
     }
 
     #[test]

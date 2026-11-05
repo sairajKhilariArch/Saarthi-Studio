@@ -124,13 +124,13 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 
 | Item | Status | Notes |
 |---|---|---|
-| Server registry | Working (1.33.0) | `mcp.json` beside the config; env values stored, only names returned |
+| Server registry | Working (1.37.0) | `mcp.json` beside the config; `transport` (stdio/http/sse), `url` for remote servers, `env` for stdio and write-only `headers` for remote — values stored, only names returned; an entry without `transport` reads as stdio |
 | Stdio connection lifecycle | Partial (1.33.0) | real `initialize` handshake and `tools/call`, but one process per operation — no pooling, no supervisor |
 | Tool discovery | Working (1.33.0) | `tools/list`, schemas kept |
 | Schema validation | Working (1.33.0) | `required` presence + declared scalar types; not full JSON Schema |
 | Permission binding | Working (1.33.0) | `mcp_tool` on `server.tool`; ask/deny/allow, audited |
 | Health, logs, reconnect | Working (1.36.0) | health recorded from a real handshake (`serverInfo.version`, protocol, tool count, latency, time), `unknown` before any contact; stderr and client events in a 200-line in-memory ring; one handshake retry after 250 ms, never a retried `tools/call`; `/api/mcp/health`, `/api/mcp/health/check`, `/api/mcp/logs?name=` |
-| SSE / HTTP transports | Missing | stdio only |
+| SSE / HTTP transports | Working (1.37.0) | streamable HTTP (one POST per message, JSON or SSE answer, `Mcp-Session-Id` carried forward) and legacy HTTP+SSE (GET stream, `endpoint` event, id-matched answers); both share handshake, catalogue, validation, gating and health/log state with stdio |
 | Agent use of MCP tools | Working (1.35.0) | `Action::Mcp` with a per-run `allowMcp` flag; catalogue discovered once into `agent_runs.mcp_tools` and logged as `mcp-tools`; approval pause names the tool and arguments; `mcp_tool` rules on `server.tool` veto; execution goes through the same `mcp::invoke` as the route |
 | Per-step tool rediscovery | Missing | the catalogue is the snapshot taken at run start |
 | MCP manager UI | Working (1.34.0) | Settings → MCP: register/edit/test/remove, tool cards, argument template, approve-then-call, raw result |

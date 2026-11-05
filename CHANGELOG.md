@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.37.0
+
+- Phase 7 close-out, transport half: an MCP server is no longer always a child
+  process. A registry entry now carries a `transport` — `stdio` (unchanged),
+  `http` (streamable HTTP) or `sse` (the older HTTP+SSE transport) — plus a
+  `url` and optional request `headers`.
+- One conversation, three carriers. `Connection` opens whichever transport the
+  entry names, and the handshake, catalogue, schema check, permission gate,
+  agent integration and health/log bookkeeping are shared with stdio. The Test
+  route, `invoke` and `discover_for_prompt` gained no second path.
+- Streamable HTTP: one POST per message with `Accept: application/json,
+  text/event-stream`; the answer is read as JSON or folded out of an SSE body,
+  and an `Mcp-Session-Id` returned by the handshake is carried on later
+  requests. A notification accepts any 2xx.
+- Legacy HTTP+SSE: one GET stream carries server messages, its `endpoint` event
+  is resolved (absolute or relative) and used for POSTs, and answers are
+  matched by id on the stream. The reader task ends with the session and is
+  aborted on close.
+- Header values are secrets exactly as env values are: the API returns names
+  only, an absent `headers` keeps what was saved so editing a URL cannot wipe a
+  token, and a value containing a newline is refused. `env` still belongs to a
+  stdio server.
+- Validation: transport is a closed set (stdio/http/sse); a stdio server still
+  needs a command; a remote server needs an `http(s)` URL shaped like one. A
+  save clears the field the chosen transport does not use, so a switched server
+  cannot keep a stale command or URL.
+- A registry written before this change reads as stdio, tested explicitly, so
+  an existing `mcp.json` keeps working without a migration.
+- Panel: Transport select, URL field and Headers field; a remote row shows
+  `http <url>` instead of a command, and lists saved header names, never values.
+- Tests: 247 pass (8 new: an old entry defaults to stdio, the transport set,
+  URL shape, SSE payload extraction, multi-line `data:` joining, endpoint
+  resolution, header names without values, and header merge preservation).
+- Live smoke on :8765 against two stand-in servers: streamable HTTP handshake
+  in 2 ms and `echo` → `remote: hello over http`; legacy SSE handshakes in
+  5/3/2 ms and `echo` → `remote: hello over sse`, `ping` → `pong`. Both report
+  `healthy`, version `2.0.0`, protocol `2024-11-05`, 2 tools; after a restart
+  both read `unknown` until contacted. An unknown transport and an `ftp://`
+  URL are both 400.
+- Still missing, recorded rather than implied: a persistent connection pool
+  (every operation still opens one session), per-step rediscovery, and an
+  OAuth flow for remote servers — remote auth is headers the user writes.
+- Version 1.37.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 53).
+
 ## 1.36.0
 
 - Phase 7 close-out, connection half: an MCP server now has health, its own

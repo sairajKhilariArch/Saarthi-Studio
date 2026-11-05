@@ -691,7 +691,7 @@
 
           <section id="settings-mcp" class="settings-section card form-card-inner hidden">
           <h2 class="form-group-title">MCP servers</h2>
-          <p>Local Model Context Protocol servers this computer may run. A server is a command; its tools are checked against <a href="#" data-goto-settings="permissions">Permissions</a> before anything runs, so an unlisted tool asks first.</p>
+          <p>Local Model Context Protocol servers this computer may run or reach. A server is a local command or a remote <code>http(s)</code> endpoint; its tools are checked against <a href="#" data-goto-settings="permissions">Permissions</a> before anything runs, so an unlisted tool asks first.</p>
           <div class="form-row">
             <label class="field">
               <span>Name</span>
@@ -706,6 +706,22 @@
           </div>
           <div class="form-row">
             <label class="field">
+              <span>Transport</span>
+              <select id="mcpTransport">
+                <option value="stdio">stdio — a local command</option>
+                <option value="http">http — streamable HTTP</option>
+                <option value="sse">sse — legacy HTTP + SSE</option>
+              </select>
+              <small>stdio starts a child process; http and sse reach the URL below.</small>
+            </label>
+            <label class="field">
+              <span>URL</span>
+              <input id="mcpUrl" type="text" placeholder="https://example.com/mcp" autocomplete="off">
+              <small>Used by http and sse only. Must start with http:// or https://.</small>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field">
               <span>Arguments</span>
               <input id="mcpArgs" type="text" placeholder="--root . --read-only" autocomplete="off">
               <small>Space-separated. An argument containing a space cannot be expressed here yet.</small>
@@ -714,6 +730,11 @@
               <span>Environment</span>
               <input id="mcpEnv" type="text" placeholder="TOKEN=… , LOG=debug" autocomplete="off">
               <small>Comma-separated <code>KEY=value</code>. Values stay on this computer and are never shown again.</small>
+            </label>
+            <label class="field">
+              <span>Headers</span>
+              <input id="mcpHeaders" type="text" placeholder="Authorization=Bearer …" autocomplete="off">
+              <small>Comma-separated <code>Name=value</code> for a remote server. Values are never shown again.</small>
             </label>
           </div>
           <label class="field checkbox-field">

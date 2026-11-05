@@ -3330,12 +3330,18 @@ function renderMcpServers() {
     const strong = document.createElement("strong");
     strong.textContent = server.name;
     const line = document.createElement("p");
-    line.textContent = [server.command, ...(server.args || [])].join(" ");
+    line.textContent =
+      server.transport && server.transport !== "stdio"
+        ? `${server.transport} ${server.url}`
+        : [server.command, ...(server.args || [])].join(" ");
     const meta = document.createElement("small");
     meta.className = "skill-path";
-    meta.textContent = (server.environment || []).length
-      ? `Environment: ${server.environment.join(", ")}`
-      : "No environment set";
+    const metaBits = [];
+    if ((server.environment || []).length) {
+      metaBits.push(`Environment: ${server.environment.join(", ")}`);
+    }
+    if ((server.headers || []).length) metaBits.push(`Headers: ${server.headers.join(", ")}`);
+    meta.textContent = metaBits.length ? metaBits.join(" · ") : "No environment or headers set";
     main.append(strong, line, meta);
     const side = document.createElement("div");
     side.className = "skill-side";
@@ -3361,43 +3367,81 @@ function renderMcpServers() {
 
 function editMcpServer(server) {
   $("mcpName").value = server.name;
+  $("mcpTransport").value = server.transport || "stdio";
   $("mcpCommand").value = server.command;
+  $("mcpUrl").value = server.url || "";
   $("mcpArgs").value = (server.args || []).join(" ");
   $("mcpEnv").value = "";
   $("mcpEnv").placeholder = (server.environment || []).length
     ? `Saved: ${server.environment.join(", ")} (leave blank to keep)`
     : "TOKEN=… , LOG=debug";
+  $("mcpHeaders").value = "";
+  $("mcpHeaders").placeholder = (server.headers || []).length
+    ? `Saved: ${server.headers.join(", ")} (leave blank to keep)`
+    : "Authorization=Bearer …";
   $("mcpEnabled").checked = server.enabled;
-  mcpNotice(`Editing ${server.name}. Its saved environment is kept unless you type a new one.`, true);
+  mcpNotice(
+    `Editing ${server.name}. Its saved environment and headers are kept unless you type new ones.`,
+    true,
+  );
+}
+
+/* One parser for both write-only maps: env is KEY=value, headers are
+   Name=value, and neither value is ever returned by the API. */
+function mcpPairs(text) {
+  const pairs = {};
+  for (const part of text.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const at = trimmed.indexOf("=");
+    if (at <= 0) return null;
+    pairs[trimmed.slice(0, at).trim()] = trimmed.slice(at + 1);
+  }
+  return pairs;
 }
 
 async function saveMcpServer() {
   const name = $("mcpName").value.trim();
+  const transport = $("mcpTransport").value;
   const command = $("mcpCommand").value.trim();
-  if (!name || !command) {
-    mcpNotice("A server needs a name and a command.", false);
+  const url = $("mcpUrl").value.trim();
+  if (!name) {
+    mcpNotice("A server needs a name.", false);
+    return;
+  }
+  if (transport === "stdio" && !command) {
+    mcpNotice("A stdio server needs a command to run.", false);
+    return;
+  }
+  if (transport !== "stdio" && !/^https?:\/\/\S+$/.test(url)) {
+    mcpNotice("A remote server needs an http:// or https:// URL.", false);
     return;
   }
   const payload = {
     name,
+    transport,
     command,
+    url,
     args: $("mcpArgs").value.trim() ? $("mcpArgs").value.trim().split(/\s+/) : [],
     enabled: $("mcpEnabled").checked,
   };
   const envText = $("mcpEnv").value.trim();
   if (envText) {
-    const env = {};
-    for (const pair of envText.split(",")) {
-      const trimmed = pair.trim();
-      if (!trimmed) continue;
-      const at = trimmed.indexOf("=");
-      if (at <= 0) {
-        mcpNotice(`Environment entry "${trimmed}" must look like KEY=value.`, false);
-        return;
-      }
-      env[trimmed.slice(0, at).trim()] = trimmed.slice(at + 1);
+    const env = mcpPairs(envText);
+    if (!env) {
+      mcpNotice("Environment entries must look like KEY=value.", false);
+      return;
     }
     payload.env = env;
+  }
+  const headerText = $("mcpHeaders").value.trim();
+  if (headerText) {
+    const headers = mcpPairs(headerText);
+    if (!headers) {
+      mcpNotice("Header entries must look like Name=value.", false);
+      return;
+    }
+    payload.headers = headers;
   }
   const result = await api("/api/mcp/servers", { method: "POST", body: JSON.stringify(payload) });
   if (!result.ok) {
