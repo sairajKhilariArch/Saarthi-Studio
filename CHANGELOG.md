@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.38.0
+
+- Phase 7 remainder, rediscovery half: a run's MCP catalogue is no longer
+  frozen at run start. When an `mcp` step fails, the catalogue is read again
+  before the repair step, because that is the step that has to fix the call —
+  a server that restarted with a different tool list was previously invisible
+  until a new run.
+- Bounded per run: the snapshot carries a `refreshes` counter and a run gets
+  three. Each refresh contacts every enabled server (discovery starts a stdio
+  child or opens a remote session), so a miss loop must not be able to respawn
+  them step after step. A resumed run keeps the allowance it used; a snapshot
+  written before this field, or one that cannot be parsed, reads as zero.
+- A refresh is visible: it records an `mcp-refresh` step summarised as
+  "N MCP tool(s) after a refresh", whose output names the reason, the allowance
+  used, the `server.tool` list, and an `unavailable:` line per server that
+  still cannot be reached. It notifies listeners like every other step.
+- Tests: 249 pass (2 new: a snapshot carries its refresh allowance including
+  old and corrupt input, and a refreshed catalogue reaches the next prompt).
+- Live run on :8765 with a scripted stand-in model: step 1 called
+  `echo.missing_tool` and the step error named the tools that do exist; the
+  refresh step recorded `(0 of 3 refreshes used)` with `echo.echo` and
+  `echo.ping`; step 2 called `echo.echo` and returned `echo: after refresh`;
+  the run finished `succeeded` with `mcpTools: 2` across 5 steps.
+- Still missing, recorded rather than implied: a persistent connection pool
+  (each operation still opens one session), and remote auth beyond the header
+  values a user writes.
+- Version 1.38.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 54).
+
 ## 1.37.0
 
 - Phase 7 close-out, transport half: an MCP server is no longer always a child

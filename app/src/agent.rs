@@ -1053,6 +1053,18 @@ fn mcp_tool_count(snapshot: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// How many refreshes a run has already spent. The count lives in the snapshot,
+/// so a resumed run keeps the allowance it used; a snapshot written before
+/// refreshes existed — or one that cannot be parsed — reads as none used.
+const MCP_REFRESHES_PER_RUN: u64 = 3;
+
+fn mcp_refresh_count(snapshot: &str) -> u64 {
+    serde_json::from_str::<Value>(snapshot)
+        .ok()
+        .and_then(|parsed| parsed.get("refreshes").and_then(Value::as_u64))
+        .unwrap_or(0)
+}
+
 /// The catalogue as prompt text: server.tool, a capped description and the
 /// required argument names. None when nothing was discovered, so a run with no
 /// usable tool is not told about an action it cannot take.
@@ -1989,6 +2001,12 @@ async fn execute_action_step(
                 &summary,
                 &error,
             )?;
+            // A failed MCP call is the moment the catalogue is most likely to
+            // be stale — the server may have restarted with different tools.
+            // Re-read it before the repair step, bounded per run.
+            if matches!(action, Action::Mcp { .. }) {
+                refresh_mcp_tools(state, &run.id, &error).await;
+            }
             // Not fatal: the next model step sees the error and can repair.
             return Ok(true);
         }
@@ -2057,6 +2075,80 @@ async fn catalog_mcp_tools(state: &AppState, run_id: &str) {
         &cap_chars(&output, STEP_OUTPUT_CAP),
     );
     notify(state, Some(run_id));
+}
+
+/// Re-reads the catalogue after an MCP action failed, so the repair step sees
+/// the tools the servers offer *now* — a server that restarted with different
+/// tools is the exact case a run-start snapshot cannot cover. Bounded per run,
+/// because each refresh contacts every enabled server; a miss loop must not be
+/// able to respawn them step after step.
+async fn refresh_mcp_tools(state: &AppState, run_id: &str, reason: &str) -> bool {
+    let Ok(Some(run)) = load_run(state, run_id) else {
+        return false;
+    };
+    if !run.allow_mcp {
+        return false;
+    }
+    let used = mcp_refresh_count(&run.mcp_tools);
+    if used >= MCP_REFRESHES_PER_RUN {
+        return false;
+    }
+    let (tools, errors) = crate::mcp::discover_for_prompt(state).await;
+    let snapshot = json!({
+        "tools": tools,
+        "errors": errors,
+        "refreshes": used + 1,
+    })
+    .to_string();
+    let stored = db(state).and_then(|conn| {
+        conn.execute(
+            "UPDATE agent_runs SET mcp_tools=?1 WHERE id=?2",
+            params![snapshot, run_id],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    });
+    if let Err(error) = stored {
+        let _ = add_step(
+            state,
+            run_id,
+            "error",
+            "The MCP catalogue could not be refreshed",
+            &error,
+        );
+        return false;
+    }
+    let listed = tools
+        .iter()
+        .map(|tool| {
+            let server = tool.get("server").and_then(Value::as_str).unwrap_or("");
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+            format!("{server}.{name}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut output = format!(
+        "An MCP call failed, so the catalogue was read again ({used} of {MCP_REFRESHES_PER_RUN} refreshes used).\nReason: {}",
+        cap_chars(reason, 300)
+    );
+    if listed.is_empty() {
+        output.push_str("\nNo tool was discovered on the enabled MCP servers.");
+    } else {
+        output.push_str("\n\n");
+        output.push_str(&listed);
+    }
+    for error in &errors {
+        output.push_str(&format!("\nunavailable: {error}"));
+    }
+    let _ = add_step(
+        state,
+        run_id,
+        "mcp-refresh",
+        &format!("{} MCP tool(s) after a refresh", tools.len()),
+        &cap_chars(&output, STEP_OUTPUT_CAP),
+    );
+    notify(state, Some(run_id));
+    true
 }
 
 async fn run_loop(state: AppState, run_id: String) {
@@ -3305,6 +3397,33 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             PermissionGate::decides(&mcp_run(true, MCP_SNAPSHOT), &call),
             GateDecision::Allowed
         ));
+    }
+
+    #[test]
+    fn a_snapshot_carries_its_refresh_allowance() {
+        // A snapshot written before refreshes existed reads as none used.
+        assert_eq!(mcp_refresh_count(MCP_SNAPSHOT), 0);
+        assert_eq!(
+            mcp_refresh_count(r#"{"tools":[],"errors":[],"refreshes":2}"#),
+            2
+        );
+        // A corrupt snapshot is zero, never a panic in the run loop.
+        assert_eq!(mcp_refresh_count("not json"), 0);
+    }
+
+    #[test]
+    fn a_refreshed_catalogue_reaches_the_next_prompt() {
+        let refreshed = r#"{"tools":[{"server":"echo","name":"ping","description":"Answer pong","required":[]}],"errors":[],"refreshes":1}"#;
+        let prompt = build_messages(&mcp_run(true, refreshed), "(one failed step)")
+            .iter()
+            .map(|message| message["content"].as_str().unwrap_or("").to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The tool the server offers after the refresh is what the model reads.
+        assert!(prompt.contains("echo.ping"), "{prompt}");
+        assert!(prompt.contains("\"action\":\"mcp\""), "{prompt}");
+        assert_eq!(mcp_tool_count(refreshed), 1);
+        assert_eq!(mcp_refresh_count(refreshed), 1);
     }
 
     #[test]
