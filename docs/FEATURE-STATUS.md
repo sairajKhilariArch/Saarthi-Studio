@@ -79,22 +79,18 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 
 ## Phase 4 — Thinking and OpenAI Platform
 
-**Nothing implemented.** Verified: no `/v1/responses` request anywhere; the only
-`api.openai.com` reference is `deepsearch.rs:72`, which picks OpenAI's grounded
-`web_search` path for research answers; `deepsearch.rs:702` merely recognises a
-`reasoning` SSE frame while parsing that provider's stream. There is no
-reasoning parameter, no level enum, no `@Thinking` token, no scope model, and no
-composer control (`app/static/index.html:205`'s `#thinking` element is the
-"Thinking with your router…" spinner, unrelated).
+The backend shipped in 1.29.0 (`thinking.rs`, `openai.rs`); the composer control
+is the remaining half, tracked below rather than counted as done.
 
 | Item | Status |
 |---|---|
-| Native OpenAI Platform provider (Responses API) | Missing |
-| Thinking control (off/low/medium/high/model default) | Missing |
-| `@Thinking` shortcut + literal escape | Missing |
-| Scope precedence (message > agent > project > global) | Missing |
-| Reasoning summaries / progress surfacing | Missing |
-| Tests for any of the above | Missing |
+| Native OpenAI Platform provider (Responses API) | Working (1.29.0) — `openai.rs`, own key, `openai:` model ids, buffered + streaming + agent calls |
+| Thinking control (off/low/medium/high/model default) | Partial — backend levels and resolution work; the composer control lands next |
+| `@Thinking` shortcut + literal escape | Working backend (1.29.0) — parsed and stripped before the message is stored; the chip lands next |
+| Scope precedence (message > agent > project > global) | Working (1.29.0) — `projects.thinking` column migrated in place, agent scope from config |
+| Reasoning summaries / progress surfacing | Partial — reasoning frames are emitted server-side; the panel lands next |
+| Tests for any of the above | Working — 21 new cases, 204 total |
+| Composer control, Settings fields, platform models in the picker | Missing (next commit) |
 
 ## Phase 5 — Agent execution engine
 

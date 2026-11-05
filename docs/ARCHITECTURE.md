@@ -23,7 +23,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 
 | Module | Lines | Responsibility |
 |---|---|---|
-| `main.rs` | 3047 | App state, config load/save, SQLite open/migrate, chat + streaming chat, conversations, usage, router/omniroute status, static serving, listener setup |
+| `main.rs` | 3628 | App state, config load/save, SQLite open/migrate, chat + streaming chat, Thinking resolution, conversations, usage, router/omniroute status, static serving, listener setup |
 | `agent.rs` | 3591 | Bounded autonomous run loop: one JSON action per model step (`think`/`list`/`read`/`write`/`command`/`done`/`fail`), permissions, approval pauses, checkpoints, diffs, cancellation, `agent_runs`/`agent_steps` persistence |
 | `host_api.rs` | 1807 | Authenticated router for the Android companion (health, capabilities, models, chat, conversations, messages) |
 | `workspace.rs` | 1599 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, git status/vcs |
@@ -40,6 +40,8 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `host_transport.rs` | 245 | Listener binding, TLS material handling |
 | `context.rs` | 213 | Token-budgeted request packing (4 chars/token, 6 k default budget, 1 k–32 k clamp) |
 | `capabilities.rs` | 280 | Model capabilities from provider-published metadata only (`/models` rows, Ollama `/api/show`); every unknown flag is `null`, never guessed |
+| `openai.rs` | 771 | Native OpenAI Platform provider: Responses API request/response/stream translation, `openai:` model ids, model catalog, key test, reasoning-rejection retry and its per-process memory |
+| `thinking.rs` | 351 | Thinking levels, fixed precedence (message > agent > project > global > provider default), `@Thinking` directive with a literal escape |
 | `events.rs` | 77 | Broadcast hub for SSE conversation mirrors |
 | `gui.rs`, `browser.rs` | 46, 30 | Tauri window bootstrap, system browser launch |
 

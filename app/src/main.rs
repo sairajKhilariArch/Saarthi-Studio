@@ -41,12 +41,14 @@ mod host_transport;
 mod installer;
 mod local;
 mod media;
+mod openai;
 mod privacy;
 mod router;
 mod router_console;
 mod router_registry;
 mod skills;
 mod terminal;
+mod thinking;
 mod workspace;
 
 const APP_NAME: &str = "Saarthi Studio";
@@ -116,6 +118,18 @@ struct Config {
     /// When on, chat/run requests go ONLY to the local runtime.
     #[serde(default)]
     local_chat: bool,
+    /// Native OpenAI Platform key, kept apart from the router key so a
+    /// platform pick can never accidentally use the gateway's.
+    #[serde(default)]
+    openai_api_key: String,
+    #[serde(default = "default_openai_base_url")]
+    openai_base_url: String,
+    /// Thinking default for every turn without a more specific setting.
+    #[serde(default)]
+    thinking_level: String,
+    /// Thinking default for agent runs (agent scope, below message scope).
+    #[serde(default)]
+    run_thinking_level: String,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -149,12 +163,20 @@ impl Config {
             local_base_url: default_local_base_url(),
             local_model: String::new(),
             local_chat: false,
+            openai_api_key: String::new(),
+            openai_base_url: default_openai_base_url(),
+            thinking_level: String::new(),
+            run_thinking_level: String::new(),
         }
     }
 }
 
 fn default_local_base_url() -> String {
     "http://127.0.0.1:11434".to_string()
+}
+
+fn default_openai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
 }
 
 /// A menu pick of the form "local:<model>" forces local routing for that
@@ -271,6 +293,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
         );",
     )?;
     let _ = migrate_projects(&conn);
+    let _ = migrate_project_thinking(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
     }
@@ -333,6 +356,52 @@ fn migrate_projects(conn: &Connection) -> rusqlite::Result<()> {
         params![fallback],
     )?;
     Ok(())
+}
+
+/// Give projects the per-project Thinking default (`''` = inherit the global
+/// setting), so the column exists on fresh and upgraded databases alike.
+fn migrate_project_thinking(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(projects)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "thinking")
+    };
+    if !has_column {
+        conn.execute_batch("ALTER TABLE projects ADD COLUMN thinking TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+/// A project's Thinking default from a request body: one of the four levels, or
+/// empty to inherit.
+fn project_thinking_input(input: &Value) -> String {
+    input
+        .get("thinking")
+        .and_then(Value::as_str)
+        .and_then(thinking::ThinkingLevel::parse)
+        .map(|level| level.as_str().to_string())
+        .unwrap_or_default()
+}
+
+/// The active project's Thinking default, or empty when it inherits. A read
+/// failure means "inherit": a chat request is never blocked by this.
+fn project_thinking_level(state: &AppState, project_id: &str) -> String {
+    if project_id.trim().is_empty() {
+        return String::new();
+    }
+    open_db(&state.database_path)
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT thinking FROM projects WHERE id=?1",
+                [project_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// The project new sessions belong to. Repairs an empty or stale pointer
@@ -501,6 +570,21 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
         "exa" | "tavily" => cfg.search_provider.to_lowercase(),
         _ => String::new(),
     };
+    cfg.openai_api_key = cfg.openai_api_key.trim().to_string();
+    cfg.openai_base_url = cfg.openai_base_url.trim().trim_end_matches('/').to_string();
+    if cfg.openai_base_url.is_empty() {
+        cfg.openai_base_url = default_openai_base_url();
+    }
+    if !cfg.openai_base_url.starts_with("https://") && !cfg.openai_base_url.starts_with("http://") {
+        return Err("The OpenAI Platform URL must start with https://.".into());
+    }
+    // A level nobody can parse is "unset" (provider default), never a guess.
+    cfg.thinking_level = thinking::ThinkingLevel::parse(&cfg.thinking_level)
+        .map(|level| level.as_str().to_string())
+        .unwrap_or_default();
+    cfg.run_thinking_level = thinking::ThinkingLevel::parse(&cfg.run_thinking_level)
+        .map(|level| level.as_str().to_string())
+        .unwrap_or_default();
 
     cfg.context_budget_tokens = cfg
         .context_budget_tokens
@@ -535,6 +619,54 @@ pub(crate) fn reach_error(base_url: &str, detail: String) -> String {
         message += "\n\nFreeLLMAPI (port 3001) is not running. Start the Docker Compose router (`cd ~/freellmapi && sudo docker compose up -d`), then try again.";
     }
     message
+}
+
+/// Whether the router's catalog says this model accepts reasoning parameters.
+/// `None` means the catalog does not say (no metadata, or it could not be
+/// read), which is not evidence either way.
+async fn catalog_reasoning(state: &AppState, cfg: &Config, id: &str) -> Option<bool> {
+    let from_list = |models: &Value| -> Option<bool> {
+        models
+            .as_array()?
+            .iter()
+            .find(|model| model.get("id").and_then(Value::as_str) == Some(id))?
+            .pointer("/capabilities/reasoning")
+            .and_then(Value::as_bool)
+    };
+    let cache_key = format!(
+        "{}|{}",
+        cfg.base_url.trim_end_matches('/'),
+        !cfg.api_key.is_empty()
+    );
+    let cached = state.models_cache.lock().ok().and_then(|cache| {
+        cache
+            .get(&cache_key)
+            .map(|(at, models)| (at.elapsed(), models.clone()))
+    });
+    if let Some((elapsed, models)) = cached {
+        if elapsed < Duration::from_secs(60) {
+            return from_list(&models);
+        }
+    }
+    let models = json!(fetch_models(state, cfg).await.ok()?);
+    let answer = from_list(&models);
+    if let Ok(mut cache) = state.models_cache.lock() {
+        cache.insert(cache_key, (std::time::Instant::now(), models));
+    }
+    answer
+}
+
+/// The thinking block a chat response reports: the level in force, where it
+/// came from, and what it does. `null` means the provider default applied.
+fn thinking_json(resolved: Option<thinking::Resolved>) -> Value {
+    match resolved {
+        Some(resolved) => json!({
+            "level": resolved.level.as_str(),
+            "scope": resolved.scope.as_str(),
+            "note": resolved.level.describe(),
+        }),
+        None => Value::Null,
+    }
 }
 
 fn response_content(data: &Value) -> String {
@@ -640,11 +772,22 @@ pub(crate) async fn call_router(
     messages: Vec<Value>,
     model_override: Option<&str>,
 ) -> Result<(String, Value), String> {
-    let cfg = load_config(state);
-    if cfg.api_key.trim().is_empty() {
-        return Err("Add your router's unified API key in Settings first.".into());
-    }
+    // Agent scope: runs resolve their Thinking default here, below any
+    // per-message setting and above the project/global defaults chat uses.
+    let level = thinking::ThinkingLevel::parse(&load_config(state).run_thinking_level);
+    call_router_with(state, messages, model_override, level).await
+}
 
+/// The same request with the Thinking level the caller resolved. A platform
+/// pick goes to the Responses API; a router pick carries `reasoning_effort`
+/// only when the router's own catalog says the model accepts it.
+pub(crate) async fn call_router_with(
+    state: &AppState,
+    messages: Vec<Value>,
+    model_override: Option<&str>,
+    level: Option<thinking::ThinkingLevel>,
+) -> Result<(String, Value), String> {
+    let cfg = load_config(state);
     let chosen = model_override
         .map(str::trim)
         .filter(|m| !m.is_empty())
@@ -652,12 +795,51 @@ pub(crate) async fn call_router(
             "auto"
         } else {
             cfg.model.as_str()
-        });
-    let request_body = json!({
-        "model": chosen,
+        })
+        .to_string();
+
+    if let Some(platform_model) = openai::platform_model(&chosen) {
+        if cfg.openai_api_key.trim().is_empty() {
+            return Err("Add your OpenAI Platform key in Settings to use this model.".into());
+        }
+        let started = Instant::now();
+        let body = openai::request_body(&platform_model, &messages, level, false);
+        let (answer, mut meta) = openai::responses_once(
+            &state.client,
+            &cfg.openai_base_url,
+            &cfg.openai_api_key,
+            body,
+        )
+        .await?;
+        meta["latency_ms"] = json!(started.elapsed().as_millis() as i64);
+        return Ok((answer, meta));
+    }
+
+    if cfg.api_key.trim().is_empty() {
+        return Err("Add your router's unified API key in Settings first.".into());
+    }
+    let mut request_body = json!({
+        "model": &chosen,
         "messages": messages,
         "stream": false
     });
+    if let Some(level) = level {
+        if let Some(effort) = thinking::completions_reasoning(level) {
+            match catalog_reasoning(state, &cfg, &chosen).await {
+                Some(true) => request_body["reasoning_effort"] = json!(effort),
+                Some(false) => {
+                    return Err(format!(
+                        "{chosen} does not advertise reasoning, so it cannot run with Thinking {}. Choose a reasoning model or set Thinking to Off.",
+                        level.as_str()
+                    ))
+                }
+                // Unknown: send nothing rather than guess at a parameter the
+                // provider may reject.
+                None => {}
+            }
+        }
+    }
+
     let started = Instant::now();
     let response = state
         .client
@@ -780,6 +962,32 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "local_base_url": cfg.local_base_url,
         "local_model": cfg.local_model,
         "local_chat": cfg.local_chat,
+        "has_openai_key": !cfg.openai_api_key.is_empty(),
+        "openai_base_url": cfg.openai_base_url,
+        "thinking_level": cfg.thinking_level,
+        "run_thinking_level": cfg.run_thinking_level,
+    }))
+}
+
+/// The Thinking levels the composer offers, with what each one actually asks
+/// the provider for, so the control never describes an effect it does not have.
+async fn thinking_levels() -> Json<Value> {
+    let levels = [
+        thinking::ThinkingLevel::Off,
+        thinking::ThinkingLevel::Low,
+        thinking::ThinkingLevel::Medium,
+        thinking::ThinkingLevel::High,
+    ];
+    Json(json!({
+        "ok": true,
+        "levels": levels
+            .iter()
+            .map(|level| json!({
+                "id": level.as_str(),
+                "effort": level.effort(),
+                "description": level.describe(),
+            }))
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -1079,6 +1287,24 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Some(m) = input.get("strong_model").and_then(Value::as_str) {
         cfg.strong_model = m.trim().to_string();
     }
+    if let Some(key) = input.get("openai_api_key").and_then(Value::as_str) {
+        if !key.trim().is_empty() {
+            cfg.openai_api_key = key.trim().to_string();
+        }
+    }
+    if let Some(url) = input.get("openai_base_url").and_then(Value::as_str) {
+        cfg.openai_base_url = url.trim().to_string();
+    }
+    // Thinking defaults replace wholesale, so clearing a select clears the
+    // setting instead of leaving the old level behind.
+    for (key, target) in [
+        ("thinking_level", &mut cfg.thinking_level),
+        ("run_thinking_level", &mut cfg.run_thinking_level),
+    ] {
+        if let Some(level) = input.get(key).and_then(Value::as_str) {
+            *target = level.trim().to_string();
+        }
+    }
     cfg.base_url = base_url;
     cfg.model = model;
     let cfg = match validate_config(cfg) {
@@ -1088,7 +1314,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level})).into_response()
 }
 
 /* Model catalog: fetched live from the configured router's /models so nothing
@@ -1375,7 +1601,7 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
     let result = (|| -> rusqlite::Result<Vec<Value>> {
         let conn = open_db(&state.database_path)?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, folder_path, created_at, updated_at, archived_at FROM projects
+            "SELECT id, name, folder_path, created_at, updated_at, archived_at, thinking FROM projects
              ORDER BY (archived_at IS NOT NULL), created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1386,6 +1612,7 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
                 "created_at": row.get::<_, f64>(3)?,
                 "updated_at": row.get::<_, f64>(4)?,
                 "archived": row.get::<_, Option<f64>>(5)?.is_some(),
+                "thinking": row.get::<_, Option<String>>(6)?.unwrap_or_default(),
             }))
         })?;
         rows.collect()
@@ -1416,10 +1643,11 @@ async fn create_project(State(state): State<AppState>, Json(input): Json<Value>)
         .collect::<String>();
     let id = Uuid::new_v4().to_string();
     let now = now_seconds();
+    let thinking = project_thinking_input(&input);
     match open_db(&state.database_path).and_then(|conn| {
         conn.execute(
-            "INSERT INTO projects(id,name,folder_path,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)",
-            params![id, name, folder, now],
+            "INSERT INTO projects(id,name,folder_path,created_at,updated_at,thinking) VALUES(?1,?2,?3,?4,?4,?5)",
+            params![id, name, folder, now, thinking],
         )
     }) {
         Ok(_) => (
@@ -1467,6 +1695,15 @@ async fn update_project(
         if let Err(e) = conn.execute(
             "UPDATE projects SET folder_path=?1, updated_at=?2 WHERE id=?3",
             params![folder, now_seconds(), id],
+        ) {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    if input.get("thinking").is_some() {
+        let thinking = project_thinking_input(&input);
+        if let Err(e) = conn.execute(
+            "UPDATE projects SET thinking=?1, updated_at=?2 WHERE id=?3",
+            params![thinking, now_seconds(), id],
         ) {
             return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
         }
@@ -1932,6 +2169,8 @@ struct ChatPrep {
     model: Option<String>,
     /// (kind, mime, file bytes) for media referenced by this message.
     attachments: Vec<(String, String, Vec<u8>)>,
+    /// The Thinking level this turn will ask for, and which scope set it.
+    thinking: Option<thinking::Resolved>,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -1950,6 +2189,15 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         .unwrap_or("")
         .trim()
         .to_string();
+    // `@Thinking` is a command only at the very start of a message; `\@Thinking`
+    // writes the token literally. The command is stripped before the message is
+    // stored, so switching Thinking on never leaves the token in the history.
+    let directive = thinking::take_directive(&message);
+    let message = if directive.command {
+        directive.text.clone()
+    } else {
+        message
+    };
     let code: String = input
         .get("code")
         .and_then(Value::as_str)
@@ -2129,12 +2377,27 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         cfg.context_budget_tokens,
         cfg.history_messages,
     );
+    // Precedence is message > agent > project > global > provider default.
+    // Chat has no agent scope: agent runs resolve their own level.
+    let project_level = project_thinking_level(state, &cfg.active_project);
+    let message_level = input
+        .get("thinking")
+        .and_then(Value::as_str)
+        .and_then(thinking::ThinkingLevel::parse)
+        .or(directive.level);
+    let resolved = thinking::resolve(
+        message_level,
+        None,
+        Some(&project_level),
+        Some(&cfg.thinking_level),
+    );
     Ok(ChatPrep {
         cid,
         cfg,
         packed,
         model,
         attachments,
+        thinking: resolved,
     })
 }
 
@@ -2207,7 +2470,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         mut packed,
         model,
         attachments,
-        ..
+        thinking,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -2330,8 +2593,16 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
     }
 
     let started = Instant::now();
-    match call_router(&state, packed.messages, Some(&chosen_model)).await {
+    match call_router_with(
+        &state,
+        packed.messages,
+        Some(&chosen_model),
+        thinking.map(|resolved| resolved.level),
+    )
+    .await
+    {
         Ok((answer, mut meta)) => {
+            meta["thinking"] = thinking_json(thinking);
             let now = now_seconds();
             let log_result = (|| -> rusqlite::Result<()> {
                 let conn = open_db(&state.database_path)?;
@@ -2374,6 +2645,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
 #[derive(Debug, Default, PartialEq)]
 struct StreamEvent {
     delta: Option<String>,
+    /// A concise reasoning summary from a provider that publishes one. Never
+    /// presented as hidden chain-of-thought.
+    reasoning: Option<String>,
     usage: Option<Value>,
     done: bool,
     error: Option<String>,
@@ -2409,8 +2683,14 @@ fn parse_stream_payload(payload: &str) -> StreamEvent {
         .map(str::to_string)
         .filter(|text| !text.is_empty());
     let usage = value.get("usage").filter(|u| !u.is_null()).cloned();
+    let reasoning = value
+        .pointer("/reasoning/summary")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.is_empty());
     StreamEvent {
         delta,
+        reasoning,
         usage,
         done: false,
         error: None,
@@ -2563,6 +2843,12 @@ impl StreamState {
                     continue;
                 };
                 let parsed = parse_stream_payload(payload);
+                if let Some(text) = parsed.reasoning {
+                    if let Ok(mut held) = self.recorder.meta.lock() {
+                        held["reasoning"] = json!(true);
+                    }
+                    self.push(json!({ "type": "reasoning", "text": text }));
+                }
                 if let Some(text) = parsed.delta {
                     if let Ok(mut held) = self.recorder.text.lock() {
                         held.push_str(&text);
@@ -2579,6 +2865,10 @@ impl StreamState {
                             .unwrap_or(Value::Null);
                         held["total_tokens"] =
                             usage.get("total_tokens").cloned().unwrap_or(Value::Null);
+                        held["reasoning_tokens"] = usage
+                            .get("reasoning_tokens")
+                            .cloned()
+                            .unwrap_or(Value::Null);
                     }
                 }
                 if let Some(error) = parsed.error {
@@ -2632,7 +2922,7 @@ async fn chat_stream(
         mut packed,
         model,
         attachments,
-        ..
+        thinking,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -2696,6 +2986,60 @@ async fn chat_stream(
         });
     }
 
+    // Native OpenAI Platform pick: stream the Responses API. Its events are
+    // translated into the same upstream frames the shared stream machine
+    // reads, so recording, stopping and usage accounting stay shared.
+    if let Some(platform_model) = openai::platform_model(&chosen_model) {
+        if cfg.openai_api_key.trim().is_empty() {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Add your OpenAI Platform key in Settings to use this model.",
+            );
+        }
+        let body = openai::request_body(
+            &platform_model,
+            &packed.messages,
+            thinking.map(|resolved| resolved.level),
+            true,
+        );
+        return match openai::responses_stream_bytes(
+            &state.client,
+            &cfg.openai_base_url,
+            &cfg.openai_api_key,
+            body,
+        )
+        .await
+        {
+            Ok(stream) => {
+                let recorder = ReplyRecorder::new(
+                    state.database_path.clone(),
+                    cid,
+                    context_tokens,
+                    state.events.clone(),
+                );
+                if let Ok(mut held) = recorder.meta.lock() {
+                    held["model"] = json!(&platform_model);
+                    held["provider"] = json!("openai-platform");
+                    held["thinking"] = thinking_json(thinking);
+                }
+                let mut pending: VecDeque<String> = ds_frames;
+                pending.push_back(sse_frame(&json!({ "ready": true })));
+                sse_response(StreamState {
+                    bytes: stream,
+                    leftover: String::new(),
+                    pending,
+                    recorder,
+                    finished: false,
+                })
+            }
+            Err(error) => {
+                log_router_error(&state, &cid, &error, 0, &platform_model);
+                events::notify(&state.events, &cid, "failed");
+                json_error(StatusCode::BAD_GATEWAY, error)
+            }
+        };
+    }
+
     // Local AI mode: stream strictly from the configured local runtime —
     // never from the remote router. Ollama's NDJSON deltas are folded into
     // the same SSE frame shape so the browser and recorder stay unchanged.
@@ -2733,11 +3077,30 @@ async fn chat_stream(
         };
     }
 
-    let request_body = json!({
+    let mut request_body = json!({
         "model": &chosen_model,
         "messages": packed.messages,
         "stream": true
     });
+    if let Some(resolved) = thinking {
+        if let Some(effort) = thinking::completions_reasoning(resolved.level) {
+            match catalog_reasoning(&state, &cfg, &chosen_model).await {
+                Some(true) => request_body["reasoning_effort"] = json!(effort),
+                Some(false) => {
+                    return json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "{chosen_model} does not advertise reasoning, so it cannot run with Thinking {}. Choose a reasoning model or set Thinking to Off.",
+                            resolved.level.as_str()
+                        ),
+                    );
+                }
+                // Unknown: send nothing rather than guess at a parameter the
+                // provider may reject.
+                None => {}
+            }
+        }
+    }
     let upstream = state
         .client
         .post(router_url(&cfg, "chat/completions"))
@@ -2786,6 +3149,7 @@ async fn chat_stream(
     );
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
+        held["thinking"] = thinking_json(thinking);
     }
     let mut pending: VecDeque<String> = ds_frames;
     pending.push_back(sse_frame(&json!({ "ready": true })));
@@ -2798,7 +3162,12 @@ async fn chat_stream(
         let answer = response_content(&parsed);
         let usage = parsed.get("usage").cloned().unwrap_or_else(|| json!({}));
         if let Ok(mut held) = recorder.meta.lock() {
-            for key in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+            for key in [
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "reasoning_tokens",
+            ] {
                 held[key] = usage.get(key).cloned().unwrap_or(Value::Null);
             }
             if let Some(model) = parsed.get("model").and_then(Value::as_str) {
@@ -2915,6 +3284,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/health", get(health))
         .route("/api/test", post(test_router))
         .route("/api/models", get(models))
+        .route("/api/thinking/levels", get(thinking_levels))
         .route("/api/chat", post(chat))
         .route("/api/chat/stream", post(chat_stream))
         .route("/api/events", get(crate::events::events))
@@ -2940,6 +3310,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(terminal::router(port))
         .merge(media::router(port))
         .merge(local::read_routes())
+        .merge(openai::read_routes())
         .merge(local::mutate_routes(port))
         .merge(agent::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),

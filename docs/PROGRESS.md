@@ -15,7 +15,8 @@ partial, `[ ]` not started.
 | 1.26.6 | `76b9fd1` | validate-clean AppStream identity (RDNS id, OARS rating), both Darwin targets | run `41884439627`: **all six jobs success, 9 assets** |
 | 1.26.7–1.26.23 | `8ff7c5e` | Router manager completed (UI, install plans, pinned images, verified downloads, update/uninstall), resume for runs, 175 tests | in-tree evidence only; no tag cut yet |
 | 1.27.0 | `1b91b32` | Full spec audit in `FEATURE-STATUS.md`; every manifest on 1.27.0 | `cargo test --locked`: 175 passed, 1 ignored |
-| 1.28.0 | this commit | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
+| 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
+| 1.29.0 | this commit | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
 
 ## Phase 1 — CI/CD and release reliability
 
@@ -97,11 +98,26 @@ lifecycle and points at its facts rather than re-deriving them.
 - [ ] Per-agent / per-project / per-task model scope (only global + per-message override today)
 - [ ] Client-side fallback policy, retry and provider health monitoring (only on-demand `/api/test`)
 
+## Phase 4 — Thinking and the OpenAI Platform
+
+Backend half shipped in 1.29.0; the composer half is the next commit.
+
+- [x] `thinking.rs`: four levels, provider-default when unset, fixed precedence (message > agent > project > global) — unit-tested both ways (1.29.0)
+- [x] `@Thinking` / `@Thinking:high` / `\@Thinking` directive parsing; unknown level, mid-sentence mention and empty prompt all stay literal (1.29.0)
+- [x] A level maps to `reasoning: {effort, summary}` on Responses and `reasoning_effort` on Chat Completions; Off sends no parameter (1.29.0)
+- [x] Router models gated on the catalog's `capabilities.reasoning`: true → send, false → refuse with a reason, unknown → send nothing (1.29.0)
+- [x] Platform model rejecting the parameter: one retry without it, refusal remembered per process, `reasoning_dropped` in meta (1.29.0)
+- [x] `openai:` ids route through chat, streaming chat and agent calls; usage incl. `reasoning_tokens` recorded (1.29.0)
+- [x] Reasoning summaries as their own SSE frame, from the API's summary channel (1.29.0)
+- [x] `projects.thinking` migration + create/update/list; resolution uses the active project (1.29.0)
+- [x] Routes: `/api/openai/models`, `/api/openai/test`, `/api/thinking/levels`; config carries both Thinking defaults and `has_openai_key` (1.29.0)
+- [ ] Composer Thinking control, `@Thinking` chip, reasoning-summary panel, Settings fields for the platform key and defaults
+- [ ] Platform models in the composer's model menu
+
 ## Next up
 
-1. Phase 4 — Thinking control and a native OpenAI Platform (Responses API)
-   provider: currently the largest untouched block of the specification, and it
-   now has the capability table it depends on.
+1. Phase 4 frontend: the composer Thinking control, `@Thinking` chip and the
+   Settings/OpenAI Platform fields that make the backend reachable.
 2. Phase 2 close-out — configuration editor plus dependency/package-manager
    probing, so the router manager stops being "80 % delivered".
 3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

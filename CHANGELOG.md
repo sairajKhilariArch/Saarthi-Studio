@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.29.0
+
+- Phase 4 backend: Thinking control plus a native OpenAI Platform provider.
+  `thinking.rs` holds the four levels, the fixed precedence (message > agent >
+  project > global > provider default) and the `@Thinking` composer directive;
+  `openai.rs` talks to the platform's own `/responses` endpoint with its own
+  key, kept apart from the OpenAI-compatible router preset.
+- A level becomes exactly one documented parameter: `reasoning: {effort,
+  summary: "auto"}` on the Responses API and `reasoning_effort` on Chat
+  Completions. "Off" sends **no** reasoning parameter, because several models
+  answer HTTP 400 to `effort: "none"` — so an off turn is byte-for-byte the
+  request it was before the feature existed.
+- A router model carries `reasoning_effort` only when the router's own catalog
+  says it accepts reasoning (`capabilities.reasoning == true`). A model that
+  says `false` is refused with a line that names the two ways forward; an
+  unknown answer sends nothing rather than guessing at a parameter.
+- A platform model that still rejects the parameter is retried once without it
+  and the refusal is remembered for the life of the process, so the turn still
+  answers and `meta.reasoning_dropped` says what happened. The retry only ever
+  fires on a 400 that names reasoning.
+- `openai:` model ids route to the platform in buffered chat, streaming chat and
+  agent calls (`call_router_with`), so a run can use a platform model without a
+  new mode switch. Usage maps onto the existing token columns, plus
+  `reasoning_tokens` when the platform reports it.
+- Reasoning summaries arrive as their own SSE frame (`type: "reasoning"`), taken
+  from the API's summary channel — never presented as hidden chain-of-thought.
+  The Responses stream is translated into the frames the shared stream machine
+  already records, so stop, partial-save and usage accounting stay shared.
+- Per-project Thinking default persisted in a new `projects.thinking` column
+  (migrated in place on both fresh and existing databases, `''` = inherit),
+  with the project's level sitting between the global default and any
+  per-message choice.
+- Routes: `GET /api/openai/models` (platform catalog, `openai:` prefixed),
+  `POST /api/openai/test` (key check that spends no tokens), and
+  `GET /api/thinking/levels` (levels, the effort each one sends, and a truthful
+  description). `GET|POST /api/config` gained the platform key and base URL plus
+  both Thinking defaults; the key itself is never returned, only `has_openai_key`.
+- Tests: 21 new cases (level parsing and aliases, precedence, the directive and
+  its escape, request-body shape, output/summary extraction, usage mapping,
+  stream event parsing, upstream frames, rejection detection, error wording);
+  204 pass, clippy clean.
+- Version 1.29.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 45).
+
 ## 1.28.0
 
 - Phase 3, first slice: a model capability table that only repeats what the
