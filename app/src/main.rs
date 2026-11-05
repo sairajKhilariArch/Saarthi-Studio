@@ -44,6 +44,7 @@ mod local;
 mod mcp;
 mod mcp_oauth;
 mod media;
+mod model_scope;
 mod openai;
 mod permissions;
 mod privacy;
@@ -135,6 +136,14 @@ struct Config {
     /// Thinking default for agent runs (agent scope, below message scope).
     #[serde(default)]
     run_thinking_level: String,
+    /// Model default for agent runs (agent scope): below a run's own model,
+    /// above the project and global defaults.
+    #[serde(default)]
+    agent_model: String,
+    /// Ordered fallback models tried when the chosen one is unavailable
+    /// (rate limit, 5xx, timeout, transport failure). Never on a 4xx refusal.
+    #[serde(default)]
+    fallback_models: Vec<String>,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -172,6 +181,8 @@ impl Config {
             openai_base_url: default_openai_base_url(),
             thinking_level: String::new(),
             run_thinking_level: String::new(),
+            agent_model: String::new(),
+            fallback_models: Vec::new(),
         }
     }
 }
@@ -299,6 +310,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     )?;
     let _ = migrate_projects(&conn);
     let _ = migrate_project_thinking(&conn);
+    let _ = migrate_project_model(&conn);
     let _ = permissions::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
@@ -378,6 +390,57 @@ fn migrate_project_thinking(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch("ALTER TABLE projects ADD COLUMN thinking TEXT NOT NULL DEFAULT '';")?;
     }
     Ok(())
+}
+
+/// Give projects the per-project model default (`''` = inherit the agent or
+/// global setting), so one workspace can run on a different model without
+/// changing the app-wide choice.
+fn migrate_project_model(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(projects)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "model")
+    };
+    if !has_column {
+        conn.execute_batch("ALTER TABLE projects ADD COLUMN model TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+/// A project's model default from a request body: trimmed, capped, and empty to
+/// inherit. The id itself is opaque here — whether it can be called is decided
+/// when a turn asks for it, with the provider's own answer.
+fn project_model_input(input: &Value) -> String {
+    input
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(200)
+        .collect()
+}
+
+/// The active project's model default, or empty when it inherits. A read
+/// failure means "inherit": a turn is never blocked by this lookup.
+fn project_model(state: &AppState, project_id: &str) -> String {
+    if project_id.trim().is_empty() {
+        return String::new();
+    }
+    open_db(&state.database_path)
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT model FROM projects WHERE id=?1",
+                [project_id],
+                |row| row.get::<_, String>(0),
+            )
+        })
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// A project's Thinking default from a request body: one of the four levels, or
@@ -678,6 +741,11 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     cfg.run_thinking_level = thinking::ThinkingLevel::parse(&cfg.run_thinking_level)
         .map(|level| level.as_str().to_string())
         .unwrap_or_default();
+    // Model ids are opaque here; what is normalised is the shape of the chain:
+    // trimmed, deduplicated, capped, and free of local picks a router cannot
+    // route.
+    cfg.agent_model = cfg.agent_model.trim().to_string();
+    cfg.fallback_models = model_scope::normalised(&cfg.fallback_models);
 
     cfg.context_budget_tokens = cfg
         .context_budget_tokens
@@ -818,9 +886,18 @@ fn choose_tier(cfg: &Config, last_action: &str, had_error: bool) -> Option<Strin
 }
 
 /// Snapshot the routing config at run start for the persisted run record,
-/// paired with the base model the run would start on.
-pub(crate) fn run_record_snapshot(state: &AppState) -> (String, String) {
+/// paired with the base model the run starts on. The model is resolved through
+/// the same precedence chat uses — task, agent, project, global — so the record
+/// says which scope produced it instead of just repeating one setting.
+pub(crate) fn run_record_snapshot(state: &AppState, task_model: Option<&str>) -> (String, String) {
     let cfg = load_config(state);
+    let project = project_model(state, &cfg.active_project);
+    let resolved = model_scope::resolve(
+        task_model,
+        Some(&cfg.agent_model),
+        Some(&project),
+        Some(&cfg.model),
+    );
     let snapshot = json!({
         "base_url": cfg.base_url,
         "adaptive_routing": cfg.adaptive_routing,
@@ -828,8 +905,13 @@ pub(crate) fn run_record_snapshot(state: &AppState) -> (String, String) {
         "strong_model": cfg.strong_model,
         "local": cfg.local_chat,
         "local_model": cfg.local_model,
+        "agent_model": cfg.agent_model,
+        "project_model": project,
+        "fallback_models": cfg.fallback_models,
+        "resolved_model": resolved.model,
+        "resolved_scope": resolved.scope.as_str(),
     });
-    (snapshot.to_string(), cfg.model.clone())
+    (snapshot.to_string(), resolved.model)
 }
 
 /// The one model seam for chat and agent runs: in Local AI mode every call
@@ -868,12 +950,30 @@ pub(crate) async fn call_router(
     // Agent scope: runs resolve their Thinking default here, below any
     // per-message setting and above the project/global defaults chat uses.
     let level = thinking::ThinkingLevel::parse(&load_config(state).run_thinking_level);
-    call_router_with(state, messages, model_override, level).await
+    // A call without an explicit model (a plan or guidance request) takes the
+    // agent scope, then the project default, then the global one.
+    let model = match model_override {
+        Some(model) => model.to_string(),
+        None => {
+            let cfg = load_config(state);
+            let project = project_model(state, &cfg.active_project);
+            model_scope::resolve(
+                None,
+                Some(&cfg.agent_model),
+                Some(&project),
+                Some(&cfg.model),
+            )
+            .model
+        }
+    };
+    call_router_with(state, messages, Some(&model), level).await
 }
 
-/// The same request with the Thinking level the caller resolved. A platform
-/// pick goes to the Responses API; a router pick carries `reasoning_effort`
-/// only when the router's own catalog says the model accepts it.
+/// The same request with the Thinking level the caller resolved, tried across
+/// the configured fallback chain: the chosen model first, then each fallback, but
+/// only when the failure was the provider being unavailable (see
+/// `model_scope::retryable`). A `fallbacks` array lands in the meta whenever a
+/// later model answered.
 pub(crate) async fn call_router_with(
     state: &AppState,
     messages: Vec<Value>,
@@ -881,15 +981,44 @@ pub(crate) async fn call_router_with(
     level: Option<thinking::ThinkingLevel>,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
-    let chosen = model_override
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .unwrap_or(if cfg.model.trim().is_empty() {
-            "auto"
-        } else {
-            cfg.model.as_str()
-        })
-        .to_string();
+    let resolved = model_scope::resolve(model_override, None, None, Some(&cfg.model));
+    let chain = model_scope::chain(&resolved.model, &cfg.fallback_models);
+    let mut tried: Vec<Value> = Vec::new();
+    let mut last_error = String::new();
+    for (index, candidate) in chain.iter().enumerate() {
+        match attempt_router_once(state, candidate, messages.clone(), level).await {
+            Ok((answer, mut meta)) => {
+                if !tried.is_empty() {
+                    meta["fallbacks"] = json!(tried);
+                }
+                return Ok((answer, meta));
+            }
+            Err(error) => {
+                // A rejected request fails identically on every model; only an
+                // unavailable provider is worth the next candidate.
+                if index + 1 == chain.len() || !model_scope::retryable(&error) {
+                    return Err(error);
+                }
+                tried.push(json!({ "model": candidate, "error": error }));
+                last_error = error;
+            }
+        }
+    }
+    Err(last_error)
+}
+
+/// One request to one model. A platform pick goes to the Responses API; a
+/// router pick carries `reasoning_effort` only when the router's own catalog
+/// says the model accepts it. The fallback loop calls this once per candidate,
+/// so it reads nothing about the chain itself.
+async fn attempt_router_once(
+    state: &AppState,
+    chosen: &str,
+    messages: Vec<Value>,
+    level: Option<thinking::ThinkingLevel>,
+) -> Result<(String, Value), String> {
+    let cfg = load_config(state);
+    let chosen = chosen.trim().to_string();
 
     if let Some(platform_model) = openai::platform_model(&chosen) {
         if cfg.openai_api_key.trim().is_empty() {
@@ -976,10 +1105,12 @@ pub(crate) async fn call_router_with(
         .get("x-fallback-attempts")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+    // What the provider says it used, or the model this attempt asked for —
+    // never the global default, which a fallback attempt did not use.
     let model = parsed
         .get("model")
         .and_then(Value::as_str)
-        .unwrap_or(&cfg.model);
+        .unwrap_or(chosen.as_str());
     let meta = json!({
         "latency_ms": latency,
         "provider": provider,
@@ -990,6 +1121,89 @@ pub(crate) async fn call_router_with(
         "model": model
     });
     Ok((answer, meta))
+}
+
+/// The first upstream stream that accepted the request, plus which models were
+/// tried before it. A fallback is only ever tried before a byte of the answer
+/// was read: replaying a half-streamed answer on another model would duplicate
+/// text the user already saw.
+struct StreamStart {
+    response: reqwest::Response,
+    model: String,
+    fallbacks: Vec<Value>,
+}
+
+async fn open_stream(
+    state: &AppState,
+    cfg: &Config,
+    chain: &[String],
+    messages: &[Value],
+    level: Option<thinking::ThinkingLevel>,
+) -> Result<StreamStart, (StatusCode, String)> {
+    let mut fallbacks: Vec<Value> = Vec::new();
+    for (index, candidate) in chain.iter().enumerate() {
+        let mut request_body = json!({ "model": candidate, "messages": messages, "stream": true });
+        if let Some(level) = level {
+            if let Some(effort) = thinking::completions_reasoning(level) {
+                match catalog_reasoning(state, cfg, candidate).await {
+                    Some(true) => request_body["reasoning_effort"] = json!(effort),
+                    Some(false) if index == 0 => {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            format!(
+                                "{candidate} does not advertise reasoning, so it cannot run with Thinking {}. Choose a reasoning model or set Thinking to Off.",
+                                level.as_str()
+                            ),
+                        ))
+                    }
+                    // A fallback that does not advertise reasoning, or does not
+                    // say, gets no parameter: dropping it for this attempt is
+                    // honest, sending one the model may reject is not.
+                    Some(false) | None => {}
+                }
+            }
+        }
+        let upstream = state
+            .client
+            .post(router_url(cfg, "chat/completions"))
+            .bearer_auth(&cfg.api_key)
+            .header("accept", "text/event-stream")
+            .json(&request_body)
+            .send()
+            .await;
+        let message = match upstream {
+            Err(error) => reach_error(&cfg.base_url, error.to_string()),
+            Ok(response) if !response.status().is_success() => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let detail = serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| body.chars().take(3000).collect());
+                format!("Router returned HTTP {}: {}", status.as_u16(), detail)
+            }
+            Ok(response) => {
+                return Ok(StreamStart {
+                    response,
+                    model: candidate.clone(),
+                    fallbacks,
+                })
+            }
+        };
+        if index + 1 == chain.len() || !model_scope::retryable(&message) {
+            return Err((StatusCode::BAD_GATEWAY, message));
+        }
+        fallbacks.push(json!({ "model": candidate, "error": message }));
+    }
+    Err((
+        StatusCode::BAD_GATEWAY,
+        "Every configured model was unavailable.".to_string(),
+    ))
 }
 
 async fn root(State(state): State<AppState>) -> Response<Body> {
@@ -1060,6 +1274,8 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "openai_base_url": cfg.openai_base_url,
         "thinking_level": cfg.thinking_level,
         "run_thinking_level": cfg.run_thinking_level,
+        "agent_model": cfg.agent_model,
+        "fallback_models": cfg.fallback_models,
     }))
 }
 
@@ -1580,6 +1796,18 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
             *target = level.trim().to_string();
         }
     }
+    if let Some(m) = input.get("agent_model").and_then(Value::as_str) {
+        cfg.agent_model = m.trim().to_string();
+    }
+    // Fallback models replace wholesale, like the exclusion list: the UI sends
+    // the whole chain, so removing one takes effect on the next turn.
+    if let Some(list) = input.get("fallback_models").and_then(Value::as_array) {
+        cfg.fallback_models = list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+    }
     cfg.base_url = base_url;
     cfg.model = model;
     let cfg = match validate_config(cfg) {
@@ -1589,7 +1817,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models})).into_response()
 }
 
 /// Remove one saved credential entirely — keychain entry first, then the
@@ -1924,7 +2152,7 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
     let result = (|| -> rusqlite::Result<Vec<Value>> {
         let conn = open_db(&state.database_path)?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, folder_path, created_at, updated_at, archived_at, thinking FROM projects
+            "SELECT id, name, folder_path, created_at, updated_at, archived_at, thinking, model FROM projects
              ORDER BY (archived_at IS NOT NULL), created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1936,6 +2164,7 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
                 "updated_at": row.get::<_, f64>(4)?,
                 "archived": row.get::<_, Option<f64>>(5)?.is_some(),
                 "thinking": row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                "model": row.get::<_, Option<String>>(7)?.unwrap_or_default(),
             }))
         })?;
         rows.collect()
@@ -1967,10 +2196,11 @@ async fn create_project(State(state): State<AppState>, Json(input): Json<Value>)
     let id = Uuid::new_v4().to_string();
     let now = now_seconds();
     let thinking = project_thinking_input(&input);
+    let model = project_model_input(&input);
     match open_db(&state.database_path).and_then(|conn| {
         conn.execute(
-            "INSERT INTO projects(id,name,folder_path,created_at,updated_at,thinking) VALUES(?1,?2,?3,?4,?4,?5)",
-            params![id, name, folder, now, thinking],
+            "INSERT INTO projects(id,name,folder_path,created_at,updated_at,thinking,model) VALUES(?1,?2,?3,?4,?4,?5,?6)",
+            params![id, name, folder, now, thinking, model],
         )
     }) {
         Ok(_) => (
@@ -2018,6 +2248,15 @@ async fn update_project(
         if let Err(e) = conn.execute(
             "UPDATE projects SET folder_path=?1, updated_at=?2 WHERE id=?3",
             params![folder, now_seconds(), id],
+        ) {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    if input.get("model").is_some() {
+        let model = project_model_input(&input);
+        if let Err(e) = conn.execute(
+            "UPDATE projects SET model=?1, updated_at=?2 WHERE id=?3",
+            params![model, now_seconds(), id],
         ) {
             return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
         }
@@ -2494,6 +2733,8 @@ struct ChatPrep {
     attachments: Vec<(String, String, Vec<u8>)>,
     /// The Thinking level this turn will ask for, and which scope set it.
     thinking: Option<thinking::Resolved>,
+    /// The active project's model default, or empty when it inherits.
+    project_model: String,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -2702,7 +2943,10 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     );
     // Precedence is message > agent > project > global > provider default.
     // Chat has no agent scope: agent runs resolve their own level.
-    let project_level = project_thinking_level(state, &cfg.active_project);
+    // Both project-scoped defaults come from the same repaired pointer, so a
+    // stale active_project in config never scopes a turn to a deleted project.
+    let active_project = active_project_id(state);
+    let project_level = project_thinking_level(state, &active_project);
     let message_level = input
         .get("thinking")
         .and_then(Value::as_str)
@@ -2721,6 +2965,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         model,
         attachments,
         thinking: resolved,
+        project_model: project_model(state, &active_project),
     })
 }
 
@@ -2794,6 +3039,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         model,
         attachments,
         thinking,
+        project_model,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -2805,18 +3051,14 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
     let context_trimmed = packed.trimmed_messages;
     media::apply_media(&mut packed.messages, &attachments);
     // The composer's model wins when present; config's model is the default.
-    let chosen_model = model
-        .as_deref()
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            if cfg.model.trim().is_empty() {
-                "auto".to_string()
-            } else {
-                cfg.model.clone()
-            }
-        });
+    let resolved_model = model_scope::resolve(
+        model.as_deref(),
+        None,
+        Some(project_model.as_str()),
+        Some(cfg.model.as_str()),
+    );
+    let model_scope_label = resolved_model.scope.as_str();
+    let chosen_model = resolved_model.model;
 
     // A native provider already answered during the deep-search phase.
     if let Some(answer) = ds_answer {
@@ -2926,6 +3168,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
     {
         Ok((answer, mut meta)) => {
             meta["thinking"] = thinking_json(thinking);
+            meta["model_scope"] = json!(model_scope_label);
             let now = now_seconds();
             let log_result = (|| -> rusqlite::Result<()> {
                 let conn = open_db(&state.database_path)?;
@@ -3246,6 +3489,7 @@ async fn chat_stream(
         model,
         attachments,
         thinking,
+        project_model,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3262,18 +3506,14 @@ async fn chat_stream(
             "Add your router's unified API key in Settings first.",
         );
     }
-    let chosen_model = model
-        .as_deref()
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            if cfg.model.trim().is_empty() {
-                "auto".to_string()
-            } else {
-                cfg.model.clone()
-            }
-        });
+    let resolved_model = model_scope::resolve(
+        model.as_deref(),
+        None,
+        Some(project_model.as_str()),
+        Some(cfg.model.as_str()),
+    );
+    let model_scope_label = resolved_model.scope.as_str();
+    let chosen_model = resolved_model.model;
 
     // Deep search already answered through a native provider: stream the
     // finished text as one frame set instead of calling the router.
@@ -3400,63 +3640,29 @@ async fn chat_stream(
         };
     }
 
-    let mut request_body = json!({
-        "model": &chosen_model,
-        "messages": packed.messages,
-        "stream": true
-    });
-    if let Some(resolved) = thinking {
-        if let Some(effort) = thinking::completions_reasoning(resolved.level) {
-            match catalog_reasoning(&state, &cfg, &chosen_model).await {
-                Some(true) => request_body["reasoning_effort"] = json!(effort),
-                Some(false) => {
-                    return json_error(
-                        StatusCode::BAD_REQUEST,
-                        format!(
-                            "{chosen_model} does not advertise reasoning, so it cannot run with Thinking {}. Choose a reasoning model or set Thinking to Off.",
-                            resolved.level.as_str()
-                        ),
-                    );
-                }
-                // Unknown: send nothing rather than guess at a parameter the
-                // provider may reject.
-                None => {}
-            }
-        }
-    }
-    let upstream = state
-        .client
-        .post(router_url(&cfg, "chat/completions"))
-        .bearer_auth(&cfg.api_key)
-        .header("accept", "text/event-stream")
-        .json(&request_body)
-        .send()
-        .await;
-
-    let response = match upstream {
-        Ok(response) => response,
-        Err(error) => {
-            let message = reach_error(&cfg.base_url, error.to_string());
-            log_router_error(&state, &cid, &message, 0, &cfg.model);
-            return json_error(StatusCode::BAD_GATEWAY, message);
+    // The same precedence as chat: task, then project, then global. Each
+    // configured fallback is tried only while nothing has been streamed yet, so
+    // a half-read answer is never replayed on another model.
+    let chain = model_scope::chain(&chosen_model, &cfg.fallback_models);
+    let start = match open_stream(
+        &state,
+        &cfg,
+        &chain,
+        &packed.messages,
+        thinking.map(|resolved| resolved.level),
+    )
+    .await
+    {
+        Ok(start) => start,
+        Err((status, message)) => {
+            log_router_error(&state, &cid, &message, 0, &chosen_model);
+            events::notify(&state.events, &cid, "failed");
+            return json_error(status, message);
         }
     };
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        let detail = serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| body.chars().take(3000).collect());
-        let message = format!("Router returned HTTP {}: {}", status.as_u16(), detail);
-        log_router_error(&state, &cid, &message, 0, &cfg.model);
-        return json_error(StatusCode::BAD_GATEWAY, message);
-    }
+    let fallbacks = start.fallbacks;
+    let chosen_model = start.model;
+    let response = start.response;
 
     let content_type = response
         .headers()
@@ -3473,6 +3679,10 @@ async fn chat_stream(
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
         held["thinking"] = thinking_json(thinking);
+        held["model_scope"] = json!(model_scope_label);
+        if !fallbacks.is_empty() {
+            held["fallbacks"] = json!(fallbacks);
+        }
     }
     let mut pending: VecDeque<String> = ds_frames;
     pending.push_back(sse_frame(&json!({ "ready": true })));
@@ -3868,6 +4078,186 @@ mod tests {
         cfg.adaptive_routing = true;
         cfg.cheap_model = "".into();
         assert_eq!(choose_tier(&cfg, "read", false), None);
+    }
+
+    fn fixture(name: &str) -> AppState {
+        let dir = scratch(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        let state = AppState {
+            config_path: dir.join("config.json"),
+            database_path: dir.join("studio.db"),
+            static_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"),
+            workspace: workspace::WorkspaceStore::load(dir.join("workspace.json")),
+            client: Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            terminal: terminal::hub(),
+            events: events::Hub::new(),
+            models_cache: Arc::new(Mutex::new(HashMap::new())),
+        };
+        ensure_setup(&state).expect("ensure_setup");
+        state
+    }
+
+    /// A router that answers with the scripted statuses in order (then 200 with
+    /// `answer`), recording each request's model so a test can prove which
+    /// candidates were actually asked.
+    async fn scripted_router(statuses: &[u16], answer: &str) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(statuses.to_vec()));
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_route = seen.clone();
+        let answer = answer.to_string();
+        let app = Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |Json(body): Json<Value>| {
+                let queue = queue.clone();
+                let seen = seen_for_route.clone();
+                let answer = answer.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(body["model"].as_str().unwrap_or("").to_string());
+                    let status = {
+                        let mut queue = queue.lock().unwrap();
+                        if queue.is_empty() {
+                            200
+                        } else {
+                            queue.remove(0)
+                        }
+                    };
+                    if status == 200 {
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "choices": [{ "message": { "role": "assistant", "content": answer } }],
+                                "usage": { "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5 }
+                            })),
+                        )
+                            .into_response()
+                    } else {
+                        (
+                            StatusCode::from_u16(status).unwrap(),
+                            Json(json!({ "error": { "message": "provider unavailable" } })),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_model_falls_through_to_the_configured_fallback() {
+        let (base, seen) = scripted_router(&[429, 200], "answered by the fallback").await;
+        let state = fixture("model-fallback");
+        let mut cfg = load_config(&state);
+        cfg.base_url = base;
+        cfg.api_key = "test-key".to_string();
+        cfg.model = "primary-model".to_string();
+        cfg.fallback_models = vec!["backup-model".to_string()];
+        save_config_file(&state.config_path, &cfg).expect("save config");
+
+        let (answer, meta) = call_router(
+            &state,
+            vec![json!({ "role": "user", "content": "hi" })],
+            None,
+        )
+        .await
+        .expect("the fallback answered");
+        assert_eq!(answer, "answered by the fallback");
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["primary-model", "backup-model"],
+            "both candidates were asked, in order"
+        );
+        assert_eq!(
+            meta["fallbacks"][0]["model"],
+            json!("primary-model"),
+            "{meta}"
+        );
+        assert_eq!(meta["model"], json!("backup-model"), "{meta}");
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_run_record_snapshot_reports_the_scope_that_set_the_model() {
+        let state = fixture("snapshot-scope");
+        let mut cfg = load_config(&state);
+        cfg.model = "global-model".to_string();
+        cfg.agent_model = "agent-model".to_string();
+        save_config_file(&state.config_path, &cfg).expect("save config");
+
+        // Agent scope beats the global default.
+        let (snapshot, model) = run_record_snapshot(&state, None);
+        assert_eq!(model, "agent-model");
+        let parsed: Value = serde_json::from_str(&snapshot).expect("snapshot json");
+        assert_eq!(parsed["resolved_scope"], json!("agent"));
+
+        // The run's own model (task scope) beats everything.
+        let (_, model) = run_record_snapshot(&state, Some("run-model"));
+        assert_eq!(model, "run-model");
+
+        // A project default beats the agent scope. The test activates the
+        // project itself rather than trusting a side effect of another helper.
+        let project = active_project_id(&state);
+        open_db(&state.database_path)
+            .expect("db")
+            .execute(
+                "UPDATE projects SET model='project-model' WHERE id=?1",
+                [&project],
+            )
+            .expect("project model");
+        assert_eq!(
+            project_model(&state, &project),
+            "project-model",
+            "the project default must be readable before it is resolved"
+        );
+        let mut cfg = load_config(&state);
+        cfg.active_project = project.clone();
+        save_config_file(&state.config_path, &cfg).expect("activate the project");
+        let (_, model) = run_record_snapshot(&state, None);
+        assert_eq!(model, "agent-model", "agent scope is above project scope");
+
+        // With the agent scope cleared, the project default takes over.
+        let mut cfg = load_config(&state);
+        cfg.agent_model.clear();
+        save_config_file(&state.config_path, &cfg).expect("clear the agent model");
+        let (snapshot, model) = run_record_snapshot(&state, None);
+        assert_eq!(model, "project-model");
+        let parsed: Value = serde_json::from_str(&snapshot).expect("snapshot json");
+        assert_eq!(parsed["resolved_scope"], json!("project"));
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_rejected_request_never_burns_the_fallback_chain() {
+        let (base, seen) = scripted_router(&[400, 200], "must not answer").await;
+        let state = fixture("model-no-fallback");
+        let mut cfg = load_config(&state);
+        cfg.base_url = base;
+        cfg.api_key = "test-key".to_string();
+        cfg.model = "primary-model".to_string();
+        cfg.fallback_models = vec!["backup-model".to_string()];
+        save_config_file(&state.config_path, &cfg).expect("save config");
+
+        let error = call_router(
+            &state,
+            vec![json!({ "role": "user", "content": "hi" })],
+            None,
+        )
+        .await
+        .expect_err("a 400 is returned as-is");
+        assert!(error.contains("HTTP 400"), "{error}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "the fallback was not asked");
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
     }
 
     #[test]

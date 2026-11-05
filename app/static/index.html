@@ -644,6 +644,18 @@
               <small>Agent scope: below a per-message choice, above the project and global defaults.</small>
             </label>
           </div>
+          <div class="form-row">
+            <label class="field">
+              <span>Agent runs model</span>
+              <input id="agentModel" type="text" placeholder="auto" autocomplete="off">
+              <small>Agent scope: below a run's own model, above the project and global defaults.</small>
+            </label>
+            <label class="field">
+              <span>Fallback models</span>
+              <input id="fallbackModels" type="text" placeholder="model-a, model-b" autocomplete="off">
+              <small>Tried in order when the chosen model is rate-limited, times out or returns a server error. Never for a rejected request, and never after part of an answer has streamed.</small>
+            </label>
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save all settings</button>
             <button type="button" id="testOpenAI" class="btn btn-quiet">Test platform key</button>

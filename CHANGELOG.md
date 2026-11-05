@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.46.0
+
+- Phase 3 rewiring: model choice now has the four scopes the specification
+  asks for and one documented precedence — task > agent > project > global >
+  `auto`. New `app/src/model_scope.rs` resolves it and reports which scope won,
+  so a reply can say where its model came from instead of leaving it implicit.
+- Per-project model: `projects.model`, migrated in place on existing databases,
+  accepted by create/update and returned by `/api/projects`. The project menu
+  shows it and a "Model" action edits or clears it; empty inherits.
+- Per-agent model: `agent_model` in config (Settings → agent runs model) is the
+  agent scope. Agent runs also take a task scope — `POST /api/runs` accepts
+  `model` — and the run record snapshot now stores `agent_model`,
+  `project_model`, `resolved_model` and `resolved_scope` rather than repeating a
+  single setting.
+- Real fallback chain: `fallback_models` in config, tried in order, trimmed,
+  deduplicated, capped at four, with `local:` picks dropped because local
+  routing is decided by local mode rather than by a fallback. A fallback is
+  attempted only when the provider was unavailable: 429, 5xx, timeouts and
+  unreachable/connection failures. A 4xx refusal, a missing key or a Thinking
+  refusal is returned as-is, because it would fail identically on every model.
+- Streaming keeps that rule with a stricter edge: fallback happens only before
+  the first byte, so a half-streamed answer is never replayed on another model.
+  A fallback that does not advertise reasoning gets no `reasoning_effort`
+  (dropping it for that attempt is honest; sending one the model may reject is
+  not), while the chosen model still refuses with 400.
+- Attempts are visible: meta carries `fallbacks: [{model, error}]` and the
+  message row renders "N fallback(s)", so an answer from a backup model is never
+  presented as if the first choice worked.
+- Defect fixed in the same path: an answer that omitted `model` filled the meta
+  with the global default, which mislabelled a fallback attempt; it now reports
+  the model that was actually asked.
+- Tests: 282 pass, 1 ignored (new: scope precedence and blank-inheritance,
+  chain order/dedup/cap/local-drop, the retryable-vs-rejected matrix, and two
+  live HTTP tests against a mock router — 429 falls through with both models
+  asked in order and `fallbacks` recorded, 400 is returned as-is with the
+  fallback never asked). Clippy `-D warnings` clean; `rustfmt` clean on the
+  touched files; `node --check app/static/app.js` clean.
+- Live smoke on :8946 (throwaway HOME, mock router that answers 503 once):
+  `POST /api/config` stored `agent_model` and deduplicated
+  `fallback_models: ["backup-model","backup-model"]` down to one; the first
+  `/api/chat` asked `primary-model`, got 503, asked `backup-model`, and answered
+  `answered by backup-model` with `model: backup-model`, `scope: global` and
+  `fallbacks: [{model: primary-model, error: "Router returned HTTP 503: …"}]`;
+  `POST /api/projects/:id/update {"model":"project-model-x"}` showed up in
+  `/api/projects`; the next chat asked `project-model-x` and answered with
+  `scope: project`. The mock's log recorded exactly `primary-model`,
+  `backup-model`, `project-model-x` in that order.
+- Version line: 1.46.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, `vscode-extension/package{,-lock}.json` and
+  `android/app/build.gradle.kts`.
+
 ## 1.45.0
 
 - Phase 7 close-out: a supervisor for wedged MCP sessions. `mcp::start_supervisor`

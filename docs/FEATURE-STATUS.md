@@ -73,8 +73,8 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 | Context window where a provider reports it | Partial | `main.rs:1181` reads `context_window`; `app.js:2704` displays it — nothing is inferred when absent |
 | Capability table (modalities, tools, reasoning, structured output) | Working (1.28.0) | `capabilities.rs` from `/models` rows and Ollama `/api/show`; unknown stays `null` |
 | Price table | Partial (1.28.0) | carried when the provider publishes `pricing.prompt`/`completion`; never inferred |
-| Per-agent / per-project / per-task model scope | Partial | global model + per-message override; runs snapshot the model they used |
-| Fallback / retry / circuit breaker | Partial | router-side `fallback_attempts` is recorded; no client-side policy |
+| Model scope (task > agent > project > global) | Working (1.46.0) | `model_scope::resolve` with a reported origin; `projects.model`, `agent_model`, and a per-run `model`; the composer pick stays the task scope |
+| Fallback / retry | Partial (1.46.0) | ordered, capped, deduplicated client-side chain that retries only an unavailable provider and never replays a half-streamed answer; every attempt lands in meta. No circuit breaker yet |
 | Provider health monitoring | Missing | on-demand `/api/test` only |
 
 ## Phase 4 — Thinking and OpenAI Platform

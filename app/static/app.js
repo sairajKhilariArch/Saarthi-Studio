@@ -176,7 +176,10 @@ function renderProjectSwitcher() {
     item.innerHTML = `<span class="project-menu-main"><strong></strong><small></small></span>` +
       `<span class="project-menu-actions-row"></span>`;
     item.querySelector("strong").textContent = project.name;
-    item.querySelector("small").textContent = project.folder_path || "no folder";
+    item.querySelector("small").textContent = [
+      project.folder_path || "no folder",
+      project.model ? `model: ${project.model}` : "",
+    ].filter(Boolean).join(" · ");
     item.title = project.folder_path || project.name;
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";
@@ -194,6 +197,15 @@ function renderProjectSwitcher() {
       event.stopPropagation();
       updateProject(project, { archived: !project.archived_at });
     });
+    // Per-project model default: this projects's turns use it unless the
+    // composer or an agent run names a model of its own.
+    const model = document.createElement("button");
+    model.className = "tree-tool";
+    model.textContent = project.model ? `Model: ${project.model}` : "Set model";
+    model.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setProjectModel(project);
+    });
     const remove = document.createElement("button");
     remove.className = "tree-tool danger";
     remove.textContent = "Delete";
@@ -201,7 +213,7 @@ function renderProjectSwitcher() {
       event.stopPropagation();
       deleteProject(project);
     });
-    actions.append(rename, archive, remove);
+    actions.append(rename, model, archive, remove);
     item.appendChild(actions);
     // The item itself switches the project — previously only the action
     // buttons worked, so the picker looked broken.
@@ -300,6 +312,19 @@ async function renameProject(project) {
   });
   if (!name || name === project.name) return;
   await updateProject(project, { name });
+}
+
+/* Empty input clears the default so the project inherits again. */
+async function setProjectModel(project) {
+  const model = await askName({
+    title: "Project model",
+    label: "Model id (leave blank to inherit the agent and global defaults)",
+    value: project.model || "",
+    placeholder: "auto",
+    submitLabel: "Save",
+  });
+  if (model == null) return;
+  await updateProject(project, { model: model.trim() });
 }
 
 async function updateProject(project, patch) {
@@ -886,6 +911,9 @@ function addMessage(role, content, options = {}) {
     const parts = [];
     if (meta.model) parts.push(meta.model);
     if (meta.provider) parts.push(meta.provider);
+    if (Array.isArray(meta.fallbacks) && meta.fallbacks.length) {
+      parts.push(`${meta.fallbacks.length} fallback${meta.fallbacks.length === 1 ? "" : "s"}`);
+    }
     if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
     if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
     head.querySelector(".msg-meta").textContent = parts.join(" · ");
@@ -3068,6 +3096,8 @@ async function loadSettings() {
     : `No platform key saved. Needed for openai: models. A saved key goes to ${keychainStoreName(keychain)}.`;
   $("thinkingLevel").value = result.data.thinking_level || "";
   $("runThinkingLevel").value = result.data.run_thinking_level || "";
+  $("agentModel").value = result.data.agent_model || "";
+  $("fallbackModels").value = (result.data.fallback_models || []).join(", ");
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
@@ -3783,6 +3813,8 @@ async function saveSettings(event) {
     openai_base_url: $("openaiBaseUrl").value.trim() || "https://api.openai.com/v1",
     thinking_level: $("thinkingLevel").value,
     run_thinking_level: $("runThinkingLevel").value,
+    agent_model: $("agentModel").value.trim(),
+    fallback_models: $("fallbackModels").value.split(",").map((s) => s.trim()).filter(Boolean),
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();

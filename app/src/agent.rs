@@ -2591,8 +2591,15 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let id = uuid::Uuid::new_v4().to_string();
     let stamp = now();
     // Reproducible-run record: freeze the routing config as it was when the
-    // run started, so the run shows which model setup produced it.
-    let (snapshot, base_model) = crate::run_record_snapshot(&state);
+    // run started, so the run shows which model setup produced it. A run may
+    // name its own model (task scope), above the agent, project and global
+    // defaults.
+    let task_model = input
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+    let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
             "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp) \
