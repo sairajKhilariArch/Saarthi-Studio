@@ -4,10 +4,11 @@
 //!
 //! Scope is stated plainly rather than implied: a server is either a local
 //! child process spoken to over stdio, or a remote endpoint reached over
-//! streamable HTTP or the older HTTP+SSE transport. One operation = one
-//! session; there is no persistent connection pool, and no sandbox beyond what
-//! the transport itself gives. Those gaps are recorded in
-//! `docs/FEATURE-STATUS.md`, not faked here.
+//! streamable HTTP or the older HTTP+SSE transport. A session is reused while
+//! it stays warm (five idle minutes), evicted when the server is edited or a
+//! request fails, and there is no supervisor or sandbox beyond what the
+//! transport itself gives. Those gaps are recorded in `docs/FEATURE-STATUS.md`,
+//! not faked here.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
@@ -761,6 +762,15 @@ impl SseSession {
     }
 }
 
+/// A dropped SSE session must not leave its reader running: the pool replaces
+/// entries when a server is edited or goes idle, and those paths drop instead
+/// of awaiting `close`.
+impl Drop for SseSession {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
 /// Every JSON payload in an SSE body. `data:` lines within one event are joined
 /// with a newline, which is what the transport specifies.
 fn sse_messages(body: &str) -> Vec<Value> {
@@ -805,9 +815,148 @@ fn resolve_endpoint(base: &str, endpoint: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pool: one live session per server, reused until it goes stale
+//
+// Without this, every call paid a process start and a handshake. A warm session
+// is checked out, asked for its tool list (so validation still reflects the
+// server), and handed back by `close`. The pool lives in memory and is bounded
+// by an idle window; editing a server evicts its session immediately.
+
+const POOL_IDLE: Duration = Duration::from_secs(300);
+
+struct PooledSession {
+    fingerprint: String,
+    protocol: String,
+    version: String,
+    last_used: Instant,
+    connection: Connection,
+}
+
+fn pool() -> &'static Mutex<BTreeMap<String, PooledSession>> {
+    static POOL: OnceLock<Mutex<BTreeMap<String, PooledSession>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+/// Everything that decides what a live connection is talking to. Env and header
+/// values are included because a token change is a different identity; the
+/// string never leaves this process and is never logged.
+fn fingerprint(server: &Server) -> String {
+    format!(
+        "{}|{}|{:?}|{}|{:?}|{:?}",
+        server.transport, server.command, server.args, server.url, server.env, server.headers
+    )
+}
+
+fn still_warm(idle: Duration) -> bool {
+    idle < POOL_IDLE
+}
+
+fn take_pooled(name: &str, fingerprint: &str) -> Option<PooledSession> {
+    let mut all = pool()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = all.get(name)?;
+    // A stale entry is removed (dropping the child) rather than returned: the
+    // caller will open a session that matches the settings it just read.
+    if entry.fingerprint != fingerprint || !still_warm(entry.last_used.elapsed()) {
+        all.remove(name);
+        return None;
+    }
+    all.remove(name)
+}
+
+fn put_pooled(
+    name: String,
+    fingerprint: String,
+    protocol: String,
+    version: String,
+    connection: Connection,
+) {
+    let mut all = pool()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    all.insert(
+        name,
+        PooledSession {
+            fingerprint,
+            protocol,
+            version,
+            last_used: Instant::now(),
+            connection,
+        },
+    );
+}
+
+/// A save or a removal changes the entry, so the connection it described is
+/// closed instead of being handed to a call that believes the old settings.
+pub(crate) fn forget_pooled(name: &str) {
+    let mut all = pool()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    all.remove(name);
+}
+
+/// One conversation that can outlive its caller: `close` returns a healthy
+/// session to the pool, and drops it when an operation failed. A dropped stdio
+/// session kills its child (kill_on_drop); a dropped SSE session aborts its
+/// reader.
+struct LiveSession {
+    server: String,
+    fingerprint: String,
+    protocol: String,
+    version: String,
+    connection: Option<Connection>,
+    reusable: bool,
+}
+
+impl LiveSession {
+    fn new(server: &Server, connection: Connection, protocol: &str, version: &str) -> LiveSession {
+        LiveSession {
+            server: server.name.clone(),
+            fingerprint: fingerprint(server),
+            protocol: protocol.to_string(),
+            version: version.to_string(),
+            connection: Some(connection),
+            reusable: true,
+        }
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let Some(connection) = self.connection.as_mut() else {
+            return Err("The MCP session is already closed.".to_string());
+        };
+        let answer = connection.request(method, params).await;
+        if answer.is_err() {
+            // A failed request is not worth reusing. A JSON-RPC error the server
+            // sent would be safe to reuse, but discarding both costs only one
+            // reconnect and can never hand back a half-broken stream.
+            self.reusable = false;
+        }
+        answer
+    }
+
+    async fn close(mut self) {
+        let Some(connection) = self.connection.take() else {
+            return;
+        };
+        if self.reusable {
+            put_pooled(
+                self.server,
+                self.fingerprint,
+                self.protocol,
+                self.version,
+                connection,
+            );
+        } else {
+            connection.close().await;
+        }
+    }
+}
+
 /// What a successful handshake taught us about the server.
 struct Handshake {
-    session: Connection,
+    session: LiveSession,
     tools: Vec<Value>,
     protocol: String,
     version: String,
@@ -850,6 +999,7 @@ async fn connect_once(server: &Server) -> Result<Handshake, String> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let session = LiveSession::new(server, session, &protocol, &version);
     Ok(Handshake {
         session,
         tools,
@@ -858,13 +1008,14 @@ async fn connect_once(server: &Server) -> Result<Handshake, String> {
     })
 }
 
-/// Handshake, then discover tools. Every caller gets a fresh session: a server
-/// that wedged or exited is replaced by the next call instead of poisoning one
-/// long-lived connection. A failed handshake is retried once on a brand-new
-/// session — a server can exit while it is still coming up (a lock file, a
-/// socket it has not bound yet), and nothing has been called at that point, so
-/// the retry cannot duplicate an effect. A `tools/call` is never retried, which
-/// is what keeps a side effect from running twice.
+/// Handshake, then discover tools — a *fresh* session, deliberately: Test, the
+/// health probe and a run's discovery all exist to ask what the server offers
+/// now. A tool call goes through `connect_pooled` instead, which reuses a warm
+/// session. A failed handshake is retried once on a brand-new session — a
+/// server can exit while it is still coming up (a lock file, a socket it has
+/// not bound yet), and nothing has been called at that point, so the retry
+/// cannot duplicate an effect. A `tools/call` is never retried, which is what
+/// keeps a side effect from running twice.
 async fn connect(server: &Server) -> Result<Handshake, String> {
     let started = Instant::now();
     let handshake = match connect_once(server).await {
@@ -915,6 +1066,58 @@ async fn connect(server: &Server) -> Result<Handshake, String> {
         ),
     );
     Ok(handshake)
+}
+
+/// The pooled path used by a real tool call: reuse the server's warm session
+/// when there is one, and re-read its tool list on that same connection so the
+/// argument check still describes the server as it is now. A warm session that
+/// stopped answering is closed and replaced by a full handshake. Discovery,
+/// Test and the health probe deliberately use `connect` — they exist to ask the
+/// server what it offers right now.
+async fn connect_pooled(server: &Server) -> Result<Handshake, String> {
+    let fingerprint = fingerprint(server);
+    let Some(entry) = take_pooled(&server.name, &fingerprint) else {
+        return connect(server).await;
+    };
+    let mut connection = entry.connection;
+    let started = Instant::now();
+    match connection.request("tools/list", json!({})).await {
+        Ok(listed) => {
+            let tools = listed
+                .get("tools")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let elapsed = started.elapsed().as_millis() as u64;
+            record_handshake(&server.name, &entry.protocol, &entry.version, tools.len());
+            record_health(&server.name, true, String::new(), elapsed);
+            record_log(
+                &server.name,
+                "client",
+                format!(
+                    "reused a pooled session: {} tools, protocol {}, {} ms",
+                    tools.len(),
+                    entry.protocol,
+                    elapsed
+                ),
+            );
+            Ok(Handshake {
+                session: LiveSession::new(server, connection, &entry.protocol, &entry.version),
+                tools,
+                protocol: entry.protocol,
+                version: entry.version,
+            })
+        }
+        Err(error) => {
+            connection.close().await;
+            record_log(
+                &server.name,
+                "client",
+                format!("the pooled session stopped answering ({error}) — opening a new one"),
+            );
+            connect(server).await
+        }
+    }
 }
 
 /// Discovery output shaped for the panel: names, capped descriptions and the
@@ -1083,7 +1286,9 @@ pub(crate) async fn invoke(
         )));
     }
     let target = tool_target(&server.name, tool);
-    let handshake = connect(&server).await.map_err(CallFailure::Server)?;
+    let handshake = connect_pooled(&server)
+        .await
+        .map_err(CallFailure::Server)?;
     record_log(&server.name, "client", format!("tools/call {target}"));
     let mut session = handshake.session;
     let tools = handshake.tools;
@@ -1407,6 +1612,9 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(error) = write_servers(&path, &servers) {
         return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
     }
+    // The saved command or URL is what a live session was opened with; drop it
+    // so the next call starts from the entry that was just written.
+    forget_pooled(&name);
     Json(json!({ "ok": true, "server": server_json(&server) })).into_response()
 }
 
@@ -1420,6 +1628,7 @@ async fn remove_server(State(state): State<AppState>, Json(input): Json<Value>) 
     if let Err(error) = write_servers(&path, &servers) {
         return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
     }
+    forget_pooled(name);
     Json(json!({ "ok": true, "removed": removed })).into_response()
 }
 
@@ -1960,6 +2169,36 @@ mod tests {
         assert_eq!(replaced.len(), 1);
         assert!(merge_headers(Some(&json!({ "Bad Name": "x" })), None).is_err());
         assert!(merge_headers(Some(&json!(["nope"])), None).is_err());
+    }
+
+    #[test]
+    fn a_fingerprint_follows_the_settings_it_describes() {
+        let base = server("fingerprint");
+        let first = fingerprint(&base);
+        assert_eq!(first, fingerprint(&base));
+        let mut edited = base.clone();
+        edited.transport = "http".to_string();
+        edited.url = "https://example.com/mcp".to_string();
+        assert_ne!(first, fingerprint(&edited));
+        let mut new_token = base.clone();
+        new_token
+            .headers
+            .insert("Authorization".to_string(), "Bearer other".to_string());
+        assert_ne!(first, fingerprint(&new_token));
+    }
+
+    #[test]
+    fn a_pooled_session_is_warm_only_inside_its_idle_window() {
+        assert!(still_warm(Duration::ZERO));
+        assert!(still_warm(POOL_IDLE - Duration::from_secs(1)));
+        assert!(!still_warm(POOL_IDLE));
+        assert!(!still_warm(POOL_IDLE + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn forgetting_an_unpooled_server_is_a_no_op() {
+        forget_pooled("never-pooled");
+        forget_pooled("never-pooled");
     }
 
     #[test]

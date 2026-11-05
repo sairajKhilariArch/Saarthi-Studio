@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.39.0
+
+- Phase 7 remainder, connection half: an MCP server now keeps a live session
+  between calls. `invoke` checks out the server's warm session, re-reads the
+  tool list on that same connection (so schema validation still describes the
+  server as it is), calls the tool, and hands the session back by `close`.
+- What reuse skips is the process start and the `initialize` handshake: a
+  second call to the stdio smoke server measured 0 ms against 39 ms for the
+  first, and a save that evicted the session measured 29 ms again.
+- The pool is in memory only and bounded: a session is warm for five idle
+  minutes, is evicted when the server's entry is saved or removed (so a new
+  command, URL, header or token can never reach an old connection), and is
+  dropped rather than reused when a request fails. A pooled session that stops
+  answering falls back to one full handshake.
+- Discovery, Test and the health probe still open fresh sessions on purpose:
+  they are the paths that must report what the server offers right now.
+- Dropping a session closes what it owns — a stdio child is killed by
+  `kill_on_drop` and an SSE reader is aborted by `Drop` — so an eviction cannot
+  leave a process or a stream behind.
+- Concurrency is stated rather than implied: two simultaneous calls to one
+  server can open a second session; the pool keeps one and the other is
+  dropped. There is still no supervisor or health loop.
+- Tests: 252 pass (3 new: the pool fingerprint follows transport, command, URL
+  and header edits; the idle-window boundary; and eviction of a name that was
+  never pooled).
+- Live smoke on :8765: call 1 `connected … 39 ms`, call 2 `reused a pooled
+  session … 0 ms`, re-saving the same entry forced call 3 to `connected … 29
+  ms`; the log counted `connected=2 reused=1 calls=3`, and all three calls
+  returned the text they were sent.
+- Version 1.39.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 55).
+
 ## 1.38.0
 
 - Phase 7 remainder, rediscovery half: a run's MCP catalogue is no longer

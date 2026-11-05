@@ -125,7 +125,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Item | Status | Notes |
 |---|---|---|
 | Server registry | Working (1.37.0) | `mcp.json` beside the config; `transport` (stdio/http/sse), `url` for remote servers, `env` for stdio and write-only `headers` for remote — values stored, only names returned; an entry without `transport` reads as stdio |
-| Stdio connection lifecycle | Partial (1.33.0) | real `initialize` handshake and `tools/call`, but one process per operation — no pooling, no supervisor |
+| Connection lifecycle | Working (1.39.0) | a live session per server is reused across calls (handshake skipped, tool list re-read), warm for five idle minutes, evicted on save/remove and on a failed request, with a fresh-handshake fallback; a dropped stdio child is killed and an SSE reader aborted |
 | Tool discovery | Working (1.33.0) | `tools/list`, schemas kept |
 | Schema validation | Working (1.33.0) | `required` presence + declared scalar types; not full JSON Schema |
 | Permission binding | Working (1.33.0) | `mcp_tool` on `server.tool`; ask/deny/allow, audited |
