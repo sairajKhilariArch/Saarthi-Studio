@@ -59,11 +59,22 @@ static ACTIVE: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
 /// One JSON action the model emits per step.
 #[derive(Debug, PartialEq)]
 enum Action {
-    Think { summary: String },
-    List { path: String },
-    Read { path: String },
-    Write { path: String, content: String },
-    Command { command: String },
+    Think {
+        summary: String,
+    },
+    List {
+        path: String,
+    },
+    Read {
+        path: String,
+    },
+    Write {
+        path: String,
+        content: String,
+    },
+    Command {
+        command: String,
+    },
     /// One call to a tool an MCP server advertises. The permission target is
     /// `server.tool`, the same string a rule is written against.
     Mcp {
@@ -71,8 +82,12 @@ enum Action {
         tool: String,
         arguments: Value,
     },
-    Done { summary: String },
-    Fail { reason: String },
+    Done {
+        summary: String,
+    },
+    Fail {
+        reason: String,
+    },
 }
 
 impl Action {
@@ -831,7 +846,9 @@ async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, Strin
             })
             .map_err(|e| e.message().to_string()),
         Action::Command { command } => run_command(root, command).await,
-        Action::Mcp { .. } => Err("MCP actions run through the MCP path, not this one.".to_string()),
+        Action::Mcp { .. } => {
+            Err("MCP actions run through the MCP path, not this one.".to_string())
+        }
         _ => Err("Only list, read, write and command actions execute.".to_string()),
     }
 }
@@ -839,11 +856,7 @@ async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, Strin
 /// Executes one non-terminal action. Workspace actions go through the
 /// path-confined helpers; an MCP call goes through the same `invoke` the HTTP
 /// route uses, so validation, argument checks and the audit trail are shared.
-async fn dispatch_step(
-    state: &AppState,
-    root: &FsPath,
-    action: &Action,
-) -> Result<String, String> {
+async fn dispatch_step(state: &AppState, root: &FsPath, action: &Action) -> Result<String, String> {
     match action {
         Action::Mcp {
             server,
@@ -1074,9 +1087,8 @@ fn mcp_catalog_block(snapshot: &str) -> Option<String> {
     if tools.is_empty() {
         return None;
     }
-    let mut lines = vec![
-        "MCP tools this run may call (server.tool — required arguments):".to_string(),
-    ];
+    let mut lines =
+        vec!["MCP tools this run may call (server.tool — required arguments):".to_string()];
     for tool in tools.iter().take(MCP_PROMPT_TOOLS) {
         let Some(server) = tool.get("server").and_then(Value::as_str) else {
             continue;
@@ -2755,6 +2767,38 @@ async fn restore_step(
     Json(json!({ "ok": true, "path": path })).into_response()
 }
 
+/// Emergency stop: cancel every live agent run in one call. A run counts as
+/// live when its stored status is `running` or `awaiting_approval` — exactly
+/// the statuses the per-run cancel endpoint refuses to leave behind — and the
+/// ACTIVE map carries a cancel flag for every loop that is actually executing
+/// a step. The two lists can disagree in both directions (a finished loop that
+/// has not been reaped, a run paused at approval), so each mechanism is applied
+/// on its own terms: the flag wakes a live loop, `finish` closes the record no
+/// matter which side was live, and the loop's terminal check can never
+/// overwrite a status the record no longer holds. Mirrors `cancel_run`,
+/// repeated over every live run, without re-loading each row.
+pub(crate) fn cancel_all_active(state: &AppState, reason: &str) -> Vec<String> {
+    let run_ids: Vec<String> = ACTIVE.lock().unwrap().keys().cloned().collect();
+    let mut stopped = Vec::new();
+    for run_id in run_ids {
+        let live = matches!(
+            run_status(state, &run_id).ok().flatten().as_deref(),
+            Some(RUNNING) | Some(AWAITING_APPROVAL)
+        );
+        if !live {
+            continue;
+        }
+        if let Some(flag) = ACTIVE.lock().unwrap().get(&run_id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+        let _ = add_step(state, &run_id, "emergency-stop", "Emergency stop.", reason);
+        let _ = finish(state, &run_id, CANCELLED, reason);
+        notify(state, Some(&run_id));
+        stopped.push(run_id);
+    }
+    stopped
+}
+
 async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
     let run = match load_run(&state, &run_id) {
         Ok(Some(run)) => run,
@@ -3335,7 +3379,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         }
         // A non-object arguments value still parses: the tool's schema rejects
         // it as a step error the model can read and repair.
-        match parse_action("{\"action\":\"mcp\",\"server\":\"e\",\"tool\":\"t\",\"arguments\":\"x\"}") {
+        match parse_action(
+            "{\"action\":\"mcp\",\"server\":\"e\",\"tool\":\"t\",\"arguments\":\"x\"}",
+        ) {
             ParsedAction::Ok(Action::Mcp { arguments, .. }) => assert_eq!(arguments, json!("x")),
             other => panic!("expected an mcp action, got {other:?}"),
         }
@@ -3361,7 +3407,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             arguments: json!({ "path": "src/main.rs" }),
         };
         let summary = pending_summary(&with_args);
-        assert!(summary.starts_with("call MCP tool files.read_file with {"), "{summary}");
+        assert!(
+            summary.starts_with("call MCP tool files.read_file with {"),
+            "{summary}"
+        );
         // The pending action survives the round trip the approval route takes.
         assert_eq!(
             Action::from_json(&with_args.to_json()),
@@ -3445,7 +3494,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert!(with.contains("echo.echo"), "{with}");
         assert!(with.contains("required: text"), "{with}");
         // Flag on but nothing discovered: no action line, and the prompt says so.
-        let empty = prompt(&mcp_run(true, "{\"tools\":[],\"errors\":[\"gone: no such file\"]}"));
+        let empty = prompt(&mcp_run(
+            true,
+            "{\"tools\":[],\"errors\":[\"gone: no such file\"]}",
+        ));
         assert!(!empty.contains("\"action\":\"mcp\""), "{empty}");
         assert!(empty.contains("no tool was discovered"), "{empty}");
         // A corrupt snapshot degrades to "no tools", never a panic.
@@ -3877,7 +3929,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     }
 
     async fn wait_for_terminal(state: &AppState, id: &str) -> (String, Vec<String>) {
-        let terminal = [SUCCEEDED, FAILED, INTERRUPTED];
+        // `cancelled` is terminal too — the helper used to ignore it, so a
+        // genuinely cancelled run looked like a hang.
+        let terminal = [SUCCEEDED, FAILED, INTERRUPTED, CANCELLED];
         for _ in 0..250 {
             if let Ok(conn) = db(state) {
                 if let Ok(status) = conn.query_row::<String, _, _>(
@@ -4175,15 +4229,50 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         );
     }
 
+    #[tokio::test]
+    async fn the_emergency_stop_cancels_every_live_run() {
+        // Enough no-op think steps to outlive the stop: the mock answers the
+        // same harmless reply until the store says cancelled.
+        let reply = "{\"action\":\"think\",\"summary\":\"waiting to be stopped\"}";
+        let replies: Vec<String> = std::iter::repeat(reply.to_string()).take(120).collect();
+        let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
+        let base = scripted_router(&refs).await;
+        let fixture = run_fixture("emergency-stop", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "work until the emergency stop",
+                "autoApprove": true,
+                "maxSteps": 120
+            }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, RUNNING).await;
+
+        // One stop accounts for every live run and flips its record on the
+        // spot, so anything polling the store sees `cancelled`, never a stale
+        // `running`.
+        let stopped = cancel_all_active(&fixture.state, "Test emergency stop.");
+        assert_eq!(stopped, vec![id.clone()], "{stopped:?}");
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, CANCELLED, "actions: {actions:?}");
+        assert!(
+            actions.contains(&"emergency-stop".to_string()),
+            "actions: {actions:?}"
+        );
+
+        // A stopped run is no longer live: a second stop finds nothing.
+        let again = cancel_all_active(&fixture.state, "Second stop.");
+        assert!(again.is_empty(), "{again:?}");
+    }
+
     /// The list query and `row_to_run` are two separate declarations of one
     /// column order. When they drifted apart every row failed to map and the
     /// Runs panel read "No runs yet" while the runs existed.
     #[test]
     fn the_runs_list_query_maps_every_column() {
-        let path = std::env::temp_dir().join(format!(
-            "saarthi-runs-list-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("saarthi-runs-list-{}.db", uuid::Uuid::new_v4()));
         let conn = crate::open_db(&path).expect("temp db");
         initialize(&conn).expect("schema");
         conn.execute(

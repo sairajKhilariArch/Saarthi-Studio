@@ -6140,6 +6140,33 @@ async function answerApproval(runId, approve) {
   if (runId === state.openRun) await loadRunDetail();
 }
 
+async function emergencyStopAll() {
+  if (!confirm("Stop every live agent run and close every terminal session right now?")) return;
+  const result = await api("/api/emergency-stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not run the emergency stop.");
+    return;
+  }
+  // The count the server reports is what actually stopped — an empty response
+  // means nothing was live, and that is worth saying too.
+  const runs = (result.data.runs || []).length;
+  const terminals = (result.data.terminals || []).length;
+  toast(runs || terminals
+    ? `Stopped ${runs} run${runs === 1 ? "" : "s"} and closed ${terminals} terminal${terminals === 1 ? "" : "s"}.`
+    : "Nothing was live — every run and terminal is already stopped.");
+  state.openRun = null;
+  state.runDetail = null;
+  // Every session was closed server-side; drop the client's attachment so the
+  // panel's Restart opens a fresh shell instead of talking to a dead id.
+  if (termState.source) termState.source.close();
+  termState.source = null;
+  termState.id = null;
+  await loadRuns();
+}
+
 async function cancelAgentRun(runId) {
   const result = await api(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
     method: "POST",
@@ -6164,6 +6191,7 @@ async function cancelAgentRun(runId) {
   bindEvents();
   setupLocalControls();
   $("runsForm").addEventListener("submit", submitRun);
+  $("emergencyStopBtn").addEventListener("click", emergencyStopAll);
   setSidebarMode("threads");
   setView("chat");
   autoGrow($("prompt"));

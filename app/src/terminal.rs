@@ -307,6 +307,18 @@ async fn terminal_resize(
     }
 }
 
+/// Emergency stop: close every terminal session in one call. Removing each
+/// entry drops its master (and writer), which closes the PTY; every shell gets
+/// SIGHUP and exits — the same mechanism the per-session close endpoint and
+/// the application exit already rely on. The subscriber threads notice the
+/// dead master and mark their session ended, exactly as a single close does.
+pub(crate) fn stop_all(hub: &Hub) -> Vec<(u64, String)> {
+    let mut sessions = hub.sessions.lock().unwrap();
+    let stopped: Vec<(u64, String)> = sessions.values().map(|s| (s.id, s.cwd.clone())).collect();
+    sessions.clear();
+    stopped
+}
+
 async fn terminal_close(State(state): State<crate::AppState>, Path(id): Path<u64>) -> Response {
     let hub = state.terminal.clone();
     let closed = hub.sessions.lock().unwrap().remove(&id).is_some();
@@ -320,6 +332,20 @@ async fn terminal_close(State(state): State<crate::AppState>, Path(id): Path<u64
 
 /// Mutating routes are local-origin guarded like every other POST route; the
 /// stream endpoint is read-only and therefore outside the guard.
+/// The empty-hub half of the emergency stop: an idle Studio must stop nothing
+/// and keep going. The live-session half is covered by the route smoke in the
+/// release notes — a fake session cannot be built without a real PTY master.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_all_on_an_empty_hub_stops_nothing() {
+        let hub = hub();
+        assert!(stop_all(&hub).is_empty());
+    }
+}
+
 pub(crate) fn router(port: u16) -> Router<crate::AppState> {
     let guarded = Router::new()
         .route("/api/terminal/open", post(terminal_open))

@@ -420,7 +420,11 @@ pub(crate) fn guard_user(
 ) -> Option<axum::response::Response> {
     let effective = explicit(state, action, target, project)?;
     let scope = effective.scope;
-    let shown = if target.is_empty() { "everything" } else { target };
+    let shown = if target.is_empty() {
+        "everything"
+    } else {
+        target
+    };
     match (effective.decision, approve) {
         (Decision::Allow, _) => None,
         (Decision::Ask, true) => {
@@ -447,7 +451,15 @@ pub(crate) fn guard_user(
             )))
         }
         (Decision::Deny, _) => {
-            record(state, action, target, Decision::Deny, scope, project, detail);
+            record(
+                state,
+                action,
+                target,
+                Decision::Deny,
+                scope,
+                project,
+                detail,
+            );
             let message = format!(
                 "A saved permission rule denies {} on \"{shown}\". Change it in Settings → Permissions.",
                 action.as_str()
@@ -539,6 +551,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
     let mutations = Router::new()
         .route("/api/permissions/grant", post(grant_rule))
         .route("/api/permissions/revoke", post(revoke_rule))
+        .route("/api/emergency-stop", post(emergency_stop))
         .route_layer(axum::middleware::from_fn_with_state(
             crate::workspace::LocalOriginGuard::new(port),
             crate::workspace::guard_local_origin,
@@ -582,6 +595,40 @@ async fn audit(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(50);
     Json(json!({ "ok": true, "entries": recent(&state, limit) })).into_response()
+}
+
+/// Global emergency stop: cancel every live agent run and close every terminal
+/// session in one call. This route is deliberately NOT policy-gated — a deny
+/// rule must never be able to hold the safety release closed — but it is the
+/// one privileged operation recorded with an unconditional allow in the audit
+/// trail, so every firing is visible in the Permissions panel even when it
+/// stops nothing.
+async fn emergency_stop(State(state): State<AppState>) -> Response {
+    let reason = "Cancelled by the global emergency stop.";
+    let runs = crate::agent::cancel_all_active(&state, reason);
+    let terminals = crate::terminal::stop_all(&state.terminal);
+    let detail = format!(
+        "stopped {} live run{} and {} terminal session{}",
+        runs.len(),
+        if runs.len() == 1 { "" } else { "s" },
+        terminals.len(),
+        if terminals.len() == 1 { "" } else { "s" },
+    );
+    record(
+        &state,
+        Action::Command,
+        "emergency-stop",
+        Decision::Allow,
+        Scope::Session,
+        "",
+        &detail,
+    );
+    Json(json!({
+        "ok": true,
+        "runs": runs,
+        "terminals": terminals,
+    }))
+    .into_response()
 }
 
 fn clean_target(value: Option<&Value>) -> String {

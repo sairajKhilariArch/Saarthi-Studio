@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.41.0
+
+- Phase 10 remainder: a global emergency stop. `POST /api/emergency-stop`
+  cancels every live agent run in one call (each live loop's cancel flag is
+  woken and its record closed to `cancelled` with an `emergency-stop` step,
+  mirroring the per-run cancel endpoint) and closes every terminal session in
+  one call (the hub is drained through the same SIGHUP-on-drop path the
+  per-session close and application exit use).
+- The route sits with the permission routes behind the local-origin guard but
+  is deliberately NOT policy-gated: a deny rule must never be able to hold the
+  safety release closed. It is the one privileged operation the audit trail
+  records with an unconditional allow, so every firing is visible in the
+  Permissions panel even when it stopped nothing (`stopped 0 live runs and 0
+  terminal sessions`).
+- The Runs panel carries an "Emergency stop" button with a confirm; it also
+  detaches the client's terminal attachment so the panel's Restart opens a
+  fresh shell instead of talking to a dead session id, and it reports the
+  server's own counts (an empty response honestly says nothing was live).
+- Test-scaffold fix found on the way: `wait_for_terminal` did not treat
+  `cancelled` as terminal, so a genuinely cancelled run looked like a hang.
+- Tests: 254 pass, 1 ignored (new e2e: a running agent run, one stop →
+  `cancelled` with an `emergency-stop` step, a second stop finds nothing; plus
+  the empty-hub stop test). Clippy `-D warnings` clean; `node --check
+  app/static/app.js` clean.
+- Live smoke on :8877: one terminal open, the stop returned `[1, cwd]`, its
+  stream then answered 404, a second stop returned `[]`/`[]`, and the audit row
+  read `allow / emergency-stop · stopped 0 live runs and 1 terminal session`.
+  The agent-run half is covered by the scripted-router e2e (a live smoke of a
+  run needs a model reply, so the test drives the same helper the loop uses).
+- Format-only re-wraps in `app/src/mcp.rs` ride along from the formatter; no
+  behavior change.
+- Version 1.41.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 57).
+
 ## 1.40.0
 
 - Phase 10 remainder: the privileged routes a person drives now consult the

@@ -679,8 +679,7 @@ impl SseSession {
             .await
             .map_err(|_| "The MCP server never announced its message endpoint.".to_string())?
             .map_err(|_| {
-                "The MCP server closed its event stream before announcing an endpoint."
-                    .to_string()
+                "The MCP server closed its event stream before announcing an endpoint.".to_string()
             })?;
         Ok(SseSession {
             client,
@@ -1271,10 +1270,7 @@ pub(crate) async fn invoke(
         return Err(CallFailure::BadRequest("Name a tool to call.".to_string()));
     }
     let servers = read_servers(&registry_path(state));
-    let Some(server) = servers
-        .into_iter()
-        .find(|entry| entry.name == server_name)
-    else {
+    let Some(server) = servers.into_iter().find(|entry| entry.name == server_name) else {
         return Err(CallFailure::NotFound(format!(
             "No MCP server named \"{server_name}\"."
         )));
@@ -1286,9 +1282,7 @@ pub(crate) async fn invoke(
         )));
     }
     let target = tool_target(&server.name, tool);
-    let handshake = connect_pooled(&server)
-        .await
-        .map_err(CallFailure::Server)?;
+    let handshake = connect_pooled(&server).await.map_err(CallFailure::Server)?;
     record_log(&server.name, "client", format!("tools/call {target}"));
     let mut session = handshake.session;
     let tools = handshake.tools;
@@ -2102,7 +2096,10 @@ mod tests {
         assert!(!valid_url("example.com/mcp"));
         assert!(!valid_url("https://"));
         assert!(!valid_url("https://example.com/a b"));
-        assert!(!valid_url(&format!("https://example.com/{}", "x".repeat(2048))));
+        assert!(!valid_url(&format!(
+            "https://example.com/{}",
+            "x".repeat(2048)
+        )));
     }
 
     #[test]
@@ -2164,8 +2161,8 @@ mod tests {
             merge_headers(None, Some(&existing)),
             Ok(existing.headers.clone())
         );
-        let replaced = merge_headers(Some(&json!({ "X-Trace": "1" })), Some(&existing))
-            .expect("object");
+        let replaced =
+            merge_headers(Some(&json!({ "X-Trace": "1" })), Some(&existing)).expect("object");
         assert_eq!(replaced.len(), 1);
         assert!(merge_headers(Some(&json!({ "Bad Name": "x" })), None).is_err());
         assert!(merge_headers(Some(&json!(["nope"])), None).is_err());
