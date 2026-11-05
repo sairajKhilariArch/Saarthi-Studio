@@ -1169,6 +1169,14 @@ kbd {
 }
 .badge.on { color: var(--ok); border-color: var(--ok-border); background: var(--ok-soft); }
 .badge.broken { color: var(--danger-ink); border-color: var(--danger-border); background: var(--danger-soft); }
+/* Permissions: decision badges reuse .badge, the trail is a compact list. */
+.badge.deny { color: var(--danger-ink); border-color: var(--danger-border); background: var(--danger-soft); }
+.badge.allow { color: var(--ok); border-color: var(--ok-border); background: var(--ok-soft); }
+.badge.ask { color: var(--dim); }
+.perm-audit { list-style: none; margin: 4px 0 0; padding: 0; max-height: 280px; overflow-y: auto; }
+.perm-audit li { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 6px 0; font-size: 12px; }
+.perm-audit time { color: var(--mute); flex: none; }
+.perm-audit .perm-audit-detail { color: var(--dim); }
 .skill-list { display: flex; flex-direction: column; gap: 8px; }
 
 .composer { position: relative; }

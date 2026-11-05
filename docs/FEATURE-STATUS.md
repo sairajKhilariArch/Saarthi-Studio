@@ -162,7 +162,7 @@ is also not built.
 | OS keychain for secrets | Missing | keys live in mode-restricted `config.json` |
 | Privileged-operation audit log | Working (1.31.0) | `permission_audit` table + `/api/permissions/audit` |
 | Global kill switch | Missing | per-run cancel exists; no stop-everything control |
-| Permissions UI | Missing | routes only (`/api/permissions`, grant, revoke, audit) |
+| Permissions UI | Working (1.32.0) | Settings → Permissions: add a rule, list rules in force, revoke, read the audit trail |
 
 ## Phase 11 — Token, context and cost
 

@@ -18,7 +18,8 @@ partial, `[ ]` not started.
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 | 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
 | 1.30.0 | `a0c76d8` | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
-| 1.31.0 | this commit | Phase 10 first slice: central permission policy store (rules + scopes + resolution), agent-step and router-install enforcement, `permission_audit` table and routes | `cargo test --locked`: 214 passed, 1 ignored; live grant/audit/revoke smoke |
+| 1.32.0 | this commit | Phase 10 UI: Settings → Permissions panel (add/revoke rules, audit trail), re-read on every visit | live browser pass on :8797: rule added through the form, badge + audit row appeared, revoke removed it |
+| 1.31.0 | `7c949c3` | Phase 10 first slice: central permission policy store (rules + scopes + resolution), agent-step and router-install enforcement, `permission_audit` table and routes | `cargo test --locked`: 214 passed, 1 ignored; live grant/audit/revoke smoke |
 
 ## Phase 1 — CI/CD and release reliability
 
@@ -130,7 +131,7 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [x] Agent steps and router installs are actually gated by the store, and a veto names the rule in the run's log (1.31.0)
 - [x] `permission_audit` table + `/api/permissions/audit`; grants, revokes, refusals and approved installs are recorded (1.31.0)
 - [x] Routes: list, grant, revoke (local-origin guarded) (1.31.0)
-- [ ] Settings → Permissions UI (list rules, revoke, add a deny/allow rule) — the API exists, the panel does not
+- [x] Settings → Permissions UI: add a rule, list rules in force, revoke, read the audit trail (1.32.0)
 - [ ] Wire the remaining privileged paths: terminal open, workspace writes from the editor, git, updates, settings/key changes
 - [ ] OS keychain for `api_key` / `search_api_key` / `openai_api_key` (still mode-restricted `config.json`)
 - [ ] Global emergency stop covering every agent run and terminal at once

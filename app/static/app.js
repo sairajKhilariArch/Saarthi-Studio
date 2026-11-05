@@ -44,6 +44,9 @@ function setSettingsSection(name) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
+  // Rules change while the app runs (an agent refusal, a router install), so
+  // the panel re-reads both endpoints on every visit instead of caching.
+  if (name === "permissions") void loadPermissions();
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
 
@@ -97,6 +100,8 @@ function setupSettingsNav() {
     const button = event.target.closest("button[data-settings-section]");
     if (button) setSettingsSection(button.dataset.settingsSection);
   });
+  $("permAdd").addEventListener("click", () => void addPermissionRule());
+  $("permRefresh").addEventListener("click", () => void loadPermissions());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
   // The theme buttons reflect the live theme without a re-render: listening on
@@ -495,6 +500,8 @@ const state = {
   /* skills: local SKILL.md folders served by /api/skills. */
   skills: [],
   openSkillId: null,
+  /* permissions: saved rules plus the audit trail from /api/permissions. */
+  permissions: { actions: [], rules: [] },
   /* activeSkillId: a skill the user picked in the composer. suggestedSkillId
      is a keyword match the composer offers when nothing was picked; either
      one rides with the next request as `skill`. */
@@ -3035,6 +3042,157 @@ async function loadSettings() {
     ? "A key is saved locally. Leave the field blank to keep it, or enter a new key to replace it."
     : "No key saved yet. It is stored in a permission-restricted local config file.";
   renderBackendPresets();
+  void loadPermissions();
+}
+
+/* ---- permissions: saved rules and what they decided lately --------- */
+
+function permissionScopeLabel(scope) {
+  return { once: "Once", session: "This session", project: "Project", always: "Always" }[scope] || scope;
+}
+
+function renderPermissionActions() {
+  const select = $("permAction");
+  if (!select || !state.permissions.actions.length) return;
+  if (select.options.length === state.permissions.actions.length) return;
+  select.replaceChildren();
+  state.permissions.actions.forEach((action) => {
+    const option = document.createElement("option");
+    option.value = action.id;
+    option.textContent = action.id;
+    option.title = `${action.description} Default: ${action.default}.`;
+    select.appendChild(option);
+  });
+}
+
+function renderPermissionRules() {
+  const host = $("permRules");
+  if (!host) return;
+  host.replaceChildren();
+  if (!state.permissions.rules.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No rules saved. Every action runs at its default: reads allowed, writes and commands ask first.";
+    host.appendChild(note);
+    return;
+  }
+  state.permissions.rules.forEach((rule) => {
+    const row = document.createElement("div");
+    row.className = "skill-row";
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = `${rule.action} · ${rule.target || "any target"}`;
+    const detail = document.createElement("p");
+    detail.textContent = `${permissionScopeLabel(rule.scope)} · ${rule.project ? `project ${rule.project}` : "every project"}`;
+    main.append(strong, detail);
+    const side = document.createElement("div");
+    side.className = "skill-side";
+    const badge = document.createElement("span");
+    badge.className = `badge ${rule.decision}`;
+    badge.textContent = rule.decision;
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "btn btn-quiet btn-small";
+    revoke.textContent = "Revoke";
+    revoke.addEventListener("click", async () => {
+      revoke.disabled = true;
+      const result = await api("/api/permissions/revoke", {
+        method: "POST",
+        body: JSON.stringify({ action: rule.action, target: rule.target, scope: rule.scope, project: rule.project }),
+      });
+      if (!result.ok) toast(result.data.error || "Could not revoke that rule.");
+      else toast(`Revoked ${rule.action}${rule.target ? ` on ${rule.target}` : ""}.`);
+      await loadPermissions();
+    });
+    side.append(badge, revoke);
+    row.appendChild(main);
+    row.appendChild(side);
+    host.appendChild(row);
+  });
+}
+
+async function loadPermissionAudit() {
+  const host = $("permAudit");
+  if (!host) return;
+  const result = await api("/api/permissions/audit?limit=25");
+  host.replaceChildren();
+  if (!result.ok) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = result.data.error || "Could not read the audit trail.";
+    host.appendChild(note);
+    return;
+  }
+  const entries = result.data.entries || [];
+  if (!entries.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "Nothing decided yet.";
+    host.appendChild(note);
+    return;
+  }
+  entries.forEach((entry) => {
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = new Date(entry.created_at * 1000).toLocaleString();
+    const what = document.createElement("span");
+    what.textContent = `${entry.action} ${entry.target || "any target"} — ${entry.decision}`;
+    const detail = document.createElement("span");
+    detail.className = "perm-audit-detail";
+    detail.textContent = entry.detail;
+    item.append(time, what, detail);
+    host.appendChild(item);
+  });
+}
+
+async function loadPermissions() {
+  const result = await api("/api/permissions");
+  if (!result.ok) {
+    const host = $("permRules");
+    host.replaceChildren();
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = result.data.error || "Could not read permission rules.";
+    host.appendChild(note);
+    return;
+  }
+  state.permissions = { actions: result.data.actions || [], rules: result.data.rules || [] };
+  renderPermissionActions();
+  renderPermissionRules();
+  void loadPermissionAudit();
+}
+
+async function addPermissionRule() {
+  const action = $("permAction").value;
+  const decision = $("permDecision").value;
+  const scope = $("permScope").value;
+  const target = $("permTarget").value.trim();
+  if (!action) {
+    toast("Pick an action first.");
+    return;
+  }
+  if (scope === "project" && !state.activeProjectId) {
+    toast("Open a project before saving a project-scoped rule.");
+    return;
+  }
+  const result = await api("/api/permissions/grant", {
+    method: "POST",
+    body: JSON.stringify({
+      action,
+      target,
+      decision,
+      scope,
+      project: scope === "project" ? state.activeProjectId : "",
+    }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not save that rule.");
+    return;
+  }
+  $("permTarget").value = "";
+  toast(`Saved: ${decision} ${action}${target ? ` on ${target}` : ""}.`);
+  await loadPermissions();
 }
 
 function settingsNotice(message, ok) {

@@ -563,6 +563,7 @@
           <button type="button" data-settings-section="context" aria-selected="false">Chat context</button>
           <button type="button" data-settings-section="search" aria-selected="false">Deep search</button>
           <button type="button" data-settings-section="openai" aria-selected="false">OpenAI Platform</button>
+          <button type="button" data-settings-section="permissions" aria-selected="false">Permissions</button>
           <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
@@ -638,6 +639,52 @@
             <button type="submit" class="btn btn-accent">Save all settings</button>
             <button type="button" id="testOpenAI" class="btn btn-quiet">Test platform key</button>
           </div>
+          </section>
+
+          <section id="settings-permissions" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">Permissions</h2>
+          <p>Rules saved here decide what the agent and the router manager may do. A rule can only make an action <em>stricter</em>: a run started without write access still cannot write, even where a rule allows it. Reads default to allowed; anything that can destroy, spend or expose asks first.</p>
+          <div class="form-row">
+            <label class="field">
+              <span>Action</span>
+              <select id="permAction"></select>
+            </label>
+            <label class="field">
+              <span>Target prefix</span>
+              <input id="permTarget" type="text" placeholder="secrets/ (blank means any target)" autocomplete="off">
+              <small>Longest matching prefix wins. A command rule matches the start of the command line.</small>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field">
+              <span>Decision</span>
+              <select id="permDecision">
+                <option value="deny">Deny</option>
+                <option value="ask">Ask</option>
+                <option value="allow">Allow</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Scope</span>
+              <select id="permScope">
+                <option value="always">Always</option>
+                <option value="project">This project only</option>
+                <option value="session">This session only</option>
+                <option value="once">Once</option>
+              </select>
+              <small>Session and once rules are never written to disk.</small>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="permAdd" class="btn btn-accent">Save rule</button>
+            <button type="button" id="permRefresh" class="btn btn-quiet">Refresh</button>
+            <button type="submit" class="btn btn-quiet">Save all settings</button>
+          </div>
+          <h3>Rules in force</h3>
+          <div id="permRules"></div>
+          <h3>Recent decisions</h3>
+          <p class="muted">Rule changes, refusals and approved installs, newest first.</p>
+          <ul id="permAudit" class="perm-audit"></ul>
           </section>
 
           <section id="settings-appearance" class="settings-section card form-card-inner hidden">

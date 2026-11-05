@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.32.0
+
+- Settings → Permissions: the policy store from 1.31.0 gets a face. Pick an
+  action (each option carries its real description and default as a tooltip),
+  an optional target prefix, a decision and a scope, and the rule is saved
+  through `POST /api/permissions/grant`. Rules in force are listed with their
+  decision badge, scope and project, each with a Revoke button.
+- The panel also shows the audit trail (`/api/permissions/audit?limit=25`), so
+  a refusal the agent recorded while the panel was closed is visible on the
+  next visit rather than needing a log dive.
+- Re-read on every visit to the section, never cached: rules change while the
+  app runs (an agent refusal, a router install), and a stale list would show a
+  rule as gone when it is not.
+- Saving a project-scoped rule without an open project is refused in the UI
+  with the reason, instead of silently saving it against no project.
+- Version 1.32.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 48).
+
 ## 1.31.0
 
 - Phase 10, first slice: a central permission policy store. `permissions.rs`
