@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.27.0
+
+- Adds the specification audit: `docs/FEATURE-STATUS.md` now records, phase by
+  phase, what the tree actually delivers and what the specification still asks
+  for. Evidence is the state of `main` at this commit — `cargo test --locked`
+  reports **175 passed, 0 failed, 1 ignored** — plus the route and test counts
+  read from the source, not a projection.
+- The audit's finding, in short: Phases 1 and 2 are effectively delivered
+  (Phase 1 waits only on install smokes and the dead-tag decision; Phase 2 on a
+  configuration editor and dependency probing), Phases 5, 9, 10, 11, 14 and 16
+  are largely in place, and **Phase 4 (Thinking + OpenAI Platform) and Phase 7
+  (MCP) have no implementation at all**. Phase 13 is a flat saved-prompt list,
+  not a workflow graph; Phases 3, 6, 8, 12, 15, 17 and 18 are partial in the
+  specific ways the report lists.
+- Records the ordering that follows from that: the Phase 3 model capability
+  table first (it is Phase 4's only hard prerequisite), then Thinking and the
+  Responses API, then the Phase 10 policy store that unblocks MCP.
+- Version 1.27.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 43).
+
 ## 1.26.23
 
 - The install flow is no longer one-way. `GET /api/routers/:id/update` compares

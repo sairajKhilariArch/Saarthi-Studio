@@ -13,6 +13,8 @@ partial, `[ ]` not started.
 | 1.26.4 | `92b6817` | Single version parser, artifact gate, regression tests, release concurrency, spec docs | run `41869072420`: deb/windows/vscode/android success, Linux AppImage failed, macOS job never acquired |
 | 1.26.5 | `3692edc` | AppImage AppStream attempt + macOS on an Intel runner | run `41882152731`: macOS exit 101 (missing aarch64 std), Linux failed `validate-tree` |
 | 1.26.6 | `76b9fd1` | validate-clean AppStream identity (RDNS id, OARS rating), both Darwin targets | run `41884439627`: **all six jobs success, 9 assets** |
+| 1.26.7–1.26.23 | `8ff7c5e` | Router manager completed (UI, install plans, pinned images, verified downloads, update/uninstall), resume for runs, 175 tests | in-tree evidence only; no tag cut yet |
+| 1.27.0 | this commit | Full spec audit in `FEATURE-STATUS.md`; every manifest on 1.27.0 | `cargo test --locked`: 175 passed, 1 ignored |
 
 ## Phase 1 — CI/CD and release reliability
 
@@ -47,6 +49,7 @@ partial, `[ ]` not started.
 ## Foundations running alongside Phase 1
 
 - [~] Permission engine — per-run flags + route guards exist, no central policy store (Phase 10)
+- [x] Specification audit at 1.27.0 — per-phase delivered/remaining with the evidence read from the tree (`FEATURE-STATUS.md`)
 - [~] Observability — `request_log` + SSE, no structured logs/correlation IDs
 - [x] Spec documents (`ARCHITECTURE`, `IMPLEMENTATION-SPECIFICATION`, `MASTER-ROADMAP`, `TESTING-STRATEGY`, `KNOWN-ISSUES`, `FEATURE-STATUS`, this file)
 - [ ] Frontend test runner
@@ -86,9 +89,11 @@ lifecycle and points at its facts rather than re-deriving them.
 
 ## Next up
 
-1. Phase 2 close-out — update/uninstall and a configuration editor on top of the
-   install records, or move to Phase 3 (model capability table) since the
-   router manager now covers detection, lifecycle, logs, launch and install.
-2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
-2. Phase 3 — capability table per model (needed before Thinking in Phase 4).
-3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.
+1. Phase 3 — capability table per model (provider-reported metadata only). It is
+   the only hard prerequisite for Phase 4 and the largest remaining gap that is
+   cheap to close honestly.
+2. Phase 4 — Thinking control and a native OpenAI Platform (Responses API)
+   provider: currently the largest untouched block of the specification.
+3. Phase 2 close-out — configuration editor plus dependency/package-manager
+   probing, so the router manager stops being "80 % delivered".
+4. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

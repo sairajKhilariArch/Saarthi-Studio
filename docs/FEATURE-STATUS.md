@@ -1,197 +1,248 @@
-# Feature status report (audit of `main` @ 1.26.3)
+# Feature status report — audit of `main` @ 1.27.0
 
-Status vocabulary: **Working** (route + persistence + UI verified in code or
-by run), **Partial** (exists but a stated requirement is unmet), **Broken**
-(exists and fails), **Missing** (no implementation).
+Read against the master specification phase by phase. Status vocabulary:
+**Working** (route + persistence + UI verified in code or by a recorded run),
+**Partial** (exists but a stated requirement is unmet), **Missing** (no
+implementation), **Broken** (exists and fails).
 
-Evidence notes: `cargo test --locked` = 127 passed at 1.26.2/1.26.3 sources;
-`desktop-ci`, `rust-host-api-ci`, `android-ci` green on the 1.26.3 push;
-release run `41861357127` published 8 non-macOS assets.
+## Evidence for this audit
 
-## Phase 1 — CI/CD and release reliability
+| Check | Command | Result |
+|---|---|---|
+| Rust suite | `cd app && cargo test --locked` | **175 passed, 0 failed, 1 ignored** (2026-11-05) |
+| Route registrations | `grep -c '\.route(' app/src/{main,agent,host_api}.rs` | 37 / 7 / 8 |
+| Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 182 |
+| Last green release | run `41884439627` (`v1.26.6`) | all six jobs success, 9 assets |
+| Release line | `8ff7c5e` … `1.27.0` | 1.26.4 → 1.26.23 all shipped, LF manifests |
+
+The counts above are what the tree contains today, not a projection.
+
+## Verdict in one paragraph
+
+Phases 1 and 2 are effectively delivered (Phase 1 needs only install smokes and
+the dead-tag decision; Phase 2 needs only a configuration editor and
+dependency/package-manager probing). Phases 5 (run engine + team/crew
+orchestration), 9 (workspace + PTY), 10 (guards), 11 (context/usage), 14
+(clients) and 16 (backend/client tests) are largely there. **Phase 4 (Thinking +
+OpenAI Platform) and Phase 7 (MCP) have no implementation at all**, Phase 13 is a
+flat saved-prompt list rather than a workflow graph, and Phases 3, 6, 8, 12, 15,
+17, 18 are partial in the specific ways listed below.
+
+## Phase 1 — CI/CD and error diagnosis
 
 | Item | Status | Evidence / gap |
 |---|---|---|
-| Rust compiles, tests, clippy gate | Working | `desktop-ci` job green, `-D warnings` |
-| Version extraction across OSes | **Broken → fixed in 1.26.4** | CRLF wan. CR leaked into artifact names (run `41693462775`) |
-| Artifact name validation before upload | **Missing → added in 1.26.4** | no validation step existed |
-| Checksum verification of uploads | Partial → verified in 1.26.4 | `SHA256SUMS.txt` produced, never checked by CI |
-| AppStream metadata for AppImage | **Missing → added in 1.26.4** | `app/packaging/` had only `.desktop` + icons |
-| macOS release job | **Broken (environment)** | `queued` >30 min in `41861357127`; `cancelled` in earlier runs; no macOS asset in any release |
-| Release tags v1.26.0/1.26.1/v1.26.2 | Broken (historical) | no assets published; v1.26.2 never triggered a run (invalid YAML) |
-| Regression test for version parsing | **Missing → added in 1.26.4** | `scripts/ci/test-version.sh` |
-| Duplicate release runs | Missing → `concurrency` added | two tag runs could race the same release asset name |
+| One version parser for all OSes | Working | `scripts/ci/version.sh` strips `[:space:][:cntrl:]`, validates semver |
+| Version regression suite | Working | `scripts/ci/test-version.sh`, wired into `desktop-ci.yml` |
+| Artifact-name + checksum gate | Working | `scripts/ci/verify-artifacts.sh` runs before every upload |
+| Release concurrency | Working | `concurrency: desktop-release-${{ github.ref }}` |
+| AppStream metadata | Working | `appstreamcli validate-tree` clean; AppImage attaches |
+| macOS job | Working | `macos-15-intel`, both Darwin targets, universal tarball |
+| All six release jobs green | Working | run `41884439627`, 9 assets |
+| Install smoke on deb/AppImage/vsix/apk | **Missing** | only the Windows zip was launched locally |
+| Dead tags `v1.26.0/1/2` | Open | documented as failed; no decision to delete |
+
+Issue A (agent SQL syntax) is **not reproducible**: `agent.rs` compiles and its
+query paths are covered by tests — left unchanged rather than rewritten blindly.
+Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 
 ## Phase 2 — Router manager
 
 | Item | Status | Notes |
 |---|---|---|
-| Detect/start/stop FreeLLMAPI compose project | Working | `router.rs`, `/api/router*`, ownership file, stop-only-if-owned; start/stop work on the compose project or on the container Studio installed (1.26.21) |
-| OmniRoute router | Partial | `main.rs` `/api/omniroute*`; a pinned container published on loopback only, started/stopped under the same ownership rule (1.26.19, 1.26.22) |
-| Router registry (multiple routers, install methods, min versions) | Working | `router_registry.rs` + `/api/routers`; only routers with a real lifecycle in the crate are listed |
-| OS/arch detection, dependency checks, package-manager awareness | Partial | registry gates OS/arch and lists methods per platform; no dependency probing or package-manager detection |
-| Install flow with approval, download, checksum, configure | Partial | plan preview + digest-bound approval + install records (1.26.18), image installs pinned to the registry manifest digest for both gateways (1.26.19, 1.26.21), and verified downloads that are hashed while streaming and unpacked only after they match the release's published sha256 (1.26.20); update and uninstall are still missing |
-| Health check distinguishing "process alive" from "healthy" | Working | `healthy` means "the health probe answered"; a container that is up but silent is `running: true, healthy: false` (unit-tested) |
-| Auto-start on launch | Working | per-router preference (`router-prefs.json`) + startup sweep; only an enabled, installed, not-already-answering router is started, so nothing is adopted (1.26.17) |
-| Router UI (list, logs, update, uninstall, connection tester) | Partial | list, health, start/stop, restart, connection tester, container logs, an update check plus approval-gated update, and uninstall that keeps data unless `purge` is asked for (1.26.23); a config editor is still missing |
+| Central registry with §5.1 fields | Working | `router_registry.rs`; only routers with a real lifecycle are listed |
+| OS/arch gating, Android never claims a local install | Working | `capability()` + tests |
+| Detection: installed/version/runtime/healthy/ownership | Working | `/api/routers`, probes run concurrently (1.26.14) |
+| `healthy` means the probe answered | Working | unit-tested both ways |
+| Approval-gated install with plan digest | Working | 1.26.18 |
+| Pinned images, verified downloads | Working | 1.26.19/1.26.20/1.26.21 |
+| Update + uninstall (data kept unless `purge`) | Working | 1.26.23 |
+| Auto-start sweep, external routers never stopped | Working | 1.26.17, rule tested both ways |
+| UI: list, health, start/stop, restart, tester, logs | Working | 1.26.13–1.26.16 |
+| **Configuration editor** | **Missing** | no route, no UI |
+| Dependency/package-manager probing (Docker, npm, brew) | Missing | registry gates OS/arch only |
+| Remote service routers | Missing | registry is local-process only |
 
 ## Phase 3 — Model and provider manager
 
 | Item | Status | Notes |
 |---|---|---|
-| Provider presets and model discovery | Working | presets in `app.js`/`index.html` (38 refs), `/models` with 1-minute cache keyed by base+key |
-| Local (Ollama) models | Working | `local.rs`: `/api/tags`, `/api/version`, hardware, pull with progress |
-| Capability metadata (context, modalities, tools, reasoning) | Missing | no per-model capability table; capabilities are inferred nowhere |
-| Per-agent / per-project / per-task model selection | Partial | global model + per-message override; agent uses the active model |
-| Fallback, circuit breaker, retry/backoff policies | Partial | router-side fallback reported back as `fallback_attempts`; no client-side policy |
-| Provider health monitoring | Missing | only on-demand `/api/test` |
+| Provider presets | Working | `app.js` / `index.html` |
+| Model discovery with cache | Working | `/models`, 1-minute cache keyed by base + key |
+| Local Ollama models | Working | `local.rs` (status, tags, hardware, pull with progress) |
+| Context window where a provider reports it | Partial | `main.rs:1181` reads `context_window`; `app.js:2704` displays it — nothing is inferred when absent |
+| Capability table (modalities, tools, reasoning, structured output) | **Missing** | no per-model table; this is the Phase 4 prerequisite |
+| Per-agent / per-project / per-task model scope | Partial | global model + per-message override; runs snapshot the model they used |
+| Fallback / retry / circuit breaker | Partial | router-side `fallback_attempts` is recorded; no client-side policy |
+| Provider health monitoring | Missing | on-demand `/api/test` only |
 
 ## Phase 4 — Thinking and OpenAI Platform
 
-| Item | Status | Notes |
-|---|---|---|
-| Native OpenAI Responses API provider | **Missing** | 0 references to `/v1/responses`, `api.openai.com`; OpenAI only via compatible base URL |
-| Reasoning/Thinking control (`off/low/medium/high`, model default) | **Missing** | 8 incidental `thinking|reasoning` matches (prose, CSS), no request parameter |
-| `@Thinking` composer shortcut | **Missing** | no parser, no escape path |
-| Reasoning summaries / progress surfacing | Missing | — |
-| Scoped precedence (message > agent > project > global) | Missing | no scope model exists |
+**Nothing implemented.** Verified: no `/v1/responses` request anywhere; the only
+`api.openai.com` reference is `deepsearch.rs:72`, which picks OpenAI's grounded
+`web_search` path for research answers; `deepsearch.rs:702` merely recognises a
+`reasoning` SSE frame while parsing that provider's stream. There is no
+reasoning parameter, no level enum, no `@Thinking` token, no scope model, and no
+composer control (`app/static/index.html:205`'s `#thinking` element is the
+"Thinking with your router…" spinner, unrelated).
+
+| Item | Status |
+|---|---|
+| Native OpenAI Platform provider (Responses API) | Missing |
+| Thinking control (off/low/medium/high/model default) | Missing |
+| `@Thinking` shortcut + literal escape | Missing |
+| Scope precedence (message > agent > project > global) | Missing |
+| Reasoning summaries / progress surfacing | Missing |
+| Tests for any of the above | Missing |
 
 ## Phase 5 — Agent execution engine
 
 | Item | Status | Notes |
 |---|---|---|
-| Real task execution loop with tools | Working | `agent.rs`: read/write/command/list/think, 12 default / 30 hard steps, 90 s command cap |
-| Approval + checkpoint + rollback | Working | `awaiting_approval`, per-step checkpoints (200 kB cap), unified diffs |
-| Crash recovery (`interrupted`) | Working | terminal statuses persisted; `markInterrupted()` on startup (also in VS Code `RunStore`) |
-| Cancellation | Working | `ACTIVE` flag map, cancel route |
-| Task lifecycle beyond run states (Queued/Planning/Verifying) | Partial | run states only; no queue, priority, dependencies |
-| Parallel/multi-agent execution, worktrees, file locks | **Missing** | single run at a time per conversation; no orchestration layer |
-| Specialised agent roles (planner/researcher/reviewer…) | Missing | two prompt modes only (`plan` mode exists) |
-| Ruflo integration | Missing | not referenced |
+| Real execution loop with tools | Working | `agent.rs`: think/list/read/write/command/done/fail |
+| Approval pauses, checkpoints, diffs, restore | Working | `awaiting_approval`, per-step checkpoint (200 kB cap) |
+| Cancellation, crash recovery (`interrupted`) | Working | `ACTIVE` map; startup sweep |
+| Resume from the step log | Working | `POST /api/runs/:id/resume` + 2 tests |
+| Team (executor → reviewer → repair) | Working | `review` step with verdict/findings |
+| Crew pipeline + per-stage budgets/policies | Working | `crew` roster 1–6, `stage_max_steps`, fail/skip |
+| Hybrid cloud-plan / local-execute | Working | plan step, bounded escalation |
+| Multi-agent parity in VS Code | Working | `agent.ts` port |
+| Task queue, priority, dependencies | **Missing** | states are run states only |
+| Parallel execution + worktree isolation / file locks | **Missing** | no `worktree` use; the only match is git-status parsing |
+| Verification step before `succeeded` | Partial | reviewer stage is opt-in, not enforced |
+| Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
 
 ## Phase 6 — Skills
 
 | Item | Status | Notes |
 |---|---|---|
-| Discovery from bundled/project/user/`~/.agents` roots | Working | `skills.rs`, 5 roots in precedence order |
-| Enable/disable with persistence | Working | `/api/skills/:id/state` → `config.json` |
-| Instruction injection with token cap | Working | picked skill rides the next message |
-| Install from git / local dir, update, remove, versioning | **Missing** | discovery only |
-| Permission/model constraints per skill | Missing | skills are prompt text, never executed (by design) |
+| Discovery across 5 roots | Working | `skills.rs` |
+| Enable/disable persisted | Working | `POST /api/skills/:id/state` |
+| Instruction injection with token cap | Working | rides the next message |
+| Install / update / remove / version tracking | **Missing** | routes are list, get, state only |
+| Skill permissions / usage history | Missing | skills are prompt text and never executed |
+| Automatic skill selection | Partial | manual picker only |
 
 ## Phase 7 — MCP
 
-**Missing entirely.** `\bmcp\b` has zero matches in the repository. No server
-registry, no tool discovery, no schema validation, no permission binding.
+**Missing entirely.** `\bmcp\b` has **zero** matches in `app/src`. No registry,
+no connection lifecycle, no tool discovery, no schema validation, no permission
+binding, no health or reconnect. The Phase 10 policy store this phase depends on
+is also not built.
 
 ## Phase 8 — Project knowledge and memory
 
 | Item | Status | Notes |
 |---|---|---|
-| Conversation history persistence | Working | `conversations`/`messages` + Android mirror |
-| Workspace file search | Working | `/api/workspace/search` (`search_tree`/`search_workspace`) |
-| Codebase indexing / symbols / incremental index | **Missing** | — |
-| Semantic retrieval (RAG) over project | Missing | `deepsearch.rs` is web research, not codebase retrieval |
-| Memory management UI (inspect/edit stored memory) | Missing | — |
+| Conversation history persistence | Working | `conversations`/`messages`, Android mirror |
+| Workspace text search | Working | `/api/workspace/search` |
+| Embeddings *probe* | Partial | `media.rs` proxies one `/api/embeddings` call; nothing is stored or indexed |
+| Codebase indexing / symbols / incremental updates | **Missing** | — |
+| RAG over the project | Missing | `deepsearch.rs` is web research, not codebase retrieval |
+| Memory records + management UI | Missing | — |
 
-## Phase 9 — VS Code-like developer environment
+## Phase 9 — Developer environment
 
 | Item | Status | Notes |
 |---|---|---|
-| File tree, tabs, editor with save | Working | `workspace.rs` + UI (`ide.js` shell) |
-| Real PTY terminal | Working | `portable-pty`, SSE, resize |
-| Search (workspace) | Working | `/api/workspace/search` |
-| Git status display | Partial | `vcs_status`/`parse_git_status` shows status only — no stage/commit/diff/branch ops |
-| Syntax highlighting, diagnostics, completion, formatting | **Missing** | no editor engine (deliberate: no Monaco/CodeMirror) |
-| Unsaved-change guards, diff viewer for pending writes | Partial | agent pending-write diff exists; editor-level diff absent |
-| Build/test runner, debugger, problems panel | Missing | agent can run commands; no runner UI |
+| File tree, editor, save, workspace search | Working | `workspace.rs` + `ide.js` |
+| Real PTY terminal (ConPTY/unix pty, SSE, resize) | Working | `terminal.rs`, `portable-pty` |
+| Git status | Partial | `vcs_status` / `parse_git_status` reads state only |
+| Git stage/commit/diff/branch/worktree checkpoints | **Missing** | — |
+| Syntax highlighting, diagnostics, completion, formatting | Missing | no editor engine, by design |
+| Build/test runner, problems panel, debugger | Missing | agent can run commands; no runner UI |
 
 ## Phase 10 — Safety and permissions
 
 | Item | Status | Notes |
 |---|---|---|
-| Path confinement, symlink escape prevention | Working | canonicalised, `MAX_FILE_BYTES` 1 MB, body cap 2 MB |
-| Cross-site / DNS-rebinding write guard | Working | loopback `Host` + `Origin` checks on mutating routes |
-| Outbound secret detection | Working | `privacy.rs` blocks credential-shaped attachments |
-| Host API auth + transport guardrails | Working | token store, body caps, separate listener |
-| Central permission engine (tools/network/git/secrets, per-scope grants) | Partial | per-run flags + endpoint guards, no unified policy store or audit log |
-| Secrets at rest via OS keychain | Missing | config file holds keys (mode-restricted, not keychain) |
-| Emergency stop / privileged-operation audit | Partial | run cancel exists; no global kill switch or audit trail |
+| Path confinement, symlink escape prevention | Working | canonicalised, `MAX_FILE_BYTES` 1 MB |
+| Loopback `Host`/`Origin` write guard | Working | `host_security.rs` |
+| Outbound secret detection | Working | `privacy.rs` |
+| Host API bearer auth + TLS + body caps | Working | `host_auth.rs`, `host_transport.rs` |
+| Central policy store (once/session/project/deny) | **Missing** | per-run flags + route guards only |
+| OS keychain for secrets | Missing | keys live in mode-restricted `config.json` |
+| Privileged-operation audit log, global kill switch | Partial | run cancel exists; no global stop, no audit trail |
 
-## Phase 11 — Token, context, cost
+## Phase 11 — Token, context and cost
 
 | Item | Status | Notes |
 |---|---|---|
-| Token-budgeted context packing | Working | `context.rs` (1 k–32 k clamp), VS Code parity in `lib.ts` |
-| Usage log with tokens/latency/status | Working | `request_log`, `/api/usage` with aggregates, series, by-model |
-| Pricing, cost estimates, budget enforcement | Missing | no price table; budget trims context but never stops a run |
-| Context compression beyond cropping | Missing | head/tail crop + attachment markers only |
+| Token-budgeted packing | Working | `context.rs`, 1 k–32 k clamp, VS Code parity |
+| Usage log + aggregates/series/by-model | Working | `request_log`, `/api/usage` |
+| Pricing, cost estimates | **Missing** | no price table |
+| Budget enforcement that stops a run | Missing | budget trims context only |
+| Compression beyond head/tail cropping | Missing | attachment markers + crop |
+| Context-utilisation display | Partial | not surfaced in the UI |
 
-## Phase 12 — Live monitoring
+## Phase 12 — Live agent monitoring
 
-Partial. Agent run state, steps, diffs and SSE change events exist
-(`agent.rs`, `events.rs`) and the UI renders a runs panel; there is no
-cross-agent dashboard, no duration/token totals per agent, no queue view.
+Partial. `agent_runs`/`agent_steps`, SSE events and a runs panel with diffs,
+approve/reject, cancel and restore are real backend state. There is **no**
+cross-agent dashboard, no per-agent duration/token totals, no pause, and no
+queue view — consistent with Phase 5 having no queue.
 
 ## Phase 13 — Workflow builder
 
-**Missing** on desktop (no workflow routes/tables). The VS Code store keeps a
-flat `{id,name,prompt,skill}` macro list — that is a saved prompt, not a node
-graph, and it has no scheduler.
+Partial. `workflows.json` holds flat `{id, name, prompt, skill}` macros with CRUD
+routes and a one-button run (Automation view). That is a saved prompt, **not** a
+node graph: no task/agent/model/tool/conditional nodes, no dependency
+resolution, no validation, no scheduler, no run history.
 
 ## Phase 14 — Cross-platform integration
 
 | Item | Status | Notes |
 |---|---|---|
-| Desktop Linux/Windows/macOS build | Working (macOS packaging broken) | Windows + Linux artifacts published; macOS never attached |
-| Android client | Working (subset) | chat + history + backup; remote-only agent, no router management |
-| VS Code extension | Working (subset) | embedded Node server + shared UI; agent port exists |
-| Capability negotiation between clients | Partial | Host API `/capabilities` exists; clients do not gate features on it |
-| TLS/pairing/session for remote | Working | host token + TLS transport module |
+| Desktop Linux/Windows/macOS | Working | deb, AppImage, tarball, zip, macOS universal tarball |
+| Android client | Working (subset) | chat streaming, history, backup, remote agent runs via Host API; no router management, no local execution |
+| VS Code extension | Working (subset) | embedded Node server, agent port, runs webview |
+| Capability negotiation driving feature gates | Partial | `/api/host/v1/capabilities` exists; clients hand-gate a few screens |
+| Pairing / TLS / sessions | Working | host token lifecycle + TLS transport |
 
-## Phase 15 — Extension ecosystem
+## Phase 15 — Extension and plugin ecosystem
 
-Missing beyond skills: no plugin manifest, no custom tools, no provider
-adapters, no UI extensions.
+Missing beyond skills. No manifest (name/version/permissions/entry point),
+no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 ## Phase 16 — Testing and quality
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 133 `#[test]`/`#[tokio::test]` functions |
-| VS Code extension | Working | `node --test` suite in `vscode-extension/test` |
-| Android | Working | JVM tests + emulator instrumentation + validation gate |
-| Frontend | **Missing** | no test runner (no build step, no bundler) |
-| End-to-end (launch → chat → agent → restart) | Missing | only ad-hoc local smokes |
-| Failure injection (offline, rate limit, disk full, crash) | Missing | — |
-| Release-pipeline regression tests | **Added in 1.26.4** | `scripts/ci/test-version.sh` |
+| Rust unit/integration | Working | 175 passed / 1 ignored at 1.27.0 |
+| VS Code extension | Working | `node --test` suites |
+| Android | Working | JVM + emulator instrumentation + validation gate |
+| Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
+| Frontend | **Missing** | no runner; `app/static/` has no build step |
+| End-to-end (launch → chat → agent → restart) | Missing | ad-hoc local smokes only |
+| Failure-injection matrix | Missing | — |
+| Install smokes in CI | Missing | — |
+| Windows Rust CI job | Missing | Windows is exercised only by the release build |
 
-## Phase 17 — Observability
+## Phase 17 — Observability and diagnostics
 
-Partial. `request_log` + SSE events + per-step agent records; no structured
-logging, no correlation IDs, no log export/support bundle, no health dashboard.
+Partial. `request_log`, SSE events and per-step run records exist. Structured
+logs with correlation IDs, support-bundle export with redaction, and a health
+dashboard do not.
 
 ## Phase 18 — Installation and updates
 
 | Item | Status | Notes |
 |---|---|---|
-| Linux `.deb` | Working | headless build on 22.04, GUI-dependency assertion |
-| Linux AppImage / tarball | Working | AppStream metadata added in 1.26.4 |
-| Windows portable zip | Working | published |
-| Windows installer (MSI/EXE) | **Missing** | zip only |
-| macOS package | Broken | job never ran; unsigned tarball only by design |
+| Linux `.deb` / AppImage / tarball | Working | AppStream validates clean |
+| Windows portable zip | Working | no MSI/EXE installer |
+| macOS package | Working (unsigned) | Gatekeeper right-click → Open |
 | Android APK/AAB | Working | debug-signed release build |
 | VS Code VSIX | Working | published |
-| Auto-update, migration, rollback | Missing | manual reinstall; data paths preserved by design |
-| `install.sh` (Linux, source build) | Working | Ubuntu/apt oriented |
+| Auto-update, DB migration rollback, uninstall | **Missing** | data paths preserved by design; manual reinstall |
 
-## Cross-cutting: previously diagnosed errors
+## What to build next (spec order)
 
-| Issue | State |
-|---|---|
-| A. `agent.rs` SQL syntax error | Resolved — compiles, 133 tests, clippy `-D warnings` green; `SELECT status FROM agent_runs` queries are correct |
-| B. CR in Linux version → bad artifact name | Root cause CRLF rewrite; **fixed at the source** (LF manifests + `scripts/ci/version.sh` strips whitespace/control chars) |
-| C. Over-escaped macOS `sed` | Fixed; macOS now uses the same helper as Linux |
-| D. Artifact upload failure | Fixed for 8 assets; now guarded by `verify-artifacts.sh` before upload |
-| E. AppImage AppStream warning | Fixed in 1.26.6: `appstreamcli validate-tree` (fatal for appimagetool, fails on warnings) needs an RDNS component id, matching file names and an OARS rating — `io.github.sairajkhilariarch.SaarthiStudio.{desktop,appdata.xml}` |
-| F. macOS cancellation/queue | **Unresolved**: no cancellation cause found in API data; the 1.26.3 job was never scheduled (queued ~35 min). Needs a runner-availability decision, not a code patch |
+1. **Phase 3 capability table** — the only hard prerequisite for Phase 4, and
+   the smallest honest unit of work: provider-reported metadata only, no
+   invented capabilities.
+2. **Phase 4 Thinking + OpenAI Platform** — the largest untouched block in the
+   specification and the reason this audit exists.
+3. **Phase 10 policy store** — unblocks MCP (Phase 7) and makes the existing
+   per-run flags uniform.
+4. **Phase 2 configuration editor** + dependency probing — closes a phase that
+   is already 80 % delivered.
