@@ -332,20 +332,6 @@ async fn terminal_close(State(state): State<crate::AppState>, Path(id): Path<u64
 
 /// Mutating routes are local-origin guarded like every other POST route; the
 /// stream endpoint is read-only and therefore outside the guard.
-/// The empty-hub half of the emergency stop: an idle Studio must stop nothing
-/// and keep going. The live-session half is covered by the route smoke in the
-/// release notes — a fake session cannot be built without a real PTY master.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stop_all_on_an_empty_hub_stops_nothing() {
-        let hub = hub();
-        assert!(stop_all(&hub).is_empty());
-    }
-}
-
 pub(crate) fn router(port: u16) -> Router<crate::AppState> {
     let guarded = Router::new()
         .route("/api/terminal/open", post(terminal_open))
@@ -358,4 +344,18 @@ pub(crate) fn router(port: u16) -> Router<crate::AppState> {
         ));
     let read_only = Router::new().route("/api/terminal/:id/stream", get(terminal_stream));
     guarded.merge(read_only)
+}
+
+// The empty-hub half of the emergency stop: an idle Studio must stop nothing
+// and keep going. The live-session half is covered by the route smoke in the
+// release notes — a fake session cannot be built without a real PTY master.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_all_on_an_empty_hub_stops_nothing() {
+        let hub = hub();
+        assert!(stop_all(&hub).is_empty());
+    }
 }

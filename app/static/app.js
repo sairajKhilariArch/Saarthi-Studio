@@ -517,7 +517,7 @@ const state = {
   permissions: { actions: [], rules: [] },
   /* mcp: the registry, the tools of the last tested server, and the picked
      tool. Nothing is cached server-side, so the panel re-tests on demand. */
-  mcp: { servers: [], tools: [], target: null, health: {}, logs: {}, openLogs: new Set() },
+  mcp: { servers: [], tools: [], target: null, health: {}, logs: {}, openLogs: new Set(), oauth: {} },
   /* activeSkillId: a skill the user picked in the composer. suggestedSkillId
      is a keyword match the composer offers when nothing was picked; either
      one rides with the next request as `skill`. */
@@ -3374,7 +3374,7 @@ async function checkMcpHealth() {
   }
 }
 
-function renderMcpServers() {
+async function renderMcpServers() {
   const host = $("mcpServers");
   host.replaceChildren();
   if (!state.mcp.servers.length) {
@@ -3419,12 +3419,93 @@ function renderMcpServers() {
       mcpButton("Logs", () => void toggleMcpLogs(server.name)),
       mcpButton("Remove", () => void removeMcpServer(server.name)),
     );
+    if (server.transport && server.transport !== "stdio") {
+      actions.append(oauthButton(server.name, state.mcp.oauth[server.name]));
+    }
     main.append(mcpHealthLine(report));
+    if (server.transport && server.transport !== "stdio") {
+      main.append(mcpOAuthLine(server.name, state.mcp.oauth[server.name]));
+    }
     side.append(badge, mcpHealthBadge(report), actions);
     row.append(main, side);
     host.appendChild(row);
     if (state.mcp.openLogs.has(server.name)) host.appendChild(mcpLogBlock(server.name));
   });
+  // Fill the OAuth badge without blocking the panel on the round trips.
+  for (const server of state.mcp.servers) {
+    if (server.transport !== "stdio" && !state.mcp.oauth[server.name]) {
+      const result = await api(`/api/mcp/${encodeURIComponent(server.name)}/oauth/status`);
+      if (result.ok) {
+        state.mcp.oauth[server.name] = result.data;
+      }
+    }
+  }
+  if (state.mcp.servers.some((server) => server.transport !== "stdio")) renderMcpServers();
+}
+
+/* OAuth status for one remote server, from whatever the panel last learned.
+   Until the status round trip lands, unknown means "sign in" shows anyway. */
+function oauthState(name) {
+  return state.mcp.oauth[name];
+}
+
+function oauthButton(name, status) {
+  const authorized = status && status.authorized;
+  const manual = status && status.manual_header;
+  const label = authorized ? "Sign out" : manual ? "Sign in (header set)" : "Sign in";
+  const button = mcpButton(label, () =>
+    void (authorized ? forgetMcpOAuth(name) : startMcpOAuth(name)),
+  );
+  if (authorized || manual) button.setAttribute("title", "OAuth stored in this machine's credential store");
+  return button;
+}
+
+function mcpOAuthLine(name, status) {
+  const line = document.createElement("small");
+  line.className = "skill-path";
+  if (!status) {
+    line.textContent = "Checking sign-in status…";
+  } else if (status.manual_header) {
+    line.textContent = "Using a hand-written authorization header; OAuth sign-in is not used here.";
+  } else if (status.authorized) {
+    const when = status.expires_at ? `; expires ${new Date(status.expires_at * 1000).toLocaleString()}` : "; expiry unknown";
+    line.textContent = `Signed in with OAuth${when}`;
+  } else if (status.registered) {
+    line.textContent = "Registered with the OAuth server but not signed in.";
+  } else if (status.transport) {
+    line.textContent = "Not signed in; token-based tools will need a sign-in first.";
+  } else {
+    line.textContent = "Not signed in.";
+  }
+  return line;
+}
+
+async function startMcpOAuth(name) {
+  const result = await api(`/api/mcp/${encodeURIComponent(name)}/oauth/start`, {
+    method: "POST",
+    body: JSON.stringify({ approve: true }),
+  });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "The sign-in did not finish.", false);
+    return;
+  }
+  mcpNotice(result.data.message || `Signed in to ${name}.`, true);
+  state.mcp.oauth[name] = { ...(state.mcp.oauth[name] || {}), ...result.data, authorized: true };
+  await loadMcp();
+}
+
+async function forgetMcpOAuth(name) {
+  const result = await api(`/api/mcp/${encodeURIComponent(name)}/oauth/forget`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "Could not remove those credentials.", false);
+    return;
+  }
+  mcpNotice(`Removed ${result.data.message || "the saved credentials"}.`, true);
+  state.mcp.oauth[name] = null;
+  await loadMcp();
 }
 
 function editMcpServer(server) {

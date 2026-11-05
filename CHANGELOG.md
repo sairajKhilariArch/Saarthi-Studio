@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.44.0
+
+- Phase 7 leftover: sign in to OAuth-protected remote MCP servers. New
+  `app/src/mcp_oauth.rs`: RFC 9728 protected-resource discovery, RFC 8414
+  authorization-server metadata with issuer-location validation (a document
+  that claims another issuer is refused), RFC 7591 dynamic client registration
+  (public client, `token_endpoint_auth_method: none`), PKCE (S256,
+  RFC-7636-verified vectors in tests), an in-flight map keyed by `state` in the
+  same atomic as the keychain, token exchange and a pre-connection silent
+  refresh with 30 s clock margin (an unknown expiry of 0 is never expired).
+- The browser leg runs on the app's own port: `GET /api/mcp/oauth/callback`
+  (read-only, outside the origin guard) redeems the redirect once — a second
+  callback with the same state finds nothing — with a bound per flow of the
+  verifier and server name so a forged callback cannot pair with a foreign
+  verifier. Tokens plus registered client material live in the OS credential
+  store under account `mcp_oauth/<server>`, never in `mcp.json` or a file; with
+  the store off, sign-in surfaces the failure honestly instead of falling back
+  to disk.
+- Tools on remote servers now carry `Authorization: Bearer <token>`
+  automatically (`attachable_header`), but only when the user did not write an
+  `authorization` header themselves — a hand-written header wins. A pool
+  fingerprint that includes headers reopens the session when the token changes.
+- HTTP 401 on a `tools/call` is surfaced as "sign in again" rather than a
+  retry, because re-running a side-effecting call would double its effect.
+- Routes (mutations behind the local-origin guard, gated on `network` with
+  `ask` → 409 default): `GET /api/mcp/:name/oauth/status` (booleans plus
+  expiry and manual-header flag, no token values), `POST /api/mcp/:name/oauth/
+  start` (opens a real browser and waits for redemption), `POST
+  /api/mcp/:name/oauth/forget` (deletes the credential). A stdio server and a
+  hand-written-header server are refused 400.
+- Settings → MCP panel: a Sign in / Sign out control plus a status line per
+  remote server (`Not signed in` / `Registered but not signed in` / `Signed in
+  with OAuth; expires …`), fetched without blocking the panel.
+- Defect found while smoking the flow: `cmd /c start <url>`-opened links died
+  at the first `&`  — cmd split the authorize URL into separate commands
+  (`client_id`, `state`, `code_challenge`, … executed as programs; the mock
+  saw `state null`). The Windows opener is now
+  `rundll32 url.dll,FileProtocolHandler <url>`, which hands the URL to the
+  shell association without a shell in between (verified in the smoke below).
+- Tests: 273 pass, 1 ignored (new: PKCE pair, well-known candidate spellings
+  including trailing-slash dedup, authorize-URL shape, token response folding,
+  expiry margin with unknown-never-expired, mock-server discovery →
+  registration → exchange round-trip, one callback per armed state). Clippy
+  `-D warnings` clean (also moved `terminal.rs`' router back above its test
+  module for `items_after_test_module`); `node --check app/static/app.js`
+  clean.
+- Live smoke on :8884 (throwaway HOME and keychain service, real Windows
+  Credential Manager) against a local node mock that serves RFC 8414 metadata,
+  registration, `/authorize` and `/token` and plays the streamable-HTTP MCP
+  endpoint: status `registered:false authorized:false`; OAuth start opened the
+  real default browser, the mock logged the full query including `state` and
+  the S256 challenge, redirected to `/api/mcp/oauth/callback`, and start
+  returned `authorized:true expires_at:… has_refresh:true`; Credential Manager
+  showed `LegacyGeneric:target=mcp_oauth/auth.SaarthiStudio-mcp-smoke144`; an
+  approved `tools/call` answered and the mock's header log recorded
+  `POST / -> Bearer access-smoke-1`; a saved `network` deny on the server URL
+  then refused a new sign-in with 403 naming the rule; a stdio server's start
+  was 400 (`needs no OAuth sign-in`); `forget` returned `OAuth session
+  removed.`, the Credential Manager listing counted 0 and status was back to
+  `authorized:false`. The mock's `/token` verifies the PKCE challenge, so the
+  recorded authorization_code grant also proves the verifier round-tripped.
+- Version 1.44.0 across `app/Cargo.toml` (+ `Cargo.lock`),
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 60).
+
 ## 1.43.0
 
 - Phase 2 close-out, dependency half (spec §5.3): `/api/routers` now carries a

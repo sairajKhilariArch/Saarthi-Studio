@@ -42,6 +42,7 @@ mod installer;
 mod keychain;
 mod local;
 mod mcp;
+mod mcp_oauth;
 mod media;
 mod openai;
 mod permissions;
@@ -534,7 +535,7 @@ pub(crate) fn load_config(state: &AppState) -> Config {
 /// config lives in. Mock-mode tests hash it into the service name so parallel
 /// fixtures never share credentials; production lands on the stable default
 /// service every time.
-fn keychain_location(path: &FsPath) -> String {
+pub(crate) fn keychain_location(path: &FsPath) -> String {
     path.parent()
         .and_then(|dir| dir.to_str())
         .map(str::to_string)

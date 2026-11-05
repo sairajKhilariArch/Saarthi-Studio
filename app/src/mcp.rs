@@ -11,13 +11,14 @@
 //! not faked here.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -1281,6 +1282,13 @@ pub(crate) async fn invoke(
             server.name
         )));
     }
+    // OAuth: a saved token (refreshed first when past its expiry) rides on the
+    // connection unless the user has written their own authorization header.
+    // A stdio server needs none, which attachable_header refuses directly.
+    let mut server = server;
+    if let Some(value) = crate::mcp_oauth::attachable_header(state, &server).await {
+        server.headers.insert("authorization".to_string(), value);
+    }
     let target = tool_target(&server.name, tool);
     let handshake = connect_pooled(&server).await.map_err(CallFailure::Server)?;
     record_log(&server.name, "client", format!("tools/call {target}"));
@@ -1366,6 +1374,10 @@ pub(crate) async fn discover_for_prompt(state: &AppState) -> (Vec<Value>, Vec<St
     let mut tools = Vec::new();
     let mut errors = Vec::new();
     for server in enabled_servers(state) {
+        let mut server = server;
+        if let Some(value) = crate::mcp_oauth::attachable_header(state, &server).await {
+            server.headers.insert("authorization".to_string(), value);
+        }
         match connect(&server).await {
             Ok(handshake) => {
                 handshake.session.close().await;
@@ -1408,18 +1420,178 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
     let read_only = Router::new()
         .route("/api/mcp", get(list_servers))
         .route("/api/mcp/health", get(health_report))
-        .route("/api/mcp/logs", get(server_logs));
+        .route("/api/mcp/logs", get(server_logs))
+        // The browser arrives here from the authorization server's redirect,
+        // so it must not be origin-guarded and it must answer HTML.
+        .route("/api/mcp/oauth/callback", get(oauth_callback))
+        .route("/api/mcp/:name/oauth/status", get(oauth_status));
     let mutations = Router::new()
         .route("/api/mcp/servers", post(save_server))
         .route("/api/mcp/servers/remove", post(remove_server))
         .route("/api/mcp/test", post(test_server))
         .route("/api/mcp/call", post(call_tool))
         .route("/api/mcp/health/check", post(check_health))
+        .route("/api/mcp/:name/oauth/start", post(oauth_start))
+        .route("/api/mcp/:name/oauth/forget", post(oauth_forget))
         .route_layer(axum::middleware::from_fn_with_state(
             crate::workspace::LocalOriginGuard::new(port),
             crate::workspace::guard_local_origin,
         ));
-    read_only.merge(mutations)
+    read_only
+        .merge(mutations)
+        // The redirect URI names this app's port, so the flow handlers carry it.
+        .layer(axum::Extension(port))
+}
+
+// ---------------------------------------------------------------------------
+// OAuth for remote servers
+//
+// The sign-in spans two endpoints: /start opens the browser and waits, and
+// /oauth/callback (read-only, browser-driven) hands the waiting side its code.
+// Tokens never appear here — only booleans and the expiry — because the OS
+// credential store keeps the values.
+
+async fn oauth_status(State(state): State<AppState>, Path(name): Path<String>) -> Response {
+    let server = read_servers(&registry_path(&state))
+        .into_iter()
+        .find(|entry| entry.name == name);
+    let Some(server) = server else {
+        return crate::json_error(StatusCode::NOT_FOUND, format!("Unknown MCP server: {name}"))
+            .into_response();
+    };
+    let remote = !server.url.trim().is_empty();
+    let session = crate::mcp_oauth::credentials(&state, &name);
+    let (registered, authorized, expires_at, has_refresh) = match &session {
+        Some(creds) => (
+            creds.registered(),
+            creds.authorized(),
+            creds.expires_at,
+            !creds.refresh_token.trim().is_empty(),
+        ),
+        None => (false, false, 0.0, false),
+    };
+    Json(json!({
+        "ok": true,
+        "name": name,
+        "transport": server.transport,
+        "url": if remote { server.url.clone() } else { String::new() },
+        // A hand-written authorization header overrides anything OAuth does.
+        "manual_header": server.headers.contains_key("authorization"),
+        "registered": registered,
+        "authorized": authorized,
+        "expires_at": expires_at,
+        "has_refresh": has_refresh,
+    }))
+    .into_response()
+}
+
+async fn oauth_start(
+    State(state): State<AppState>,
+    axum::Extension(port): axum::Extension<u16>,
+    Path(name): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let server = read_servers(&registry_path(&state))
+        .into_iter()
+        .find(|entry| entry.name == name);
+    let Some(server) = server else {
+        return crate::json_error(StatusCode::NOT_FOUND, format!("Unknown MCP server: {name}"))
+            .into_response();
+    };
+    if server.url.trim().is_empty() {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "A stdio server is a local program and needs no OAuth sign-in.",
+        )
+        .into_response();
+    }
+    if server.headers.contains_key("authorization") {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "This server carries a hand-written authorization header; remove it before signing in.",
+        )
+        .into_response();
+    }
+    let approve = input.get("approve").and_then(Value::as_bool).unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        PolicyAction::Network,
+        &server.url,
+        "",
+        approve,
+        "sign in to the MCP server",
+    ) {
+        return response.into_response();
+    }
+    let flow = match crate::mcp_oauth::prepare(&state, &name, server.url.trim(), port).await {
+        Ok(flow) => flow,
+        Err(error) => return crate::json_error(StatusCode::BAD_GATEWAY, error).into_response(),
+    };
+    crate::browser::open_url(&flow.url);
+    match crate::mcp_oauth::wait_for_browser(&state, flow.receiver, port).await {
+        Ok(renewed) => Json(json!({
+            "ok": true,
+            "name": name,
+            "authorized": renewed.authorized(),
+            "expires_at": renewed.expires_at,
+            "has_refresh": !renewed.refresh_token.trim().is_empty(),
+            "message": "Signed in. The connection carries your OAuth token now.",
+        }))
+        .into_response(),
+        Err(error) => crate::json_error(StatusCode::BAD_GATEWAY, error).into_response(),
+    }
+}
+
+/// Browser landing page for an OAuth redirect. It only redeems the query
+/// against the armed flow — it holds no authority of its own.
+async fn oauth_callback(
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let page = crate::mcp_oauth::browser_callback(
+        params.get("code").map(String::as_str).unwrap_or(""),
+        params.get("state").map(String::as_str).unwrap_or(""),
+        params.get("error").map(String::as_str).unwrap_or(""),
+    );
+    let (status, body) = match page {
+        Ok(html) => (StatusCode::OK, html.to_string()),
+        Err(message) => (StatusCode::NOT_FOUND, format!("<div>{}</div>", message)),
+    };
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(axum::body::Body::from(body))
+        .unwrap_or_else(|error| {
+            axum::http::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from(format!("callback page failed: {error}")))
+                .unwrap()
+        })
+        .into_response()
+}
+
+async fn oauth_forget(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Response {
+    let exists = read_servers(&registry_path(&state))
+        .into_iter()
+        .any(|entry| entry.name == name);
+    if !exists {
+        return crate::json_error(StatusCode::NOT_FOUND, format!("Unknown MCP server: {name}"))
+            .into_response();
+    }
+    crate::mcp_oauth::forget(&state, &name);
+    crate::permissions::record(
+        &state,
+        PolicyAction::Network,
+        &format!("mcp:{name}"),
+        PolicyDecision::Deny,
+        crate::permissions::Scope::Session,
+        "",
+        "OAuth session for the MCP server removed",
+    );
+    Json(json!({ "ok": true, "name": name, "message": "OAuth session removed." }))
+        .into_response()
 }
 
 async fn list_servers(State(state): State<AppState>) -> Response {

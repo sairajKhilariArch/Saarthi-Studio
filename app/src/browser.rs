@@ -15,9 +15,15 @@ pub(crate) fn open_url(url: &str) {
     #[cfg(target_os = "macos")]
     let program = ("open", vec![url.to_string()]);
     #[cfg(target_os = "windows")]
+    // rundll32 hands the URL straight to the shell association without a
+    // shell in between, so query strings with `&` survive. `cmd /c start`
+    // cannot make that promise: cmd splits the line at every `&`.
     let program = (
-        "cmd",
-        vec!["/c".to_string(), "start".to_string(), url.to_string()],
+        "rundll32",
+        vec![
+            "url.dll,FileProtocolHandler".to_string(),
+            url.to_string(),
+        ],
     );
 
     match std::process::Command::new(program.0)
