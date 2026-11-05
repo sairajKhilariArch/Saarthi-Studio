@@ -3558,6 +3558,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             println!("{}", outcome.message);
         }
     }
+    // The MCP supervisor keeps pooled sessions honest: a session that stopped
+    // answering while idle is evicted on the timer instead of the next user
+    // call paying the full operation timeout to discover it.
+    mcp::start_supervisor();
     agent::mark_interrupted(&state);
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
         .ok()

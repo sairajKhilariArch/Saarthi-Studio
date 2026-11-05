@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.45.0
+
+- Phase 7 close-out: a supervisor for wedged MCP sessions. `mcp::start_supervisor`
+  runs once at boot (`OnceLock`-guarded, so every boot path may call it) and
+  sweeps the session pool every 60 s: each idle session is pinged with a 5 s
+  silence budget, so a session that stopped answering while nobody was calling
+  is closed on the timer instead of the next user call paying the whole 20 s
+  operation ceiling before the fresh-handshake fallback noticed.
+- The probe is per transport, and only silence is a wedge. stdio writes `ping`
+  on the child's stdin and waits for the id-matched reply (a JSON-RPC error
+  counts — the question was heard); streamable HTTP accepts any 2xx answer and
+  reports a non-2xx as a dead transport; the legacy HTTP+SSE transport must see
+  the id-matched reply on its event stream.
+- The sweep takes the map (`std::mem::take`) before probing, so a session a call
+  has checked out is never probed and a call cannot race the supervisor. An
+  answering session goes back with its *original* `last_used` — a probe must
+  never extend a session past its idle window — and `restore_pooled` keeps a
+  fresher entry when a call reconnected while the probe was in flight.
+- Every eviction is narrated in the server's own log (`stopped answering ping
+  within 5s` / `is gone (<reason>)`, each naming the reconnect that follows), so
+  the MCP panel explains a session that disappeared instead of showing nothing.
+- Tests: 275 pass, 1 ignored (new: `the_supervisor_keeps_answering_sessions_and_
+  evicts_wedged_ones` against a real streamable-HTTP mock — an answer keeps the
+  original stamp, silence is evicted with its log line, an HTTP 500 is evicted
+  with its reason, and an empty sweep is a no-op; plus `a_probe_does_not_replace_
+  a_session_that_reconnected_meanwhile`). Clippy `-D warnings` clean;
+  `rustfmt --check src/mcp.rs` clean.
+- Version line: 1.45.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, `vscode-extension/package{,-lock}.json` and
+  `android/app/build.gradle.kts` (Android was still on 1.43.0).
+
 ## 1.44.0
 
 - Phase 7 leftover: sign in to OAuth-protected remote MCP servers. New

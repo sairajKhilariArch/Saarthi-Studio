@@ -6,12 +6,13 @@
 //! child process spoken to over stdio, or a remote endpoint reached over
 //! streamable HTTP or the older HTTP+SSE transport. A session is reused while
 //! it stays warm (five idle minutes), evicted when the server is edited or a
-//! request fails, and there is no supervisor or sandbox beyond what the
-//! transport itself gives. Those gaps are recorded in `docs/FEATURE-STATUS.md`,
-//! not faked here.
+//! request fails, and swept by a supervisor that pings idle sessions so a
+//! wedged one is noticed on a timer instead of by the next user call. There is
+//! no sandbox beyond what the transport itself gives; that gap is recorded in
+//! `docs/FEATURE-STATUS.md`, not faked here.
 
-use std::collections::{BTreeMap, VecDeque};
 use std::collections::HashMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
@@ -434,6 +435,40 @@ impl Session {
         self.send(method, params, None).await
     }
 
+    /// A liveness probe: any mapped answer proves the child is speaking.
+    /// A JSON-RPC error to `ping` still counts — the question was heard.
+    async fn poll(&mut self, within: Duration) -> PingOutcome {
+        let id = self.next_id;
+        self.next_id += 1;
+        if let Err(error) = self.send("ping", json!({}), Some(id)).await {
+            return PingOutcome::Failed(error);
+        }
+        let reply = async {
+            loop {
+                match self
+                    .lines
+                    .next_line()
+                    .await
+                    .map_err(|e| format!("Reading from the MCP server failed: {e}"))?
+                {
+                    None => {
+                        return Err("The MCP server closed its output before answering.".to_string())
+                    }
+                    Some(line) => {
+                        if reply_for(&line, id).is_some() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        };
+        match tokio::time::timeout(within, reply).await {
+            Err(_) => PingOutcome::TimedOut,
+            Ok(Err(error)) => PingOutcome::Failed(error),
+            Ok(Ok(())) => PingOutcome::Answered,
+        }
+    }
+
     async fn close(mut self) {
         let _ = self.child.kill().await;
         let _ = self.child.wait().await;
@@ -485,7 +520,36 @@ impl Connection {
             Connection::Sse(session) => session.close().await,
         }
     }
+
+    /// A liveness probe the whole transport can answer: any mapped answer
+    /// counts, because `ping`'s JSON-RPC body is not the supervisor's concern.
+    async fn poll(&mut self, within: Duration) -> PingOutcome {
+        match self {
+            Connection::Stdio(session) => session.poll(within).await,
+            Connection::Http(session) => session.poll(within).await,
+            Connection::Sse(session) => session.poll(within).await,
+        }
+    }
 }
+
+/// What a supervisor probe decided about a pooled session. `Answered` covers
+/// both a `ping` result and a JSON-RPC error to it — the server is speaking;
+/// only silence (`TimedOut`) or a transport failure (`Failed`) is a wedge.
+enum PingOutcome {
+    Answered,
+    TimedOut,
+    Failed(String),
+}
+
+// ---------------------------------------------------------------------------
+// Supervisor: idle sessions are probed before a user call pays for a wedged one
+//
+// A pooled session may stop working while nobody is calling: a stdio child can
+// hang between writes, a remote endpoint can stop answering while keeping the
+// TCP stream. Without sweeping, the next user call pays the full operation
+// timeout before the fresh-handshake fallback. The supervisor probes each idle
+// session on a timer, evicts the wedged ones, and does so only for sessions
+// that are in the map — a session in use is checked out and never probed.
 
 /// Streamable HTTP: one POST per message, and the answer comes back either as
 /// JSON or as an SSE stream on that same response. The handshake may hand back
@@ -550,6 +614,27 @@ impl HttpSession {
                 "The MCP server answered {method} with HTTP {}.",
                 response.status()
             ))
+        }
+    }
+
+    /// A liveness probe. A 2xx answer to `ping`, whatever its JSON-RPC body,
+    /// proves the endpoint is talking; anything else is a dead transport.
+    async fn poll(&mut self, within: Duration) -> PingOutcome {
+        let message = json!({ "jsonrpc": "2.0", "id": 0, "method": "ping", "params": {} });
+        let probe = self.post(&message);
+        match tokio::time::timeout(within, probe).await {
+            Err(_) => PingOutcome::TimedOut,
+            Ok(Err(error)) => PingOutcome::Failed(error),
+            Ok(Ok(response)) => {
+                if response.status().is_success() {
+                    PingOutcome::Answered
+                } else {
+                    PingOutcome::Failed(format!(
+                        "The MCP server answered ping with HTTP {}.",
+                        response.status()
+                    ))
+                }
+            }
         }
     }
 
@@ -720,6 +805,34 @@ impl SseSession {
         }
     }
 
+    /// A liveness probe for a legacy HTTP+SSE session: the answer arrives on
+    /// the open event stream, so `ping` is proven only by a mapped reply.
+    async fn poll(&mut self, within: Duration) -> PingOutcome {
+        let id = self.next_id;
+        self.next_id += 1;
+        let message = json!({ "jsonrpc": "2.0", "id": id, "method": "ping", "params": {} });
+        if let Err(error) = self.send(&message).await {
+            return PingOutcome::Failed(error);
+        }
+        let reply = async {
+            loop {
+                let value = self
+                    .incoming
+                    .recv()
+                    .await
+                    .ok_or_else(|| "The MCP server closed its event stream.".to_string())?;
+                if match_reply(value, id).is_some() {
+                    return Ok(());
+                }
+            }
+        };
+        match tokio::time::timeout(within, reply).await {
+            Err(_) => PingOutcome::TimedOut,
+            Ok(Err(error)) => PingOutcome::Failed(error),
+            Ok(Ok(())) => PingOutcome::Answered,
+        }
+    }
+
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
@@ -825,6 +938,12 @@ fn resolve_endpoint(base: &str, endpoint: &str) -> String {
 
 const POOL_IDLE: Duration = Duration::from_secs(300);
 
+/// How often the supervisor looks at idle sessions, and how long a probe waits
+/// before it declares silence. The sweep window is then deliberately shorter
+/// than the operation ceiling that a user call would pay.
+const SUPERVISOR_INTERVAL: Duration = Duration::from_secs(60);
+const SUPERVISOR_PING: Duration = Duration::from_secs(5);
+
 struct PooledSession {
     fingerprint: String,
     protocol: String,
@@ -886,6 +1005,72 @@ fn put_pooled(
             connection,
         },
     );
+}
+
+/// A probe whose session answered is handed back with its original `last_used`:
+/// the supervisor works for a user's patience, not for keeping sessions warm,
+/// and a re-stamp would keep sessions alive forever.
+fn restore_pooled(name: String, entry: PooledSession) {
+    let mut all = pool()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A call that connected while the probe ran already put a fresher session
+    // back; keep that one and drop the probed entry.
+    all.entry(name).or_insert_with(|| entry);
+}
+
+/// Start the supervisor once. Safe to call from every boot path.
+pub(crate) fn start_supervisor() {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    tokio::spawn(supervisor_loop());
+}
+
+async fn supervisor_loop() {
+    loop {
+        supervisor_sweep(SUPERVISOR_PING).await;
+        tokio::time::sleep(SUPERVISOR_INTERVAL).await;
+    }
+}
+
+/// One sweep over the idle sessions. Every entry is checked out by draining
+/// (a session in use is never in the map, so the sweep cannot race a call),
+/// probed, and either restored or evicted. `within` is the silence budget.
+async fn supervisor_sweep(within: Duration) {
+    let idle: Vec<(String, PooledSession)> = {
+        let mut all = pool()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut *all).into_iter().collect()
+    };
+    for (name, mut entry) in idle {
+        match entry.connection.poll(within).await {
+            PingOutcome::Answered => restore_pooled(name, entry),
+            PingOutcome::TimedOut => {
+                entry.connection.close().await;
+                record_log(
+                    &name,
+                    "client",
+                    format!(
+                        "Supervisor: the idle session stopped answering ping within {}s; it was closed and the next call reconnects.",
+                        within.as_secs()
+                    ),
+                );
+            }
+            PingOutcome::Failed(reason) => {
+                entry.connection.close().await;
+                record_log(
+                    &name,
+                    "client",
+                    format!(
+                        "Supervisor: the idle session is gone ({reason}); it was closed and the next call reconnects."
+                    ),
+                );
+            }
+        }
+    }
 }
 
 /// A save or a removal changes the entry, so the connection it described is
@@ -1512,7 +1697,10 @@ async fn oauth_start(
         )
         .into_response();
     }
-    let approve = input.get("approve").and_then(Value::as_bool).unwrap_or(false);
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if let Some(response) = crate::permissions::guard_user(
         &state,
         PolicyAction::Network,
@@ -1544,9 +1732,7 @@ async fn oauth_start(
 
 /// Browser landing page for an OAuth redirect. It only redeems the query
 /// against the armed flow — it holds no authority of its own.
-async fn oauth_callback(
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
+async fn oauth_callback(Query(params): Query<HashMap<String, String>>) -> Response {
     let page = crate::mcp_oauth::browser_callback(
         params.get("code").map(String::as_str).unwrap_or(""),
         params.get("state").map(String::as_str).unwrap_or(""),
@@ -1563,16 +1749,15 @@ async fn oauth_callback(
         .unwrap_or_else(|error| {
             axum::http::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(axum::body::Body::from(format!("callback page failed: {error}")))
+                .body(axum::body::Body::from(format!(
+                    "callback page failed: {error}"
+                )))
                 .unwrap()
         })
         .into_response()
 }
 
-async fn oauth_forget(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Response {
+async fn oauth_forget(State(state): State<AppState>, Path(name): Path<String>) -> Response {
     let exists = read_servers(&registry_path(&state))
         .into_iter()
         .any(|entry| entry.name == name);
@@ -1590,8 +1775,7 @@ async fn oauth_forget(
         "",
         "OAuth session for the MCP server removed",
     );
-    Json(json!({ "ok": true, "name": name, "message": "OAuth session removed." }))
-        .into_response()
+    Json(json!({ "ok": true, "name": name, "message": "OAuth session removed." })).into_response()
 }
 
 async fn list_servers(State(state): State<AppState>) -> Response {
@@ -2378,5 +2562,179 @@ mod tests {
         let line = all.get(name).expect("state").logs.front().expect("line");
         assert_eq!(line.text.chars().count(), LOG_LINE_CAP);
         assert_eq!(line.source, "server");
+    }
+
+    // -----------------------------------------------------------------------
+    // Supervisor
+    // -----------------------------------------------------------------------
+
+    #[derive(Clone, Copy)]
+    enum Probe {
+        Answers,
+        Silent,
+        Broken,
+    }
+
+    /// A real streamable-HTTP MCP endpoint: handshake, an empty catalogue and a
+    /// `ping` whose behaviour the caller chooses. The supervisor is exercised
+    /// over a transport it will actually probe, not a stand-in for one.
+    async fn mock_mcp(name: &str, probe: Probe) -> Server {
+        let app = Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| async move {
+                let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+                let id = body.get("id").cloned().unwrap_or(Value::Null);
+                match method {
+                    "ping" => match probe {
+                        Probe::Answers => Json(json!({ "jsonrpc": "2.0", "id": id, "result": {} }))
+                            .into_response(),
+                        Probe::Silent => {
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            Json(json!({ "jsonrpc": "2.0", "id": id, "result": {} }))
+                                .into_response()
+                        }
+                        Probe::Broken => {
+                            (StatusCode::INTERNAL_SERVER_ERROR, "this endpoint is down")
+                                .into_response()
+                        }
+                    },
+                    "initialize" => Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "serverInfo": { "version": "9.9.9" }
+                        }
+                    }))
+                    .into_response(),
+                    "tools/list" => Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": { "tools": [] }
+                    }))
+                    .into_response(),
+                    _ => StatusCode::ACCEPTED.into_response(),
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let mut entry = server(name);
+        entry.transport = "http".to_string();
+        entry.command = String::new();
+        entry.url = format!("http://{addr}");
+        entry
+    }
+
+    /// The pooled entry a finished call leaves behind, with an explicit stamp
+    /// so the sweep sees a given amount of idle time without waiting for it.
+    fn parked(entry: &Server, handshake: Handshake, last_used: Instant) -> PooledSession {
+        PooledSession {
+            fingerprint: fingerprint(entry),
+            protocol: handshake.protocol,
+            version: handshake.version,
+            last_used,
+            connection: handshake.session.connection.expect("live connection"),
+        }
+    }
+
+    fn park(entry: &Server, handshake: Handshake, last_used: Instant) {
+        pool()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(entry.name.clone(), parked(entry, handshake, last_used));
+    }
+
+    fn pooled_stamp(name: &str) -> Option<Instant> {
+        pool()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(name)
+            .map(|entry| entry.last_used)
+    }
+
+    fn last_log(name: &str) -> String {
+        let all = monitor().lock().expect("monitor");
+        all.get(name)
+            .and_then(|state| state.logs.back())
+            .map(|line| line.text.clone())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn the_supervisor_keeps_answering_sessions_and_evicts_wedged_ones() {
+        // A 200 ms silence budget: the code path is the boot path, only the
+        // clock is shortened so the test does not wait minutes.
+        let within = Duration::from_millis(200);
+
+        // 1. An idle session that still answers is handed back untouched,
+        //    including its original stamp — a probe must not keep it alive.
+        let alive = mock_mcp("supervisor-alive", Probe::Answers).await;
+        let handshake = connect_once(&alive).await.expect("handshake");
+        assert_eq!(handshake.version, "9.9.9");
+        let stamped = Instant::now() - Duration::from_secs(120);
+        park(&alive, handshake, stamped);
+        supervisor_sweep(within).await;
+        assert_eq!(pooled_stamp(&alive.name), Some(stamped), "kept its stamp");
+
+        // 2. A session that stops answering while idle is closed on the timer,
+        //    so the next call connects instead of paying the timeout to find out.
+        let wedged = mock_mcp("supervisor-wedged", Probe::Silent).await;
+        park(
+            &wedged,
+            connect_once(&wedged).await.expect("handshake"),
+            Instant::now() - Duration::from_secs(60),
+        );
+        supervisor_sweep(within).await;
+        assert_eq!(
+            pooled_stamp(&wedged.name),
+            None,
+            "timed-out session evicted"
+        );
+        let logged = last_log(&wedged.name);
+        assert!(logged.contains("stopped answering ping"), "{logged}");
+
+        // 3. A transport answering with an error is gone, and the log says why
+        //    rather than pretending the session was merely idle.
+        let broken = mock_mcp("supervisor-broken", Probe::Broken).await;
+        park(
+            &broken,
+            connect_once(&broken).await.expect("handshake"),
+            Instant::now() - Duration::from_secs(60),
+        );
+        supervisor_sweep(within).await;
+        assert_eq!(pooled_stamp(&broken.name), None, "broken session evicted");
+        let logged = last_log(&broken.name);
+        assert!(logged.contains("is gone"), "{logged}");
+        assert!(logged.contains("500"), "{logged}");
+
+        // A sweep with nothing parked is a no-op, not a panic.
+        supervisor_sweep(within).await;
+    }
+
+    #[tokio::test]
+    async fn a_probe_does_not_replace_a_session_that_reconnected_meanwhile() {
+        let entry = mock_mcp("supervisor-race", Probe::Answers).await;
+        let probed = parked(
+            &entry,
+            connect_once(&entry).await.expect("handshake"),
+            Instant::now() - Duration::from_secs(120),
+        );
+        // A call reconnected while the probe was in flight and put a fresher
+        // session back; the probe's older copy must lose.
+        let fresh = Instant::now();
+        park(
+            &entry,
+            connect_once(&entry).await.expect("handshake"),
+            fresh,
+        );
+        restore_pooled(entry.name.clone(), probed);
+        assert_eq!(pooled_stamp(&entry.name), Some(fresh));
+        forget_pooled(&entry.name);
     }
 }
