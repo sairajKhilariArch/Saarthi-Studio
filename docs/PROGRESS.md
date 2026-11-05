@@ -18,7 +18,8 @@ partial, `[ ]` not started.
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 | 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
 | 1.30.0 | `a0c76d8` | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
-| 1.33.0 | this commit | Phase 7 first slice: MCP registry (`mcp.json`), stdio JSON-RPC handshake per operation, tool discovery with real schemas, argument validation, every route policy-gated on `mcp_tool` | live end-to-end on :8796 with a real stdio server — test listed `echo` with its schema, an approved call returned `echo: hi`, a missing argument and a wrong type were refused 400, an unknown tool 404, the default `ask` 409, and both decisions landed in the audit log |
+| 1.34.0 | this commit | Phase 7 UI: Settings → MCP panel (register/edit/test/remove, tool cards with required args, schema-shaped JSON template, explicit approve-then-call, raw result) + `env` preserved when a save omits it | live browser pass on :8795 — server saved and listed, Test discovered `echo`/`ping`, the template pre-filled `{"text": ""}`, first call answered `ask` and flipped the button to "Approve and call", second call returned `echo:` |
+| 1.33.0 | `79cc9ab` | Phase 7 first slice: MCP registry (`mcp.json`), stdio JSON-RPC handshake per operation, tool discovery with real schemas, argument validation, every route policy-gated on `mcp_tool` | live end-to-end on :8796 with a real stdio server — test listed `echo` with its schema, an approved call returned `echo: hi`, a missing argument and a wrong type were refused 400, an unknown tool 404, the default `ask` 409, and both decisions landed in the audit log |
 | 1.32.0 | `010566b` | Phase 10 UI: Settings → Permissions panel (add/revoke rules, audit trail), re-read on every visit | live browser pass on :8797: rule added through the form, badge + audit row appeared, revoke removed it |
 | 1.31.0 | `7c949c3` | Phase 10 first slice: central permission policy store (rules + scopes + resolution), agent-step and router-install enforcement, `permission_audit` table and routes | `cargo test --locked`: 214 passed, 1 ignored; live grant/audit/revoke smoke |
 
@@ -147,7 +148,7 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [x] Routes: list, save, remove, test, call (mutations behind the local-origin guard) (1.33.0)
 - [ ] Persistent connection pool / health state / captured server logs / reconnect backoff
 - [ ] SSE and streamable-HTTP transports (stdio only today)
-- [ ] Manager UI in Settings (the routes exist, the panel does not)
+- [x] Manager UI in Settings: register/edit/test/remove servers, tool cards, schema-shaped argument template, approve-then-call, raw result (1.34.0)
 - [ ] Agent integration: an MCP action in the agent loop so a run can call a discovered tool
 
 ## Next up

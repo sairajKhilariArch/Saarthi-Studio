@@ -47,6 +47,7 @@ function setSettingsSection(name) {
   // Rules change while the app runs (an agent refusal, a router install), so
   // the panel re-reads both endpoints on every visit instead of caching.
   if (name === "permissions") void loadPermissions();
+  if (name === "mcp") void loadMcp();
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
 
@@ -102,6 +103,17 @@ function setupSettingsNav() {
   });
   $("permAdd").addEventListener("click", () => void addPermissionRule());
   $("permRefresh").addEventListener("click", () => void loadPermissions());
+  // The MCP panel points at Permissions where a rule would go; the link moves
+  // the panel instead of navigating away from the app.
+  $("settings-mcp").addEventListener("click", (event) => {
+    const link = event.target.closest("[data-goto-settings]");
+    if (!link) return;
+    event.preventDefault();
+    setSettingsSection(link.dataset.gotoSettings);
+  });
+  $("mcpSave").addEventListener("click", () => void saveMcpServer());
+  $("mcpRefresh").addEventListener("click", () => void loadMcp());
+  $("mcpCall").addEventListener("click", () => void callMcpTool());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
   // The theme buttons reflect the live theme without a re-render: listening on
@@ -502,6 +514,9 @@ const state = {
   openSkillId: null,
   /* permissions: saved rules plus the audit trail from /api/permissions. */
   permissions: { actions: [], rules: [] },
+  /* mcp: the registry, the tools of the last tested server, and the picked
+     tool. Nothing is cached server-side, so the panel re-tests on demand. */
+  mcp: { servers: [], tools: [], target: null },
   /* activeSkillId: a skill the user picked in the composer. suggestedSkillId
      is a keyword match the composer offers when nothing was picked; either
      one rides with the next request as `skill`. */
@@ -3161,6 +3176,264 @@ async function loadPermissions() {
   renderPermissionActions();
   renderPermissionRules();
   void loadPermissionAudit();
+}
+
+/* ---- MCP: servers, discovery and approved tool calls --------------- */
+
+function mcpNotice(message, ok) {
+  const box = $("mcpNotice");
+  box.textContent = message;
+  box.className = "notice " + (ok ? "success" : "error");
+  box.classList.remove("hidden");
+}
+
+function mcpButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-quiet btn-small";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function loadMcp() {
+  const host = $("mcpServers");
+  const result = await api("/api/mcp");
+  host.replaceChildren();
+  if (!result.ok) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = result.data.error || "Could not read the MCP registry.";
+    host.appendChild(note);
+    return;
+  }
+  state.mcp.servers = result.data.servers || [];
+  renderMcpServers();
+}
+
+function renderMcpServers() {
+  const host = $("mcpServers");
+  host.replaceChildren();
+  if (!state.mcp.servers.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No servers registered. Add one above with the command that starts it.";
+    host.appendChild(note);
+    return;
+  }
+  state.mcp.servers.forEach((server) => {
+    const row = document.createElement("div");
+    row.className = "skill-row" + (server.enabled ? "" : " off");
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = server.name;
+    const line = document.createElement("p");
+    line.textContent = [server.command, ...(server.args || [])].join(" ");
+    const meta = document.createElement("small");
+    meta.className = "skill-path";
+    meta.textContent = (server.environment || []).length
+      ? `Environment: ${server.environment.join(", ")}`
+      : "No environment set";
+    main.append(strong, line, meta);
+    const side = document.createElement("div");
+    side.className = "skill-side";
+    const badge = document.createElement("span");
+    badge.className = "badge" + (server.enabled ? " on" : "");
+    badge.textContent = server.enabled ? "Enabled" : "Disabled";
+    const actions = document.createElement("div");
+    actions.className = "mcp-actions";
+    actions.append(
+      mcpButton("Edit", () => editMcpServer(server)),
+      mcpButton("Test", () => void testMcpServer(server.name)),
+      mcpButton("Remove", () => void removeMcpServer(server.name)),
+    );
+    side.append(badge, actions);
+    row.append(main, side);
+    host.appendChild(row);
+  });
+}
+
+function editMcpServer(server) {
+  $("mcpName").value = server.name;
+  $("mcpCommand").value = server.command;
+  $("mcpArgs").value = (server.args || []).join(" ");
+  $("mcpEnv").value = "";
+  $("mcpEnv").placeholder = (server.environment || []).length
+    ? `Saved: ${server.environment.join(", ")} (leave blank to keep)`
+    : "TOKEN=… , LOG=debug";
+  $("mcpEnabled").checked = server.enabled;
+  mcpNotice(`Editing ${server.name}. Its saved environment is kept unless you type a new one.`, true);
+}
+
+async function saveMcpServer() {
+  const name = $("mcpName").value.trim();
+  const command = $("mcpCommand").value.trim();
+  if (!name || !command) {
+    mcpNotice("A server needs a name and a command.", false);
+    return;
+  }
+  const payload = {
+    name,
+    command,
+    args: $("mcpArgs").value.trim() ? $("mcpArgs").value.trim().split(/\s+/) : [],
+    enabled: $("mcpEnabled").checked,
+  };
+  const envText = $("mcpEnv").value.trim();
+  if (envText) {
+    const env = {};
+    for (const pair of envText.split(",")) {
+      const trimmed = pair.trim();
+      if (!trimmed) continue;
+      const at = trimmed.indexOf("=");
+      if (at <= 0) {
+        mcpNotice(`Environment entry "${trimmed}" must look like KEY=value.`, false);
+        return;
+      }
+      env[trimmed.slice(0, at).trim()] = trimmed.slice(at + 1);
+    }
+    payload.env = env;
+  }
+  const result = await api("/api/mcp/servers", { method: "POST", body: JSON.stringify(payload) });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "Could not save that server.", false);
+    return;
+  }
+  $("mcpEnv").value = "";
+  mcpNotice(`Saved ${name}. Press Test to discover its tools.`, true);
+  await loadMcp();
+}
+
+async function removeMcpServer(name) {
+  const result = await api("/api/mcp/servers/remove", { method: "POST", body: JSON.stringify({ name }) });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "Could not remove that server.", false);
+    return;
+  }
+  if (state.mcp.target && state.mcp.target.server === name) {
+    state.mcp.target = null;
+    state.mcp.tools = [];
+    renderMcpTools();
+  }
+  mcpNotice(`Removed ${name}.`, true);
+  await loadMcp();
+}
+
+async function testMcpServer(name) {
+  // The Test button is the approval: a deliberate click that starts a process
+  // the user registered themselves.
+  const result = await api("/api/mcp/test", {
+    method: "POST",
+    body: JSON.stringify({ name, approve: true }),
+  });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "The server did not answer.", false);
+    return;
+  }
+  state.mcp.tools = result.data.tools || [];
+  state.mcp.target = { server: name, tool: null };
+  renderMcpTools();
+  const count = state.mcp.tools.length;
+  mcpNotice(`${name} answered with ${count} tool${count === 1 ? "" : "s"}.`, true);
+}
+
+/* Pre-fill only what the schema says is required, with the right shape for
+   each declared type, so the field starts as a valid guess, not a blank. */
+function mcpArgumentTemplate(schema) {
+  const properties = (schema && schema.properties) || {};
+  const required = new Set((schema && schema.required) || []);
+  const template = {};
+  Object.keys(properties).forEach((key) => {
+    if (!required.has(key)) return;
+    const type = properties[key].type;
+    if (type === "number" || type === "integer") template[key] = 0;
+    else if (type === "boolean") template[key] = false;
+    else if (type === "array") template[key] = [];
+    else if (type === "object") template[key] = {};
+    else template[key] = "";
+  });
+  return template;
+}
+
+function renderMcpTools() {
+  const host = $("mcpTools");
+  host.replaceChildren();
+  if (!state.mcp.tools.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = state.mcp.target
+      ? "That server listed no tools."
+      : "Test a server to see the tools it offers.";
+    host.appendChild(note);
+    return;
+  }
+  state.mcp.tools.forEach((tool) => {
+    const row = document.createElement("div");
+    const picked = Boolean(state.mcp.target && state.mcp.target.tool === tool.name);
+    row.className = "mcp-tool" + (picked ? " picked" : "");
+    const head = document.createElement("strong");
+    head.textContent = tool.name;
+    const body = document.createElement("p");
+    body.textContent = tool.description || "No description.";
+    const required = (tool.input_schema && tool.input_schema.required) || [];
+    const meta = document.createElement("small");
+    meta.textContent = required.length
+      ? `Required: ${required.join(", ")}`
+      : "No required arguments";
+    row.append(head, body, meta);
+    row.addEventListener("click", () => {
+      state.mcp.target = {
+        server: state.mcp.target ? state.mcp.target.server : null,
+        tool: tool.name,
+      };
+      $("mcpArgsJson").value = JSON.stringify(mcpArgumentTemplate(tool.input_schema), null, 2);
+      $("mcpResult").classList.add("hidden");
+      const button = $("mcpCall");
+      button.textContent = "Call tool";
+      delete button.dataset.approve;
+      renderMcpTools();
+    });
+    host.appendChild(row);
+  });
+}
+
+async function callMcpTool() {
+  const target = state.mcp.target || {};
+  const button = $("mcpCall");
+  const approve = button.dataset.approve === "1";
+  if (!target.server || !target.tool) {
+    mcpNotice("Test a server and pick a tool first.", false);
+    return;
+  }
+  let args;
+  const raw = $("mcpArgsJson").value.trim();
+  try {
+    args = raw ? JSON.parse(raw) : {};
+  } catch {
+    mcpNotice("Arguments must be valid JSON.", false);
+    return;
+  }
+  const result = await api("/api/mcp/call", {
+    method: "POST",
+    body: JSON.stringify({ server: target.server, tool: target.tool, arguments: args, approve }),
+  });
+  // The store answered "ask": the next click is the approval, not a silent retry.
+  if (result.status === 409 && result.data.needs_approval) {
+    mcpNotice(`${target.server}.${target.tool} needs approval before it runs.`, false);
+    button.textContent = "Approve and call";
+    button.dataset.approve = "1";
+    return;
+  }
+  button.textContent = "Call tool";
+  delete button.dataset.approve;
+  if (!result.ok) {
+    mcpNotice(result.data.error || "The tool call failed.", false);
+    return;
+  }
+  const box = $("mcpResult");
+  box.textContent = result.data.text || "(the result carried no text)";
+  box.classList.remove("hidden");
+  mcpNotice(`${target.server}.${target.tool} returned.`, true);
 }
 
 async function addPermissionRule() {

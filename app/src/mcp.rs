@@ -421,6 +421,37 @@ fn clean_args(input: Option<&Value>) -> Result<Vec<String>, String> {
     }
 }
 
+/// Environment handling for a save. An absent (or null) `env` keeps whatever
+/// the server already had: the API never returns values, so a client that only
+/// edits the command must not silently wipe the saved secrets.
+fn merge_env(
+    input: Option<&Value>,
+    existing: Option<&Server>,
+) -> Result<BTreeMap<String, String>, String> {
+    match input {
+        None | Some(Value::Null) => Ok(existing.map(|entry| entry.env.clone()).unwrap_or_default()),
+        Some(Value::Object(values)) => {
+            let mut env = BTreeMap::new();
+            for (key, value) in values {
+                let Some(value) = value.as_str() else {
+                    return Err(format!("Environment value for {key} must be a string."));
+                };
+                if !key
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+                {
+                    return Err(format!(
+                        "Environment name {key} must be letters, digits, underscore or dot."
+                    ));
+                }
+                env.insert(key.clone(), value.to_string());
+            }
+            Ok(env)
+        }
+        Some(_) => Err("Environment must be an object of KEY: value pairs.".to_string()),
+    }
+}
+
 async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let name = input
         .get("name")
@@ -449,29 +480,13 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
         Ok(args) => args,
         Err(error) => return crate::json_error(StatusCode::BAD_REQUEST, error).into_response(),
     };
-    let mut env = BTreeMap::new();
-    if let Some(values) = input.get("env").and_then(Value::as_object) {
-        for (key, value) in values {
-            let Some(value) = value.as_str() else {
-                return crate::json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("Environment value for {key} must be a string."),
-                )
-                .into_response();
-            };
-            if !key
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-            {
-                return crate::json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("Environment name {key} must be letters, digits, underscore or dot."),
-                )
-                .into_response();
-            }
-            env.insert(key.clone(), value.to_string());
-        }
-    }
+    let path = registry_path(&state);
+    let mut servers = read_servers(&path);
+    let existing = servers.iter().find(|entry| entry.name == name).cloned();
+    let env = match merge_env(input.get("env"), existing.as_ref()) {
+        Ok(env) => env,
+        Err(error) => return crate::json_error(StatusCode::BAD_REQUEST, error).into_response(),
+    };
     let enabled = input
         .get("enabled")
         .and_then(Value::as_bool)
@@ -483,8 +498,6 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
         env,
         enabled,
     };
-    let path = registry_path(&state);
-    let mut servers = read_servers(&path);
     match servers.iter_mut().find(|entry| entry.name == name) {
         Some(existing) => *existing = server.clone(),
         None => servers.push(server.clone()),
@@ -801,6 +814,24 @@ mod tests {
         let rendered = server_json(&entry).to_string();
         assert!(rendered.contains("API_TOKEN"));
         assert!(!rendered.contains("super-secret"));
+    }
+
+    #[test]
+    fn saving_without_env_keeps_the_saved_values() {
+        let mut existing = server("files");
+        existing
+            .env
+            .insert("TOKEN".to_string(), "secret".to_string());
+        assert_eq!(merge_env(None, Some(&existing)), Ok(existing.env.clone()));
+        assert_eq!(
+            merge_env(Some(&Value::Null), Some(&existing)),
+            Ok(existing.env.clone())
+        );
+        let replaced =
+            merge_env(Some(&json!({ "LOG": "debug" })), Some(&existing)).expect("object");
+        assert_eq!(replaced.len(), 1);
+        assert!(replaced.contains_key("LOG"));
+        assert!(merge_env(Some(&json!(["nope"])), None).is_err());
     }
 
     #[test]

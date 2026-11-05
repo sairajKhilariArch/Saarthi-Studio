@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.34.0
+
+- Settings → MCP: the 1.33.0 routes now have a panel. Register a server (name,
+  command, arguments, environment, enabled), Edit it in place, Test it for a
+  real handshake, and Remove it. Servers list their executable, environment
+  names and enabled state, and a disabled server stays visibly disabled.
+- Tools discovered by a test render as cards with the description and the
+  `required` arguments. Clicking one selects it and pre-fills a JSON argument
+  object shaped from its own schema — required fields only, with empty strings,
+  `0`, `false`, `[]` or `{}` per declared type.
+- Calls use the store's answer instead of guessing: the first click sends
+  without approval, and when the store says `ask` the button becomes
+  **Approve and call** so the second click is a real approval, not a silent
+  retry. Results print raw, preserving whitespace, in a bounded block.
+- `POST /api/mcp/servers` now keeps a server's saved environment when the
+  request omits `env`: the API never returns values, so an edit that only
+  changes the command must not wipe them. Sending `env: {}` still clears it.
+- Version 1.34.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 50).
+- Tests: 227 pass (one new case for the environment merge).
+
 ## 1.33.0
 
 - Phase 7, first slice: an MCP registry that actually runs servers. `mcp.rs`

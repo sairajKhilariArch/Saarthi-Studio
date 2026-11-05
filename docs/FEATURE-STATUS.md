@@ -132,7 +132,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Health, logs, reconnect | Missing | a failed call surfaces as 502; no health state, no server log capture |
 | SSE / HTTP transports | Missing | stdio only |
 | Agent use of MCP tools | Missing | routes exist; the agent loop has no MCP action yet |
-| MCP manager UI | Missing | routes only |
+| MCP manager UI | Working (1.34.0) | Settings → MCP: register/edit/test/remove, tool cards, argument template, approve-then-call, raw result |
 
 ## Phase 8 — Project knowledge and memory
 

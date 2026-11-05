@@ -564,6 +564,7 @@
           <button type="button" data-settings-section="search" aria-selected="false">Deep search</button>
           <button type="button" data-settings-section="openai" aria-selected="false">OpenAI Platform</button>
           <button type="button" data-settings-section="permissions" aria-selected="false">Permissions</button>
+          <button type="button" data-settings-section="mcp" aria-selected="false">MCP</button>
           <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
@@ -685,6 +686,60 @@
           <h3>Recent decisions</h3>
           <p class="muted">Rule changes, refusals and approved installs, newest first.</p>
           <ul id="permAudit" class="perm-audit"></ul>
+          </section>
+
+          <section id="settings-mcp" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">MCP servers</h2>
+          <p>Local Model Context Protocol servers this computer may run. A server is a command; its tools are checked against <a href="#" data-goto-settings="permissions">Permissions</a> before anything runs, so an unlisted tool asks first.</p>
+          <div class="form-row">
+            <label class="field">
+              <span>Name</span>
+              <input id="mcpName" type="text" placeholder="files" autocomplete="off">
+              <small>Letters, digits, dot, dash or underscore. Rules address a tool as <code>name.tool</code>.</small>
+            </label>
+            <label class="field">
+              <span>Command</span>
+              <input id="mcpCommand" type="text" placeholder="/usr/local/bin/mcp-files" autocomplete="off">
+              <small>The executable; arguments go in the next field.</small>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="field">
+              <span>Arguments</span>
+              <input id="mcpArgs" type="text" placeholder="--root . --read-only" autocomplete="off">
+              <small>Space-separated. An argument containing a space cannot be expressed here yet.</small>
+            </label>
+            <label class="field">
+              <span>Environment</span>
+              <input id="mcpEnv" type="text" placeholder="TOKEN=… , LOG=debug" autocomplete="off">
+              <small>Comma-separated <code>KEY=value</code>. Values stay on this computer and are never shown again.</small>
+            </label>
+          </div>
+          <label class="field checkbox-field">
+            <input id="mcpEnabled" type="checkbox" checked>
+            <span>Enabled</span>
+            <small>A disabled server is never started, not even by a test.</small>
+          </label>
+          <div class="form-actions">
+            <button type="button" id="mcpSave" class="btn btn-accent">Save server</button>
+            <button type="button" id="mcpRefresh" class="btn btn-quiet">Refresh</button>
+            <button type="submit" class="btn btn-quiet">Save all settings</button>
+          </div>
+          <div id="mcpNotice" class="notice hidden"></div>
+          <h3>Registered servers</h3>
+          <div id="mcpServers"></div>
+          <h3>Tools</h3>
+          <p class="muted">Test a server to discover what it offers. Nothing is cached: a test is a real handshake with a real process.</p>
+          <div id="mcpTools"></div>
+          <label class="field">
+            <span>Arguments (JSON)</span>
+            <textarea id="mcpArgsJson" rows="4" spellcheck="false" placeholder='{"path": "src/main.rs"}'></textarea>
+            <small>Checked against the tool's own schema before anything is sent.</small>
+          </label>
+          <div class="form-actions">
+            <button type="button" id="mcpCall" class="btn btn-accent">Call tool</button>
+          </div>
+          <pre id="mcpResult" class="mcp-result hidden"></pre>
           </section>
 
           <section id="settings-appearance" class="settings-section card form-card-inner hidden">
