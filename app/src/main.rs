@@ -3197,6 +3197,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
     events::notify(&state.events, &cid, "user");
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
+    let context_dropped = packed.dropped_messages;
+    let context_saved = packed.tokens_saved;
     media::apply_media(&mut packed.messages, &attachments);
     // The composer's model wins when present; config's model is the default.
     let resolved_model = model_scope::resolve(
@@ -3234,6 +3236,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         let mut meta = json!({ "model": cfg.model, "deepsearch": true });
         meta["context_tokens"] = json!(context_tokens);
         meta["context_trimmed"] = json!(context_trimmed);
+        meta["context_dropped"] = json!(context_dropped);
+        meta["context_saved_tokens"] = json!(context_saved);
         return Json(json!({
             "ok": true,
             "answer": answer,
@@ -3288,6 +3292,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                         "completion_tokens": completion,
                         "context_tokens": context_tokens,
                         "context_trimmed": context_trimmed,
+                        "context_dropped": context_dropped,
+                        "context_saved_tokens": context_saved,
                     }
                 }))
                 .into_response()
@@ -3347,6 +3353,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
             events::notify(&state.events, &cid, "message");
             meta["context_tokens"] = json!(context_tokens);
             meta["context_trimmed"] = json!(context_trimmed);
+            meta["context_dropped"] = json!(context_dropped);
+            meta["context_saved_tokens"] = json!(context_saved);
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
         }
         Err(error) => {
@@ -3672,6 +3680,9 @@ async fn chat_stream(
     // open view of this thread should refresh now that it landed.
     events::notify(&state.events, &cid, "user");
     let context_tokens = packed.estimated_tokens;
+    let context_trimmed = packed.trimmed_messages;
+    let context_dropped = packed.dropped_messages;
+    let context_saved = packed.tokens_saved;
     media::apply_media(&mut packed.messages, &attachments);
 
     if ds_answer.is_none() && !cfg.local_chat && cfg.api_key.trim().is_empty() {
@@ -3858,6 +3869,9 @@ async fn chat_stream(
         held["thinking"] = thinking_json(thinking);
         held["model_scope"] = json!(model_scope_label);
         held["context_budget"] = json!(cfg.context_budget_tokens);
+        held["context_trimmed"] = json!(context_trimmed);
+        held["context_dropped"] = json!(context_dropped);
+        held["context_saved_tokens"] = json!(context_saved);
         if !fallbacks.is_empty() {
             held["fallbacks"] = json!(fallbacks);
         }

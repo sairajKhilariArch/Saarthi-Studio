@@ -916,7 +916,9 @@ function addMessage(role, content, options = {}) {
     }
     if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
     if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
+    pushContextMeta(parts, meta);
     head.querySelector(".msg-meta").textContent = parts.join(" · ");
+    head.querySelector(".msg-meta").title = contextMetaTitle(meta);
   } else if (role === "assistant") {
     head.querySelector(".msg-meta").textContent = "";
   }
@@ -953,6 +955,23 @@ function addMessage(role, content, options = {}) {
   // Callers (the live stream row above all) keep updating the row after it
   // is added; without this they silently get undefined.
   return row;
+}
+
+/* Context compression is reported, never hidden: condensed or dropped turns
+   change what the model could see, so the reply row says so. */
+function pushContextMeta(parts, meta) {
+  if (meta.context_trimmed) parts.push(`${meta.context_trimmed} condensed`);
+  if (meta.context_dropped) parts.push(`${meta.context_dropped} dropped`);
+  if (meta.context_saved_tokens) parts.push(`~${formatCount(meta.context_saved_tokens)} saved`);
+}
+
+function contextMetaTitle(meta) {
+  const bits = [];
+  if (meta.context_tokens != null) bits.push(`${formatCount(meta.context_tokens)} tokens sent`);
+  if (meta.context_budget) bits.push(`budget ${formatCount(meta.context_budget)}`);
+  if (meta.context_saved_tokens) bits.push(`${formatCount(meta.context_saved_tokens)} estimated tokens kept out`);
+  if (meta.context_dropped) bits.push(`${meta.context_dropped} message(s) not sent at all`);
+  return bits.join(" · ");
 }
 
 function appendMessageActions(row, actions) {
@@ -1553,6 +1572,8 @@ function applyStreamMeta(meta) {
   if (meta.provider) parts.push(meta.provider);
   if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
   if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
+  pushContextMeta(parts, meta);
+  head.title = contextMetaTitle(meta);
   const chip = head.querySelector(".stream-status");
   head.textContent = parts.join(" · ");
   if (chip) head.appendChild(chip);

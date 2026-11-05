@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.48.0
+
+- Phase 11 close-out: context compression that is more than head/tail cropping.
+  `context.rs` now normalises whitespace (trailing spaces, runs of blank lines),
+  drops an exact repeat of an earlier turn once, and — only when the request
+  would exceed the budget — keeps the newest turns whole while they fit and folds
+  older ones into labelled excerpts appended to the system prompt
+  (`- [assistant] … (N characters in the full message)`). They are labelled
+  excerpts, because packing makes no model call and will not pretend it
+  paraphrased anything.
+- A thread that fits is sent **untouched**: compression is a remedy for an
+  over-budget request, not a style applied to every turn. The fitting path
+  reports zero condensed, zero dropped and zero tokens saved, and the contents
+  are unchanged.
+- The digest gets at most a quarter of the budget, reserved before the recent
+  turns are placed, so old context cannot crowd out the turn being continued.
+  The thread's first message survives as a pointer when the window has moved past
+  it instead of being silently forgotten.
+- Anything that does not even fit as an excerpt is counted as **dropped** rather
+  than quietly lost: `PackedRequest` reports `trimmed_messages`,
+  `dropped_messages` and `tokens_saved`, and both reply paths put
+  `context_trimmed`, `context_dropped` and `context_saved_tokens` in meta beside
+  the existing `context_tokens`/`context_budget`. The reply row shows
+  “N condensed · N dropped · ~N saved”, with a tooltip naming what was sent, the
+  budget, what was kept out and how many messages were not sent at all.
+- Tests: 293 pass, 1 ignored. New: whitespace normalisation that never edits the
+  words, a fitting thread sent untouched with no compression language, old turns
+  folded into labelled excerpts with tokens saved and nothing dropped, a repeated
+  turn sent once and counted, and a huge current message kept (cropped only to
+  its own cap) while older turns are condensed. Clippy `-D warnings` clean;
+  `rustfmt` clean on the touched files; `node --check app/static/app.js` clean.
+  The UI change was syntax-checked but not viewed in a browser, and no live smoke
+  was run for this slice.
+
 ## 1.47.0
 
 - Phase 11: spend is now derived from published prices only. New
