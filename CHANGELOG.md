@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.33.0
+
+- Phase 7, first slice: an MCP registry that actually runs servers. `mcp.rs`
+  keeps servers in `mcp.json` beside the config (name, command, args,
+  environment, enabled) and speaks the stdio JSON-RPC 2.0 transport to them:
+  `initialize` → `notifications/initialized` → `tools/list` → `tools/call`,
+  newline-delimited, with a 20-second ceiling per operation and the child
+  killed on every exit path.
+- One session per operation rather than a pooled connection: a server that wedged
+  or exited is retried by the next call instead of poisoning one long-lived
+  handle. The cost is a process spawn per call; the benefit is that nothing
+  leaks and nothing needs a supervisor yet.
+- Discovery keeps each tool's real `inputSchema`, and calls are validated
+  against it before they are sent: a missing `required` field or a declared
+  scalar of the wrong type is refused locally with the field named. Only
+  `required` presence and declared scalar types are enforced — this is not a
+  JSON Schema implementation and does not claim to be.
+- Every route that can start a process asks the policy store first, as
+  `mcp_tool` against `server.tool` (a test asks on the server name alone). A
+  `deny` rule refuses with 403, the default `ask` returns 409 with
+  `needs_approval`, an approved retry proceeds, and each outcome is written to
+  `permission_audit`.
+- Routes: `GET /api/mcp`, `POST /api/mcp/servers`,
+  `POST /api/mcp/servers/remove`, `POST /api/mcp/test`, `POST /api/mcp/call`
+  (mutations behind the local-origin guard). Environment values are stored and
+  passed to the child but never appear in a response — only their names do.
+- Tests: 12 new cases (line encoding, id matching that ignores notifications
+  and stray stdout, JSON-RPC errors, namespaced targets, name validation,
+  registry round-trip and corrupt-file safety, env-name-only rendering,
+  required/type validation, text flattening, schema caps); 226 pass.
+- Not built yet, and recorded as missing rather than implied: persistent
+  connection pooling, SSE/HTTP transports, a manager UI, and agent use of MCP
+  tools (the routes work; the agent loop does not call them).
+- Version 1.33.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 49).
+
 ## 1.32.0
 
 - Settings → Permissions: the policy store from 1.31.0 gets a face. Pick an

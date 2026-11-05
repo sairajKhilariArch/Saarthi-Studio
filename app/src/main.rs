@@ -40,6 +40,7 @@ mod host_security;
 mod host_transport;
 mod installer;
 mod local;
+mod mcp;
 mod media;
 mod openai;
 mod permissions;
@@ -3345,6 +3346,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(local::read_routes())
         .merge(openai::read_routes())
         .merge(permissions::router(port))
+        .merge(mcp::router(port))
         .merge(local::mutate_routes(port))
         .merge(agent::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),

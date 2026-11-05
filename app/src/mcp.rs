@@ -1,0 +1,862 @@
+//! MCP: a registry of local Model Context Protocol servers, a stdio JSON-RPC
+//! session, tool discovery with schema validation, and every call bound to the
+//! permission store.
+//!
+//! Scope is stated plainly rather than implied: a server is a local child
+//! process spoken to over stdio, and one operation = one session. There is no
+//! persistent connection pool, no SSE/HTTP transport and no sandbox beyond the
+//! command the user wrote into the registry. Those gaps are recorded in
+//! `docs/FEATURE-STATUS.md`, not faked here.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path as FsPath, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+
+use crate::permissions::{self, Action as PolicyAction, Decision as PolicyDecision};
+use crate::AppState;
+
+/// Revision advertised in the handshake. Servers speaking an older revision
+/// still answer; the value is a negotiation starting point, not a promise
+/// about what comes back.
+const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// No single operation may hold a child process open longer than this.
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Tool output becomes model input later; one call must not flood it.
+const RESULT_CAP: usize = 20_000;
+
+/// Descriptions are prompt text, so they are capped at the same order as a
+/// skill summary.
+const DESCRIPTION_CAP: usize = 2_000;
+
+// ---------------------------------------------------------------------------
+// Registry: the servers the user has written down
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Server {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment for the child process. Values never leave the machine and
+    /// never appear in an API response — only the names do.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RegistryFile {
+    #[serde(default)]
+    servers: Vec<Server>,
+}
+
+fn registry_path(state: &AppState) -> PathBuf {
+    state.config_path.with_file_name("mcp.json")
+}
+
+/// Servers from disk. A file that cannot be parsed reads as an empty registry:
+/// no tools is the safe failure, and the panel can rewrite it.
+pub(crate) fn read_servers(path: &FsPath) -> Vec<Server> {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<RegistryFile>(&bytes).ok())
+        .map(|file| file.servers)
+        .unwrap_or_default()
+}
+
+fn write_servers(path: &FsPath, servers: &[Server]) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(&RegistryFile {
+        servers: servers.to_vec(),
+    })
+    .map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let temp = path.with_extension("tmp");
+    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+    crate::set_private_permissions(&temp, false).map_err(|e| e.to_string())?;
+    fs::rename(&temp, path).map_err(|e| e.to_string())?;
+    crate::set_private_permissions(path, false).map_err(|e| e.to_string())
+}
+
+/// A server name becomes half of every permission target, so it stays boring:
+/// it must survive a round trip through a shell-free field and a rule prefix.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// `server.tool` — the target a permission rule is written against, so one
+/// rule can deny a specific tool while another server's tools still work.
+fn tool_target(server: &str, tool: &str) -> String {
+    format!("{server}.{tool}")
+}
+
+/// The public view of a server: environment variable names, never values.
+fn server_json(server: &Server) -> Value {
+    json!({
+        "name": server.name,
+        "command": server.command,
+        "args": server.args,
+        "environment": server.env.keys().cloned().collect::<Vec<_>>(),
+        "enabled": server.enabled,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Session: one child per operation, newline-delimited JSON-RPC 2.0
+
+struct Session {
+    child: Child,
+    stdin: ChildStdin,
+    lines: Lines<BufReader<ChildStdout>>,
+    next_id: u64,
+}
+
+/// One JSON-RPC message per line. MCP's stdio transport is exactly this.
+fn encode(message: &Value) -> String {
+    let mut line = message.to_string();
+    line.push('\n');
+    line
+}
+
+/// The answer to *our* id, if this line is one. Anything else — a
+/// notification, another request, a log line a server wrote to stdout — is not
+/// ours and reads as `None`, so the session keeps waiting instead of failing.
+fn reply_for(line: &str, id: u64) -> Option<Result<Value, String>> {
+    let value: Value = serde_json::from_str(line.trim()).ok()?;
+    if value.get("id").and_then(Value::as_u64) != Some(id) {
+        return None;
+    }
+    if let Some(error) = value.get("error") {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("MCP server returned an error");
+        return Some(Err(message.to_string()));
+    }
+    Some(Ok(value.get("result").cloned().unwrap_or(Value::Null)))
+}
+
+impl Session {
+    fn start(server: &Server) -> Result<Session, String> {
+        let mut command = Command::new(&server.command);
+        command
+            .args(&server.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        for (key, value) in &server.env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().map_err(|e| {
+            format!(
+                "Could not start MCP server \"{}\" ({}): {e}",
+                server.name, server.command
+            )
+        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "MCP server has no stdin.".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "MCP server has no stdout.".to_string())?;
+        Ok(Session {
+            child,
+            stdin,
+            lines: BufReader::new(stdout).lines(),
+            next_id: 1,
+        })
+    }
+
+    async fn send(&mut self, method: &str, params: Value, id: Option<u64>) -> Result<(), String> {
+        let mut message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        if let Some(id) = id {
+            message["id"] = json!(id);
+        }
+        let line = encode(&message);
+        self.stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| format!("Writing to the MCP server failed: {e}"))?;
+        self.stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Writing to the MCP server failed: {e}"))
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(method, params, Some(id)).await?;
+        let answer = async {
+            loop {
+                let line = self
+                    .lines
+                    .next_line()
+                    .await
+                    .map_err(|e| format!("Reading from the MCP server failed: {e}"))?
+                    .ok_or_else(|| {
+                        "The MCP server closed its output before answering.".to_string()
+                    })?;
+                if let Some(answer) = reply_for(&line, id) {
+                    return answer;
+                }
+            }
+        };
+        match tokio::time::timeout(OPERATION_TIMEOUT, answer).await {
+            Err(_) => Err(format!(
+                "The MCP server did not answer {method} within {}s.",
+                OPERATION_TIMEOUT.as_secs()
+            )),
+            Ok(answer) => answer,
+        }
+    }
+
+    async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
+        self.send(method, params, None).await
+    }
+
+    async fn close(mut self) {
+        let _ = self.child.kill().await;
+        let _ = self.child.wait().await;
+    }
+}
+
+/// Handshake, then discover tools. Every caller gets a fresh session: a server
+/// that wedged or exited is retried by the next call instead of poisoning one
+/// long-lived connection.
+async fn connect(server: &Server) -> Result<(Session, Vec<Value>), String> {
+    let mut session = Session::start(server)?;
+    session
+        .request(
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "saarthi-studio",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }),
+        )
+        .await?;
+    session
+        .notify("notifications/initialized", json!({}))
+        .await?;
+    let listed = session.request("tools/list", json!({})).await?;
+    let tools = listed
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok((session, tools))
+}
+
+/// Discovery output shaped for the panel: names, capped descriptions and the
+/// real input schema, which is what makes validation possible later.
+fn tools_json(tools: &[Value]) -> Value {
+    let rows = tools
+        .iter()
+        .filter_map(|tool| {
+            let name = tool.get("name").and_then(Value::as_str)?;
+            Some(json!({
+                "name": name,
+                "description": cap(
+                    tool.get("description").and_then(Value::as_str).unwrap_or(""),
+                    DESCRIPTION_CAP,
+                ),
+                "input_schema": tool.get("inputSchema").cloned().unwrap_or_else(|| json!({})),
+            }))
+        })
+        .collect::<Vec<_>>();
+    json!(rows)
+}
+
+fn cap(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+    value.chars().take(limit).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Schema validation: refuse a call the server itself would reject
+
+fn matches_type(expected: &str, value: &Value) -> bool {
+    match expected {
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "boolean" => value.is_boolean(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "null" => value.is_null(),
+        // A schema type this client does not model is not a reason to refuse:
+        // the server is still the authority on its own tool.
+        _ => true,
+    }
+}
+
+/// Check the arguments against the tool's own `inputSchema`. Only `required`
+/// presence and declared scalar types are enforced — enough to catch the
+/// mistake a model actually makes (dropping a required field, sending a number
+/// as a string) without pretending to implement JSON Schema.
+fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), String> {
+    let Some(object) = arguments.as_object() else {
+        return Err("Tool arguments must be a JSON object.".to_string());
+    };
+    let Some(required) = schema.get("required").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for name in required.iter().filter_map(Value::as_str) {
+        let Some(value) = object.get(name) else {
+            return Err(format!("Missing required argument \"{name}\"."));
+        };
+        let expected = schema
+            .get("properties")
+            .and_then(|properties| properties.get(name))
+            .and_then(|property| property.get("type"))
+            .and_then(Value::as_str);
+        if let Some(expected) = expected {
+            if !matches_type(expected, value) {
+                return Err(format!("Argument \"{name}\" must be {expected}."));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Flatten a `tools/call` result into the text a caller can read, keeping the
+/// structured content alongside it for anything richer than text.
+fn tool_text(result: &Value) -> String {
+    let parts = result
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| {
+                    if part.get("type").and_then(Value::as_str) == Some("text") {
+                        part.get("text").and_then(Value::as_str).map(str::to_string)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if parts.is_empty() {
+        result.to_string()
+    } else {
+        parts.join("\n")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+
+pub(crate) fn router(port: u16) -> Router<AppState> {
+    let read_only = Router::new().route("/api/mcp", get(list_servers));
+    let mutations = Router::new()
+        .route("/api/mcp/servers", post(save_server))
+        .route("/api/mcp/servers/remove", post(remove_server))
+        .route("/api/mcp/test", post(test_server))
+        .route("/api/mcp/call", post(call_tool))
+        .route_layer(axum::middleware::from_fn_with_state(
+            crate::workspace::LocalOriginGuard::new(port),
+            crate::workspace::guard_local_origin,
+        ));
+    read_only.merge(mutations)
+}
+
+async fn list_servers(State(state): State<AppState>) -> Response {
+    let servers = read_servers(&registry_path(&state));
+    Json(json!({
+        "ok": true,
+        "servers": servers.iter().map(server_json).collect::<Vec<_>>(),
+        "path": registry_path(&state).to_string_lossy(),
+    }))
+    .into_response()
+}
+
+fn clean_args(input: Option<&Value>) -> Result<Vec<String>, String> {
+    match input {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "Every argument must be a string.".to_string())
+            })
+            .collect(),
+        Some(_) => Err("Arguments must be a list of strings.".to_string()),
+    }
+}
+
+async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let name = input
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !valid_name(&name) {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "A server name is 1–64 characters: letters, digits, dot, dash or underscore.",
+        )
+        .into_response();
+    }
+    let command = input
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if command.is_empty() {
+        return crate::json_error(StatusCode::BAD_REQUEST, "A server needs a command to run.")
+            .into_response();
+    }
+    let args = match clean_args(input.get("args")) {
+        Ok(args) => args,
+        Err(error) => return crate::json_error(StatusCode::BAD_REQUEST, error).into_response(),
+    };
+    let mut env = BTreeMap::new();
+    if let Some(values) = input.get("env").and_then(Value::as_object) {
+        for (key, value) in values {
+            let Some(value) = value.as_str() else {
+                return crate::json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("Environment value for {key} must be a string."),
+                )
+                .into_response();
+            };
+            if !key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+            {
+                return crate::json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("Environment name {key} must be letters, digits, underscore or dot."),
+                )
+                .into_response();
+            }
+            env.insert(key.clone(), value.to_string());
+        }
+    }
+    let enabled = input
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let server = Server {
+        name: name.clone(),
+        command,
+        args,
+        env,
+        enabled,
+    };
+    let path = registry_path(&state);
+    let mut servers = read_servers(&path);
+    match servers.iter_mut().find(|entry| entry.name == name) {
+        Some(existing) => *existing = server.clone(),
+        None => servers.push(server.clone()),
+    }
+    if let Err(error) = write_servers(&path, &servers) {
+        return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    Json(json!({ "ok": true, "server": server_json(&server) })).into_response()
+}
+
+async fn remove_server(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let name = input.get("name").and_then(Value::as_str).unwrap_or("");
+    let path = registry_path(&state);
+    let mut servers = read_servers(&path);
+    let before = servers.len();
+    servers.retain(|server| server.name != name);
+    let removed = before - servers.len();
+    if let Err(error) = write_servers(&path, &servers) {
+        return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    Json(json!({ "ok": true, "removed": removed })).into_response()
+}
+
+/// Every route that can start a child process asks the policy first. Testing a
+/// server *is* starting it, so it answers to `mcp_tool` on the server name —
+/// one rule can keep a server from ever running.
+fn gate(state: &AppState, target: &str, approve: bool, detail: &str) -> Option<Response> {
+    let verdict = permissions::check(state, PolicyAction::McpTool, target, "");
+    match verdict.decision {
+        PolicyDecision::Deny => {
+            permissions::record(
+                state,
+                PolicyAction::McpTool,
+                target,
+                PolicyDecision::Deny,
+                verdict.scope,
+                "",
+                detail,
+            );
+            Some(
+                crate::json_error(
+                    StatusCode::FORBIDDEN,
+                    format!(
+                        "A saved permission rule denies {target}. Change it in Settings → Permissions."
+                    ),
+                )
+                .into_response(),
+            )
+        }
+        PolicyDecision::Ask if !approve => {
+            permissions::record(
+                state,
+                PolicyAction::McpTool,
+                target,
+                PolicyDecision::Ask,
+                verdict.scope,
+                "",
+                detail,
+            );
+            Some(
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": format!("{target} asks for approval before it runs."),
+                        "needs_approval": true,
+                    })),
+                )
+                    .into_response(),
+            )
+        }
+        _ => None,
+    }
+}
+
+async fn test_server(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let name = input.get("name").and_then(Value::as_str).unwrap_or("");
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let servers = read_servers(&registry_path(&state));
+    let Some(server) = servers.iter().find(|server| server.name == name).cloned() else {
+        return crate::json_error(
+            StatusCode::NOT_FOUND,
+            format!("No MCP server named \"{name}\"."),
+        )
+        .into_response();
+    };
+    if let Some(response) = gate(&state, &server.name, approve, "MCP server test") {
+        return response;
+    }
+    let (session, tools) = match connect(&server).await {
+        Ok(pair) => pair,
+        Err(error) => {
+            return crate::json_error(StatusCode::BAD_GATEWAY, error).into_response();
+        }
+    };
+    session.close().await;
+    Json(json!({
+        "ok": true,
+        "server": server.name,
+        "tools": tools_json(&tools),
+    }))
+    .into_response()
+}
+
+async fn call_tool(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let name = input.get("server").and_then(Value::as_str).unwrap_or("");
+    let tool = input.get("tool").and_then(Value::as_str).unwrap_or("");
+    let arguments = input.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if tool.trim().is_empty() {
+        return crate::json_error(StatusCode::BAD_REQUEST, "Name a tool to call.").into_response();
+    }
+    let servers = read_servers(&registry_path(&state));
+    let Some(server) = servers.iter().find(|server| server.name == name).cloned() else {
+        return crate::json_error(
+            StatusCode::NOT_FOUND,
+            format!("No MCP server named \"{name}\"."),
+        )
+        .into_response();
+    };
+    if !server.enabled {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            format!("MCP server \"{}\" is disabled.", server.name),
+        )
+        .into_response();
+    }
+    let target = tool_target(&server.name, tool);
+    if let Some(response) = gate(&state, &target, approve, "MCP tool call") {
+        return response;
+    }
+    let (mut session, tools) = match connect(&server).await {
+        Ok(pair) => pair,
+        Err(error) => return crate::json_error(StatusCode::BAD_GATEWAY, error).into_response(),
+    };
+    let Some(discovered) = tools
+        .iter()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(tool))
+    else {
+        session.close().await;
+        let known = tools
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return crate::json_error(
+            StatusCode::NOT_FOUND,
+            format!(
+                "{} exposes no tool named \"{tool}\". It lists: {}.",
+                server.name,
+                if known.is_empty() {
+                    "nothing"
+                } else {
+                    known.as_str()
+                }
+            ),
+        )
+        .into_response();
+    };
+    let schema = discovered
+        .get("inputSchema")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if let Err(error) = validate_arguments(&schema, &arguments) {
+        session.close().await;
+        return crate::json_error(StatusCode::BAD_REQUEST, error).into_response();
+    }
+    let outcome = session
+        .request(
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        )
+        .await;
+    session.close().await;
+    match outcome {
+        Ok(result) => {
+            permissions::record(
+                &state,
+                PolicyAction::McpTool,
+                &target,
+                PolicyDecision::Allow,
+                permissions::check(&state, PolicyAction::McpTool, &target, "").scope,
+                "",
+                "MCP tool called",
+            );
+            let text = tool_text(&result);
+            Json(json!({
+                "ok": true,
+                "server": server.name,
+                "tool": tool,
+                "is_error": result.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                "text": cap(&text, RESULT_CAP),
+                "content": result.get("content").cloned().unwrap_or(Value::Null),
+            }))
+            .into_response()
+        }
+        Err(error) => {
+            permissions::record(
+                &state,
+                PolicyAction::McpTool,
+                &target,
+                PolicyDecision::Allow,
+                permissions::check(&state, PolicyAction::McpTool, &target, "").scope,
+                "",
+                "MCP tool call failed",
+            );
+            crate::json_error(StatusCode::BAD_GATEWAY, error).into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(name: &str) -> Server {
+        Server {
+            name: name.to_string(),
+            command: "true".to_string(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            enabled: true,
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("saarthi-mcp-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir.join("mcp.json")
+    }
+
+    #[test]
+    fn a_message_is_exactly_one_line() {
+        let line = encode(&json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/list" }));
+        assert!(line.ends_with('\n'));
+        assert_eq!(line.matches('\n').count(), 1);
+        let parsed: Value = serde_json::from_str(line.trim()).expect("round trip");
+        assert_eq!(parsed["id"], json!(7));
+    }
+
+    #[test]
+    fn replies_are_matched_by_id_and_other_traffic_is_ignored() {
+        let result = json!({ "jsonrpc": "2.0", "id": 4, "result": {"tools": []} });
+        assert!(reply_for(&result.to_string(), 5).is_none());
+        let notification = json!({ "jsonrpc": "2.0", "method": "notifications/progress" });
+        assert!(reply_for(&notification.to_string(), 4).is_none());
+        // A server that logs to stdout: not JSON, so not an answer.
+        assert!(reply_for("starting up...", 4).is_none());
+        match reply_for(&result.to_string(), 4) {
+            Some(Ok(value)) => assert_eq!(value["tools"], json!([])),
+            other => panic!("expected our result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_jsonrpc_error_becomes_a_readable_message() {
+        let failure = json!({
+            "jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "no such tool"}
+        });
+        match reply_for(&failure.to_string(), 2) {
+            Some(Err(message)) => assert!(message.contains("no such tool")),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_targets_are_namespaced_by_server() {
+        assert_eq!(tool_target("files", "read_file"), "files.read_file");
+        assert_eq!(tool_target("a", "b.c"), "a.b.c");
+    }
+
+    #[test]
+    fn server_names_reject_anything_a_rule_cannot_address() {
+        assert!(valid_name("files"));
+        assert!(valid_name("my-server_2.local"));
+        assert!(!valid_name(""));
+        assert!(!valid_name("has space"));
+        assert!(!valid_name("slash/name"));
+        assert!(!valid_name(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn registry_round_trips_through_disk() {
+        let path = scratch("roundtrip");
+        let mut entry = server("files");
+        entry.args = vec!["--root".to_string(), ".".to_string()];
+        entry.env.insert("TOKEN".to_string(), "secret".to_string());
+        entry.enabled = false;
+        write_servers(&path, &[entry.clone()]).expect("write");
+        assert_eq!(read_servers(&path), vec![entry]);
+        let _ = fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    #[test]
+    fn a_broken_registry_reads_as_empty() {
+        let path = scratch("broken");
+        fs::write(&path, b"{ not json").expect("write");
+        assert!(read_servers(&path).is_empty());
+        let _ = fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    #[test]
+    fn env_values_never_reach_an_api_response() {
+        let mut entry = server("files");
+        entry
+            .env
+            .insert("API_TOKEN".to_string(), "super-secret".to_string());
+        let rendered = server_json(&entry).to_string();
+        assert!(rendered.contains("API_TOKEN"));
+        assert!(!rendered.contains("super-secret"));
+    }
+
+    #[test]
+    fn missing_required_arguments_are_named() {
+        let schema = json!({
+            "type": "object",
+            "required": ["path"],
+            "properties": { "path": { "type": "string" } }
+        });
+        assert_eq!(
+            validate_arguments(&schema, &json!({})),
+            Err("Missing required argument \"path\".".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "path": 3 })),
+            Err("Argument \"path\" must be string.".to_string())
+        );
+        assert!(validate_arguments(&schema, &json!({ "path": "src/main.rs" })).is_ok());
+        // Extra arguments are the server's business, not this client's.
+        assert!(validate_arguments(&schema, &json!({ "path": "a", "extra": true })).is_ok());
+    }
+
+    #[test]
+    fn a_tool_without_required_fields_accepts_an_empty_object() {
+        let schema = json!({ "type": "object", "properties": {} });
+        assert!(validate_arguments(&schema, &json!({})).is_ok());
+        assert!(validate_arguments(&schema, &json!([])).is_err());
+    }
+
+    #[test]
+    fn tool_text_joins_text_parts_and_falls_back_to_the_raw_result() {
+        let with_text = json!({
+            "content": [
+                { "type": "text", "text": "first" },
+                { "type": "image", "data": "..." },
+                { "type": "text", "text": "second" }
+            ]
+        });
+        assert_eq!(tool_text(&with_text), "first\nsecond");
+        let bare = json!({ "content": [] });
+        assert!(tool_text(&bare).contains("content"));
+    }
+
+    #[test]
+    fn discovery_keeps_schemas_and_caps_descriptions() {
+        let tools = vec![json!({
+            "name": "read_file",
+            "description": "x".repeat(5_000),
+            "inputSchema": { "type": "object", "required": ["path"] }
+        })];
+        let rendered = tools_json(&tools);
+        assert_eq!(rendered[0]["name"], json!("read_file"));
+        assert_eq!(
+            rendered[0]["description"].as_str().unwrap().chars().count(),
+            DESCRIPTION_CAP
+        );
+        assert_eq!(rendered[0]["input_schema"]["required"], json!(["path"]));
+    }
+}

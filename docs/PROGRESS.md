@@ -18,7 +18,8 @@ partial, `[ ]` not started.
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 | 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
 | 1.30.0 | `a0c76d8` | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
-| 1.32.0 | this commit | Phase 10 UI: Settings → Permissions panel (add/revoke rules, audit trail), re-read on every visit | live browser pass on :8797: rule added through the form, badge + audit row appeared, revoke removed it |
+| 1.33.0 | this commit | Phase 7 first slice: MCP registry (`mcp.json`), stdio JSON-RPC handshake per operation, tool discovery with real schemas, argument validation, every route policy-gated on `mcp_tool` | live end-to-end on :8796 with a real stdio server — test listed `echo` with its schema, an approved call returned `echo: hi`, a missing argument and a wrong type were refused 400, an unknown tool 404, the default `ask` 409, and both decisions landed in the audit log |
+| 1.32.0 | `010566b` | Phase 10 UI: Settings → Permissions panel (add/revoke rules, audit trail), re-read on every visit | live browser pass on :8797: rule added through the form, badge + audit row appeared, revoke removed it |
 | 1.31.0 | `7c949c3` | Phase 10 first slice: central permission policy store (rules + scopes + resolution), agent-step and router-install enforcement, `permission_audit` table and routes | `cargo test --locked`: 214 passed, 1 ignored; live grant/audit/revoke smoke |
 
 ## Phase 1 — CI/CD and release reliability
@@ -136,11 +137,23 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [ ] OS keychain for `api_key` / `search_api_key` / `openai_api_key` (still mode-restricted `config.json`)
 - [ ] Global emergency stop covering every agent run and terminal at once
 
+## Phase 7 — MCP
+
+- [x] Registry in `mcp.json`: name, command, args, environment, enabled; env values stored but only names returned (1.33.0)
+- [x] Real stdio JSON-RPC session: `initialize` → `notifications/initialized` → `tools/list` → `tools/call`, one message per line (1.33.0)
+- [x] 20-second ceiling per operation, child killed on every exit path, stray stdout lines ignored rather than treated as answers (1.33.0)
+- [x] Tool discovery keeps each tool's `inputSchema`; calls are validated against `required` and declared scalar types before being sent (1.33.0)
+- [x] Every process-starting route gated on `mcp_tool` (`server.tool`, server name for a test): deny → 403, ask → 409 `needs_approval`, approved retry proceeds, all audited (1.33.0)
+- [x] Routes: list, save, remove, test, call (mutations behind the local-origin guard) (1.33.0)
+- [ ] Persistent connection pool / health state / captured server logs / reconnect backoff
+- [ ] SSE and streamable-HTTP transports (stdio only today)
+- [ ] Manager UI in Settings (the routes exist, the panel does not)
+- [ ] Agent integration: an MCP action in the agent loop so a run can call a discovered tool
+
 ## Next up
 
-1. Phase 7 MCP — now unblocked: MCP tools can take the same `mcp_tool` policy
-   path the agent gate already consults.
-2. Phase 10 close-out — Settings → Permissions UI, remaining privileged
-   call sites, keychain, global stop.
+1. Phase 7 close-out — manager UI, agent tool use, then health/transport work.
+2. Phase 10 close-out — remaining privileged call sites (terminal, editor
+   writes, git, updates, settings), keychain, global stop.
 3. Phase 2 close-out — configuration editor plus dependency/package-manager
    probing, so the router manager stops being "80 % delivered".

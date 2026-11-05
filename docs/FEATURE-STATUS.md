@@ -122,10 +122,17 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 
 ## Phase 7 — MCP
 
-**Missing entirely.** `\bmcp\b` has **zero** matches in `app/src`. No registry,
-no connection lifecycle, no tool discovery, no schema validation, no permission
-binding, no health or reconnect. The Phase 10 policy store this phase depends on
-is also not built.
+| Item | Status | Notes |
+|---|---|---|
+| Server registry | Working (1.33.0) | `mcp.json` beside the config; env values stored, only names returned |
+| Stdio connection lifecycle | Partial (1.33.0) | real `initialize` handshake and `tools/call`, but one process per operation — no pooling, no supervisor |
+| Tool discovery | Working (1.33.0) | `tools/list`, schemas kept |
+| Schema validation | Working (1.33.0) | `required` presence + declared scalar types; not full JSON Schema |
+| Permission binding | Working (1.33.0) | `mcp_tool` on `server.tool`; ask/deny/allow, audited |
+| Health, logs, reconnect | Missing | a failed call surfaces as 502; no health state, no server log capture |
+| SSE / HTTP transports | Missing | stdio only |
+| Agent use of MCP tools | Missing | routes exist; the agent loop has no MCP action yet |
+| MCP manager UI | Missing | routes only |
 
 ## Phase 8 — Project knowledge and memory
 
@@ -242,7 +249,8 @@ dashboard do not.
    invented capabilities.
 2. **Phase 4 Thinking + OpenAI Platform** — the largest untouched block in the
    specification and the reason this audit exists.
-3. **Phase 10 policy store** — unblocks MCP (Phase 7) and makes the existing
+3. ~~**Phase 10 policy store**~~ — shipped in 1.31.0; it gates agent steps,
+   router installs and MCP calls. It unblocks MCP (Phase 7) and makes the existing
    per-run flags uniform.
 4. **Phase 2 configuration editor** + dependency probing — closes a phase that
    is already 80 % delivered.
