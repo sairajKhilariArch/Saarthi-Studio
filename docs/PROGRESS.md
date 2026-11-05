@@ -14,7 +14,8 @@ partial, `[ ]` not started.
 | 1.26.5 | `3692edc` | AppImage AppStream attempt + macOS on an Intel runner | run `41882152731`: macOS exit 101 (missing aarch64 std), Linux failed `validate-tree` |
 | 1.26.6 | `76b9fd1` | validate-clean AppStream identity (RDNS id, OARS rating), both Darwin targets | run `41884439627`: **all six jobs success, 9 assets** |
 | 1.26.7–1.26.23 | `8ff7c5e` | Router manager completed (UI, install plans, pinned images, verified downloads, update/uninstall), resume for runs, 175 tests | in-tree evidence only; no tag cut yet |
-| 1.27.0 | this commit | Full spec audit in `FEATURE-STATUS.md`; every manifest on 1.27.0 | `cargo test --locked`: 175 passed, 1 ignored |
+| 1.27.0 | `1b91b32` | Full spec audit in `FEATURE-STATUS.md`; every manifest on 1.27.0 | `cargo test --locked`: 175 passed, 1 ignored |
+| 1.28.0 | this commit | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 
 ## Phase 1 — CI/CD and release reliability
 
@@ -87,13 +88,20 @@ lifecycle and points at its facts rather than re-deriving them.
 - [x] Per-router launch preferences stored atomically, with `auto_start` in `/api/routers` and a "Start with Studio" checkbox (1.26.17)
 - [x] Auto-start on launch that never stops externally owned routers — the sweep starts only an enabled, installed, not-already-answering router, and the rule is unit-tested both ways (1.26.17). A boot with Docker down records the failure per router and the app still opens
 
+## Phase 3 — Model and provider manager
+
+- [x] Capability table sourced only from provider metadata (`capabilities.rs`) — modalities, context limit, streaming, tools, reasoning, structured output, price; unknown stays `null` (1.28.0)
+- [x] Context limit read once, including OpenRouter's nested `top_provider.context_length` (1.28.0)
+- [x] Local runtime description per model: `GET /api/local/model-capabilities?name=` → `/api/show` capabilities + real context length, 404 for a model that is not installed (1.28.0)
+- [x] Model menu shows reported capability marks and one honest summary line (1.28.0)
+- [ ] Per-agent / per-project / per-task model scope (only global + per-message override today)
+- [ ] Client-side fallback policy, retry and provider health monitoring (only on-demand `/api/test`)
+
 ## Next up
 
-1. Phase 3 — capability table per model (provider-reported metadata only). It is
-   the only hard prerequisite for Phase 4 and the largest remaining gap that is
-   cheap to close honestly.
-2. Phase 4 — Thinking control and a native OpenAI Platform (Responses API)
-   provider: currently the largest untouched block of the specification.
-3. Phase 2 close-out — configuration editor plus dependency/package-manager
+1. Phase 4 — Thinking control and a native OpenAI Platform (Responses API)
+   provider: currently the largest untouched block of the specification, and it
+   now has the capability table it depends on.
+2. Phase 2 close-out — configuration editor plus dependency/package-manager
    probing, so the router manager stops being "80 % delivered".
-4. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.
+3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.

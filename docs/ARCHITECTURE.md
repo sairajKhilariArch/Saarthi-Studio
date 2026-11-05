@@ -27,7 +27,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `agent.rs` | 3591 | Bounded autonomous run loop: one JSON action per model step (`think`/`list`/`read`/`write`/`command`/`done`/`fail`), permissions, approval pauses, checkpoints, diffs, cancellation, `agent_runs`/`agent_steps` persistence |
 | `host_api.rs` | 1807 | Authenticated router for the Android companion (health, capabilities, models, chat, conversations, messages) |
 | `workspace.rs` | 1599 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, git status/vcs |
-| `local.rs` | 1100 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), 600 s chat timeout, no silent remote fallback |
+| `local.rs` | 1167 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
 | `deepsearch.rs` | 714 | Research answers: provider-native grounding (Gemini, OpenAI `web_search`) or Exa/Tavily loop; bounded queries; SSE steps; citations |
 | `host_auth.rs` | 595 | Host token lifecycle (issue/redeem/rotate/revoke), paired-device records |
 | `router.rs` | 545 | FreeLLMAPI lifecycle: compose dir/port discovery, ownership file, start/stop/status, stop-only-if-owned on exit |
@@ -39,6 +39,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `terminal.rs` | 318 | Real PTYs (`portable-pty`) — ConPTY on Windows, unix pty elsewhere; SSE streams; resize; close |
 | `host_transport.rs` | 245 | Listener binding, TLS material handling |
 | `context.rs` | 213 | Token-budgeted request packing (4 chars/token, 6 k default budget, 1 k–32 k clamp) |
+| `capabilities.rs` | 280 | Model capabilities from provider-published metadata only (`/models` rows, Ollama `/api/show`); every unknown flag is `null`, never guessed |
 | `events.rs` | 77 | Broadcast hub for SSE conversation mirrors |
 | `gui.rs`, `browser.rs` | 46, 30 | Tauri window bootstrap, system browser launch |
 

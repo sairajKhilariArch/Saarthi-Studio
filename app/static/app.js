@@ -2685,7 +2685,10 @@ function renderModelMenu() {
       id: `local:${name}`,
       label: `${name}`,
       chosen: state.chatModel === `local:${name}`,
-      onPick: () => { state.chatModel = `local:${name}`; },
+      onPick: () => {
+        state.chatModel = `local:${name}`;
+        void loadLocalCapabilities(name);
+      },
     }));
   });
 
@@ -2696,12 +2699,14 @@ function renderModelMenu() {
     if (!matches.length) {
       note.textContent = `No model matches "${$("modelFilter").value.trim()}".`;
       list.appendChild(note);
+      list.appendChild(capabilityNote());
       return;
     }
     matches.slice(0, 200).forEach((model) => {
       list.appendChild(modelMenuItem({
         id: model.id,
         context: model.context_window || 0,
+        capabilities: model.capabilities,
         chosen: state.chatModel === model.id,
         onPick: () => { state.chatModel = model.id; },
       }));
@@ -2710,9 +2715,63 @@ function renderModelMenu() {
     note.textContent = state.modelsError || "Load the catalog from the router to pick a model.";
     list.appendChild(note);
   }
+  list.appendChild(capabilityNote());
 }
 
-function modelMenuItem({ id, label, context, chosen, onPick }) {
+/* Capabilities of the model that would answer the next message. The backend
+   only reports what the provider published, so anything it did not publish is
+   shown as unknown rather than assumed. */
+function chosenCapabilities() {
+  const pick = state.chatModel || "";
+  if (pick.startsWith("local:")) {
+    const name = pick.slice("local:".length);
+    if (!state.localCapabilities || state.localCapabilities.name !== name) return { model: name, caps: null };
+    return { model: name, caps: state.localCapabilities.capabilities || null };
+  }
+  const id = pick || state.model;
+  const row = (state.models || []).find((model) => model.id === id);
+  return { model: id, caps: (row && row.capabilities) || null };
+}
+
+function capabilitySummary(caps) {
+  if (!caps) return "";
+  const parts = [];
+  if (caps.context_limit) parts.push(`${formatCount(caps.context_limit)} context`);
+  if (caps.tools === true) parts.push("tools");
+  if (caps.reasoning === true) parts.push("reasoning");
+  if (caps.structured_output === true) parts.push("structured output");
+  const extraInputs = (caps.input_modalities || []).filter((kind) => kind !== "text");
+  if (extraInputs.length) parts.push(`input: ${extraInputs.join(" + ")}`);
+  if (!parts.length) {
+    return caps.source === "ollama"
+      ? "The runtime published no capabilities for this model."
+      : "This provider published no capability metadata for the model.";
+  }
+  return `Reported by ${caps.source}: ${parts.join(", ")}.`;
+}
+
+function capabilityNote() {
+  const note = document.createElement("p");
+  note.className = "model-note model-capabilities";
+  const { model, caps } = chosenCapabilities();
+  const summary = capabilitySummary(caps);
+  note.textContent = summary
+    ? summary
+    : model
+      ? `Capabilities for ${model} are unknown — the provider published none.`
+      : "";
+  return note;
+}
+
+async function loadLocalCapabilities(name) {
+  const result = await api(`/api/local/model-capabilities?name=${encodeURIComponent(name)}`);
+  state.localCapabilities = result.ok && result.data && result.data.capabilities
+    ? { name, capabilities: result.data.capabilities }
+    : { name, capabilities: null };
+  if ((state.chatModel || "") === `local:${name}`) renderModelMenu();
+}
+
+function modelMenuItem({ id, label, context, capabilities, chosen, onPick }) {
   const item = document.createElement("button");
   item.type = "button";
   item.className = "skill-menu-item model-item" + (chosen ? " active" : "");
@@ -2726,7 +2785,14 @@ function modelMenuItem({ id, label, context, chosen, onPick }) {
   item.appendChild(main);
   const side = document.createElement("small");
   const ctx = context ? formatCount(context) : "";
-  side.textContent = [ctx, modelDailyUsage(id)].filter(Boolean).join(" · ");
+  const marks = capabilities
+    ? [
+        capabilities.tools === true ? "tools" : "",
+        capabilities.reasoning === true ? "reasoning" : "",
+        capabilities.structured_output === true ? "json" : "",
+      ].filter(Boolean).join("/")
+    : "";
+  side.textContent = [ctx, marks, modelDailyUsage(id)].filter(Boolean).join(" · ");
   if (side.textContent) item.appendChild(side);
   item.addEventListener("click", () => {
     onPick();

@@ -11,7 +11,7 @@
 //! Hardware diagnostics are best-effort and platform-aware: anything that
 //! cannot be determined is reported as missing/Unknown rather than guessed.
 
-use axum::extract::State;
+use axum::extract::{Query as AxumQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -20,6 +20,7 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::time::Duration;
 
+use crate::capabilities;
 use crate::AppState;
 
 /// Longer than most local chats take to think; each request carries its own
@@ -101,6 +102,31 @@ pub(crate) async fn fetch_models(base_url: &str) -> Result<Vec<Value>, String> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+/// POST /api/show → the runtime's own description of one installed model,
+/// including the `capabilities` list and the model's real context length.
+pub(crate) async fn fetch_show(base_url: &str, model: &str) -> Result<Value, String> {
+    let url = format!("{base_url}/api/show");
+    let response = client()
+        .post(&url)
+        .timeout(DETECT_TIMEOUT)
+        .json(&json!({ "name": model }))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot describe {model} on the local runtime: {e}"))?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("The description of {model} (HTTP {status}) was unreadable: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "The runtime answered HTTP {} when asked about {model}.",
+            status.as_u16()
+        ));
+    }
+    Ok(body)
 }
 
 /// One /api/tags entry, normalized for the UI. Pure so it is testable.
@@ -636,6 +662,47 @@ pub(crate) fn read_routes() -> Router<AppState> {
         .route("/api/local/status", get(local_status))
         .route("/api/local/models", get(local_models))
         .route("/api/local/hardware", get(local_hardware))
+        .route(
+            "/api/local/model-capabilities",
+            get(local_model_capabilities),
+        )
+}
+
+/// GET /api/local/model-capabilities?name=… — what the runtime says about one
+/// installed model. A model the runtime does not list is refused, so the answer
+/// can never describe something that is not there.
+async fn local_model_capabilities(
+    State(state): State<AppState>,
+    AxumQuery(params): AxumQuery<std::collections::HashMap<String, String>>,
+) -> Response {
+    let name = params.get("name").map(|value| value.trim()).unwrap_or("");
+    if name.is_empty() {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "Name a model, e.g. ?name=qwen2.5-coder:1.5b.",
+        );
+    }
+    let base_url = base_url_of(&state);
+    let installed = match fetch_models(&base_url).await {
+        Ok(models) => models,
+        Err(e) => return crate::json_error(StatusCode::BAD_GATEWAY, e),
+    };
+    if !is_model_installed(&installed, name) {
+        return crate::json_error(
+            StatusCode::NOT_FOUND,
+            format!("{name} is not installed on the local runtime."),
+        );
+    }
+    let show = match fetch_show(&base_url, name).await {
+        Ok(show) => show,
+        Err(e) => return crate::json_error(StatusCode::BAD_GATEWAY, e),
+    };
+    Json(json!({
+        "ok": true,
+        "model": name,
+        "capabilities": capabilities::from_show(&show),
+    }))
+    .into_response()
 }
 
 pub(crate) fn mutate_routes(port: u16) -> Router<AppState> {

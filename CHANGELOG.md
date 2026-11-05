@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.28.0
+
+- Phase 3, first slice: a model capability table that only repeats what the
+  provider published. `capabilities.rs` reads OpenRouter-shaped `/models` rows
+  (`architecture.input_modalities`, `supported_parameters`, `pricing`) and turns
+  them into explicit flags; a provider that publishes nothing leaves every flag
+  `null`, so the UI says "unknown" instead of promising tools or reasoning.
+- Context limits come from that same table, so the nested
+  `top_provider.context_length` OpenRouter uses is read in one place instead of
+  two — and a plain OpenAI-compatible row that reports nothing stays at 0
+  rather than being guessed from the model name.
+- `GET /api/local/model-capabilities?name=…` asks the local runtime's own
+  `/api/show` about one installed model: its `capabilities` list (tools,
+  thinking, vision) and the model's real `*.context_length` from `model_info`.
+  A model the runtime does not list answers 404 instead of an invented answer.
+- The model menu shows each model's reported marks (tools / reasoning / json)
+  and one line under the list stating what the chosen model was reported to do
+  — or that nothing was reported. Picking a local model fetches its description
+  on demand, so the panel never shows a stale model's capabilities.
+- Pricing per million tokens is carried when a provider publishes both halves,
+  which Phase 11 can use instead of inventing a price table.
+- Tests: 8 capability cases (OpenRouter row, metadata-free row, empty parameter
+  list, nested context limit, Ollama `/api/show` with and without a capability
+  list, vision vs text-only input, null-not-false serialisation); 183 pass.
+- Version 1.28.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 44).
+
 ## 1.27.0
 
 - Adds the specification audit: `docs/FEATURE-STATUS.md` now records, phase by

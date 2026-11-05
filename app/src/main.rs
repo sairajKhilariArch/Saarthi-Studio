@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 mod agent;
 mod browser;
+mod capabilities;
 mod context;
 mod deepsearch;
 mod events;
@@ -1178,24 +1179,14 @@ async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, Stri
         let Some(id) = row.get("id").and_then(Value::as_str) else {
             continue;
         };
-        let context_window = [
-            "context_length",
-            "context_window",
-            "max_input_tokens",
-            "top_provider::context_length",
-        ]
-        .iter()
-        .find_map(|key| row.get(key).and_then(Value::as_i64))
-        .or_else(|| {
-            // OpenRouter nests limits under top_provider.
-            row.pointer("/top_provider/context_length")
-                .and_then(Value::as_i64)
-        })
-        .unwrap_or(0);
+        // Capabilities come from this row's own metadata; a provider that
+        // publishes none leaves them null rather than guessed (capabilities.rs).
+        let caps = capabilities::from_catalog_row(&row);
         models.push(json!({
             "id": id,
             "owner": row.get("owned_by").and_then(Value::as_str).unwrap_or(""),
-            "context_window": context_window,
+            "context_window": caps.context_limit,
+            "capabilities": caps,
         }));
     }
     models.sort_by(|a, b| {

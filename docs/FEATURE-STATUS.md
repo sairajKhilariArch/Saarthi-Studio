@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 1.27.0
+# Feature status report — audit of `main` @ 1.28.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -9,7 +9,7 @@ implementation), **Broken** (exists and fails).
 
 | Check | Command | Result |
 |---|---|---|
-| Rust suite | `cd app && cargo test --locked` | **175 passed, 0 failed, 1 ignored** (2026-11-05) |
+| Rust suite | `cd app && cargo test --locked` | **183 passed, 0 failed, 1 ignored** (2026-11-05) |
 | Route registrations | `grep -c '\.route(' app/src/{main,agent,host_api}.rs` | 37 / 7 / 8 |
 | Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 182 |
 | Last green release | run `41884439627` (`v1.26.6`) | all six jobs success, 9 assets |
@@ -71,7 +71,8 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 | Model discovery with cache | Working | `/models`, 1-minute cache keyed by base + key |
 | Local Ollama models | Working | `local.rs` (status, tags, hardware, pull with progress) |
 | Context window where a provider reports it | Partial | `main.rs:1181` reads `context_window`; `app.js:2704` displays it — nothing is inferred when absent |
-| Capability table (modalities, tools, reasoning, structured output) | **Missing** | no per-model table; this is the Phase 4 prerequisite |
+| Capability table (modalities, tools, reasoning, structured output) | Working (1.28.0) | `capabilities.rs` from `/models` rows and Ollama `/api/show`; unknown stays `null` |
+| Price table | Partial (1.28.0) | carried when the provider publishes `pricing.prompt`/`completion`; never inferred |
 | Per-agent / per-project / per-task model scope | Partial | global model + per-message override; runs snapshot the model they used |
 | Fallback / retry / circuit breaker | Partial | router-side `fallback_attempts` is recorded; no client-side policy |
 | Provider health monitoring | Missing | on-demand `/api/test` only |
@@ -208,7 +209,7 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 175 passed / 1 ignored at 1.27.0 |
+| Rust unit/integration | Working | 183 passed / 1 ignored at 1.28.0 |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
