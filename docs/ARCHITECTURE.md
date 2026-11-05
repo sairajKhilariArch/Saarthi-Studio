@@ -42,6 +42,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `capabilities.rs` | 280 | Model capabilities from provider-published metadata only (`/models` rows, Ollama `/api/show`); every unknown flag is `null`, never guessed |
 | `openai.rs` | 771 | Native OpenAI Platform provider: Responses API request/response/stream translation, `openai:` model ids, model catalog, key test, reasoning-rejection retry and its per-process memory |
 | `thinking.rs` | 351 | Thinking levels, fixed precedence (message > agent > project > global > provider default), `@Thinking` directive with a literal escape |
+| `permissions.rs` | 761 | Central permission policy: action × target × decision × scope rules, fixed resolution order, `permission_audit` trail, grant/revoke/audit routes |
 | `events.rs` | 77 | Broadcast hub for SSE conversation mirrors |
 | `gui.rs`, `browser.rs` | 46, 30 | Tauri window bootstrap, system browser launch |
 

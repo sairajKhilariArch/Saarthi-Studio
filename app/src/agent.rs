@@ -1642,6 +1642,52 @@ async fn execute_action_step(
         return Ok(true);
     }
 
+    // The central policy can veto a tool this run was started with. It can
+    // never grant more than the run's own flags, so the only outcome that
+    // changes behaviour here is a refusal.
+    let (policy_action, policy_target) = match action {
+        Action::Write { path, .. } => (crate::permissions::Action::FsWrite, path.clone()),
+        Action::Command { command } => (crate::permissions::Action::Command, command.clone()),
+        Action::Read { path } | Action::List { path } => {
+            (crate::permissions::Action::FsRead, path.clone())
+        }
+        _ => (crate::permissions::Action::FsRead, String::new()),
+    };
+    let verdict = crate::permissions::check(state, policy_action, &policy_target, &run.project_id);
+    if verdict.decision == crate::permissions::Decision::Deny {
+        crate::permissions::record(
+            state,
+            policy_action,
+            &policy_target,
+            crate::permissions::Decision::Deny,
+            verdict.scope,
+            &run.project_id,
+            "agent step refused by a saved rule",
+        );
+        add_step(
+            state,
+            &run.id,
+            action.tag(),
+            &pending_summary(action),
+            &format!(
+                "Refused: a saved permission rule denies {} for \"{}\".",
+                policy_action.as_str(),
+                policy_target
+            ),
+        )?;
+        finish(
+            state,
+            &run.id,
+            FAILED,
+            &format!(
+                "A saved permission rule denies {} on \"{}\". Change it in Settings → Permissions, then start a new run.",
+                policy_action.as_str(),
+                policy_target
+            ),
+        )?;
+        return Ok(false);
+    }
+
     match PermissionGate::decides(run, action) {
         GateDecision::Denied(need) => {
             add_step(

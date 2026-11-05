@@ -42,6 +42,7 @@ mod installer;
 mod local;
 mod media;
 mod openai;
+mod permissions;
 mod privacy;
 mod router;
 mod router_console;
@@ -294,6 +295,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     )?;
     let _ = migrate_projects(&conn);
     let _ = migrate_project_thinking(&conn);
+    let _ = permissions::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
     }
@@ -1087,8 +1089,39 @@ async fn routers_install(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let digest = input.get("digest").and_then(Value::as_str).unwrap_or("");
+    // A saved deny rule is checked before the plan is even considered: the
+    // approval in the request cannot override a policy the user wrote down.
+    let verdict = permissions::check(&state, permissions::Action::RouterInstall, &id, "");
+    if verdict.decision == permissions::Decision::Deny {
+        permissions::record(
+            &state,
+            permissions::Action::RouterInstall,
+            &id,
+            permissions::Decision::Deny,
+            verdict.scope,
+            "",
+            "install refused by a saved rule",
+        );
+        return json_error(
+            StatusCode::FORBIDDEN,
+            format!(
+                "A saved permission rule denies installing {id}. Revoke it in Settings → Permissions, then retry."
+            ),
+        );
+    }
     match router_registry::install(&state, &id, approve, digest).await {
-        Ok(record) => Json(json!({"record": record})).into_response(),
+        Ok(record) => {
+            permissions::record(
+                &state,
+                permissions::Action::RouterInstall,
+                &id,
+                permissions::Decision::Allow,
+                verdict.scope,
+                "",
+                "install approved and run",
+            );
+            Json(json!({"record": record})).into_response()
+        }
         Err(router_registry::InstallError::Unknown(message)) => {
             json_error(StatusCode::NOT_FOUND, message)
         }
@@ -3311,6 +3344,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(media::router(port))
         .merge(local::read_routes())
         .merge(openai::read_routes())
+        .merge(permissions::router(port))
         .merge(local::mutate_routes(port))
         .merge(agent::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),

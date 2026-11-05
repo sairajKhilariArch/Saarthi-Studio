@@ -157,9 +157,12 @@ is also not built.
 | Loopback `Host`/`Origin` write guard | Working | `host_security.rs` |
 | Outbound secret detection | Working | `privacy.rs` |
 | Host API bearer auth + TLS + body caps | Working | `host_auth.rs`, `host_transport.rs` |
-| Central policy store (once/session/project/deny) | **Missing** | per-run flags + route guards only |
+| Central policy store (once/session/project/deny) | Working (1.31.0) | `permissions.rs`; rules scoped once/session/project/always, resolved longest-target → deny → scope |
+| Enforcement of that store | Partial (1.31.0) | agent steps and router installs consult it; terminal, editor writes, git, updates and settings do not yet |
 | OS keychain for secrets | Missing | keys live in mode-restricted `config.json` |
-| Privileged-operation audit log, global kill switch | Partial | run cancel exists; no global stop, no audit trail |
+| Privileged-operation audit log | Working (1.31.0) | `permission_audit` table + `/api/permissions/audit` |
+| Global kill switch | Missing | per-run cancel exists; no stop-everything control |
+| Permissions UI | Missing | routes only (`/api/permissions`, grant, revoke, audit) |
 
 ## Phase 11 — Token, context and cost
 

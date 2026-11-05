@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.31.0
+
+- Phase 10, first slice: a central permission policy store. `permissions.rs`
+  replaces "per-run booleans only" with rules that carry an action (`fs_read`,
+  `fs_write`, `command`, `network`, `git`, `router_install`, `update`,
+  `settings`, `mcp_tool`), an optional target prefix, a decision (`allow` /
+  `ask` / `deny`) and a scope (`once`, `session`, `project`, `always`). Rules
+  live in `permissions.json` beside the config, written atomically with private
+  permissions; `once` and `session` rules stay in memory.
+- Resolution is stated once and tested: the longest matching target wins, then
+  deny over ask over allow, then the narrower scope. Reads default to `allow`;
+  anything that can destroy, spend or expose defaults to `ask`. A rule can only
+  ever make an action stricter — the run's own flags remain the ceiling.
+- Enforcement is real, not advisory. Agent steps consult the store before the
+  per-run gate: a `deny` rule stops the step, records the refusal and fails the
+  run with the rule named. Router installs consult it before the plan is even
+  considered, so an in-request approval cannot override a rule the user wrote.
+- Audit trail: every rule add/revoke, every agent refusal and every approved
+  install goes to a new `permission_audit` table (action, target, decision,
+  scope, project, detail, timestamp), readable at `/api/permissions/audit`.
+- Routes: `GET /api/permissions` (actions with their defaults plus rules in
+  force), `POST /api/permissions/grant`, `POST /api/permissions/revoke` (both
+  behind the local-origin guard) and `GET /api/permissions/audit?limit=`.
+- Tests: 10 new cases (wire names, unknown words, default decisions, longest
+  target, deny at a tie, scope tie-break, project isolation, rules-file
+  round-trip plus corrupt-file safety, command prefix matching); 214 pass.
+- Version 1.31.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 47).
+
 ## 1.30.0
 
 - Phase 4 frontend, wired to the backend from 1.29.0. The composer has a

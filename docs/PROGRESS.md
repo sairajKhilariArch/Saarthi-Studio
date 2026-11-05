@@ -17,7 +17,8 @@ partial, `[ ]` not started.
 | 1.27.0 | `1b91b32` | Full spec audit in `FEATURE-STATUS.md`; every manifest on 1.27.0 | `cargo test --locked`: 175 passed, 1 ignored |
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 | 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
-| 1.30.0 | this commit | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
+| 1.30.0 | `a0c76d8` | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
+| 1.31.0 | this commit | Phase 10 first slice: central permission policy store (rules + scopes + resolution), agent-step and router-install enforcement, `permission_audit` table and routes | `cargo test --locked`: 214 passed, 1 ignored; live grant/audit/revoke smoke |
 
 ## Phase 1 — CI/CD and release reliability
 
@@ -121,10 +122,24 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [ ] Tool calling and structured output through the platform path (the request shape supports them; no agent tool loop uses `openai:` yet)
 - [ ] `@Thinking` mention in the composer's slash/prompt helpers so discoverability does not depend on docs
 
+## Phase 10 — Safety and permissions
+
+- [x] Central policy store: action × target × decision × scope, `permissions.json` written atomically with private permissions (1.31.0)
+- [x] Fixed resolution order, tested: longest target → deny/ask/allow → narrower scope; reads default allow, destructive actions default ask (1.31.0)
+- [x] `once` rules are consumed by use; `session` rules die with the process; `project`/`always` persist (1.31.0)
+- [x] Agent steps and router installs are actually gated by the store, and a veto names the rule in the run's log (1.31.0)
+- [x] `permission_audit` table + `/api/permissions/audit`; grants, revokes, refusals and approved installs are recorded (1.31.0)
+- [x] Routes: list, grant, revoke (local-origin guarded) (1.31.0)
+- [ ] Settings → Permissions UI (list rules, revoke, add a deny/allow rule) — the API exists, the panel does not
+- [ ] Wire the remaining privileged paths: terminal open, workspace writes from the editor, git, updates, settings/key changes
+- [ ] OS keychain for `api_key` / `search_api_key` / `openai_api_key` (still mode-restricted `config.json`)
+- [ ] Global emergency stop covering every agent run and terminal at once
+
 ## Next up
 
-1. Phase 4 frontend: the composer Thinking control, `@Thinking` chip and the
-   Settings/OpenAI Platform fields that make the backend reachable.
-2. Phase 2 close-out — configuration editor plus dependency/package-manager
+1. Phase 7 MCP — now unblocked: MCP tools can take the same `mcp_tool` policy
+   path the agent gate already consults.
+2. Phase 10 close-out — Settings → Permissions UI, remaining privileged
+   call sites, keychain, global stop.
+3. Phase 2 close-out — configuration editor plus dependency/package-manager
    probing, so the router manager stops being "80 % delivered".
-3. Phase 10 foundations (permission store) before MCP tool exposure in Phase 7.
