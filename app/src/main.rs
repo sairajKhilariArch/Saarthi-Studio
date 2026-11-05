@@ -3369,8 +3369,12 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
 
     let ctrl_tx = shutdown_tx.clone();
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        let _ = ctrl_tx.send(true);
+        // Only a real Ctrl+C stops the server. `ctrl_c()` fails outright when
+        // the process has no console (headless launch, service, CI), and
+        // treating that failure as a signal made such a launch exit at once.
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = ctrl_tx.send(true);
+        }
     });
     let mut server_shutdown_rx = shutdown_rx.clone();
     let server = tokio::spawn(async move {
@@ -3428,7 +3432,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let wants_browser = args.iter().any(|arg| arg == "--browser");
-    let gui_mode = !wants_browser
+    // A build without the `gui` feature has no window to wait on, so it takes
+    // the headless path even when nothing asked for one. Treating it as a
+    // windowed launch sent the shutdown signal immediately after startup, which
+    // is why a server-only binary could not serve at all.
+    let gui_mode = cfg!(feature = "gui")
+        && !wants_browser
         && !args
             .iter()
             .any(|arg| arg == "--no-gui" || arg == "--headless")

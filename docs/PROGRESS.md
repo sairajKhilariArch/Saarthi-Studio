@@ -16,7 +16,8 @@ partial, `[ ]` not started.
 | 1.26.7–1.26.23 | `8ff7c5e` | Router manager completed (UI, install plans, pinned images, verified downloads, update/uninstall), resume for runs, 175 tests | in-tree evidence only; no tag cut yet |
 | 1.27.0 | `1b91b32` | Full spec audit in `FEATURE-STATUS.md`; every manifest on 1.27.0 | `cargo test --locked`: 175 passed, 1 ignored |
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
-| 1.29.0 | this commit | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
+| 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
+| 1.30.0 | this commit | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
 
 ## Phase 1 — CI/CD and release reliability
 
@@ -111,8 +112,14 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [x] Reasoning summaries as their own SSE frame, from the API's summary channel (1.29.0)
 - [x] `projects.thinking` migration + create/update/list; resolution uses the active project (1.29.0)
 - [x] Routes: `/api/openai/models`, `/api/openai/test`, `/api/thinking/levels`; config carries both Thinking defaults and `has_openai_key` (1.29.0)
-- [ ] Composer Thinking control, `@Thinking` chip, reasoning-summary panel, Settings fields for the platform key and defaults
-- [ ] Platform models in the composer's model menu
+- [x] Composer Think control with the four levels + model default, fed by `/api/thinking/levels` (1.30.0)
+- [x] `@Thinking` hint that mirrors the server's rules, including the `\@Thinking` escape (1.30.0)
+- [x] Reasoning-summary card in the streaming row, from the provider's summary frames (1.30.0)
+- [x] Settings → OpenAI Platform: write-only key, base URL, global and agent-run Thinking defaults, key test (1.30.0)
+- [x] Platform models in the composer's model menu under `openai:` ids (1.30.0)
+- [x] Headless launch fixed: a `--no-default-features` build serves instead of shutting down at once (1.30.0)
+- [ ] Tool calling and structured output through the platform path (the request shape supports them; no agent tool loop uses `openai:` yet)
+- [ ] `@Thinking` mention in the composer's slash/prompt helpers so discoverability does not depend on docs
 
 ## Next up
 

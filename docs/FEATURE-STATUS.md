@@ -79,18 +79,18 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 
 ## Phase 4 — Thinking and OpenAI Platform
 
-The backend shipped in 1.29.0 (`thinking.rs`, `openai.rs`); the composer control
-is the remaining half, tracked below rather than counted as done.
+Backend in 1.29.0, composer and settings in 1.30.0.
 
 | Item | Status |
 |---|---|
 | Native OpenAI Platform provider (Responses API) | Working (1.29.0) — `openai.rs`, own key, `openai:` model ids, buffered + streaming + agent calls |
-| Thinking control (off/low/medium/high/model default) | Partial — backend levels and resolution work; the composer control lands next |
-| `@Thinking` shortcut + literal escape | Working backend (1.29.0) — parsed and stripped before the message is stored; the chip lands next |
+| Thinking control (off/low/medium/high/model default) | Working (1.30.0) — composer Think control, levels from `/api/thinking/levels` |
+| `@Thinking` shortcut + literal escape | Working (1.29.0/1.30.0) — stripped server-side before storage, hinted in the composer, `\@Thinking` stays literal |
 | Scope precedence (message > agent > project > global) | Working (1.29.0) — `projects.thinking` column migrated in place, agent scope from config |
-| Reasoning summaries / progress surfacing | Partial — reasoning frames are emitted server-side; the panel lands next |
-| Tests for any of the above | Working — 21 new cases, 204 total |
-| Composer control, Settings fields, platform models in the picker | Missing (next commit) |
+| Reasoning summaries / progress surfacing | Working (1.30.0) — collapsible card fed by the provider's summary frames |
+| Platform key in Settings (write-only) + key test | Working (1.30.0) — `/api/openai/test`, no tokens spent |
+| Tests | Working — 21 new cases, 204 total; live smoke on :8799 for the new routes |
+| Tool calling / structured output through the platform path | Missing — the request shape allows it, no agent tool loop uses `openai:` yet |
 
 ## Phase 5 — Agent execution engine
 

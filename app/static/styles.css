@@ -1309,6 +1309,20 @@ kbd {
 }
 #deepToggle.active .icon { color: var(--accent); }
 
+/* Thinking control: the chip reads out the level, so it is styled as an
+   active toggle only when a level is actually set (model default is off). */
+#thinkBtn.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent); }
+#thinkBtn.active .icon { color: var(--accent); }
+
+/* Reasoning summaries: the API's own summary channel, collapsible so a long
+   one never pushes the answer off-screen. */
+.reasoning-card {
+  margin: 6px 0 10px; padding: 8px 10px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border); font-size: 12px;
+}
+.reasoning-card summary { cursor: pointer; color: var(--dim); font-weight: 600; }
+.reasoning-body { margin: 6px 0 0; white-space: pre-wrap; color: var(--mute); line-height: 1.6; }
+
 /* deep-search live checklist inside the streaming reply */
 .msg .deep-steps {
   margin: 2px 0 8px;

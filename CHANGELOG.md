@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.30.0
+
+- Phase 4 frontend, wired to the backend from 1.29.0. The composer has a
+  **Think** control (model default / off / low / medium / high) that names what
+  the next message asks for and explains the level in its tooltip. Typing
+  `@Thinking`, `@Thinking:high` or `@Thinking high` at the start of a message
+  shows a hint and lets the server act on it; `\@Thinking` stays literal on
+  both sides and an unknown level is never swallowed.
+- Reasoning summaries stream into a collapsible "Reasoning summary" card above
+  the answer, fed by the provider's own summary channel — never presented as
+  hidden chain-of-thought, and collapsible so it never hides the reply.
+- Settings gained an **OpenAI Platform** section: platform key (write-only —
+  the UI only ever learns `has_openai_key`), base URL, the global Thinking
+  default and the agent-run default, plus a "Test platform key" button backed
+  by `/api/openai/test`, which spends no tokens.
+- The model menu lists the platform's own models under `openai:` ids once a key
+  is saved, labelled so a platform pick is never mistaken for a router pick,
+  with whatever capabilities the platform published beside them.
+- Two launch defects found while smoke-testing the headless binary: a build
+  without the `gui` feature no longer treats itself as windowed (it sent the
+  shutdown signal immediately, so `./free-ai-studio` served nothing at all),
+  and a process without a console no longer stops because `ctrl_c()` failed —
+  only a real Ctrl+C stops the server.
+- Verified against a live instance: `/api/thinking/levels` returns the four
+  levels with the effort each one sends, `/api/openai/models` answers 400 with
+  "Save an OpenAI Platform key…" when none exists, `POST /api/config`
+  round-trips both Thinking defaults without echoing a key, and
+  `POST /api/projects {"thinking":"medium"}` persists in the new column.
+- Version 1.30.0 across `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  the extension manifest and lock, and the Android `versionName` (code 46).
+
 ## 1.29.0
 
 - Phase 4 backend: Thinking control plus a native OpenAI Platform provider.

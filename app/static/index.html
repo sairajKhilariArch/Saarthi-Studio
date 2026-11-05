@@ -239,6 +239,15 @@
                 <svg class="icon"><use href="#i-search"/></svg>Deep
               </button>
               <div class="skill-picker-wrap">
+                <button id="thinkBtn" class="btn btn-quiet btn-small" title="Thinking: the reasoning level this message asks for" aria-haspopup="listbox" aria-expanded="false" aria-pressed="false">
+                  <svg class="icon"><use href="#i-spark"/></svg><span id="thinkLabel">Think: model default</span>
+                </button>
+                <div id="thinkingMenu" class="skill-menu hidden" role="listbox" aria-label="Thinking level">
+                  <div id="thinkingMenuList" class="skill-menu-list"></div>
+                </div>
+              </div>
+              <span id="thinkHint" class="kbd-hint hidden"></span>
+              <div class="skill-picker-wrap">
                 <button id="skillPickerBtn" class="btn btn-quiet btn-small" title="Attach a skill to this message" aria-haspopup="listbox" aria-expanded="false">
                   <svg class="icon"><use href="#i-spark"/></svg>Skill
                 </button>
@@ -553,6 +562,7 @@
           <button type="button" data-settings-section="appearance" aria-selected="false">Appearance</button>
           <button type="button" data-settings-section="context" aria-selected="false">Chat context</button>
           <button type="button" data-settings-section="search" aria-selected="false">Deep search</button>
+          <button type="button" data-settings-section="openai" aria-selected="false">OpenAI Platform</button>
           <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
@@ -584,6 +594,49 @@
             <button type="submit" class="btn btn-accent">Save settings</button>
             <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>
             <button type="button" id="openProviderDashboardSettings" class="btn btn-link">Open router dashboard ↗</button>
+          </div>
+          </section>
+
+          <section id="settings-openai" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">OpenAI Platform</h2>
+          <p>Native platform access through its own <code>/responses</code> API. This is separate from the router above: the key stays on this computer, and the browser only ever learns whether one is saved.</p>
+          <label class="field">
+            <span>Platform API key</span>
+            <input id="openaiKey" type="password" placeholder="Paste an OpenAI Platform key" autocomplete="new-password">
+            <small id="openaiKeyStatus">Stored in a permission-restricted local config file.</small>
+          </label>
+          <label class="field">
+            <span>Platform base URL</span>
+            <input id="openaiBaseUrl" type="url" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1">
+            <small>Change this only for an endpoint that implements the Responses API.</small>
+          </label>
+          <div class="form-row">
+            <label class="field">
+              <span>Default Thinking level</span>
+              <select id="thinkingLevel">
+                <option value="">Model default (send nothing)</option>
+                <option value="off">Off</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <small>Applies to any turn without a project or message setting. A per-message choice always wins.</small>
+            </label>
+            <label class="field">
+              <span>Agent runs</span>
+              <select id="runThinkingLevel">
+                <option value="">Model default (send nothing)</option>
+                <option value="off">Off</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <small>Agent scope: below a per-message choice, above the project and global defaults.</small>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-accent">Save all settings</button>
+            <button type="button" id="testOpenAI" class="btn btn-quiet">Test platform key</button>
           </div>
           </section>
 

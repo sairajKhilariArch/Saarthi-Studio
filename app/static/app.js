@@ -479,6 +479,12 @@ const state = {
      lists recent threads from every project, each labelled with its project. */
   threadScope: (() => { try { return localStorage.getItem("freeai-thread-scope") === "all" ? "all" : "project"; } catch { return "project"; } })(),
   model: "auto",
+  /* thinking: "" means "model default" (no reasoning parameter). The choice is
+     per message and sticky for the session; the server resolves
+     message > agent > project > global and reports which scope won. */
+  thinking: (() => { try { return localStorage.getItem("freeai-thinking") || ""; } catch { return ""; } })(),
+  thinkingLevels: null,
+  platformModels: null,
   contextBudget: 6000,
   lastContextTokens: null,
   /* projects: real server-side scoping — the active project filters every
@@ -1151,6 +1157,7 @@ async function sendMessage(preset = null) {
   streamTargetId = state.currentId;
   const deepSteps = [];
   const deepSources = [];
+  const reasoningSummary = [];
   const controller = new AbortController();
   state.abort = controller;
   addStreamRow();
@@ -1170,6 +1177,7 @@ async function sendMessage(preset = null) {
         skill: skillId,
         deepsearch: Boolean(state.deepSearch),
         model: state.chatModel || undefined,
+        thinking: state.thinking || undefined,
         mode: state.chatMode === "plan" ? "plan" : undefined,
         attachments: attachmentsToSend.length ? attachmentsToSend : undefined,
       }),
@@ -1197,6 +1205,10 @@ async function sendMessage(preset = null) {
           if (!answer) setStreamStatus("responding");
           answer += frame.delta;
           appendStreamText(answer);
+        }
+        if (frame.type === "reasoning" && frame.text) {
+          reasoningSummary.push(frame.text);
+          renderReasoning(reasoningSummary.join(""));
         }
         if (frame.error) failed = frame.error;
         if (frame.done && frame.meta) {
@@ -1426,6 +1438,30 @@ function setStreamStatus(text) {
 function clearStreamStatus() {
   const chip = streamRow ? streamRow.querySelector(".stream-status") : null;
   if (chip) chip.remove();
+}
+
+/* Concise reasoning summaries the provider chose to publish — the API's own
+   summary channel, never raw chain-of-thought. Open while it streams, then
+   left collapsed by the user's own toggle so it never hides the reply. */
+function renderReasoning(text) {
+  if (!streamRow) return;
+  let card = streamRow.querySelector(".reasoning-card");
+  if (!card) {
+    card = document.createElement("details");
+    card.className = "reasoning-card";
+    card.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Reasoning summary";
+    const body = document.createElement("p");
+    body.className = "reasoning-body";
+    card.append(summary, body);
+    const head = streamRow.querySelector(".msg-meta");
+    if (head && head.parentNode === streamRow) streamRow.insertBefore(card, head.nextSibling);
+    else streamRow.insertBefore(card, streamRow.firstChild);
+  }
+  const body = card.querySelector(".reasoning-body");
+  if (body) body.textContent = text;
+  scrollChat();
 }
 
 function appendStreamText(answer) {
@@ -2649,6 +2685,9 @@ function toggleModelMenu(force) {
     void refreshModelDailyUsage();
     // Local models come from the runtime, fetched beside the router catalog.
     void refreshLocalMenuModels();
+    // Platform models only appear when a platform key is saved; the endpoint
+    // answers 400 otherwise and leaves the list as it was.
+    void refreshPlatformMenuModels();
   }
 }
 
@@ -2689,6 +2728,21 @@ function renderModelMenu() {
         state.chatModel = `local:${name}`;
         void loadLocalCapabilities(name);
       },
+    }));
+  });
+
+  // Native OpenAI Platform models, labelled so a platform pick is never
+  // mistaken for a router pick. Only real ids the platform lists.
+  const platform = (state.platformModels || [])
+    .filter((model) => String(model.label || model.id).toLowerCase().includes(filter));
+  platform.slice(0, 200).forEach((model) => {
+    list.appendChild(modelMenuItem({
+      id: model.id,
+      label: `${model.label || model.id} · OpenAI Platform`,
+      context: model.context_window || 0,
+      capabilities: model.capabilities,
+      chosen: state.chatModel === model.id,
+      onPick: () => { state.chatModel = model.id; },
     }));
   });
 
@@ -2771,6 +2825,131 @@ async function loadLocalCapabilities(name) {
   if ((state.chatModel || "") === `local:${name}`) renderModelMenu();
 }
 
+/* ---- Thinking control -------------------------------------------- */
+
+const THINKING_KEYS = ["off", "low", "medium", "high"];
+
+function thinkingDescription(level) {
+  const entry = (state.thinkingLevels || []).find((item) => item.id === level);
+  return entry ? entry.description : "";
+}
+
+function setThinking(level) {
+  state.thinking = THINKING_KEYS.includes(level) ? level : "";
+  try { localStorage.setItem("freeai-thinking", state.thinking); } catch { /* private mode */ }
+  renderThinkingChip();
+}
+
+function renderThinkingChip() {
+  const button = $("thinkBtn");
+  const label = $("thinkLabel");
+  if (!button || !label) return;
+  label.textContent = `Think: ${state.thinking || "model default"}`;
+  button.classList.toggle("active", Boolean(state.thinking));
+  button.setAttribute("aria-pressed", String(Boolean(state.thinking)));
+  button.title = state.thinking
+    ? thinkingDescription(state.thinking) || `Asks for ${state.thinking} reasoning.`
+    : "No reasoning parameter is sent; the model's own default applies.";
+}
+
+async function loadThinkingLevels() {
+  const result = await api("/api/thinking/levels");
+  if (result.ok && Array.isArray(result.data.levels)) state.thinkingLevels = result.data.levels;
+  renderThinkingChip();
+  if ($("thinkingMenu") && !$("thinkingMenu").classList.contains("hidden")) renderThinkingMenu();
+}
+
+function thinkingMenuItems() {
+  const levels = state.thinkingLevels && state.thinkingLevels.length
+    ? state.thinkingLevels
+    : THINKING_KEYS.map((id) => ({ id, description: "" }));
+  return [
+    { id: "", description: "Send no reasoning parameter; the model decides." },
+    ...levels,
+  ];
+}
+
+function renderThinkingMenu() {
+  const list = $("thinkingMenuList");
+  if (!list) return;
+  list.replaceChildren();
+  thinkingMenuItems().forEach((entry) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "skill-menu-item" + (state.thinking === entry.id ? " active" : "");
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(state.thinking === entry.id));
+    const main = document.createElement("span");
+    main.textContent = entry.id || "Model default";
+    item.appendChild(main);
+    if (entry.description) {
+      const note = document.createElement("small");
+      note.textContent = entry.description;
+      item.appendChild(note);
+    }
+    item.addEventListener("click", () => {
+      setThinking(entry.id);
+      toggleThinkingMenu(false);
+    });
+    list.appendChild(item);
+  });
+}
+
+function toggleThinkingMenu(force) {
+  const menu = $("thinkingMenu");
+  if (!menu) return;
+  const show = force != null ? force : menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !show);
+  $("thinkBtn").setAttribute("aria-expanded", String(show));
+  if (show) renderThinkingMenu();
+}
+
+/* `@Thinking` / `@Thinking:high` typed at the start of the prompt is a command,
+   and the server strips it before storing the message. `\@Thinking` is the
+   literal form. The hint mirrors the server's rules exactly, so it never
+   claims a command the backend will not run. */
+function directiveLevel(text) {
+  const trimmed = text.replace(/^\s+/, "");
+  if (trimmed.startsWith("\\@")) return null;
+  const match = trimmed.match(/^@thinking(?::([A-Za-z]+))?(?:\s+([A-Za-z]+))?/i);
+  if (!match) return null;
+  // An unknown level (`@Thinking:banana`) stays prose on the server too.
+  if (match[1] && !THINKING_KEYS.includes(match[1].toLowerCase())) return null;
+  const word = (match[2] || match[1] || "").toLowerCase();
+  return THINKING_KEYS.includes(word) ? word : "";
+}
+
+function syncThinkingDirective() {
+  const level = directiveLevel($("prompt").value);
+  const hint = $("thinkHint");
+  if (!hint) return;
+  if (level === null) {
+    hint.classList.add("hidden");
+    return;
+  }
+  hint.classList.remove("hidden");
+  hint.textContent = level
+    ? `@Thinking ${level} — this message asks for ${level} reasoning.`
+    : "@Thinking — this message asks for reasoning at the level set beside it.";
+}
+
+async function refreshPlatformMenuModels() {
+  const result = await api("/api/openai/models");
+  state.platformModels = result.ok && Array.isArray(result.data.models) ? result.data.models : null;
+  renderModelMenu();
+}
+
+async function testOpenAIPlatform() {
+  const saved = await saveSettings();
+  if (!saved) return;
+  const result = await api("/api/openai/test", { method: "POST", body: "{}" });
+  if (result.ok && result.data.ok) {
+    settingsNotice(result.data.message, true);
+    return;
+  }
+  settingsNotice(result.data.error || "The platform key test failed.", false);
+}
+
 function modelMenuItem({ id, label, context, capabilities, chosen, onPick }) {
   const item = document.createElement("button");
   item.type = "button";
@@ -2832,6 +3011,17 @@ async function loadSettings() {
   $("cheapModel").value = result.data.cheap_model || "";
   $("strongModel").value = result.data.strong_model || "";
   $("adaptiveTiersRow").classList.toggle("hidden", !adaptive);
+  $("openaiBaseUrl").value = result.data.openai_base_url || "https://api.openai.com/v1";
+  $("openaiKey").value = "";
+  $("openaiKey").placeholder = result.data.has_openai_key
+    ? "Saved key (leave blank to keep it)"
+    : "Paste an OpenAI Platform key";
+  $("openaiKeyStatus").textContent = result.data.has_openai_key
+    ? "A platform key is saved locally. Leave the field blank to keep it."
+    : "No platform key saved. Needed for openai: models.";
+  $("thinkingLevel").value = result.data.thinking_level || "";
+  $("runThinkingLevel").value = result.data.run_thinking_level || "";
+  void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
   $("searchKeyStatus").textContent = result.data.has_search_key
@@ -2866,10 +3056,15 @@ async function saveSettings(event) {
     adaptive_routing: $("adaptiveRouting").checked,
     cheap_model: $("cheapModel").value.trim(),
     strong_model: $("strongModel").value.trim(),
+    openai_base_url: $("openaiBaseUrl").value.trim() || "https://api.openai.com/v1",
+    thinking_level: $("thinkingLevel").value,
+    run_thinking_level: $("runThinkingLevel").value,
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();
   if (key) payload.api_key = key;
+  const openaiKey = $("openaiKey").value.trim();
+  if (openaiKey) payload.openai_api_key = openaiKey;
   const searchKey = $("searchApiKey").value.trim();
   if (searchKey) payload.search_api_key = searchKey;
   const result = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
@@ -2883,6 +3078,11 @@ async function saveSettings(event) {
   updateContextMeter();
   $("apiKey").value = "";
   $("apiKey").placeholder = "Saved key (leave blank to keep it)";
+  if ($("openaiKey").value.trim()) {
+    $("openaiKey").value = "";
+    $("openaiKey").placeholder = "Saved key (leave blank to keep it)";
+    $("openaiKeyStatus").textContent = "A platform key is saved locally. Leave the field blank to keep it.";
+  }
   if ($("searchApiKey").value.trim()) {
     $("searchApiKey").value = "";
     $("searchApiKey").placeholder = "Saved key (leave blank to keep it)";
@@ -4408,6 +4608,16 @@ function bindEvents() {
     toggleModelMenu();
   });
   $("modelMenu").addEventListener("click", (event) => event.stopPropagation());
+  // Thinking control: same menu pattern as the model picker.
+  $("thinkBtn").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleThinkingMenu();
+  });
+  $("thinkingMenu").addEventListener("click", (event) => event.stopPropagation());
+  document.addEventListener("click", () => toggleThinkingMenu(false));
+  $("prompt").addEventListener("input", syncThinkingDirective);
+  $("testOpenAI").addEventListener("click", () => { void testOpenAIPlatform(); });
+  renderThinkingChip();
   $("modelFilter").addEventListener("input", () => renderModelMenu());
   document.addEventListener("click", () => toggleModelMenu(false));
   // Mode picker (Build/Plan); persists the choice like the model chip.
