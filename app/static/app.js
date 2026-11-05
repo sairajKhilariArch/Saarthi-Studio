@@ -363,6 +363,7 @@ async function deleteProject(project) {
 /* ------------------------------------------------------------------ */
 
 async function loadSkills() {
+  wireSkillInstall();
   const box = $("skillList");
   const result = await api("/api/skills");
   if (!result.ok) {
@@ -415,9 +416,23 @@ function renderSkills() {
   });
 }
 
-function openSkillDetail(id) {
+async function openSkillDetail(id) {
   state.openSkillId = id;
+  state.skillDetail = null;
   renderSkillDetail();
+  // The list shows a summary; the editor needs the file's real instructions.
+  const result = await api(`/api/skills/${encodeURIComponent(id)}`);
+  if (state.openSkillId !== id) return;
+  if (result.ok && result.data.skill) {
+    state.skillDetail = result.data.skill;
+    renderSkillDetail();
+  }
+}
+
+function skillUsageLine(skill) {
+  if (!skill.uses) return "never used";
+  const when = skill.last_used_at ? new Date(skill.last_used_at * 1000).toLocaleDateString() : "";
+  return `used ${skill.uses} time${skill.uses === 1 ? "" : "s"}${when ? `, last ${when}` : ""}`;
 }
 
 function renderSkillDetail() {
@@ -441,13 +456,131 @@ function renderSkillDetail() {
     body.appendChild(err);
   }
   const meta = document.createElement("p");
-  meta.textContent = (skill.enabled ? "Enabled — " : "Disabled — ") + (skill.path || "");
+  meta.className = "skill-meta";
+  const facts = [skill.enabled ? "Enabled" : "Disabled", skill.source || "local"];
+  if (skill.version) facts.push(`v${skill.version}`);
+  facts.push(skillUsageLine(skill));
+  if (skill.modified) facts.push("edited since install");
+  meta.textContent = facts.join(" · ");
+  meta.title = skill.path || "";
   body.appendChild(meta);
   if (skill.description) {
     const desc = document.createElement("p");
     desc.textContent = skill.description;
     body.appendChild(desc);
   }
+  if (!skill.writable || skill.last_error) {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = skill.last_error
+      ? "This skill could not be loaded, so there is nothing to edit."
+      : "This skill is not in your user skills folder, so it is read-only here; edit its SKILL.md where it lives.";
+    body.appendChild(note);
+    return;
+  }
+  const label = document.createElement("label");
+  label.className = "field";
+  const caption = document.createElement("span");
+  caption.textContent = "Instructions";
+  const area = document.createElement("textarea");
+  area.rows = 10;
+  const loaded = state.skillDetail && state.skillDetail.id === skill.id;
+  area.value = loaded ? state.skillDetail.body || "" : "";
+  area.placeholder = loaded ? "" : "Loading instructions…";
+  label.append(caption, area);
+  body.appendChild(label);
+  const actions = document.createElement("div");
+  actions.className = "form-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn btn-accent btn-small";
+  save.textContent = "Save instructions";
+  save.addEventListener("click", () => saveSkillInstructions(skill.id, area.value));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn btn-quiet btn-small danger";
+  remove.textContent = "Remove skill";
+  remove.addEventListener("click", () => removeSkill(skill.id));
+  actions.append(save, remove);
+  body.appendChild(actions);
+  const note = document.createElement("p");
+  note.className = "muted";
+  note.textContent = "Usage is recorded whenever this skill rides along with a message.";
+  body.appendChild(note);
+}
+
+async function installSkill() {
+  const name = $("skillInstallName").value.trim();
+  const instructions = $("skillInstallBody").value.trim();
+  if (!name || !instructions) {
+    toast("A skill needs a name and instructions.");
+    return;
+  }
+  const result = await api("/api/skills/install", {
+    method: "POST",
+    confirmApproval: true,
+    body: JSON.stringify({
+      name,
+      version: $("skillInstallVersion").value.trim(),
+      description: $("skillInstallDescription").value.trim(),
+      instructions,
+    }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not install that skill.");
+    return;
+  }
+  $("skillInstallName").value = "";
+  $("skillInstallVersion").value = "";
+  $("skillInstallDescription").value = "";
+  $("skillInstallBody").value = "";
+  toast(`Installed ${result.data.id} v${result.data.version}.`);
+  await loadSkills();
+  await openSkillDetail(result.data.id);
+}
+
+async function saveSkillInstructions(id, body) {
+  if (!body.trim()) {
+    toast("The instructions cannot be empty.");
+    return;
+  }
+  const result = await api(`/api/skills/${encodeURIComponent(id)}/update`, {
+    method: "POST",
+    confirmApproval: true,
+    body: JSON.stringify({ instructions: body }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not update that skill.");
+    return;
+  }
+  toast(`Saved ${result.data.id} v${result.data.version}.`);
+  await loadSkills();
+  await openSkillDetail(result.data.id);
+}
+
+async function removeSkill(id) {
+  if (!confirm(`Remove the skill "${id}"?\n\nIts folder is moved to .removed beside your other user skills, so it can be restored.`)) return;
+  const result = await api(`/api/skills/${encodeURIComponent(id)}/remove`, {
+    method: "POST",
+    confirmApproval: true,
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not remove that skill.");
+    return;
+  }
+  toast(`Removed ${id}; it moved to ${result.data.moved_to}.`);
+  state.openSkillId = null;
+  state.skillDetail = null;
+  await loadSkills();
+  renderSkills();
+}
+
+function wireSkillInstall() {
+  const button = $("skillInstallBtn");
+  if (!button || button.dataset.wired) return;
+  button.dataset.wired = "1";
+  button.addEventListener("click", installSkill);
 }
 
 function renderSkillsOverview() {
@@ -475,6 +608,16 @@ function renderSkillsOverview() {
     path.className = "skill-path";
     path.textContent = skill.path || "";
     main.appendChild(path);
+    const facts = [];
+    if (skill.version) facts.push(`v${skill.version}`);
+    if (skill.uses) facts.push(`${skill.uses} use${skill.uses === 1 ? "" : "s"}`);
+    if (skill.modified) facts.push("edited since install");
+    if (facts.length) {
+      const meta = document.createElement("small");
+      meta.className = "skill-meta";
+      meta.textContent = facts.join(" · ");
+      main.appendChild(meta);
+    }
     row.appendChild(main);
     const side = document.createElement("div");
     side.className = "skill-side";
@@ -538,6 +681,7 @@ const state = {
   /* skills: local SKILL.md folders served by /api/skills. */
   skills: [],
   openSkillId: null,
+  skillDetail: null,
   /* permissions: saved rules plus the audit trail from /api/permissions. */
   permissions: { actions: [], rules: [] },
   /* mcp: the registry, the tools of the last tested server, and the picked

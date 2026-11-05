@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.49.0
+
+- Phase 6 close-out: skills can now be installed, updated and removed, with
+  version tracking and real usage history. Discovery, enable/disable and
+  instruction injection were already working; these are the parts that were
+  missing.
+- Install (`POST /api/skills/install`) writes `<user skills>/<slug>/SKILL.md`
+  from a name, an optional version and description, and plain instructions. The
+  manifest is validated with the same parser the list uses **before** anything
+  touches the disk, so a skill with no instructions is refused rather than
+  installed broken, and the write goes through a temp file in the same folder so
+  an interrupted install cannot leave half a manifest. An existing id is refused
+  unless `replace: true`.
+- Update (`POST /api/skills/:id/update`) rewrites the manifest in place and
+  keeps its folder, so the id, the config's disabled list and the usage rows stay
+  attached. It only touches skills in the user root: a project, built-in or
+  `~/.agents` skill is refused with a message saying to edit its file where it
+  lives. No version in the request means no version claim — the recorded version
+  is kept instead of inventing a bump.
+- Remove (`POST /api/skills/:id/remove`) moves the folder to
+  `<user root>/.removed/<folder>-<timestamp>`, which is reversible. It never
+  deletes the user's files, and never touches a root this app did not write.
+- Version tracking: `skills.json` beside the config records the installed
+  version, install time, update time and a content fingerprint (FNV-1a — called a
+  fingerprint, never presented as a checksum). A mismatch with the file today is
+  reported as “edited since install”, so a hand edit stays visible instead of
+  being overwritten silently or mistaken for the installed version.
+- Usage history: a `skill_usage` table records every pick — skill id, time,
+  conversation and instruction tokens — from the chat path where the conversation
+  id exists. `/api/skills` reports `uses`/`last_used_at`/`tokens` per skill and
+  `GET /api/skills/:id/usage` returns the recent rows. Recording is
+  fire-and-forget: a lost row never fails the turn it describes.
+- Permission-gated: install, update and remove consult the same `fs_write` policy
+  as every other write in the app (deny 403, ask 409 until `approve: true`), and
+  the UI goes through the existing approval prompt.
+- UI: an install form in the Skills pane, an editable instruction body in the
+  detail view with Save and Remove, and version / uses / “edited since install”
+  facts on each row. A skill outside the user root reads as read-only, with the
+  reason, rather than offering buttons that would fail.
+- Tests: 301 pass, 1 ignored. New: install writes and parses a manifest with its
+  version; a second install is refused unless asked and the refused write leaves
+  the original intact; an empty skill creates nothing; a hand edit changes the
+  fingerprint; the registry keeps the install time across an update; slugs cannot
+  escape the root; remove moves rather than deletes; usage counts, sums tokens and
+  orders newest first. Clippy `-D warnings` clean; `rustfmt` clean on the touched
+  files; `node --check app/static/app.js` clean. Not verified: the new Skills UI
+  was syntax-checked but not opened in a browser, and the three new routes were
+  exercised through their file-level operations rather than over HTTP.
+
 ## 1.48.0
 
 - Phase 11 close-out: context compression that is more than head/tail cropping.

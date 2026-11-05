@@ -17,14 +17,22 @@
 //! ---
 //! name: code-review
 //! description: Review a file for bugs, security problems and readability.
+//! version: 1.2.0
 //! ---
 //! Instructions go here, in plain prose...
 //! ```
 //!
 //! Enable/disable state lives in `config.json`, so it survives restarts and is
-//! shared by the desktop app and the VS Code extension.
+//! shared by the desktop app and the VS Code extension. Install metadata lives in
+//! `skills.json` beside it: the version that was installed, when it was installed
+//! and updated, and a fingerprint of what was written. Usage history is rows in
+//! `skill_usage`, because "used 4 times, last Tuesday" is history, not state.
+//!
+//! Only the user root is written to. A project, built-in or `~/.agents` skill is
+//! reported as not writable rather than edited behind the repository's back, and
+//! removal moves a folder into `<root>/.removed/` instead of deleting it.
 
-use crate::{home_dir, load_config, AppState};
+use crate::{home_dir, load_config, open_db, AppState};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, State},
@@ -33,9 +41,11 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path as FsPath, PathBuf},
 };
@@ -44,16 +54,46 @@ const MANIFEST: &str = "SKILL.md";
 /// Instructions beyond this many tokens are truncated: the composer meter must
 /// stay honest, and no single skill may eat the whole context budget.
 const MAX_BODY_TOKENS: usize = 900;
+/// A skill installed without a stated version still gets one, so the record can
+/// show that it predates the first explicit update.
+const DEFAULT_VERSION: &str = "0.1.0";
 
 #[derive(Clone, Debug)]
 pub(crate) struct Skill {
     pub id: String,
     pub name: String,
     pub description: String,
+    pub version: String,
     pub body: String,
     pub path: String,
     pub source: &'static str,
+    /// Fingerprint of the manifest as it is now, so a hand edit is visible
+    /// against what was installed.
+    pub fingerprint: String,
     pub error: Option<String>,
+}
+
+/// What `skills.json` remembers about a skill this app installed or updated.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct Installed {
+    id: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    installed_at: f64,
+    #[serde(default)]
+    updated_at: f64,
+    /// Fingerprint of the manifest written at install/update time. A mismatch
+    /// means someone edited the file since; the app reports that instead of
+    /// silently overwriting their words on the next update.
+    #[serde(default)]
+    fingerprint: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct Registry {
+    #[serde(default)]
+    skills: Vec<Installed>,
 }
 
 /// Search roots in precedence order: the first root that claims a skill name
@@ -110,29 +150,51 @@ fn parse_manifest(manifest: &FsPath, source: &str) -> Skill {
         .and_then(FsPath::file_name)
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "skill".to_string());
+    match fs::read_to_string(manifest) {
+        Ok(text) => {
+            let mut skill = parse_text(&folder, &text, source);
+            skill.path = manifest.display().to_string();
+            skill
+        }
+        Err(error) => Skill {
+            id: folder.clone(),
+            name: folder.replace(['_', '-'], " "),
+            description: String::new(),
+            version: String::new(),
+            body: String::new(),
+            path: manifest.display().to_string(),
+            source: label(source),
+            fingerprint: String::new(),
+            error: Some(format!("SKILL.md could not be read: {error}")),
+        },
+    }
+}
+
+fn label(source: &str) -> &'static str {
+    match source {
+        "project" => "project",
+        "user" => "user",
+        "agents" => "agents",
+        _ => "built-in",
+    }
+}
+
+/// Parse a manifest from text — the same parser the installer validates with, so
+/// something that can be installed is exactly something that can be listed.
+fn parse_text(folder: &str, text: &str, source: &str) -> Skill {
     let mut skill = Skill {
-        id: folder.clone(),
+        id: folder.to_string(),
         name: folder.replace(['_', '-'], " "),
         description: String::new(),
+        version: String::new(),
         body: String::new(),
-        path: manifest.display().to_string(),
-        source: match source {
-            "project" => "project",
-            "user" => "user",
-            "agents" => "agents",
-            _ => "built-in",
-        },
+        path: String::new(),
+        source: label(source),
+        fingerprint: fingerprint(text),
         error: None,
     };
 
-    let text = match fs::read_to_string(manifest) {
-        Ok(text) => text,
-        Err(error) => {
-            skill.error = Some(format!("SKILL.md could not be read: {error}"));
-            return skill;
-        }
-    };
-    let (front, body) = split_front_matter(&text);
+    let (front, body) = split_front_matter(text);
     skill.body = body.trim().to_string();
 
     let mut lines = front.lines().peekable();
@@ -170,8 +232,8 @@ fn parse_manifest(manifest: &FsPath, source: &str) -> Skill {
                 skill.id = value.clone();
                 skill.name = value;
             }
-
             "description" if !value.is_empty() => skill.description = value,
+            "version" if !value.is_empty() => skill.version = value,
             _ => {}
         }
     }
@@ -243,6 +305,185 @@ pub(crate) fn instructions_for(id: &str, all: &[Skill]) -> Option<Skill> {
     })
 }
 
+/* ---------------------------------------------------------------- */
+/* install / update / remove                                         */
+/* ---------------------------------------------------------------- */
+
+/// A stable, dependency-free content fingerprint (FNV-1a 64). It exists to spot
+/// a hand edit, not to prove integrity, so it is called a fingerprint and never
+/// presented as a checksum.
+fn fingerprint(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Turn a user-supplied name into a folder name. Anything that could escape the
+/// root (`/`, `\`, `..`) simply is not accepted as a character.
+fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            // Every non-alphanumeric becomes one separator, so a path-like name
+            // reads as words instead of running together.
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// Build a manifest from the fields the installer collects. `description` and
+/// `version` are optional; a description is never invented from the
+/// instructions, because the list would then show words the user did not write.
+fn manifest_text(name: &str, description: &str, version: &str, instructions: &str) -> String {
+    let description = description.replace(['\n', '\r'], " ");
+    let version = version.trim();
+    let mut out = String::from("---\n");
+    out.push_str(&format!("name: {}\n", name.trim()));
+    if !description.trim().is_empty() {
+        out.push_str(&format!("description: {}\n", description.trim()));
+    }
+    if !version.is_empty() {
+        out.push_str(&format!("version: {version}\n"));
+    }
+    out.push_str("---\n\n");
+    out.push_str(instructions.trim());
+    out.push('\n');
+    out
+}
+
+fn registry_path(state: &AppState) -> PathBuf {
+    state.config_path.with_file_name("skills.json")
+}
+
+fn load_registry_at(path: &FsPath) -> Registry {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_registry_at(path: &FsPath, registry: &Registry) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+    }
+    let text = serde_json::to_string_pretty(registry).map_err(|e| e.to_string())?;
+    fs::write(path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))
+}
+
+/// Record an install/update, keeping the original `installed_at`.
+fn remember_at(path: &FsPath, id: &str, version: &str, fingerprint: &str) -> Result<(), String> {
+    let mut registry = load_registry_at(path);
+    let now = crate::now_seconds();
+    match registry.skills.iter_mut().find(|entry| entry.id == id) {
+        Some(entry) => {
+            entry.version = version.to_string();
+            entry.updated_at = now;
+            entry.fingerprint = fingerprint.to_string();
+        }
+        None => registry.skills.push(Installed {
+            id: id.to_string(),
+            version: version.to_string(),
+            installed_at: now,
+            updated_at: now,
+            fingerprint: fingerprint.to_string(),
+        }),
+    }
+    save_registry_at(path, &registry)
+}
+
+fn forget_at(path: &FsPath, id: &str) -> Result<(), String> {
+    let mut registry = load_registry_at(path);
+    registry.skills.retain(|entry| entry.id != id);
+    save_registry_at(path, &registry)
+}
+
+fn installed_record(path: &FsPath, id: &str) -> Option<Installed> {
+    load_registry_at(path)
+        .skills
+        .into_iter()
+        .find(|entry| entry.id == id)
+}
+
+/// Write `document` as `<dir>/SKILL.md`. Validation happens before the disk is
+/// touched, and the write goes through a temp file in the same folder so an
+/// interrupted install cannot leave a half manifest behind.
+fn write_manifest(dir: &FsPath, document: &str, replace: bool) -> Result<PathBuf, String> {
+    let parsed = parse_text(
+        dir.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default()
+            .as_str(),
+        document,
+        "user",
+    );
+    if let Some(error) = parsed.error {
+        return Err(error);
+    }
+    let manifest = dir.join(MANIFEST);
+    if manifest.is_file() && !replace {
+        return Err(format!("A skill named \"{}\" already exists.", parsed.id));
+    }
+    fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let temp = dir.join(format!("{MANIFEST}.tmp"));
+    fs::write(&temp, document).map_err(|e| format!("Could not write {}: {e}", temp.display()))?;
+    // Windows will not rename onto an existing file, so the replace path removes
+    // the old manifest first; the temp file is already complete at this point.
+    if manifest.exists() {
+        fs::remove_file(&manifest)
+            .map_err(|e| format!("Could not replace {}: {e}", manifest.display()))?;
+    }
+    fs::rename(&temp, &manifest).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        format!("Could not install {}: {e}", manifest.display())
+    })?;
+    Ok(manifest)
+}
+
+/// The one root this app may write to: the user's own skills folder.
+fn writable_root(state: &AppState) -> Option<PathBuf> {
+    let workspace_root = state.workspace.current_root();
+    roots(&state.static_dir, workspace_root.as_deref())
+        .into_iter()
+        .find(|(source, _)| source == "user")
+        .map(|(_, path)| path)
+}
+
+fn folder_of(skill: &Skill) -> Option<PathBuf> {
+    PathBuf::from(&skill.path).parent().map(FsPath::to_path_buf)
+}
+
+/// Is `dir` strictly inside `root`? Canonical paths, so `..` or a symlink cannot
+/// talk the app into rewriting a skill that is not in the writable root.
+fn inside(root: &FsPath, dir: &FsPath) -> bool {
+    match (root.canonicalize(), dir.canonicalize()) {
+        (Ok(root), Ok(dir)) => dir != root && dir.starts_with(&root),
+        _ => false,
+    }
+}
+
+/// Remove a skill by moving its folder into `<root>/.removed/`, which is
+/// reversible; deleting a user's own files is not something a Remove button
+/// should do.
+fn move_out_of_the_way(root: &FsPath, dir: &FsPath) -> Result<PathBuf, String> {
+    let trash = root.join(".removed");
+    fs::create_dir_all(&trash).map_err(|e| format!("Could not create {}: {e}", trash.display()))?;
+    let folder = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "skill".to_string());
+    let stamp = crate::now_seconds() as i64;
+    let target = trash.join(format!("{folder}-{stamp}"));
+    fs::rename(dir, &target).map_err(|e| format!("Could not move {} aside: {e}", dir.display()))?;
+    Ok(target)
+}
+
 fn disabled_list(state: &AppState) -> Vec<String> {
     load_config(state).disabled_skills
 }
@@ -262,21 +503,158 @@ fn all_skills(state: &AppState) -> Vec<Skill> {
     discover(&roots(&state.static_dir, workspace_root.as_deref()))
 }
 
+/* ---------------------------------------------------------------- */
+/* usage history                                                     */
+/* ---------------------------------------------------------------- */
+
+/// `skill_usage` is created here as well as at boot so a database made by an
+/// older build grows the table on first use instead of failing the insert.
+pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS skill_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL,
+            used_at REAL NOT NULL, conversation_id TEXT NOT NULL DEFAULT '',
+            tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS skill_usage_skill ON skill_usage(skill_id, used_at DESC);",
+    )
+}
+
+/// Record that a skill rode along with a message. Fire-and-forget: a lost usage
+/// row must never fail the turn it describes.
+pub(crate) fn record_use(db: &FsPath, id: &str, conversation: &str, tokens: usize) {
+    let _ = open_db(db).and_then(|conn| {
+        initialize(&conn)?;
+        conn.execute(
+            "INSERT INTO skill_usage(skill_id, used_at, conversation_id, tokens) VALUES(?1,?2,?3,?4)",
+            rusqlite::params![id, crate::now_seconds(), conversation, tokens as i64],
+        )?;
+        Ok(())
+    });
+}
+
+/// Record a pick from a chat request, sizing the instruction text the same way
+/// the request itself does.
+pub(crate) fn record_pick(state: &AppState, id: &str, conversation: &str) {
+    let tokens = instructions_for(id, &all_skills(state))
+        .map(|skill| crate::context::estimate_tokens(&skill.body))
+        .unwrap_or(0);
+    record_use(&state.database_path, id, conversation, tokens);
+}
+
+/// Uses, last use and instruction tokens per skill, for the list route.
+fn usage_summary(db: &FsPath) -> HashMap<String, (i64, f64, i64)> {
+    let mut summary = HashMap::new();
+    let Ok(conn) = open_db(db) else {
+        return summary;
+    };
+    let _ = initialize(&conn);
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT skill_id, COUNT(*), MAX(used_at), COALESCE(SUM(tokens),0) FROM skill_usage GROUP BY skill_id",
+    ) else {
+        return summary;
+    };
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            (
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                row.get::<_, i64>(3)?,
+            ),
+        ))
+    }) else {
+        return summary;
+    };
+    for row in rows.flatten() {
+        summary.insert(row.0, row.1);
+    }
+    summary
+}
+
+fn usage_detail(db: &FsPath, id: &str, limit: usize) -> Value {
+    let mut recent = Vec::new();
+    let mut uses = 0i64;
+    let mut last_used_at = 0.0f64;
+    let mut tokens = 0i64;
+    if let Ok(conn) = open_db(db) {
+        let _ = initialize(&conn);
+        if let Ok((count, last, total)) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(used_at),0), COALESCE(SUM(tokens),0) FROM skill_usage WHERE skill_id=?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        ) {
+            uses = count;
+            last_used_at = last;
+            tokens = total;
+        }
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT used_at, conversation_id, tokens FROM skill_usage WHERE skill_id=?1 ORDER BY used_at DESC LIMIT ?2",
+        ) {
+            if let Ok(rows) = stmt.query_map(rusqlite::params![id, limit as i64], |row| {
+                Ok(json!({
+                    "used_at": row.get::<_, f64>(0)?,
+                    "conversation_id": row.get::<_, String>(1)?,
+                    "tokens": row.get::<_, i64>(2)?,
+                }))
+            }) {
+                recent = rows.flatten().collect();
+            }
+        }
+    }
+    json!({
+        "ok": true, "id": id, "uses": uses, "last_used_at": last_used_at,
+        "tokens": tokens, "recent": recent,
+    })
+}
+
+/* ---------------------------------------------------------------- */
+/* routes                                                            */
+/* ---------------------------------------------------------------- */
+
+/// The list entry: discovery plus what this app knows about installing it.
+fn skill_json(state: &AppState, skill: &Skill, usage: &HashMap<String, (i64, f64, i64)>) -> Value {
+    let record = installed_record(&registry_path(state), &skill.id);
+    let usage = usage.get(&skill.id).copied().unwrap_or((0, 0.0, 0));
+    json!({
+        "id": skill.id,
+        "name": skill.name,
+        "description": skill.description,
+        "path": skill.path,
+        "source": skill.source,
+        "error": skill.error,
+        "enabled": !disabled_list(state).contains(&skill.id),
+        "version": if skill.version.is_empty() {
+            record.as_ref().map(|entry| entry.version.clone()).unwrap_or_default()
+        } else {
+            skill.version.clone()
+        },
+        "installed_at": record.as_ref().map(|entry| entry.installed_at),
+        "updated_at": record.as_ref().map(|entry| entry.updated_at),
+        "writable": skill.source == "user",
+        // A fingerprint mismatch means the file was edited after installation;
+        // the UI says so instead of implying the installed version is current.
+        "modified": record
+            .as_ref()
+            .map(|entry| !entry.fingerprint.is_empty() && entry.fingerprint != skill.fingerprint)
+            .unwrap_or(false),
+        "uses": usage.0,
+        "last_used_at": if usage.0 > 0 { Some(usage.1) } else { None },
+        "tokens": usage.2,
+    })
+}
+
 async fn get_skills(State(state): State<AppState>) -> Json<Value> {
-    let disabled = disabled_list(&state);
+    let usage = usage_summary(&state.database_path);
     let skills: Vec<Value> = all_skills(&state)
-        .into_iter()
-        .map(|skill| {
-            json!({
-                "id": skill.id,
-                "name": skill.name,
-                "description": skill.description,
-                "path": skill.path,
-                "source": skill.source,
-                "error": skill.error,
-                "enabled": !disabled.contains(&skill.id),
-            })
-        })
+        .iter()
+        .map(|skill| skill_json(&state, skill, &usage))
         .collect();
     Json(json!({ "ok": true, "skills": skills }))
 }
@@ -286,15 +664,12 @@ async fn get_skill(
     AxumPath(id): AxumPath<String>,
 ) -> Response<Body> {
     match instructions_for(&id, &all_skills(&state)) {
-        Some(skill) if skill.error.is_none() => Json(json!({
-            "ok": true,
-            "skill": {
-                "id": skill.id, "name": skill.name, "description": skill.description,
-                "body": skill.body, "path": skill.path, "source": skill.source,
-                "enabled": !disabled_list(&state).contains(&skill.id),
-            }
-        }))
-        .into_response(),
+        Some(skill) if skill.error.is_none() => {
+            let usage = usage_summary(&state.database_path);
+            let mut entry = skill_json(&state, &skill, &usage);
+            entry["body"] = json!(skill.body);
+            Json(json!({ "ok": true, "skill": entry })).into_response()
+        }
         Some(skill) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({ "ok": false, "error": skill.error.unwrap_or_default() })),
@@ -323,11 +698,267 @@ async fn set_skill_enabled(
     Json(json!({ "ok": true, "id": id, "enabled": enabled })).into_response()
 }
 
+async fn install_skill(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let name = input
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let instructions = input
+        .get("instructions")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if name.is_empty() || instructions.trim().is_empty() {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "A skill needs a name and instructions.",
+        );
+    }
+    let slug = slugify(&name);
+    if slug.is_empty() {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "Use a name with at least one letter or digit.",
+        );
+    }
+    let Some(root) = writable_root(&state) else {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
+        );
+    };
+    let target = root.join(&slug).join(MANIFEST).display().to_string();
+    // Installing writes a file, so it is gated on the same `fs_write` rule as
+    // every other write in the app.
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        &target,
+        "",
+        approve,
+        "install a skill",
+    ) {
+        return response;
+    }
+    let version = input
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let version = if version.is_empty() {
+        DEFAULT_VERSION.to_string()
+    } else {
+        version
+    };
+    let description = input
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    // The manifest names the slug, not the typed title: the id is what every
+    // route, the config's disabled list and the usage history key on.
+    let document = manifest_text(&slug, description, &version, &instructions);
+    let replace = input
+        .get("replace")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match write_manifest(&root.join(&slug), &document, replace) {
+        Ok(manifest) => {
+            if let Err(error) = remember_at(
+                &registry_path(&state),
+                &slug,
+                &version,
+                &fingerprint(&document),
+            ) {
+                return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+            }
+            Json(json!({
+                "ok": true, "id": slug, "version": version,
+                "path": manifest.display().to_string(), "replaced": replace,
+            }))
+            .into_response()
+        }
+        Err(error) => crate::json_error(StatusCode::CONFLICT, error),
+    }
+}
+
+async fn update_skill(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(skill) = all_skills(&state).into_iter().find(|entry| entry.id == id) else {
+        return crate::json_error(StatusCode::NOT_FOUND, "No such skill.");
+    };
+    if skill.source != "user" {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            format!(
+                "\"{id}\" is a {} skill; edit its SKILL.md where it lives instead of from here.",
+                skill.source
+            ),
+        );
+    }
+    let Some(root) = writable_root(&state) else {
+        return crate::json_error(StatusCode::CONFLICT, "There is no writable skills folder.");
+    };
+    let Some(dir) = folder_of(&skill) else {
+        return crate::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "That skill has no containing folder.",
+        );
+    };
+    if !inside(&root, &dir) {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "That skill is outside the user skills folder and is not editable from here.",
+        );
+    }
+    let instructions = match input.get("instructions").and_then(Value::as_str) {
+        Some(text) if !text.trim().is_empty() => text.to_string(),
+        _ => {
+            return crate::json_error(StatusCode::BAD_REQUEST, "Provide the instructions to save.")
+        }
+    };
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        &dir.join(MANIFEST).display().to_string(),
+        "",
+        approve,
+        "update a skill",
+    ) {
+        return response;
+    }
+    // No version given means no version claim: keep the recorded one rather than
+    // inventing a bump the user did not make.
+    let recorded = installed_record(&registry_path(&state), &id)
+        .map(|entry| entry.version)
+        .filter(|version| !version.is_empty());
+    let version = input
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(skill.version.clone()).filter(|version| !version.is_empty()))
+        .or(recorded)
+        .unwrap_or_else(|| DEFAULT_VERSION.to_string());
+    let description = input
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| skill.description.clone());
+    let document = manifest_text(&id, &description, &version, &instructions);
+    match write_manifest(&dir, &document, true) {
+        Ok(manifest) => {
+            let target_id = parse_text(&id, &document, "user").id;
+            if let Err(error) = remember_at(
+                &registry_path(&state),
+                &target_id,
+                &version,
+                &fingerprint(&document),
+            ) {
+                return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+            }
+            Json(json!({
+                "ok": true, "id": target_id, "version": version,
+                "path": manifest.display().to_string(),
+            }))
+            .into_response()
+        }
+        Err(error) => crate::json_error(StatusCode::CONFLICT, error),
+    }
+}
+
+async fn remove_skill(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    input: Option<Json<Value>>,
+) -> Response<Body> {
+    let approve = input
+        .as_ref()
+        .and_then(|Json(body)| body.get("approve"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(skill) = all_skills(&state).into_iter().find(|entry| entry.id == id) else {
+        return crate::json_error(StatusCode::NOT_FOUND, "No such skill.");
+    };
+    if skill.source != "user" {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            format!(
+                "\"{id}\" is a {} skill; this app does not delete files it did not install.",
+                skill.source
+            ),
+        );
+    }
+    let Some(root) = writable_root(&state) else {
+        return crate::json_error(StatusCode::CONFLICT, "There is no writable skills folder.");
+    };
+    let Some(dir) = folder_of(&skill) else {
+        return crate::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "That skill has no containing folder.",
+        );
+    };
+    if !inside(&root, &dir) {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "That skill is outside the user skills folder and is not removable from here.",
+        );
+    }
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        &dir.display().to_string(),
+        "",
+        approve,
+        "remove a skill",
+    ) {
+        return response;
+    }
+    match move_out_of_the_way(&root, &dir) {
+        Ok(target) => {
+            if let Err(error) = forget_at(&registry_path(&state), &id) {
+                return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+            }
+            Json(json!({
+                "ok": true, "id": id, "moved_to": target.display().to_string(),
+            }))
+            .into_response()
+        }
+        Err(error) => crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn get_usage(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response<Body> {
+    let limit = 20usize;
+    Json(usage_detail(&state.database_path, &id, limit)).into_response()
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/skills", get(get_skills))
+        .route("/api/skills/install", post(install_skill))
         .route("/api/skills/:id", get(get_skill))
         .route("/api/skills/:id/state", post(set_skill_enabled))
+        .route("/api/skills/:id/update", post(update_skill))
+        .route("/api/skills/:id/remove", post(remove_skill))
+        .route("/api/skills/:id/usage", get(get_usage))
 }
 
 #[cfg(test)]
@@ -450,5 +1081,146 @@ mod tests {
         let index = index_text(&["b".into()], &all).expect("index");
         assert!(index.contains("- a: First skill."));
         assert!(!index.contains("Second skill"));
+    }
+
+    #[test]
+    fn install_writes_a_manifest_and_keeps_the_version() {
+        let root = scratch("install");
+        let document = manifest_text(
+            "code-review",
+            "Review a file for bugs.",
+            "1.2.0",
+            "Read the file, then list the bugs you can prove.",
+        );
+        let manifest =
+            write_manifest(&root.join("code-review"), &document, false).expect("install");
+        assert!(manifest.is_file());
+        let skills = discover(&[("user".into(), root.clone())]);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "code-review");
+        assert_eq!(skills[0].version, "1.2.0");
+        assert_eq!(skills[0].description, "Review a file for bugs.");
+        assert!(skills[0].body.starts_with("Read the file"));
+        assert!(skills[0].error.is_none());
+    }
+
+    #[test]
+    fn install_refuses_to_overwrite_unless_asked() {
+        let root = scratch("overwrite");
+        let first = manifest_text("Review", "First copy.", "1.0.0", "First instructions.");
+        let second = manifest_text("Review", "Second copy.", "2.0.0", "Second instructions.");
+        write_manifest(&root.join("review"), &first, false).expect("first install");
+        let error = write_manifest(&root.join("review"), &second, false)
+            .expect_err("a second install without replace must not clobber");
+        assert!(error.contains("already exists"), "{error}");
+        // The refused write left the original untouched.
+        let skills = discover(&[("user".into(), root.clone())]);
+        assert_eq!(skills[0].body, "First instructions.");
+
+        write_manifest(&root.join("review"), &second, true).expect("explicit replace");
+        let skills = discover(&[("user".into(), root)]);
+        assert_eq!(skills[0].version, "2.0.0");
+        assert_eq!(skills[0].body, "Second instructions.");
+    }
+
+    #[test]
+    fn an_install_with_no_instructions_creates_nothing() {
+        let root = scratch("empty-install");
+        let document = manifest_text("Empty", "Nothing to say.", "1.0.0", "   ");
+        let error = write_manifest(&root.join("empty"), &document, false)
+            .expect_err("an empty skill is refused");
+        assert!(error.contains("no instructions"), "{error}");
+        assert!(!root.join("empty").exists(), "nothing was written");
+    }
+
+    #[test]
+    fn a_hand_edit_changes_the_fingerprint() {
+        let installed = manifest_text("Edit", "Before.", "1.0.0", "Original instructions.");
+        let edited = manifest_text("Edit", "Before.", "1.0.0", "Someone changed this.");
+        assert_ne!(fingerprint(&installed), fingerprint(&edited));
+        // Same text, same fingerprint: the comparison is about content only.
+        assert_eq!(fingerprint(&edited), fingerprint(&edited.clone()));
+    }
+
+    #[test]
+    fn the_registry_remembers_the_version_without_losing_the_install_time() {
+        let dir = scratch("registry");
+        let path = dir.join("skills.json");
+        remember_at(&path, "review", "1.0.0", "aaaa").expect("first install");
+        let first = installed_record(&path, "review").expect("record");
+        assert_eq!(first.version, "1.0.0");
+        assert_eq!(first.installed_at, first.updated_at);
+
+        remember_at(&path, "review", "1.1.0", "bbbb").expect("update");
+        let second = installed_record(&path, "review").expect("record");
+        assert_eq!(second.version, "1.1.0");
+        assert_eq!(second.fingerprint, "bbbb");
+        assert_eq!(
+            second.installed_at, first.installed_at,
+            "an update does not reset the install time"
+        );
+
+        forget_at(&path, "review").expect("forget");
+        assert!(installed_record(&path, "review").is_none());
+    }
+
+    #[test]
+    fn slugs_cannot_escape_the_root() {
+        assert_eq!(slugify("Code Review"), "code-review");
+        assert_eq!(slugify("../../etc/passwd"), "etc-passwd");
+        assert_eq!(slugify("already-slugged"), "already-slugged");
+        assert_eq!(slugify("   "), "");
+        assert_eq!(slugify("///"), "");
+    }
+
+    #[test]
+    fn remove_moves_the_folder_into_the_trash_rather_than_deleting_it() {
+        let root = scratch("remove");
+        write_skill(
+            &root,
+            "temp",
+            "---\nname: temp\ndescription: Temporary.\n---\nGo.\n",
+        );
+        let dir = root.join("temp");
+        assert!(inside(&root, &dir));
+        let moved = move_out_of_the_way(&root, &dir).expect("moved");
+        assert!(!dir.exists(), "the skill left the list");
+        assert!(
+            moved.join(MANIFEST).is_file(),
+            "its manifest is still on disk"
+        );
+        assert!(moved.starts_with(root.join(".removed")));
+        // The trash is not a skill root entry: it has no manifest of its own.
+        assert_eq!(discover(&[("user".into(), root.clone())]).len(), 0);
+        // The root itself is never "inside" itself.
+        assert!(!inside(&root, &root));
+    }
+
+    #[test]
+    fn usage_history_counts_uses_and_reports_the_last_one() {
+        let dir = scratch("usage");
+        let db = dir.join("studio.db");
+        record_use(&db, "review", "conversation-1", 40);
+        record_use(&db, "review", "conversation-2", 60);
+        record_use(&db, "other", "conversation-1", 5);
+
+        let summary = usage_summary(&db);
+        let (uses, last, tokens) = summary.get("review").copied().expect("review usage");
+        assert_eq!(uses, 2);
+        assert!(last > 0.0);
+        assert_eq!(tokens, 100);
+
+        let detail = usage_detail(&db, "review", 10);
+        assert_eq!(detail["uses"], 2);
+        assert_eq!(detail["tokens"], 100);
+        let recent = detail["recent"].as_array().expect("recent rows");
+        assert_eq!(recent.len(), 2);
+        // Newest first.
+        assert_eq!(recent[0]["conversation_id"], "conversation-2");
+
+        // An unknown skill reads as never used rather than as an error.
+        let none = usage_detail(&db, "missing", 10);
+        assert_eq!(none["uses"], 0);
+        assert_eq!(none["recent"].as_array().map(Vec::len), Some(0));
     }
 }

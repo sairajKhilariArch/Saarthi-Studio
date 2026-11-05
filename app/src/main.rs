@@ -319,6 +319,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = migrate_project_model(&conn);
     let _ = migrate_request_log_costs(&conn);
     let _ = permissions::initialize(&conn);
+    let _ = skills::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
     }
@@ -3195,6 +3196,13 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
     // Mirroring: the user's message is saved inside prepare_chat, so every
     // open view of this thread should refresh now that it landed.
     events::notify(&state.events, &cid, "user");
+    // Usage history for the picked skill: recorded here, where the conversation
+    // id exists, so a brand-new thread is attributed too.
+    if let Some(skill_id) = input.get("skill").and_then(Value::as_str) {
+        if !skill_id.is_empty() {
+            skills::record_pick(&state, skill_id, &cid);
+        }
+    }
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
     let context_dropped = packed.dropped_messages;
@@ -3679,6 +3687,13 @@ async fn chat_stream(
     // Mirroring: the user's message is saved inside prepare_chat, so every
     // open view of this thread should refresh now that it landed.
     events::notify(&state.events, &cid, "user");
+    // Usage history for the picked skill: recorded here, where the conversation
+    // id exists, so a brand-new thread is attributed too.
+    if let Some(skill_id) = input.get("skill").and_then(Value::as_str) {
+        if !skill_id.is_empty() {
+            skills::record_pick(&state, skill_id, &cid);
+        }
+    }
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
     let context_dropped = packed.dropped_messages;

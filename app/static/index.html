@@ -88,6 +88,15 @@
       <div id="skillList" class="skill-list">
         <p class="empty-note">Loading skills…</p>
       </div>
+      <details id="skillInstall" class="skill-install">
+        <summary>Install a skill…</summary>
+        <label class="field"><span>Name</span><input id="skillInstallName" type="text" placeholder="code-review" autocomplete="off"></label>
+        <label class="field"><span>Version</span><input id="skillInstallVersion" type="text" placeholder="0.1.0" autocomplete="off"></label>
+        <label class="field"><span>Description</span><input id="skillInstallDescription" type="text" placeholder="Review a file for bugs." autocomplete="off"></label>
+        <label class="field"><span>Instructions</span><textarea id="skillInstallBody" rows="6" placeholder="What this skill should make the assistant do."></textarea></label>
+        <div class="form-actions"><button type="button" id="skillInstallBtn" class="btn btn-accent btn-small">Install</button></div>
+        <small class="muted">Installed into your user skills folder. Nothing runs: the instructions only ride along when you pick the skill.</small>
+      </details>
       <div id="skillDetail" class="skill-detail hidden">
         <div class="skill-detail-head">
           <button id="skillBack" class="icon-btn tiny" aria-label="Back to the skill list"><svg class="icon"><use href="#i-chevron"/></svg></button>

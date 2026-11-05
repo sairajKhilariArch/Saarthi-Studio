@@ -116,8 +116,8 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Discovery across 5 roots | Working | `skills.rs` |
 | Enable/disable persisted | Working | `POST /api/skills/:id/state` |
 | Instruction injection with token cap | Working | rides the next message |
-| Install / update / remove / version tracking | **Missing** | routes are list, get, state only |
-| Skill permissions / usage history | Missing | skills are prompt text and never executed |
+| Install / update / remove / version tracking | Working (1.49.0) | install writes `<user skills>/<slug>/SKILL.md` after validating it with the list parser (temp file + rename, refuses overwrite unless `replace`); update rewrites in place and keeps the id; remove moves the folder to `<root>/.removed/` instead of deleting; `skills.json` records version, install/update times and a content fingerprint, so “edited since install” is reported; only the user root is writable |
+| Skill permissions / usage history | Partial (1.49.0) | usage history is real (`skill_usage`: id, time, conversation, tokens; `uses`/`last_used_at` per skill and `/api/skills/:id/usage`); writing routes are gated on `fs_write`. There are no per-skill permissions because a skill is prompt text and is never executed |
 | Automatic skill selection | Partial | manual picker only |
 
 ## Phase 7 — MCP
