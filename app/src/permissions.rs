@@ -209,10 +209,24 @@ impl Effective {
     }
 }
 
+/// Paths reach this module with either separator: Windows callers build them
+/// with `Path::join` (backslashes), the UI and the audit write `/`. A rule and
+/// a target are compared after this normalisation, so a rule written one way
+/// still matches the other — a mismatch would silently disable the rule.
+fn normalise_target(value: &str) -> String {
+    let mut out = value.trim().replace('\\', "/");
+    while out.len() > 1 && out.ends_with('/') {
+        out.pop();
+    }
+    out
+}
+
 fn applies(rule: &Rule, action: Action, target: &str, project: &str) -> bool {
-    rule.action == action
-        && (rule.project.is_empty() || rule.project == project)
-        && (rule.target.is_empty() || target.starts_with(rule.target.as_str()))
+    if rule.action != action || !(rule.project.is_empty() || rule.project == project) {
+        return false;
+    }
+    let rule_target = normalise_target(&rule.target);
+    rule_target.is_empty() || normalise_target(target).starts_with(&rule_target)
 }
 
 /// Most specific rule wins: longer target, then deny > ask > allow, then the
@@ -325,9 +339,10 @@ pub(crate) fn revoke(
     scope: Option<Scope>,
     project: &str,
 ) -> usize {
+    let wanted_target = normalise_target(target);
     let matches = |rule: &Rule| {
         rule.action == action
-            && rule.target == target
+            && normalise_target(&rule.target) == wanted_target
             && scope.map_or(true, |wanted| rule.scope == wanted)
             && (project.is_empty() || rule.project == project)
     };
@@ -351,11 +366,13 @@ pub(crate) fn revoke(
 /// Drop `once` rules that were just used, so a single-use grant really is one
 /// use.
 fn consume_once(state: &AppState, action: Action, target: &str, project: &str) {
+    let wanted = normalise_target(target);
     let mine = |rule: &Rule| {
+        let rule_target = normalise_target(&rule.target);
         rule.action == action
             && rule.scope == Scope::Once
             && (rule.project.is_empty() || rule.project == project)
-            && (rule.target.is_empty() || target.starts_with(rule.target.as_str()))
+            && (rule_target.is_empty() || wanted.starts_with(&rule_target))
     };
     let path = store_path(state);
     let mut persisted = read_rules(&path);
@@ -756,6 +773,24 @@ mod tests {
             project: String::new(),
             created_at: 0.0,
         }
+    }
+
+    #[test]
+    fn path_targets_match_across_separators_and_trailing_slashes() {
+        // The bug this guards: a Windows caller builds its target with
+        // `Path::join` (backslashes) while the rule was written with `/`.
+        let file = rule(Action::FsWrite, "C:/work/ws/.env", Decision::Deny, Scope::Always);
+        assert!(applies(&file, Action::FsWrite, r"C:\work\ws\.env", ""));
+        assert!(applies(&file, Action::FsWrite, "C:/work/ws/.env", ""));
+        assert!(!applies(&file, Action::FsWrite, r"C:\work\ws\other.txt", ""));
+        let directory = rule(Action::FsWrite, "C:/work/ws/", Decision::Deny, Scope::Always);
+        assert!(applies(
+            &directory,
+            Action::FsWrite,
+            r"C:\work\ws\.env",
+            ""
+        ));
+        assert_eq!(normalise_target(r"C:\work\ws\"), "C:/work/ws");
     }
 
     #[test]

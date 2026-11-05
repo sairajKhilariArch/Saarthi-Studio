@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.43.0
+
+- Phase 2 close-out, dependency half (spec §5.3): `/api/routers` now carries a
+  measured `environment` — OS and OS version, architecture, every package
+  manager found on PATH with its version (`apt-get`, `dnf`, `pacman`, `zypper`,
+  `apk`, `brew`, `winget`, `choco`, `scoop`, `port`), Docker, and `docker
+  compose` (or the legacy `docker-compose`). Presence comes from a PATH lookup,
+  versions from the tool's own `--version`; nothing is guessed. The Router panel
+  prints the same facts instead of leaving a blocked install unexplained.
+- Phase 2 close-out, editor half (spec §5.6): a real configuration editor for
+  the compose-based router. `GET /api/routers/:id/config` lists the whitelisted
+  files (`docker-compose.yml|yaml`, `compose.yml|yaml`, `.env`) in the project
+  the install recorded; `GET …/config/file?name=` reads one; `POST …/config/file`
+  saves it through a temp file and a rename. Reads and writes share one
+  whitelist validator, so a separator or `..` can never leave that directory,
+  and the editor stops at 64 KiB. A router with no file says why: OmniRoute
+  keeps its settings in its container, and the local runtime is configured
+  through the Local runtime panel that validates it.
+- Saves are gated on `fs_write` for the exact file, so a saved rule can freeze
+  the router's compose file without freezing the workspace; the UI retries once
+  after the person approves a 409.
+- Defect found while smoking the gate: permission targets were compared as raw
+  strings with `starts_with`, so a rule written with `/` never matched a target
+  a Windows caller built with `Path::join` (`\`). A deny was silently inert.
+  Targets and rules are now normalised (separators and trailing slashes) before
+  matching, revoking and one-use consumption, with a regression test.
+- Tests: 266 pass, 1 ignored (new: version extraction, whitelist validation,
+  file round-trip and oversize refusal, router-without-file reasons, separator
+  normalisation). Clippy `-D warnings` clean; `node --check app/static/app.js`
+  clean.
+- Live smoke on :8879 with a throwaway HOME and a fabricated compose project:
+  `/api/routers` reported the real host (Windows 10.0.26200, docker 29.9.2,
+  compose 5.6.1, winget) and FreeLLMAPI as installed from the compose dir; the
+  editor listed and read `docker-compose.yml`; saving `.env` returned 200 and
+  the file appeared on disk; `../x` and `config.json` were refused 400; an
+  unknown router was 404; OmniRoute answered with its container reason; a
+  forward-slash `fs_write` deny then refused the save with 403 even though the
+  route passes a backslash path, and after revoking the rule the save succeeded.
+- Version 1.43.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 59).
+
 ## 1.42.0
 
 - Phase 10 close-out: saved API keys live in the OS credential store instead

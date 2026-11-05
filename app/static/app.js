@@ -4657,6 +4657,21 @@ function routerRow(entry) {
       : "The router has not written any output yet.";
   }));
 
+  // Configuration editor. The server decides whether this router has a file to
+  // edit or why it does not (a container-only gateway, or the local runtime
+  // Studio configures elsewhere), so the button never offers an editor that
+  // cannot work.
+  const configBox = document.createElement("div");
+  configBox.className = "console-logs hidden";
+  actions.appendChild(rowButton("Configuration", async () => {
+    if (!configBox.classList.contains("hidden")) {
+      configBox.classList.add("hidden");
+      return;
+    }
+    await mountRouterConfig(entry, configBox);
+  }));
+  row.appendChild(configBox);
+
   // Install: the server builds a plan with no side effects, the panel prints its
   // exact commands and prerequisites, and only that plan's digest can be
   // approved. A blocked plan explains itself and offers nothing to click.
@@ -4821,9 +4836,98 @@ async function loadRouterList() {
   }
   list.replaceChildren(...entries.map(routerRow));
   const note = $("routerListNote");
-  if (note && result.data.platform) {
-    note.textContent = `Probed on ${result.data.platform.os}/${result.data.platform.arch}.`;
+  if (note) {
+    const platform = result.data.platform || {};
+    const env = result.data.environment || {};
+    const parts = [`Probed on ${platform.os || "?"}/${platform.arch || "?"}`];
+    if (env.os_version) parts.push(env.os_version);
+    parts.push(env.docker ? `docker ${env.docker.version || "present"}` : "docker not found on PATH");
+    if (env.compose) parts.push(`compose ${env.compose.version || "present"}`);
+    if (env.package_managers && env.package_managers.length) {
+      parts.push(`package managers: ${env.package_managers.map((item) => item.name).join(", ")}`);
+    } else {
+      parts.push("no package manager found on PATH");
+    }
+    note.textContent = parts.join(" · ");
   }
+}
+
+// The router configuration editor (Phase 2 close-out). Files come from the
+// server's whitelist inside the compose project the install recorded; saves go
+// through the same permission store an editor save uses, so a saved fs_write
+// deny can freeze the router's compose file.
+async function mountRouterConfig(entry, host) {
+  host.classList.remove("hidden");
+  host.replaceChildren();
+  const status = document.createElement("small");
+  status.className = "muted";
+  const info = await api(`/api/routers/${entry.id}/config`);
+  if (!info.ok || info.data.ok === false) {
+    status.textContent = info.data.error || "Could not read the router's configuration.";
+    host.appendChild(status);
+    return;
+  }
+  const files = info.data.files || [];
+  const heading = document.createElement("small");
+  heading.className = "muted";
+  heading.textContent = files.length
+    ? info.data.directory
+    : `No configuration file exists yet in ${info.data.directory}.`;
+  host.appendChild(heading);
+  if (!files.length) return;
+
+  const controls = document.createElement("div");
+  controls.className = "form-actions";
+  const select = document.createElement("select");
+  select.className = "run-crew-input";
+  files.forEach((file) => {
+    const option = document.createElement("option");
+    option.value = file.name;
+    option.textContent = `${file.name} (${formatBytes(file.bytes)})`;
+    select.appendChild(option);
+  });
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn btn-accent btn-small";
+  save.textContent = "Save file";
+  controls.append(select, save);
+
+  const area = document.createElement("textarea");
+  area.className = "code-area router-config-area";
+  area.spellcheck = false;
+  area.wrap = "off";
+  area.rows = 14;
+
+  const loadFile = async () => {
+    area.value = "Loading…";
+    const result = await api(`/api/routers/${entry.id}/config/file?name=${encodeURIComponent(select.value)}`);
+    if (!result.ok) {
+      area.value = "";
+      status.textContent = result.data.error || "Could not read that file.";
+      return;
+    }
+    area.value = result.data.content;
+    status.textContent = `${result.data.name} · ${formatBytes(result.data.bytes)} loaded`;
+  };
+  select.addEventListener("change", loadFile);
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    const result = await api(`/api/routers/${entry.id}/config/file`, {
+      method: "POST",
+      confirmApproval: true,
+      body: JSON.stringify({ name: select.value, content: area.value }),
+    });
+    save.disabled = false;
+    if (!result.ok) {
+      status.textContent = result.data.error || "Could not save the file.";
+      return;
+    }
+    status.textContent = `Saved ${result.data.name} · ${formatBytes(result.data.bytes)}`;
+    toast("Router configuration saved.");
+  });
+
+  host.append(controls, area, status);
+  await loadFile();
 }
 
 async function loadConsoleStatus() {

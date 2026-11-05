@@ -48,6 +48,7 @@ mod permissions;
 mod privacy;
 mod router;
 mod router_console;
+mod router_env;
 mod router_registry;
 mod skills;
 mod terminal;
@@ -1123,13 +1124,132 @@ async fn omniroute_stop(State(_state): State<AppState>) -> Response<Body> {
 /// probe that already backs /api/router, /api/omniroute and /api/local/status.
 async fn routers(State(state): State<AppState>) -> Json<Value> {
     let routers = router_registry::views(&state).await;
+    // Measured once per list call: package managers, Docker and compose
+    // versions are what the install plans depend on, so the panel can explain
+    // a blocked install with facts instead of a guess. Blocking subprocesses
+    // stay off the async worker.
+    let environment = tokio::task::spawn_blocking(router_env::environment)
+        .await
+        .ok()
+        .map(|env| env.to_json());
     Json(json!({
         "platform": {
             "os": router_registry::current_os(),
             "arch": router_registry::current_arch(),
         },
+        "environment": environment,
         "routers": routers,
     }))
+}
+
+/// The router's editable configuration files, or the reason there is nothing
+/// to edit (a container-only router, or a runtime Studio configures elsewhere).
+async fn routers_config(Path(id): Path<String>) -> Response<Body> {
+    match router_env::config_dir(&id) {
+        Ok(dir) => {
+            let files = router_env::list_in(&dir);
+            Json(json!({
+                "ok": true,
+                "id": id,
+                "directory": dir.to_string_lossy(),
+                "files": files,
+                "editable": router_env::EDITABLE_FILES,
+            }))
+            .into_response()
+        }
+        Err(error) if error.starts_with("Unknown router id") => {
+            json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => Json(json!({"ok": false, "error": error, "files": []})).into_response(),
+    }
+}
+
+/// One whitelisted file's text. Anything outside the whitelist is refused by
+/// the same validation the write path uses, so neither direction can leave the
+/// directory the install recorded.
+async fn routers_config_file(
+    Path(id): Path<String>,
+    AxumQuery(params): AxumQuery<HashMap<String, String>>,
+) -> Response<Body> {
+    let name = params
+        .get("name")
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+    if name.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Pass ?name=<config file>.");
+    }
+    match router_env::config_dir(&id) {
+        Ok(dir) => match router_env::read_in(&dir, &name) {
+            Ok(content) => Json(json!({
+                "ok": true,
+                "id": id,
+                "name": name,
+                "path": dir.join(&name).to_string_lossy(),
+                "content": content,
+                "bytes": content.len(),
+            }))
+            .into_response(),
+            Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+        },
+        Err(error) if error.starts_with("Unknown router id") => {
+            json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
+/// Save one whitelisted file. Gated on `fs_write` for the exact path, so a
+/// saved rule can freeze the router's compose file while leaving the rest of
+/// the workspace writable.
+async fn routers_save_config_file(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let name = input
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let Some(content) = input.get("content").and_then(Value::as_str) else {
+        return json_error(StatusCode::BAD_REQUEST, "Pass the file's new content.");
+    };
+    let dir = match router_env::config_dir(&id) {
+        Ok(dir) => dir,
+        Err(error) if error.starts_with("Unknown router id") => {
+            return json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    if let Err(error) = router_env::validate_name(&name) {
+        return json_error(StatusCode::BAD_REQUEST, error);
+    }
+    let target = dir.join(&name);
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = permissions::guard_user(
+        &state,
+        permissions::Action::FsWrite,
+        &target.to_string_lossy(),
+        "",
+        approve,
+        "save the router's configuration",
+    ) {
+        return response;
+    }
+    match router_env::write_in(&dir, &name, content) {
+        Ok(bytes) => Json(json!({
+            "ok": true,
+            "id": id,
+            "name": name,
+            "path": target.to_string_lossy(),
+            "bytes": bytes,
+        }))
+        .into_response(),
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
 }
 
 /// Connection tester: a real request to the router's documented health path,
@@ -3452,6 +3572,11 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/omniroute/start", post(omniroute_start))
         .route("/api/omniroute/stop", post(omniroute_stop))
         .route("/api/routers", get(routers))
+        .route("/api/routers/:id/config", get(routers_config))
+        .route(
+            "/api/routers/:id/config/file",
+            get(routers_config_file).post(routers_save_config_file),
+        )
         .route("/api/routers/:id/test", post(routers_test))
         .route("/api/routers/:id/restart", post(routers_restart))
         .route("/api/routers/:id/logs", get(routers_logs))
