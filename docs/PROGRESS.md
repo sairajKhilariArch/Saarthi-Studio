@@ -18,7 +18,8 @@ partial, `[ ]` not started.
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 | 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
 | 1.30.0 | `a0c76d8` | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
-| 1.34.0 | this commit | Phase 7 UI: Settings → MCP panel (register/edit/test/remove, tool cards with required args, schema-shaped JSON template, explicit approve-then-call, raw result) + `env` preserved when a save omits it | live browser pass on :8795 — server saved and listed, Test discovered `echo`/`ping`, the template pre-filled `{"text": ""}`, first call answered `ask` and flipped the button to "Approve and call", second call returned `echo:` |
+| 1.35.0 | this commit | Phase 7 agent half: an `mcp` action in the agent loop (run-scoped opt-in, once-per-run catalogue in `mcp-tools`, approval pause naming the tool and arguments, shared `mcp::invoke` call path, `mcp: N tools` on the run card) + the `list_runs` column/`row_to_run` drift fixed | `cargo test --locked`: 234 passed, 1 ignored; clippy `-D warnings` clean; live run on :8811 against a real stdio MCP server — 2 tools discovered, `think` then pause `call MCP tool echo.echo with {"text":"hello from saarthi"}`, approve → step `mcp` output `echo: hello from saarthi` → `done`; deny rule on `echo.echo` → step refused and run failed naming the rule; auto-approve run called the tool with no pause; runs list now returns rows (3/3) instead of 0 |
+| 1.34.0 | `f7b668b` | Phase 7 UI: Settings → MCP panel (register/edit/test/remove, tool cards with required args, schema-shaped JSON template, explicit approve-then-call, raw result) + `env` preserved when a save omits it | live browser pass on :8795 — server saved and listed, Test discovered `echo`/`ping`, the template pre-filled `{"text": ""}`, first call answered `ask` and flipped the button to "Approve and call", second call returned `echo:` |
 | 1.33.0 | `79cc9ab` | Phase 7 first slice: MCP registry (`mcp.json`), stdio JSON-RPC handshake per operation, tool discovery with real schemas, argument validation, every route policy-gated on `mcp_tool` | live end-to-end on :8796 with a real stdio server — test listed `echo` with its schema, an approved call returned `echo: hi`, a missing argument and a wrong type were refused 400, an unknown tool 404, the default `ask` 409, and both decisions landed in the audit log |
 | 1.32.0 | `010566b` | Phase 10 UI: Settings → Permissions panel (add/revoke rules, audit trail), re-read on every visit | live browser pass on :8797: rule added through the form, badge + audit row appeared, revoke removed it |
 | 1.31.0 | `7c949c3` | Phase 10 first slice: central permission policy store (rules + scopes + resolution), agent-step and router-install enforcement, `permission_audit` table and routes | `cargo test --locked`: 214 passed, 1 ignored; live grant/audit/revoke smoke |
@@ -149,11 +150,15 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [ ] Persistent connection pool / health state / captured server logs / reconnect backoff
 - [ ] SSE and streamable-HTTP transports (stdio only today)
 - [x] Manager UI in Settings: register/edit/test/remove servers, tool cards, schema-shaped argument template, approve-then-call, raw result (1.34.0)
-- [ ] Agent integration: an MCP action in the agent loop so a run can call a discovered tool
+- [x] Agent integration: an `mcp` action in the agent loop, gated on a per-run `allowMcp` flag, refused when no server is enabled, paused for approval, vetoed by `mcp_tool` deny rules on `server.tool`, and executed through the same `mcp::invoke` the HTTP route uses (1.35.0)
+- [x] Catalogue discovered once per run into `agent_runs.mcp_tools` and logged as an `mcp-tools` step, so step prompts never spawn a server (1.35.0)
+- [x] Run surface: `allowMcp` on create/list/get, "May call MCP tools" on the run form, `mcp: N tools` on the run card (1.35.0)
+- [ ] Per-step rediscovery / tool list refresh mid-run (the snapshot is fixed at run start)
+- [x] Runs list defect found while building this: the `list_runs` SELECT omitted `model`, `row_to_run` read one column short, every row failed to map and the panel read "No runs yet"; `RUN_LIST_SQL` is now a constant with a mapping test (1.35.0)
 
 ## Next up
 
-1. Phase 7 close-out — manager UI, agent tool use, then health/transport work.
+1. Phase 7 close-out — MCP health/log state, reconnect, then SSE/HTTP transports.
 2. Phase 10 close-out — remaining privileged call sites (terminal, editor
    writes, git, updates, settings), keychain, global stop.
 3. Phase 2 close-out — configuration editor plus dependency/package-manager

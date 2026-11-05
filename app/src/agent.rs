@@ -38,6 +38,8 @@ const HISTORY_STEPS: i64 = 40;
 const CHECKPOINT_CAP: usize = 200_000;
 /// How many characters of unified diff one step may log.
 const DIFF_CAP: usize = 8_000;
+/// How many discovered tools one agent prompt may list.
+const MCP_PROMPT_TOOLS: usize = 30;
 
 const RUNNING: &str = "running";
 const AWAITING_APPROVAL: &str = "awaiting_approval";
@@ -62,6 +64,13 @@ enum Action {
     Read { path: String },
     Write { path: String, content: String },
     Command { command: String },
+    /// One call to a tool an MCP server advertises. The permission target is
+    /// `server.tool`, the same string a rule is written against.
+    Mcp {
+        server: String,
+        tool: String,
+        arguments: Value,
+    },
     Done { summary: String },
     Fail { reason: String },
 }
@@ -74,6 +83,7 @@ impl Action {
             Action::Read { .. } => "read",
             Action::Write { .. } => "write",
             Action::Command { .. } => "command",
+            Action::Mcp { .. } => "mcp",
             Action::Done { .. } => "done",
             Action::Fail { .. } => "fail",
         }
@@ -88,6 +98,13 @@ impl Action {
                 json!({ "action": "write", "path": path, "content": content })
             }
             Action::Command { command } => json!({ "action": "command", "command": command }),
+            Action::Mcp {
+                server,
+                tool,
+                arguments,
+            } => json!({
+                "action": "mcp", "server": server, "tool": tool, "arguments": arguments
+            }),
             Action::Done { summary } => json!({ "action": "done", "summary": summary }),
             Action::Fail { reason } => json!({ "action": "fail", "reason": reason }),
         }
@@ -133,6 +150,17 @@ impl Action {
             }),
             "command" => Ok(Action::Command {
                 command: field("command", value)?,
+            }),
+            // Arguments are passed through unchanged: the tool's own schema is
+            // the authority, and a non-object here becomes a step error the
+            // model can read instead of an unparseable reply.
+            "mcp" | "mcp-call" | "mcp_call" => Ok(Action::Mcp {
+                server: field("server", value)?,
+                tool: field("tool", value)?,
+                arguments: match value.get("arguments") {
+                    None | Some(Value::Null) => json!({}),
+                    Some(arguments) => arguments.clone(),
+                },
             }),
             "done" => Ok(Action::Done {
                 summary: field("summary", value)?,
@@ -398,6 +426,12 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // when a stage cannot finish inside it ("fail" is the default).
         "ALTER TABLE agent_runs ADD COLUMN stage_policy TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_runs ADD COLUMN stage_max_steps INTEGER NOT NULL DEFAULT 0",
+        // MCP tool use is opt-in per run, like writes and commands: a run that
+        // was not started with it can never call a server tool.
+        "ALTER TABLE agent_runs ADD COLUMN allow_mcp INTEGER NOT NULL DEFAULT 0",
+        // The catalogue discovered at run start (JSON: tools + errors), so a
+        // step prompt never has to spawn a server to describe it.
+        "ALTER TABLE agent_runs ADD COLUMN mcp_tools TEXT NOT NULL DEFAULT ''",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -436,6 +470,10 @@ struct RunRow {
     stage_policy: String,
     /// Per-stage step ceiling for crew runs (0 = disabled).
     stage_max_steps: i64,
+    /// Whether this run may call tools on registered MCP servers.
+    allow_mcp: bool,
+    /// Catalogue snapshot taken at run start (empty until discovery runs).
+    mcp_tools: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -459,6 +497,8 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         crew: row.get(16)?,
         stage_policy: row.get(17)?,
         stage_max_steps: row.get(18)?,
+        allow_mcp: row.get(19)?,
+        mcp_tools: row.get(20)?,
     })
 }
 
@@ -559,7 +599,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -599,6 +639,7 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "model": row.model, "routerConfig": row.router_config,
         "profile": row.profile, "mode": row.mode,
         "stagePolicy": row.stage_policy, "stageMaxSteps": row.stage_max_steps,
+        "allowMcp": row.allow_mcp, "mcpTools": mcp_tool_count(&row.mcp_tools),
         "crew": serde_json::from_str::<Value>(&row.crew)
             .ok()
             .and_then(|v| v.as_array().cloned())
@@ -630,6 +671,21 @@ fn pending_summary(action: &Action) -> String {
             format!("write {} ({} bytes)", path, content.len())
         }
         Action::Command { command } => format!("run {command}"),
+        Action::Mcp {
+            server,
+            tool,
+            arguments,
+        } => {
+            let rendered = arguments.to_string();
+            if rendered == "{}" {
+                format!("call MCP tool {server}.{tool}")
+            } else {
+                format!(
+                    "call MCP tool {server}.{tool} with {}",
+                    cap_chars(&rendered, 200)
+                )
+            }
+        }
         Action::Read { path } => format!("read {path}"),
         Action::List { path } => format!("list {}", if path.is_empty() { "." } else { path }),
         _ => String::new(),
@@ -775,7 +831,48 @@ async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, Strin
             })
             .map_err(|e| e.message().to_string()),
         Action::Command { command } => run_command(root, command).await,
+        Action::Mcp { .. } => Err("MCP actions run through the MCP path, not this one.".to_string()),
         _ => Err("Only list, read, write and command actions execute.".to_string()),
+    }
+}
+
+/// Executes one non-terminal action. Workspace actions go through the
+/// path-confined helpers; an MCP call goes through the same `invoke` the HTTP
+/// route uses, so validation, argument checks and the audit trail are shared.
+async fn dispatch_step(
+    state: &AppState,
+    root: &FsPath,
+    action: &Action,
+) -> Result<String, String> {
+    match action {
+        Action::Mcp {
+            server,
+            tool,
+            arguments,
+        } => match crate::mcp::invoke(state, server, tool, arguments).await {
+            Ok(payload) => {
+                let text = payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let is_error = payload
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                Ok(format!(
+                    "{}via MCP {server}.{tool}\n---\n{}",
+                    if is_error {
+                        "the tool reported an error\n"
+                    } else {
+                        ""
+                    },
+                    cap_chars(&text, STEP_OUTPUT_CAP)
+                ))
+            }
+            Err(failure) => Err(failure.message().to_string()),
+        },
+        other => dispatch_action(root, other).await,
     }
 }
 
@@ -850,7 +947,14 @@ impl PermissionGate {
             Action::Command { .. } if !run.allow_commands => {
                 GateDecision::Denied("command execution")
             }
-            Action::Write { .. } | Action::Command { .. } if !run.auto_approve => {
+            // An MCP call starts a child process and can do anything that
+            // process does, so it is opt-in per run and a pause by default —
+            // exactly like a command. A deny rule on `server.tool` is applied
+            // before this gate ever runs.
+            Action::Mcp { .. } if !run.allow_mcp => GateDecision::Denied("MCP tool calls"),
+            Action::Write { .. } | Action::Command { .. } | Action::Mcp { .. }
+                if !run.auto_approve =>
+            {
                 GateDecision::NeedsApproval
             }
             _ => GateDecision::Allowed,
@@ -884,7 +988,26 @@ fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
     } else {
         "command FORBIDDEN — never emit it".to_string()
     };
-    vec![
+    // The mcp action is only advertised when the run was started with it AND
+    // discovery actually found a tool: telling the model about an action that
+    // would be refused is worse than saying nothing.
+    let mcp_block = if run.allow_mcp {
+        mcp_catalog_block(&run.mcp_tools)
+    } else {
+        None
+    };
+    let mcp_rule = match (&mcp_block, run.allow_mcp) {
+        (Some(_), _) if run.auto_approve => "mcp (enabled for this run)",
+        (Some(_), _) => "mcp (each call first waits for user approval)",
+        (None, true) => "mcp (no tool was discovered — do not emit it)",
+        (None, false) => "mcp FORBIDDEN — never emit it",
+    };
+    let mcp_action_line = if mcp_block.is_some() {
+        "{\"action\":\"mcp\",\"server\":\"<server>\",\"tool\":\"<tool>\",\"arguments\":{}} call one MCP tool from the list below (arguments follow its schema)\n"
+    } else {
+        ""
+    };
+    let mut messages = vec![
         json!({
             "role": "system",
             "content": format!(
@@ -896,9 +1019,10 @@ fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
                  {{\"action\":\"read\",\"path\":\"relative/path\"}} read a file (always read before editing)\n\
                  {{\"action\":\"write\",\"path\":\"relative/path\",\"content\":\"full file text\"}} create or overwrite a file\n\
                  {{\"action\":\"command\",\"command\":\"echo ready\"}} run a shell command in the workspace\n\
+                 {mcp_action_line}\
                  {{\"action\":\"done\",\"summary\":\"...\"}} the goal is met and you verified it\n\
                  {{\"action\":\"fail\",\"reason\":\"...\"}} you cannot meet the goal\n\n\
-                 Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}.",
+                 Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}; mcp: {mcp_rule}.",
                 profile_role(&run.profile)
             )
         }),
@@ -911,7 +1035,87 @@ fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
                 run.goal, history
             )
         }),
-    ]
+    ];
+    // The discovered tools ride along as their own message, so the action list
+    // stays short and the catalogue is easy to read.
+    if let Some(catalog) = mcp_block {
+        messages.push(json!({ "role": "system", "content": catalog }));
+    }
+    messages
+}
+
+/// How many tools the run's snapshot has, for the run card. A corrupt or
+/// absent snapshot is zero, never an error the UI has to understand.
+fn mcp_tool_count(snapshot: &str) -> usize {
+    serde_json::from_str::<Value>(snapshot)
+        .ok()
+        .and_then(|parsed| parsed.get("tools").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0)
+}
+
+/// The catalogue as prompt text: server.tool, a capped description and the
+/// required argument names. None when nothing was discovered, so a run with no
+/// usable tool is not told about an action it cannot take.
+fn mcp_catalog_block(snapshot: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(snapshot).ok()?;
+    let tools = parsed.get("tools").and_then(Value::as_array)?;
+    if tools.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "MCP tools this run may call (server.tool — required arguments):".to_string(),
+    ];
+    for tool in tools.iter().take(MCP_PROMPT_TOOLS) {
+        let Some(server) = tool.get("server").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = tool.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let required = tool
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let mut line = format!("- {server}.{name}");
+        if !description.is_empty() {
+            line.push_str(&format!(": {}", cap_chars(description, 160)));
+        }
+        if !required.is_empty() {
+            line.push_str(&format!(" (required: {required})"));
+        }
+        lines.push(line);
+    }
+    if tools.len() > MCP_PROMPT_TOOLS {
+        lines.push(format!(
+            "... and {} more tool(s) not shown.",
+            tools.len() - MCP_PROMPT_TOOLS
+        ));
+    }
+    if let Some(errors) = parsed.get("errors").and_then(Value::as_array) {
+        if !errors.is_empty() {
+            let listed = errors
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("; ");
+            lines.push(format!(
+                "Unavailable MCP servers: {}",
+                cap_chars(&listed, 400)
+            ));
+        }
+    }
+    Some(lines.join("\n"))
 }
 
 /// Every logged step so far, oldest first with a cap so a long run's prompt
@@ -1290,6 +1494,8 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         crew: run.crew.clone(),
         stage_policy: run.stage_policy.clone(),
         stage_max_steps: run.stage_max_steps,
+        allow_mcp: run.allow_mcp,
+        mcp_tools: run.mcp_tools.clone(),
     }
 }
 
@@ -1413,7 +1619,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             // A `done` with no executed tool step is an unverified claim: no
             // file was written and no command ran. Hold the run to the plan.
             ParsedAction::Ok(Action::Done { .. }) if executed_so_far == 0 => Some(
-                "The local model claimed done but executed no plan action yet: no file was written and no command was run."
+                "The local model claimed done but executed no plan action yet: no file was written, no command was run and no MCP tool was called."
                     .to_string(),
             ),
             _ => None,
@@ -1513,7 +1719,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                     &run.id,
                     "fail",
                     "Done without any executed action",
-                    "The model claimed the goal is complete, but no file was written and no command was run, so nothing was actually delivered or verified.",
+                    "The model claimed the goal is complete, but no file was written, no command was run and no MCP tool was called, so nothing was actually delivered or verified.",
                 )?;
                 finish(
                     state,
@@ -1580,7 +1786,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
 fn executed_tool_steps(state: &AppState, run_id: &str) -> Result<i64, String> {
     db(state)?
         .query_row(
-            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action IN ('write','command')",
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action IN ('write','command','mcp')",
             [run_id],
             |r| r.get(0),
         )
@@ -1651,6 +1857,10 @@ async fn execute_action_step(
         Action::Read { path } | Action::List { path } => {
             (crate::permissions::Action::FsRead, path.clone())
         }
+        Action::Mcp { server, tool, .. } => (
+            crate::permissions::Action::McpTool,
+            crate::mcp::tool_target(server, tool),
+        ),
         _ => (crate::permissions::Action::FsRead, String::new()),
     };
     let verdict = crate::permissions::check(state, policy_action, &policy_target, &run.project_id);
@@ -1758,7 +1968,7 @@ async fn execute_action_step(
         Some((_, path)) => Ok(format!(
             "[blocked by privacy policy: {path} is on the outbound exclusion list; contents were not sent and are not shown here.]"
         )),
-        None => dispatch_action(&root, action).await,
+        None => dispatch_step(state, &root, action).await,
     };
     let output = match outcome {
         Ok(output) => {
@@ -1791,7 +2001,67 @@ async fn execute_action_step(
 /// Drives a run to a terminal state: keeps stepping the model until the goal
 /// completes, approval is requested, the user cancels, or the hard step
 /// ceiling is reached.
+/// Discovers the MCP catalogue once per run and records it, because discovery
+/// starts each enabled server. The snapshot is what every step prompt reads,
+/// so a long run neither respawns servers per step nor loses the list when a
+/// server dies mid-run. A resumed run keeps the snapshot it already has.
+async fn catalog_mcp_tools(state: &AppState, run_id: &str) {
+    let Ok(Some(run)) = load_run(state, run_id) else {
+        return;
+    };
+    if !run.allow_mcp || !run.mcp_tools.is_empty() {
+        return;
+    }
+    let (tools, errors) = crate::mcp::discover_for_prompt(state).await;
+    let snapshot = json!({ "tools": tools, "errors": errors }).to_string();
+    let stored = db(state).and_then(|conn| {
+        conn.execute(
+            "UPDATE agent_runs SET mcp_tools=?1 WHERE id=?2",
+            params![snapshot, run_id],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    });
+    if let Err(error) = stored {
+        let _ = add_step(
+            state,
+            run_id,
+            "error",
+            "The MCP catalogue could not be saved",
+            &error,
+        );
+        return;
+    }
+    let listed = tools
+        .iter()
+        .map(|tool| {
+            let server = tool.get("server").and_then(Value::as_str).unwrap_or("");
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+            format!("{server}.{name}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut output = if listed.is_empty() {
+        "No tool was discovered on the enabled MCP servers.".to_string()
+    } else {
+        listed
+    };
+    for error in &errors {
+        output.push_str(&format!("\nunavailable: {error}"));
+    }
+    let _ = add_step(
+        state,
+        run_id,
+        "mcp-tools",
+        &format!("{} MCP tool(s) available to this run", tools.len()),
+        &cap_chars(&output, STEP_OUTPUT_CAP),
+    );
+    notify(state, Some(run_id));
+}
+
 async fn run_loop(state: AppState, run_id: String) {
+    // The MCP catalogue comes first: the very first prompt is built from it.
+    catalog_mcp_tools(&state, &run_id).await;
     // Hybrid phase 1: the cloud plans before the local model touches anything.
     if let Ok(Some(run)) = load_run(&state, &run_id) {
         if run.mode == "hybrid" && run.status == RUNNING {
@@ -2140,6 +2410,18 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         .get("autoApprove")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // MCP tool use is opt-in per run and refused at the door when there is
+    // nothing to call: a checkbox that can only ever do nothing is a lie.
+    let allow_mcp = input
+        .get("allowMcp")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if allow_mcp && crate::mcp::enabled_servers(&state).is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "No enabled MCP server is registered - add one in Settings \u{2192} MCP first, or start the run without MCP tools.",
+        );
+    }
     let max_steps = input
         .get("maxSteps")
         .and_then(Value::as_i64)
@@ -2209,12 +2491,13 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 id, project_id, goal, RUNNING,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
-                snapshot, base_model, profile, mode, crew_json, stage_policy, stage_max_steps
+                snapshot, base_model, profile, mode, crew_json, stage_policy, stage_max_steps,
+                allow_mcp
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -2225,24 +2508,29 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     Json(json!({ "ok": true, "run": { "id": id, "status": RUNNING } })).into_response()
 }
 
+/// Column order must match `row_to_run` exactly, `model` included: a list that
+/// skipped it shifted every later field, the rows failed to map, and the panel
+/// read "No runs yet" while the runs existed. The step count is the last column.
+const RUN_LIST_SQL: &str = "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, \
+ r.allow_commands, r.auto_approve, r.max_steps, r.pending_action, r.error, r.created_at, \
+ r.updated_at, r.router_config, r.model, r.profile, r.mode, r.crew, r.stage_policy, \
+ r.stage_max_steps, r.allow_mcp, r.mcp_tools, \
+ (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
+ FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50";
+
 async fn list_runs(State(state): State<AppState>) -> Response {
     let conn = match db(&state) {
         Ok(conn) => conn,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
-    let mut stmt = match conn.prepare(
-        "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, r.allow_commands, r.auto_approve, \
-         r.max_steps, r.pending_action, r.error, r.created_at, r.updated_at, r.router_config, r.profile, r.mode, r.crew, r.stage_policy, r.stage_max_steps, \
-         (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
-         FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50",
-    ) {
+    let mut stmt = match conn.prepare(RUN_LIST_SQL) {
         Ok(stmt) => stmt,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
     let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(17)?;
+            let steps: i64 = row.get(21)?;
 
             Ok(run_json(&run, steps))
         })
@@ -2537,7 +2825,7 @@ async fn approve_run(
         Action::Write { path, .. } => capture_checkpoint(&root, path),
         _ => (String::new(), None),
     };
-    match dispatch_action(&root, &action).await {
+    match dispatch_step(&state, &root, &action).await {
         Ok(output) => {
             let _ = set_run(&state, &run_id, RUNNING, None, Some(""));
             let output = match &action {
@@ -2795,6 +3083,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             crew: String::new(),
             stage_policy: String::new(),
             stage_max_steps: 0,
+            allow_mcp: false,
+            mcp_tools: String::new(),
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -2915,7 +3205,134 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             crew: String::new(),
             stage_policy: String::new(),
             stage_max_steps: 0,
+            allow_mcp: false,
+            mcp_tools: String::new(),
         }
+    }
+
+    /// An all-allowed run whose MCP flag and catalogue are under test.
+    fn mcp_run(allow_mcp: bool, snapshot: &str) -> RunRow {
+        let mut run = gated_run("coding");
+        run.allow_mcp = allow_mcp;
+        run.mcp_tools = snapshot.to_string();
+        run
+    }
+
+    const MCP_SNAPSHOT: &str = r#"{"tools":[{"server":"echo","name":"echo","description":"Echo text back","required":["text"]}],"errors":[]}"#;
+
+    #[test]
+    fn an_mcp_action_parses_with_and_without_arguments() {
+        match parse_action(
+            "{\"action\":\"mcp\",\"server\":\"echo\",\"tool\":\"echo\",\"arguments\":{\"text\":\"hi\"}}",
+        ) {
+            ParsedAction::Ok(Action::Mcp {
+                server,
+                tool,
+                arguments,
+            }) => {
+                assert_eq!(server, "echo");
+                assert_eq!(tool, "echo");
+                assert_eq!(arguments["text"], json!("hi"));
+            }
+            other => panic!("expected an mcp action, got {other:?}"),
+        }
+        // Missing arguments means no arguments, not a malformed reply.
+        match parse_action("{\"action\":\"mcp-call\",\"server\":\"echo\",\"tool\":\"ping\"}") {
+            ParsedAction::Ok(Action::Mcp { arguments, .. }) => assert_eq!(arguments, json!({})),
+            other => panic!("expected an mcp action, got {other:?}"),
+        }
+        // A non-object arguments value still parses: the tool's schema rejects
+        // it as a step error the model can read and repair.
+        match parse_action("{\"action\":\"mcp\",\"server\":\"e\",\"tool\":\"t\",\"arguments\":\"x\"}") {
+            ParsedAction::Ok(Action::Mcp { arguments, .. }) => assert_eq!(arguments, json!("x")),
+            other => panic!("expected an mcp action, got {other:?}"),
+        }
+        // Naming the server or tool is not optional.
+        match parse_action("{\"action\":\"mcp\",\"tool\":\"echo\"}") {
+            ParsedAction::Malformed(error) => assert!(error.contains("server"), "{error}"),
+            other => panic!("expected malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_mcp_call_is_summarised_for_the_approval_row() {
+        let bare = Action::Mcp {
+            server: "echo".into(),
+            tool: "echo".into(),
+            arguments: json!({}),
+        };
+        assert_eq!(pending_summary(&bare), "call MCP tool echo.echo");
+        assert_eq!(bare.tag(), "mcp");
+        let with_args = Action::Mcp {
+            server: "files".into(),
+            tool: "read_file".into(),
+            arguments: json!({ "path": "src/main.rs" }),
+        };
+        let summary = pending_summary(&with_args);
+        assert!(summary.starts_with("call MCP tool files.read_file with {"), "{summary}");
+        // The pending action survives the round trip the approval route takes.
+        assert_eq!(
+            Action::from_json(&with_args.to_json()),
+            Ok(Action::Mcp {
+                server: "files".into(),
+                tool: "read_file".into(),
+                arguments: json!({ "path": "src/main.rs" }),
+            })
+        );
+    }
+
+    #[test]
+    fn mcp_calls_are_gated_by_the_run_and_still_pause() {
+        let call = Action::Mcp {
+            server: "echo".into(),
+            tool: "echo".into(),
+            arguments: json!({ "text": "hi" }),
+        };
+        // A run started without MCP may never call a tool.
+        assert!(matches!(
+            PermissionGate::decides(&mcp_run(false, MCP_SNAPSHOT), &call),
+            GateDecision::Denied(_)
+        ));
+        // Allowed but unapproved: it pauses for the user first.
+        let mut run = mcp_run(true, MCP_SNAPSHOT);
+        run.auto_approve = false;
+        assert!(matches!(
+            PermissionGate::decides(&run, &call),
+            GateDecision::NeedsApproval
+        ));
+        // Allowed and auto-approved: it runs.
+        assert!(matches!(
+            PermissionGate::decides(&mcp_run(true, MCP_SNAPSHOT), &call),
+            GateDecision::Allowed
+        ));
+    }
+
+    #[test]
+    fn the_mcp_action_is_advertised_only_when_a_tool_was_found() {
+        let prompt = |run: &RunRow| {
+            build_messages(run, "(no steps yet)")
+                .iter()
+                .map(|message| message["content"].as_str().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // No flag: the action is forbidden and no catalogue rides along.
+        let without = prompt(&mcp_run(false, MCP_SNAPSHOT));
+        assert!(without.contains("mcp FORBIDDEN"), "{without}");
+        assert!(!without.contains("echo.echo"), "{without}");
+        // Flag on with a discovered tool: the action, the rule and the tool.
+        let with = prompt(&mcp_run(true, MCP_SNAPSHOT));
+        assert!(with.contains("\"action\":\"mcp\""), "{with}");
+        assert!(with.contains("echo.echo"), "{with}");
+        assert!(with.contains("required: text"), "{with}");
+        // Flag on but nothing discovered: no action line, and the prompt says so.
+        let empty = prompt(&mcp_run(true, "{\"tools\":[],\"errors\":[\"gone: no such file\"]}"));
+        assert!(!empty.contains("\"action\":\"mcp\""), "{empty}");
+        assert!(empty.contains("no tool was discovered"), "{empty}");
+        // A corrupt snapshot degrades to "no tools", never a panic.
+        assert_eq!(mcp_tool_count("{not json"), 0);
+        assert_eq!(mcp_tool_count(MCP_SNAPSHOT), 1);
+        assert!(mcp_catalog_block("{not json").is_none());
     }
 
     #[test]
@@ -3034,6 +3451,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             crew: String::new(),
             stage_policy: String::new(),
             stage_max_steps: 0,
+            allow_mcp: false,
+            mcp_tools: String::new(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -3067,6 +3486,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             crew: String::new(),
             stage_policy: String::new(),
             stage_max_steps: 0,
+            allow_mcp: false,
+            mcp_tools: String::new(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
@@ -3633,5 +4054,166 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             std::fs::read_to_string(fixture.root.join("ws/hi.txt")).unwrap(),
             "hello"
         );
+    }
+
+    /// The list query and `row_to_run` are two separate declarations of one
+    /// column order. When they drifted apart every row failed to map and the
+    /// Runs panel read "No runs yet" while the runs existed.
+    #[test]
+    fn the_runs_list_query_maps_every_column() {
+        let path = std::env::temp_dir().join(format!(
+            "saarthi-runs-list-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let conn = crate::open_db(&path).expect("temp db");
+        initialize(&conn).expect("schema");
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,mcp_tools) \
+             VALUES('run-1','proj','the goal','succeeded',1,1,0,7,'','',10.0,11.0,'cfg','the-model','review','crew','[\"coding\"]','skip',5,1,'{\"tools\":[],\"errors\":[]}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_steps(run_id,seq,action,created_at) VALUES('run-1',1,'think',1.0)",
+            [],
+        )
+        .unwrap();
+        let mut stmt = conn.prepare(RUN_LIST_SQL).expect("the list SQL prepares");
+        let (run, steps) = stmt
+            .query_row([], |row| {
+                let run = row_to_run(row)?;
+                let steps: i64 = row.get(21)?;
+                Ok((run, steps))
+            })
+            .expect("every list row maps");
+        assert_eq!(run.model, "the-model");
+        assert_eq!(run.profile, "review");
+        assert_eq!(run.mode, "crew");
+        assert_eq!(run.crew, "[\"coding\"]");
+        assert_eq!(run.stage_policy, "skip");
+        assert_eq!(run.stage_max_steps, 5);
+        assert!(run.allow_mcp);
+        assert_eq!(mcp_tool_count(&run.mcp_tools), 0);
+        assert_eq!(steps, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Writes a registry with one server whose command cannot start, so the
+    /// wiring is tested without needing a real MCP binary on every platform.
+    fn write_ghost_server(state: &crate::AppState) {
+        let registry = state.config_path.with_file_name("mcp.json");
+        std::fs::write(
+            &registry,
+            json!({
+                "servers": [{
+                    "name": "ghost",
+                    "command": "saarthi-no-such-mcp-server",
+                    "args": [],
+                    "enabled": true
+                }]
+            })
+            .to_string(),
+        )
+        .expect("write registry");
+    }
+
+    async fn post_approve(app: &Router, id: &str, approve: bool) -> (StatusCode, String) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/approve"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        json!({ "approve": approve }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    #[tokio::test]
+    async fn an_mcp_run_pauses_for_approval_then_attempts_the_call() {
+        let base = scripted_router(&[
+            "{\"action\":\"think\",\"summary\":\"use the echo tool\"}",
+            "{\"action\":\"mcp\",\"server\":\"ghost\",\"tool\":\"echo\",\"arguments\":{\"text\":\"hi\"}}",
+            "{\"action\":\"done\",\"summary\":\"attempted the MCP call\"}",
+        ])
+        .await;
+        let fixture = run_fixture("mcp-approve", &base);
+        write_ghost_server(&fixture.state);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "call the echo tool",
+                "allowMcp": true,
+                "autoApprove": false,
+                "maxSteps": 6
+            }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
+        // The pause names the tool and the arguments it would send.
+        let pending: String = db(&fixture.state)
+            .unwrap()
+            .query_row(
+                "SELECT pending_action FROM agent_runs WHERE id=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(pending.contains("\"action\":\"mcp\""), "{pending}");
+        assert!(pending.contains("ghost"), "{pending}");
+
+        // Approving runs the call; a server that cannot start fails the run
+        // with its reason instead of pretending a tool answered.
+        let (code, body) = post_approve(&fixture.app, &id, true).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        let error: String = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT error FROM agent_runs WHERE id=?1", [&id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            error.contains("Could not start MCP server") || error.contains("ghost"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_started_without_mcp_cannot_call_a_tool() {
+        let base = scripted_router(&[
+            "{\"action\":\"mcp\",\"server\":\"ghost\",\"tool\":\"echo\",\"arguments\":{}}",
+        ])
+        .await;
+        let fixture = run_fixture("mcp-denied", &base);
+        write_ghost_server(&fixture.state);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "call a tool this run never asked for",
+                "autoApprove": true,
+                "maxSteps": 4
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, FAILED, "actions: {actions:?}");
+        assert_eq!(actions, ["mcp"]);
+        let error: String = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT error FROM agent_runs WHERE id=?1", [&id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(error.contains("MCP tool calls"), "{error}");
     }
 }

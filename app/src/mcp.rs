@@ -42,6 +42,9 @@ const RESULT_CAP: usize = 20_000;
 /// skill summary.
 const DESCRIPTION_CAP: usize = 2_000;
 
+/// A tool description in an agent prompt is a hint, not documentation.
+const PROMPT_DESCRIPTION_CAP: usize = 200;
+
 // ---------------------------------------------------------------------------
 // Registry: the servers the user has written down
 
@@ -110,8 +113,16 @@ fn valid_name(name: &str) -> bool {
 
 /// `server.tool` — the target a permission rule is written against, so one
 /// rule can deny a specific tool while another server's tools still work.
-fn tool_target(server: &str, tool: &str) -> String {
+pub(crate) fn tool_target(server: &str, tool: &str) -> String {
     format!("{server}.{tool}")
+}
+
+/// Enabled servers only: a disabled server never runs for a route or a run.
+pub(crate) fn enabled_servers(state: &AppState) -> Vec<Server> {
+    read_servers(&registry_path(state))
+        .into_iter()
+        .filter(|server| server.enabled)
+        .collect()
 }
 
 /// The public view of a server: environment variable names, never values.
@@ -298,6 +309,9 @@ fn tools_json(tools: &[Value]) -> Value {
     json!(rows)
 }
 
+/// Tool output becomes model input later; one call must not flood it.
+const TOOLS_PER_SERVER: usize = 20;
+
 fn cap(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
         return value.to_string();
@@ -376,6 +390,185 @@ fn tool_text(result: &Value) -> String {
     } else {
         parts.join("\n")
     }
+}
+
+// ---------------------------------------------------------------------------
+// One call path for the HTTP route and the agent loop
+
+/// Why a tool call did not happen. The route maps these onto HTTP statuses; an
+/// agent step turns them into text the model can read and repair.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum CallFailure {
+    NotFound(String),
+    Disabled(String),
+    BadRequest(String),
+    Server(String),
+}
+
+impl CallFailure {
+    pub(crate) fn message(&self) -> &str {
+        match self {
+            Self::NotFound(message)
+            | Self::Disabled(message)
+            | Self::BadRequest(message)
+            | Self::Server(message) => message,
+        }
+    }
+
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Disabled(_) => StatusCode::CONFLICT,
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Server(_) => StatusCode::BAD_GATEWAY,
+        }
+    }
+}
+
+/// Call one tool on one registry server: find the server, open a session,
+/// check the arguments against the tool's own schema, call it, and record the
+/// outcome. Callers ask the permission store first — this function decides
+/// whether a call *worked*, never whether it *may happen*, so both the route
+/// and an agent step run through exactly the same execution path.
+pub(crate) async fn invoke(
+    state: &AppState,
+    server_name: &str,
+    tool: &str,
+    arguments: &Value,
+) -> Result<Value, CallFailure> {
+    if tool.trim().is_empty() {
+        return Err(CallFailure::BadRequest("Name a tool to call.".to_string()));
+    }
+    let servers = read_servers(&registry_path(state));
+    let Some(server) = servers
+        .into_iter()
+        .find(|entry| entry.name == server_name)
+    else {
+        return Err(CallFailure::NotFound(format!(
+            "No MCP server named \"{server_name}\"."
+        )));
+    };
+    if !server.enabled {
+        return Err(CallFailure::Disabled(format!(
+            "MCP server \"{}\" is disabled.",
+            server.name
+        )));
+    }
+    let target = tool_target(&server.name, tool);
+    let (mut session, tools) = connect(&server).await.map_err(CallFailure::Server)?;
+    let Some(discovered) = tools
+        .iter()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(tool))
+    else {
+        session.close().await;
+        let known = tools
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CallFailure::NotFound(format!(
+            "{} exposes no tool named \"{tool}\". It lists: {}.",
+            server.name,
+            if known.is_empty() {
+                "nothing"
+            } else {
+                known.as_str()
+            }
+        )));
+    };
+    let schema = discovered
+        .get("inputSchema")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if let Err(error) = validate_arguments(&schema, arguments) {
+        session.close().await;
+        return Err(CallFailure::BadRequest(error));
+    }
+    let outcome = session
+        .request(
+            "tools/call",
+            json!({ "name": tool, "arguments": arguments }),
+        )
+        .await;
+    session.close().await;
+    match outcome {
+        Ok(result) => {
+            permissions::record(
+                state,
+                PolicyAction::McpTool,
+                &target,
+                PolicyDecision::Allow,
+                permissions::Scope::Always,
+                "",
+                "MCP tool called",
+            );
+            let text = tool_text(&result);
+            Ok(json!({
+                "ok": true,
+                "server": server.name,
+                "tool": tool,
+                "is_error": result.get("isError").and_then(Value::as_bool).unwrap_or(false),
+                "text": cap(&text, RESULT_CAP),
+                "content": result.get("content").cloned().unwrap_or(Value::Null),
+            }))
+        }
+        Err(error) => {
+            permissions::record(
+                state,
+                PolicyAction::McpTool,
+                &target,
+                PolicyDecision::Allow,
+                permissions::Scope::Always,
+                "",
+                "MCP tool call failed",
+            );
+            Err(CallFailure::Server(error))
+        }
+    }
+}
+
+/// The catalogue an agent prompt can carry: enabled servers only, one entry
+/// per tool with just what a model needs to choose it. Discovery starts each
+/// server once, so an agent run takes this snapshot at run start instead of on
+/// every step. A server that cannot be reached is reported, never silently
+/// dropped — the model should know a tool it heard about is unavailable.
+pub(crate) async fn discover_for_prompt(state: &AppState) -> (Vec<Value>, Vec<String>) {
+    let mut tools = Vec::new();
+    let mut errors = Vec::new();
+    for server in enabled_servers(state) {
+        match connect(&server).await {
+            Ok((session, discovered)) => {
+                session.close().await;
+                for tool in discovered.iter().take(TOOLS_PER_SERVER) {
+                    let Some(name) = tool.get("name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let required = tool
+                        .get("inputSchema")
+                        .and_then(|schema| schema.get("required"))
+                        .and_then(Value::as_array)
+                        .map(|list| {
+                            list.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    tools.push(json!({
+                        "server": server.name,
+                        "name": name,
+                        "description": cap(
+                            tool.get("description").and_then(Value::as_str).unwrap_or(""),
+                            PROMPT_DESCRIPTION_CAP,
+                        ),
+                        "required": required,
+                    }));
+                }
+            }
+            Err(error) => errors.push(format!("{}: {}", server.name, cap(&error, 200))),
+        }
+    }
+    (tools, errors)
 }
 
 // ---------------------------------------------------------------------------
@@ -634,82 +827,10 @@ async fn call_tool(State(state): State<AppState>, Json(input): Json<Value>) -> R
     if let Some(response) = gate(&state, &target, approve, "MCP tool call") {
         return response;
     }
-    let (mut session, tools) = match connect(&server).await {
-        Ok(pair) => pair,
-        Err(error) => return crate::json_error(StatusCode::BAD_GATEWAY, error).into_response(),
-    };
-    let Some(discovered) = tools
-        .iter()
-        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(tool))
-    else {
-        session.close().await;
-        let known = tools
-            .iter()
-            .filter_map(|entry| entry.get("name").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return crate::json_error(
-            StatusCode::NOT_FOUND,
-            format!(
-                "{} exposes no tool named \"{tool}\". It lists: {}.",
-                server.name,
-                if known.is_empty() {
-                    "nothing"
-                } else {
-                    known.as_str()
-                }
-            ),
-        )
-        .into_response();
-    };
-    let schema = discovered
-        .get("inputSchema")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if let Err(error) = validate_arguments(&schema, &arguments) {
-        session.close().await;
-        return crate::json_error(StatusCode::BAD_REQUEST, error).into_response();
-    }
-    let outcome = session
-        .request(
-            "tools/call",
-            json!({ "name": tool, "arguments": arguments }),
-        )
-        .await;
-    session.close().await;
-    match outcome {
-        Ok(result) => {
-            permissions::record(
-                &state,
-                PolicyAction::McpTool,
-                &target,
-                PolicyDecision::Allow,
-                permissions::check(&state, PolicyAction::McpTool, &target, "").scope,
-                "",
-                "MCP tool called",
-            );
-            let text = tool_text(&result);
-            Json(json!({
-                "ok": true,
-                "server": server.name,
-                "tool": tool,
-                "is_error": result.get("isError").and_then(Value::as_bool).unwrap_or(false),
-                "text": cap(&text, RESULT_CAP),
-                "content": result.get("content").cloned().unwrap_or(Value::Null),
-            }))
-            .into_response()
-        }
-        Err(error) => {
-            permissions::record(
-                &state,
-                PolicyAction::McpTool,
-                &target,
-                PolicyDecision::Allow,
-                permissions::check(&state, PolicyAction::McpTool, &target, "").scope,
-                "",
-                "MCP tool call failed",
-            );
-            crate::json_error(StatusCode::BAD_GATEWAY, error).into_response()
+    match invoke(&state, &server.name, tool, &arguments).await {
+        Ok(payload) => Json(payload).into_response(),
+        Err(failure) => {
+            crate::json_error(failure.status(), failure.message().to_string()).into_response()
         }
     }
 }

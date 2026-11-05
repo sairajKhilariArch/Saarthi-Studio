@@ -5668,7 +5668,10 @@ function renderRunCard(run) {
     ? ` · crew: ${run.crew.join(" → ")}`
     : run.mode ? ` · ${run.mode}` : "";
   const profileTag = run.profile && run.profile !== "coding" ? ` · ${run.profile}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${profileTag}${modeTag}${modelTag}`;
+  // The discovered tool count comes from the run's own catalogue snapshot, so
+  // a run that found nothing says so instead of implying it had tools.
+  const mcpTag = run.allowMcp ? ` · mcp: ${run.mcpTools || 0} tool${run.mcpTools === 1 ? "" : "s"}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${profileTag}${modeTag}${modelTag}${mcpTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
@@ -5857,6 +5860,7 @@ async function submitRun(event) {
     mode: $("runMode").value,
     allowWrites: $("runAllowWrites").checked,
     allowCommands: $("runAllowCommands").checked,
+    allowMcp: $("runAllowMcp").checked,
     autoApprove: $("runAutoApprove").checked,
   };
   if ($("runMode").value === "crew") {

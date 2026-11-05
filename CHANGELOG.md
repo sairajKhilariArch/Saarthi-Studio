@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.35.0
+
+- Phase 7 close-out, agent half: an agent run can now call MCP tools.
+  `Action::Mcp { server, tool, arguments }` joins the run's action list, and
+  the action line is advertised only when the run was started with `allowMcp`
+  *and* discovery actually found a tool — a model is never told about an
+  action that would be refused.
+- One catalogue per run, not per step: discovery runs once at run start,
+  records an `mcp-tools` step (`server.tool` per line plus `unavailable: …`
+  for a server that would not start) and stores the snapshot in
+  `agent_runs.mcp_tools`. Step prompts read the snapshot, so a long run never
+  respawns servers and a resumed run keeps the list it started with.
+  Caps: 30 tools in the prompt, 20 per server, 200 characters of description.
+- Gating has the same shape as command execution. `allowMcp` off → the step is
+  refused and the run fails naming the missing permission. `allowMcp` on with
+  auto-approve off → the run pauses in `awaiting_approval`, and the approval
+  row names the tool and the arguments it would send. A `mcp_tool` deny rule
+  on `server.tool` is applied first and vetoes the step by name.
+- One execution path for both callers: `mcp::invoke` was extracted from
+  `POST /api/mcp/call` and is now shared with the agent loop, so the argument
+  check against the tool's own `inputSchema` and the `mcp_tool` audit record
+  are identical whether a panel or a run made the call.
+- `POST /api/runs` refuses `allowMcp` when no enabled server is registered,
+  instead of accepting a checkbox that can only ever do nothing.
+- Runs panel: a "May call MCP tools" checkbox on the run form, and each run
+  card tags `mcp: N tools` from that run's own snapshot (0 when discovery
+  found nothing).
+- Fixed a defect found while testing this: `list_runs` selected the run
+  columns without `model`, so every row failed to map and the panel read
+  "No runs yet" while the runs existed — which would also have hidden the
+  approval button this feature needs. The query is now a named constant
+  (`RUN_LIST_SQL`) and a test inserts a run, maps it through `row_to_run` and
+  asserts every field and the step count, so the two column orders cannot
+  drift apart silently again.
+- Tests: 234 pass (7 new: mcp action parsing with and without arguments, the
+  approval summary and its approval-route round trip, the gate matrix
+  (denied / needs approval / allowed), prompt advertisement rules, the list
+  query column map, and two run-level cases — a paused run that goes on to
+  attempt the call, and a run started without `allowMcp` that is refused).
+- Version 1.35.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 51).
+- Not built yet, and recorded as missing rather than implied: persistent MCP
+  connections with health state, SSE/HTTP transports, and per-step
+  rediscovery (the catalogue is fixed at run start).
+
 ## 1.34.0
 
 - Settings → MCP: the 1.33.0 routes now have a panel. Register a server (name,
