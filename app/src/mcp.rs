@@ -8,17 +8,19 @@
 //! command the user wrote into the registry. Those gaps are recorded in
 //! `docs/FEATURE-STATUS.md`, not faked here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -137,6 +139,126 @@ fn server_json(server: &Server) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// Health and logs: what this process observed, never what is stored on disk
+
+/// Runtime state lives in memory only. A persisted "healthy" would be a lie the
+/// moment the machine rebooted, so the registry file stays the only durable
+/// thing here; the panel says `unknown` until a server has actually answered.
+static MONITOR: OnceLock<Mutex<BTreeMap<String, ServerState>>> = OnceLock::new();
+
+/// Newest lines kept per server. A server that logs in a loop must not grow
+/// this process's memory without bound.
+const LOG_LINES: usize = 200;
+const LOG_LINE_CAP: usize = 400;
+
+/// A fresh session, once, when the first handshake fails.
+const RECONNECT_DELAY: Duration = Duration::from_millis(250);
+
+#[derive(Debug, Clone, Serialize)]
+struct LogEntry {
+    /// Unix seconds; the panel renders it in local time.
+    at: u64,
+    /// `server` is the child's own stderr, `client` is what this app did.
+    source: &'static str,
+    text: String,
+}
+
+#[derive(Debug, Default)]
+struct ServerState {
+    /// `None` means never contacted, which is not the same as unhealthy.
+    healthy: Option<bool>,
+    error: String,
+    version: String,
+    protocol: String,
+    tools: usize,
+    latency_ms: u64,
+    checked_at: u64,
+    logs: VecDeque<LogEntry>,
+}
+
+fn monitor() -> &'static Mutex<BTreeMap<String, ServerState>> {
+    MONITOR.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn with_state<T>(name: &str, change: impl FnOnce(&mut ServerState) -> T) -> T {
+    let mut all = monitor()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    change(all.entry(name.to_string()).or_default())
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0)
+}
+
+fn record_log(name: &str, source: &'static str, text: impl Into<String>) {
+    let text = cap(&text.into(), LOG_LINE_CAP);
+    with_state(name, |state| {
+        state.logs.push_back(LogEntry {
+            at: now_secs(),
+            source,
+            text,
+        });
+        while state.logs.len() > LOG_LINES {
+            state.logs.pop_front();
+        }
+    });
+}
+
+fn record_handshake(name: &str, protocol: &str, version: &str, tools: usize) {
+    with_state(name, |state| {
+        state.protocol = protocol.to_string();
+        state.version = version.to_string();
+        state.tools = tools;
+    });
+}
+
+fn record_health(name: &str, healthy: bool, error: String, latency_ms: u64) {
+    with_state(name, |state| {
+        state.healthy = Some(healthy);
+        state.error = error;
+        state.latency_ms = latency_ms;
+        state.checked_at = now_secs();
+    });
+}
+
+/// The health row the panel reads. A server that was never contacted reports
+/// `unknown` — not `healthy`, and not `unhealthy`.
+fn report_json(server: &Server, state: &ServerState) -> Value {
+    json!({
+        "name": server.name,
+        "enabled": server.enabled,
+        "health": match state.healthy {
+            None => "unknown",
+            Some(true) => "healthy",
+            Some(false) => "unhealthy",
+        },
+        "error": state.error,
+        "version": state.version,
+        "protocol": state.protocol,
+        "tools": state.tools,
+        "latency_ms": state.latency_ms,
+        "checked_at": state.checked_at,
+        "log_lines": state.logs.len(),
+    })
+}
+
+fn health_rows(state: &AppState) -> Vec<Value> {
+    let servers = read_servers(&registry_path(state));
+    let all = monitor()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let blank = ServerState::default();
+    servers
+        .iter()
+        .map(|server| report_json(server, all.get(&server.name).unwrap_or(&blank)))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Session: one child per operation, newline-delimited JSON-RPC 2.0
 
 struct Session {
@@ -178,7 +300,7 @@ impl Session {
             .args(&server.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         for (key, value) in &server.env {
             command.env(key, value);
@@ -197,6 +319,18 @@ impl Session {
             .stdout
             .take()
             .ok_or_else(|| "MCP server has no stdout.".to_string())?;
+        // Stderr is captured, not discarded: a server that refuses to start
+        // usually says why there, and "it did not answer" is not a diagnosis.
+        // The reader ends with the child, and its buffer is bounded.
+        if let Some(stderr) = child.stderr.take() {
+            let name = server.name.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    record_log(&name, "server", line);
+                }
+            });
+        }
         Ok(Session {
             child,
             stdin,
@@ -259,12 +393,17 @@ impl Session {
     }
 }
 
-/// Handshake, then discover tools. Every caller gets a fresh session: a server
-/// that wedged or exited is retried by the next call instead of poisoning one
-/// long-lived connection.
-async fn connect(server: &Server) -> Result<(Session, Vec<Value>), String> {
+/// What a successful handshake taught us about the server.
+struct Handshake {
+    session: Session,
+    tools: Vec<Value>,
+    protocol: String,
+    version: String,
+}
+
+async fn connect_once(server: &Server) -> Result<Handshake, String> {
     let mut session = Session::start(server)?;
-    session
+    let init = session
         .request(
             "initialize",
             json!({
@@ -286,7 +425,84 @@ async fn connect(server: &Server) -> Result<(Session, Vec<Value>), String> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    Ok((session, tools))
+    // The server names its own revision and version; the panel shows both so an
+    // upgrade is visible without reading the command line.
+    let protocol = init
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .unwrap_or(PROTOCOL_VERSION)
+        .to_string();
+    let version = init
+        .get("serverInfo")
+        .and_then(|info| info.get("version"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok(Handshake {
+        session,
+        tools,
+        protocol,
+        version,
+    })
+}
+
+/// Handshake, then discover tools. Every caller gets a fresh session: a server
+/// that wedged or exited is replaced by the next call instead of poisoning one
+/// long-lived connection. A failed handshake is retried once on a brand-new
+/// session — a server can exit while it is still coming up (a lock file, a
+/// socket it has not bound yet), and nothing has been called at that point, so
+/// the retry cannot duplicate an effect. A `tools/call` is never retried, which
+/// is what keeps a side effect from running twice.
+async fn connect(server: &Server) -> Result<Handshake, String> {
+    let started = Instant::now();
+    let handshake = match connect_once(server).await {
+        Ok(handshake) => handshake,
+        Err(error) => {
+            record_log(
+                &server.name,
+                "client",
+                format!("handshake failed: {error} — retrying once"),
+            );
+            tokio::time::sleep(RECONNECT_DELAY).await;
+            match connect_once(server).await {
+                Ok(handshake) => handshake,
+                Err(second) => {
+                    let message = format!("{error} (one retry also failed: {second})");
+                    record_log(
+                        &server.name,
+                        "client",
+                        format!("handshake failed again: {second}"),
+                    );
+                    record_health(
+                        &server.name,
+                        false,
+                        message.clone(),
+                        started.elapsed().as_millis() as u64,
+                    );
+                    return Err(message);
+                }
+            }
+        }
+    };
+    let elapsed = started.elapsed().as_millis() as u64;
+    record_handshake(
+        &server.name,
+        &handshake.protocol,
+        &handshake.version,
+        handshake.tools.len(),
+    );
+    record_health(&server.name, true, String::new(), elapsed);
+    record_log(
+        &server.name,
+        "client",
+        format!(
+            "connected: {} tools, protocol {}, {} ms",
+            handshake.tools.len(),
+            handshake.protocol,
+            elapsed
+        ),
+    );
+    Ok(handshake)
 }
 
 /// Discovery output shaped for the panel: names, capped descriptions and the
@@ -455,7 +671,10 @@ pub(crate) async fn invoke(
         )));
     }
     let target = tool_target(&server.name, tool);
-    let (mut session, tools) = connect(&server).await.map_err(CallFailure::Server)?;
+    let handshake = connect(&server).await.map_err(CallFailure::Server)?;
+    record_log(&server.name, "client", format!("tools/call {target}"));
+    let mut session = handshake.session;
+    let tools = handshake.tools;
     let Some(discovered) = tools
         .iter()
         .find(|entry| entry.get("name").and_then(Value::as_str) == Some(tool))
@@ -537,9 +756,9 @@ pub(crate) async fn discover_for_prompt(state: &AppState) -> (Vec<Value>, Vec<St
     let mut errors = Vec::new();
     for server in enabled_servers(state) {
         match connect(&server).await {
-            Ok((session, discovered)) => {
-                session.close().await;
-                for tool in discovered.iter().take(TOOLS_PER_SERVER) {
+            Ok(handshake) => {
+                handshake.session.close().await;
+                for tool in handshake.tools.iter().take(TOOLS_PER_SERVER) {
                     let Some(name) = tool.get("name").and_then(Value::as_str) else {
                         continue;
                     };
@@ -575,12 +794,16 @@ pub(crate) async fn discover_for_prompt(state: &AppState) -> (Vec<Value>, Vec<St
 // Routes
 
 pub(crate) fn router(port: u16) -> Router<AppState> {
-    let read_only = Router::new().route("/api/mcp", get(list_servers));
+    let read_only = Router::new()
+        .route("/api/mcp", get(list_servers))
+        .route("/api/mcp/health", get(health_report))
+        .route("/api/mcp/logs", get(server_logs));
     let mutations = Router::new()
         .route("/api/mcp/servers", post(save_server))
         .route("/api/mcp/servers/remove", post(remove_server))
         .route("/api/mcp/test", post(test_server))
         .route("/api/mcp/call", post(call_tool))
+        .route("/api/mcp/health/check", post(check_health))
         .route_layer(axum::middleware::from_fn_with_state(
             crate::workspace::LocalOriginGuard::new(port),
             crate::workspace::guard_local_origin,
@@ -782,17 +1005,20 @@ async fn test_server(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Some(response) = gate(&state, &server.name, approve, "MCP server test") {
         return response;
     }
-    let (session, tools) = match connect(&server).await {
-        Ok(pair) => pair,
+    let handshake = match connect(&server).await {
+        Ok(handshake) => handshake,
         Err(error) => {
             return crate::json_error(StatusCode::BAD_GATEWAY, error).into_response();
         }
     };
-    session.close().await;
+    let tools = tools_json(&handshake.tools);
+    handshake.session.close().await;
     Json(json!({
         "ok": true,
         "server": server.name,
-        "tools": tools_json(&tools),
+        "tools": tools,
+        "protocol": handshake.protocol,
+        "version": handshake.version,
     }))
     .into_response()
 }
@@ -833,6 +1059,97 @@ async fn call_tool(State(state): State<AppState>, Json(input): Json<Value>) -> R
             crate::json_error(failure.status(), failure.message().to_string()).into_response()
         }
     }
+}
+
+/// The state as observed so far. Read-only: it never starts a process, so the
+/// panel can poll it freely.
+async fn health_report(State(state): State<AppState>) -> Response {
+    Json(json!({ "ok": true, "servers": health_rows(&state) })).into_response()
+}
+
+/// Captured output for one server. A removed server keeps its last words until
+/// the process exits — that is the log a user reads after something went wrong.
+async fn server_logs(Query(params): Query<BTreeMap<String, String>>) -> Response {
+    let name = params.get("name").cloned().unwrap_or_default();
+    if name.is_empty() {
+        return crate::json_error(StatusCode::BAD_REQUEST, "Name a server to read its log.")
+            .into_response();
+    }
+    let all = monitor()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entries = all
+        .get(&name)
+        .map(|state| state.logs.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    Json(json!({ "ok": true, "name": name, "entries": entries })).into_response()
+}
+
+async fn probe(server: &Server) -> Value {
+    match connect(server).await {
+        Ok(handshake) => {
+            handshake.session.close().await;
+            json!({ "name": server.name, "ok": true })
+        }
+        Err(error) => json!({ "name": server.name, "ok": false, "error": error }),
+    }
+}
+
+/// A real handshake per server, on request. The click that sends this is the
+/// approval, exactly like Test: checking a server *is* starting it, so the
+/// policy store is asked first and a saved `deny` skips that server instead of
+/// failing the whole sweep.
+async fn check_health(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let wanted = input.get("name").and_then(Value::as_str).unwrap_or("");
+    let servers = if wanted.is_empty() {
+        enabled_servers(&state)
+    } else {
+        read_servers(&registry_path(&state))
+            .into_iter()
+            .filter(|server| server.name == wanted && server.enabled)
+            .collect()
+    };
+    if servers.is_empty() {
+        return Json(json!({
+            "ok": true,
+            "checked": health_rows(&state),
+            "results": [],
+            "skipped": [],
+            "message": if wanted.is_empty() {
+                "No enabled MCP servers to check."
+            } else {
+                "No enabled MCP server by that name."
+            },
+        }))
+        .into_response();
+    }
+    let mut skipped = Vec::new();
+    let mut allowed = Vec::new();
+    for server in servers {
+        if let Some(response) = gate(&state, &server.name, approve, "MCP health check") {
+            if response.status() == StatusCode::FORBIDDEN {
+                skipped.push(json!({
+                    "name": server.name,
+                    "reason": "a saved permission rule denies it",
+                }));
+                continue;
+            }
+            return response;
+        }
+        allowed.push(server);
+    }
+    let results = join_all(allowed.iter().map(probe)).await;
+    Json(json!({
+        "ok": true,
+        "checked": health_rows(&state),
+        "results": results,
+        "skipped": skipped,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -1010,5 +1327,61 @@ mod tests {
             DESCRIPTION_CAP
         );
         assert_eq!(rendered[0]["input_schema"]["required"], json!(["path"]));
+    }
+
+    #[test]
+    fn health_is_unknown_until_something_answers() {
+        let rendered = report_json(&server("never-contacted"), &ServerState::default());
+        assert_eq!(rendered["health"], json!("unknown"));
+        assert_eq!(rendered["tools"], json!(0));
+        assert_eq!(rendered["checked_at"], json!(0));
+    }
+
+    #[test]
+    fn a_failed_check_keeps_the_reason_it_failed() {
+        let name = "health-failed";
+        record_health(name, false, "server closed its output".to_string(), 12);
+        let all = monitor().lock().expect("monitor");
+        let rendered = report_json(&server(name), all.get(name).expect("state"));
+        assert_eq!(rendered["health"], json!("unhealthy"));
+        assert_eq!(rendered["error"], json!("server closed its output"));
+        assert_eq!(rendered["latency_ms"], json!(12));
+    }
+
+    #[test]
+    fn a_handshake_records_the_version_it_was_given() {
+        let name = "versioned";
+        record_handshake(name, "2024-11-05", "0.4.1", 3);
+        let all = monitor().lock().expect("monitor");
+        let rendered = report_json(&server(name), all.get(name).expect("state"));
+        assert_eq!(rendered["protocol"], json!("2024-11-05"));
+        assert_eq!(rendered["version"], json!("0.4.1"));
+        assert_eq!(rendered["tools"], json!(3));
+    }
+
+    #[test]
+    fn logs_keep_only_the_newest_lines() {
+        let name = "log-ring";
+        for index in 0..(LOG_LINES + 25) {
+            record_log(name, "server", format!("line {index}"));
+        }
+        let all = monitor().lock().expect("monitor");
+        let state = all.get(name).expect("state");
+        assert_eq!(state.logs.len(), LOG_LINES);
+        assert_eq!(state.logs.front().expect("first").text, "line 25");
+        assert_eq!(
+            state.logs.back().expect("last").text,
+            format!("line {}", LOG_LINES + 24)
+        );
+    }
+
+    #[test]
+    fn a_long_log_line_is_capped_and_attributed() {
+        let name = "log-cap";
+        record_log(name, "server", "x".repeat(LOG_LINE_CAP * 3));
+        let all = monitor().lock().expect("monitor");
+        let line = all.get(name).expect("state").logs.front().expect("line");
+        assert_eq!(line.text.chars().count(), LOG_LINE_CAP);
+        assert_eq!(line.source, "server");
     }
 }

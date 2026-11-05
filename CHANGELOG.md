@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.36.0
+
+- Phase 7 close-out, connection half: an MCP server now has health, its own
+  captured logs, and one reconnect attempt. `GET /api/mcp/health` returns what
+  this process has observed; `POST /api/mcp/health/check` runs a real handshake
+  per enabled server; `GET /api/mcp/logs?name=…` returns the captured lines.
+- Health is observed, never assumed. A server that was never contacted reports
+  `unknown` — not `healthy`, and not `unhealthy`. A handshake records `healthy`
+  with its latency; a failure stores the reason it failed. The state lives in
+  memory next to the registry (a persisted "healthy" is a lie after a reboot)
+  and is recorded by every path that connects: Test, a health sweep, a tool
+  call, and the agent run's discovery.
+- Version tracking comes from the handshake itself: `serverInfo.version` and
+  the negotiated `protocolVersion` are kept and shown beside the tool count, so
+  an upgrade is visible without reading a command line.
+- Server logs are captured instead of discarded. stderr is piped into a bounded
+  in-memory ring — 200 lines, 400 characters per line — together with a few
+  client events (`connected: …`, `tools/call …`, a failed handshake). A server
+  that refuses to start now has a reason to read, not just a 502.
+- Reconnect: one failed handshake is retried once on a brand-new session after
+  250 ms. Nothing has been called at that point, so the retry cannot duplicate
+  an effect; `tools/call` is never retried, which is what stops a side effect
+  from running twice. Every operation still gets a fresh child process — there
+  is no pool, and the docs keep saying so.
+- Panel: each server row carries a health badge (Not checked / Healthy /
+  Unhealthy) and a line with server version, protocol, tool count, latency and
+  check time; a Logs button opens the captured output under the row; Check
+  health sweeps every enabled server once and reports how many answered,
+  failed, or were skipped by a saved rule.
+- Tests: 239 pass (5 new: unknown before contact, a failure keeps its reason,
+  a handshake records version/protocol/tools, the log ring keeps only the
+  newest lines, and a long line is capped and attributed).
+- Live smoke on :8765 against a real stdio server: `unknown` before contact →
+  `healthy`, `version 1.0.0`, `protocol 2024-11-05`, `2 tools`, 39 ms after
+  Test; the sweep returned `{echo: ok}`; the log held `connected: 2 tools,
+  protocol 2024-11-05, 39 ms`; a missing `name` on the log route is a 400. A
+  server that exits at once reported `unhealthy` with `(one retry also
+  failed: …)` and its own stderr `boom`, captured twice — once per attempt.
+- Still not built, and recorded as missing rather than implied: SSE/HTTP
+  transports, per-step rediscovery, and a persistent connection pool.
+- Version 1.36.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 52).
+
 ## 1.35.0
 
 - Phase 7 close-out, agent half: an agent run can now call MCP tools.

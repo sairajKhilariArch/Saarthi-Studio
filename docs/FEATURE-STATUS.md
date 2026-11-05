@@ -129,7 +129,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Tool discovery | Working (1.33.0) | `tools/list`, schemas kept |
 | Schema validation | Working (1.33.0) | `required` presence + declared scalar types; not full JSON Schema |
 | Permission binding | Working (1.33.0) | `mcp_tool` on `server.tool`; ask/deny/allow, audited |
-| Health, logs, reconnect | Missing | a failed call surfaces as 502 and an agent step as `mcp-error`; no health state, no server log capture, no backoff |
+| Health, logs, reconnect | Working (1.36.0) | health recorded from a real handshake (`serverInfo.version`, protocol, tool count, latency, time), `unknown` before any contact; stderr and client events in a 200-line in-memory ring; one handshake retry after 250 ms, never a retried `tools/call`; `/api/mcp/health`, `/api/mcp/health/check`, `/api/mcp/logs?name=` |
 | SSE / HTTP transports | Missing | stdio only |
 | Agent use of MCP tools | Working (1.35.0) | `Action::Mcp` with a per-run `allowMcp` flag; catalogue discovered once into `agent_runs.mcp_tools` and logged as `mcp-tools`; approval pause names the tool and arguments; `mcp_tool` rules on `server.tool` veto; execution goes through the same `mcp::invoke` as the route |
 | Per-step tool rediscovery | Missing | the catalogue is the snapshot taken at run start |

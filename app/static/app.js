@@ -114,6 +114,7 @@ function setupSettingsNav() {
   $("mcpSave").addEventListener("click", () => void saveMcpServer());
   $("mcpRefresh").addEventListener("click", () => void loadMcp());
   $("mcpCall").addEventListener("click", () => void callMcpTool());
+  $("mcpHealth").addEventListener("click", () => void checkMcpHealth());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
   // The theme buttons reflect the live theme without a re-render: listening on
@@ -516,7 +517,7 @@ const state = {
   permissions: { actions: [], rules: [] },
   /* mcp: the registry, the tools of the last tested server, and the picked
      tool. Nothing is cached server-side, so the panel re-tests on demand. */
-  mcp: { servers: [], tools: [], target: null },
+  mcp: { servers: [], tools: [], target: null, health: {}, logs: {}, openLogs: new Set() },
   /* activeSkillId: a skill the user picked in the composer. suggestedSkillId
      is a keyword match the composer offers when nothing was picked; either
      one rides with the next request as `skill`. */
@@ -3198,7 +3199,7 @@ function mcpButton(label, onClick) {
 
 async function loadMcp() {
   const host = $("mcpServers");
-  const result = await api("/api/mcp");
+  const [result, health] = await Promise.all([api("/api/mcp"), api("/api/mcp/health")]);
   host.replaceChildren();
   if (!result.ok) {
     const note = document.createElement("p");
@@ -3208,7 +3209,107 @@ async function loadMcp() {
     return;
   }
   state.mcp.servers = result.data.servers || [];
+  if (health.ok) setMcpHealth(health.data.servers || []);
   renderMcpServers();
+}
+
+function setMcpHealth(rows) {
+  state.mcp.health = {};
+  rows.forEach((row) => {
+    state.mcp.health[row.name] = row;
+  });
+}
+
+function mcpHealthBadge(report) {
+  const badge = document.createElement("span");
+  const health = report ? report.health : "unknown";
+  badge.className = "badge" + (health === "healthy" ? " on" : "");
+  badge.textContent =
+    health === "healthy" ? "Healthy" : health === "unhealthy" ? "Unhealthy" : "Not checked";
+  return badge;
+}
+
+/* Health is this process's own observation, so it says what was seen and when,
+   never a guess. A failed check keeps the reason the handshake failed. */
+function mcpHealthLine(report) {
+  const line = document.createElement("small");
+  line.className = "skill-path";
+  if (!report || report.health === "unknown") {
+    line.textContent = "Never contacted in this session. Test it or press Check health.";
+    return line;
+  }
+  if (report.health === "unhealthy") {
+    line.textContent = `Last check failed: ${report.error || "no reason given"}`;
+    return line;
+  }
+  const parts = [];
+  if (report.version) parts.push(`server ${report.version}`);
+  if (report.protocol) parts.push(`protocol ${report.protocol}`);
+  parts.push(`${report.tools} tool${report.tools === 1 ? "" : "s"}`);
+  if (report.latency_ms) parts.push(`${report.latency_ms} ms`);
+  if (report.checked_at) parts.push(new Date(report.checked_at * 1000).toLocaleTimeString());
+  line.textContent = parts.join(" · ");
+  return line;
+}
+
+function mcpLogBlock(name) {
+  const entries = state.mcp.logs[name] || [];
+  const box = document.createElement("pre");
+  box.className = "mcp-result mcp-log";
+  box.textContent = entries.length
+    ? entries
+        .slice(-80)
+        .map((entry) => {
+          const at = new Date(entry.at * 1000).toLocaleTimeString();
+          return `${at} ${entry.source === "server" ? "server" : "client"}: ${entry.text}`;
+        })
+        .join("\n")
+    : "No output captured yet.";
+  return box;
+}
+
+async function loadMcpLogs(name) {
+  const result = await api(`/api/mcp/logs?name=${encodeURIComponent(name)}`);
+  if (!result.ok) {
+    mcpNotice(result.data.error || "Could not read those logs.", false);
+    return;
+  }
+  state.mcp.logs[name] = result.data.entries || [];
+}
+
+async function toggleMcpLogs(name) {
+  if (state.mcp.openLogs.has(name)) {
+    state.mcp.openLogs.delete(name);
+    renderMcpServers();
+    return;
+  }
+  state.mcp.openLogs.add(name);
+  await loadMcpLogs(name);
+  renderMcpServers();
+}
+
+async function checkMcpHealth() {
+  const result = await api("/api/mcp/health/check", {
+    method: "POST",
+    body: JSON.stringify({ approve: true }),
+  });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "The health check did not run.", false);
+    return;
+  }
+  setMcpHealth(result.data.checked || []);
+  const results = result.data.results || [];
+  const failed = results.filter((entry) => !entry.ok);
+  const skipped = result.data.skipped || [];
+  for (const name of state.mcp.openLogs) await loadMcpLogs(name);
+  renderMcpServers();
+  const parts = [`${results.length - failed.length} healthy`];
+  if (failed.length) parts.push(`${failed.length} failed`);
+  if (skipped.length) parts.push(`${skipped.length} skipped by a saved rule`);
+  mcpNotice(`Checked ${results.length} server${results.length === 1 ? "" : "s"}: ${parts.join(", ")}.`, !failed.length);
+  if (failed.length) {
+    mcpNotice(`Failed: ${failed.map((entry) => `${entry.name} — ${entry.error}`).join("; ")}`, false);
+  }
 }
 
 function renderMcpServers() {
@@ -3238,6 +3339,7 @@ function renderMcpServers() {
     main.append(strong, line, meta);
     const side = document.createElement("div");
     side.className = "skill-side";
+    const report = state.mcp.health[server.name];
     const badge = document.createElement("span");
     badge.className = "badge" + (server.enabled ? " on" : "");
     badge.textContent = server.enabled ? "Enabled" : "Disabled";
@@ -3246,11 +3348,14 @@ function renderMcpServers() {
     actions.append(
       mcpButton("Edit", () => editMcpServer(server)),
       mcpButton("Test", () => void testMcpServer(server.name)),
+      mcpButton("Logs", () => void toggleMcpLogs(server.name)),
       mcpButton("Remove", () => void removeMcpServer(server.name)),
     );
-    side.append(badge, actions);
+    main.append(mcpHealthLine(report));
+    side.append(badge, mcpHealthBadge(report), actions);
     row.append(main, side);
     host.appendChild(row);
+    if (state.mcp.openLogs.has(server.name)) host.appendChild(mcpLogBlock(server.name));
   });
 }
 
@@ -3335,6 +3440,7 @@ async function testMcpServer(name) {
   renderMcpTools();
   const count = state.mcp.tools.length;
   mcpNotice(`${name} answered with ${count} tool${count === 1 ? "" : "s"}.`, true);
+  await loadMcp();
 }
 
 /* Pre-fill only what the schema says is required, with the right shape for
