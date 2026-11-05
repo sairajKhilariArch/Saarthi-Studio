@@ -387,6 +387,79 @@ pub(crate) fn check(state: &AppState, action: Action, target: &str, project: &st
     }
 }
 
+/// What a route that a *person* is driving should do about a saved rule. Rules
+/// are enforced exactly as written; when no rule covers the action, the click
+/// itself is the consent, so the action's ask-by-default is not applied here —
+/// an editor save or an auto-opened terminal must not turn into a prompt the
+/// user never asked for. The agent path keeps those defaults.
+pub(crate) fn explicit(
+    state: &AppState,
+    action: Action,
+    target: &str,
+    project: &str,
+) -> Option<Effective> {
+    let all = rules(state);
+    let effective = resolve(all.iter(), action, target, project)?;
+    if effective.scope == Scope::Once {
+        consume_once(state, action, target, project);
+    }
+    Some(effective)
+}
+
+/// Gate for a privileged route the UI calls. A saved deny is answered with 403,
+/// a saved ask with 409 + `needs_approval` unless the request carries
+/// `approve: true` — the person's second request is the yes. Every refusal and
+/// every approved ask is audited.
+pub(crate) fn guard_user(
+    state: &AppState,
+    action: Action,
+    target: &str,
+    project: &str,
+    approve: bool,
+    detail: &str,
+) -> Option<axum::response::Response> {
+    let effective = explicit(state, action, target, project)?;
+    let scope = effective.scope;
+    let shown = if target.is_empty() { "everything" } else { target };
+    match (effective.decision, approve) {
+        (Decision::Allow, _) => None,
+        (Decision::Ask, true) => {
+            record(
+                state,
+                action,
+                target,
+                Decision::Allow,
+                scope,
+                project,
+                "approved by the user",
+            );
+            None
+        }
+        (Decision::Ask, false) => {
+            record(state, action, target, Decision::Ask, scope, project, detail);
+            let message = format!(
+                "{} on \"{shown}\" needs approval before it runs. Approve it, or change the rule in Settings → Permissions.",
+                action.as_str()
+            );
+            Some(axum::response::IntoResponse::into_response((
+                axum::http::StatusCode::CONFLICT,
+                axum::Json(serde_json::json!({ "error": message, "needs_approval": true })),
+            )))
+        }
+        (Decision::Deny, _) => {
+            record(state, action, target, Decision::Deny, scope, project, detail);
+            let message = format!(
+                "A saved permission rule denies {} on \"{shown}\". Change it in Settings → Permissions.",
+                action.as_str()
+            );
+            Some(axum::response::IntoResponse::into_response((
+                axum::http::StatusCode::FORBIDDEN,
+                axum::Json(serde_json::json!({ "error": message })),
+            )))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Audit trail
 

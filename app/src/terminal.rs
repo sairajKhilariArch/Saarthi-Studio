@@ -107,6 +107,23 @@ async fn terminal_open(
             format!("Folder does not exist: {cwd}").as_str(),
         );
     }
+    // A saved `command` rule is checked before a shell is spawned *and* before
+    // an existing session for this folder is handed back, so a deny cannot be
+    // bypassed by a terminal that is already running.
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::Command,
+        "terminal",
+        "",
+        approve,
+        "open a terminal",
+    ) {
+        return response;
+    }
     {
         // One session per directory; switching projects leaves the old one
         // running so returning to that project keeps its scrollback.

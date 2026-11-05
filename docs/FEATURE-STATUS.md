@@ -166,6 +166,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Outbound secret detection | Working | `privacy.rs` |
 | Host API bearer auth + TLS + body caps | Working | `host_auth.rs`, `host_transport.rs` |
 | Central policy store (once/session/project/deny) | Working (1.31.0) | `permissions.rs`; rules scoped once/session/project/always, resolved longest-target → deny → scope |
+| Privileged UI routes gated | Working (1.40.0) | terminal open, editor saves, workspace create/rename/delete and settings/key saves consult saved rules; deny → 403, ask → 409 until `approve: true`, both audited. No rule means no prompt — the click is the consent. UI routes pass an empty project, so `project`-scoped rules still apply to agent steps only. Git has no mutating route; updates have no in-app route |
 | Enforcement of that store | Partial (1.31.0) | agent steps and router installs consult it; terminal, editor writes, git, updates and settings do not yet |
 | OS keychain for secrets | Missing | keys live in mode-restricted `config.json` |
 | Privileged-operation audit log | Working (1.31.0) | `permission_audit` table + `/api/permissions/audit` |

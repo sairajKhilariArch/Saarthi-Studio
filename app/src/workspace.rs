@@ -857,61 +857,123 @@ async fn read_file(
     read_text_file(&root, &query.path).map(Json)
 }
 
-async fn write_file(
-    State(state): State<AppState>,
-    Json(input): Json<Value>,
-) -> Result<Json<FilePayload>, WorkspaceError> {
-    let root = state.workspace.root()?;
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("Provide the file path to save."))?;
-    let content = input
-        .get("content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("Provide the file content to save."))?;
-    write_text_file(&root, path, content).map(Json)
+async fn write_file(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let Some(path) = input.get("path").and_then(Value::as_str) else {
+        return bad_request("Provide the file path to save.").into_response();
+    };
+    let Some(content) = input.get("content").and_then(Value::as_str) else {
+        return bad_request("Provide the file content to save.").into_response();
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        path,
+        "",
+        approve,
+        "save a file from the editor",
+    ) {
+        return response;
+    }
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    match write_text_file(&root, path, content) {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
-async fn create(
-    State(state): State<AppState>,
-    Json(input): Json<Value>,
-) -> Result<Json<Value>, WorkspaceError> {
-    let root = state.workspace.root()?;
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("Provide a name for the new item."))?;
+async fn create(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let Some(path) = input.get("path").and_then(Value::as_str) else {
+        return bad_request("Provide a name for the new item.").into_response();
+    };
     let dir = input.get("dir").and_then(Value::as_bool).unwrap_or(false);
-    create_entry(&root, path, dir).map(Json)
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        path,
+        "",
+        approve,
+        "create an item in the workspace",
+    ) {
+        return response;
+    }
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    match create_entry(&root, path, dir) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
-async fn rename(
-    State(state): State<AppState>,
-    Json(input): Json<Value>,
-) -> Result<Json<Value>, WorkspaceError> {
-    let root = state.workspace.root()?;
-    let from = input
-        .get("from")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("Provide the current path."))?;
-    let to = input
-        .get("to")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("Provide the new path."))?;
-    rename_entry(&root, from, to).map(Json)
+async fn rename(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let Some(from) = input.get("from").and_then(Value::as_str) else {
+        return bad_request("Provide the current path.").into_response();
+    };
+    let Some(to) = input.get("to").and_then(Value::as_str) else {
+        return bad_request("Provide the new path.").into_response();
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        from,
+        "",
+        approve,
+        "rename an item in the workspace",
+    ) {
+        return response;
+    }
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    match rename_entry(&root, from, to) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
-async fn remove(
-    State(state): State<AppState>,
-    Json(input): Json<Value>,
-) -> Result<Json<Value>, WorkspaceError> {
-    let root = state.workspace.root()?;
-    let path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| bad_request("Provide the path to delete."))?;
-    delete_entry(&root, path).map(Json)
+async fn remove(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let Some(path) = input.get("path").and_then(Value::as_str) else {
+        return bad_request("Provide the path to delete.").into_response();
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::FsWrite,
+        path,
+        "",
+        approve,
+        "delete an item in the workspace",
+    ) {
+        return response;
+    }
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    match delete_entry(&root, path) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 /* ------------------------------------------------------------------ */

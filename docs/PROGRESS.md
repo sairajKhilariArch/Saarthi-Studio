@@ -18,7 +18,8 @@ partial, `[ ]` not started.
 | 1.28.0 | `ed30132` | Phase 3 capability table from provider metadata only, Ollama `/api/show` probe, capability line in the model menu | `cargo test --locked`: 183 passed, 1 ignored |
 | 1.29.0 | `a389789` | Phase 4 backend: Thinking levels + precedence + `@Thinking`, native OpenAI Platform (Responses API), reasoning summaries as SSE frames, per-project Thinking column | `cargo test --locked`: 204 passed, 1 ignored; clippy clean |
 | 1.30.0 | `a0c76d8` | Phase 4 frontend: Think control + `@Thinking` hint + reasoning card + OpenAI Platform settings + `openai:` models in the menu; headless launch fixes | live smoke on :8799 — levels, 400-for-no-key, config round-trip, project column |
-| 1.39.0 | this commit | Phase 7 remainder, connection half: one live MCP session per server reused across calls (handshake skipped, tool list re-read), 5-minute idle window, eviction on registry save/remove and on a failed request, fresh-handshake fallback, `Drop` closes a stdio child or an SSE reader | `cargo test --locked`: 252 passed, 1 ignored; clippy `-D warnings` clean; live on :8765 — call 1 `connected 39 ms`, call 2 `reused a pooled session 0 ms`, re-save then call 3 `connected 29 ms`, log counted `connected=2 reused=1 calls=3` |
+| 1.40.0 | this commit | Phase 10 remainder: terminal open, editor saves, workspace create/rename/delete and settings/key saves consult saved rules — deny is 403, ask is 409 until `approve: true`, and the UI asks once before retrying; git has no mutating route (status only) and updates have no in-app route | `cargo test --locked`: 252 passed, 1 ignored; clippy `-D warnings` clean; `node --check app/static/app.js` clean; live on :8765 — no-rule save 200, saved `fs_write` deny 403, revoke then 200, `settings` ask on `config.key` 409 with `needs_approval` then 200 with `approve`, `command` deny on `terminal` 403, revoke then a terminal opened, audit carried both decisions |
+| 1.39.0 | `cc0c2cb` | Phase 7 remainder, connection half: one live MCP session per server reused across calls (handshake skipped, tool list re-read), 5-minute idle window, eviction on registry save/remove and on a failed request, fresh-handshake fallback, `Drop` closes a stdio child or an SSE reader | `cargo test --locked`: 252 passed, 1 ignored; clippy `-D warnings` clean; live on :8765 — call 1 `connected 39 ms`, call 2 `reused a pooled session 0 ms`, re-save then call 3 `connected 29 ms`, log counted `connected=2 reused=1 calls=3` |
 | 1.38.0 | `2d8721d` | Phase 7 remainder, rediscovery: a failed `mcp` step re-reads the catalogue before the repair step, bounded to three refreshes per run by the snapshot's `refreshes` counter, recorded as an `mcp-refresh` step | `cargo test --locked`: 249 passed, 1 ignored; clippy `-D warnings` clean; live run on :8765 — `echo.missing_tool` → `mcp-error` + `mcp-refresh` "(0 of 3 refreshes used)" listing both tools → `echo.echo` → `echo: after refresh` → `succeeded`, `mcpTools: 2`, 5 steps |
 | 1.37.0 | `cbd9cec` | Phase 7 close-out, transport half: `transport` (stdio/http/sse) + `url` + write-only `headers` in the registry, one `Connection` over a child process, streamable HTTP or legacy HTTP+SSE, `Mcp-Session-Id` carried on later requests, endpoint event resolved, panel fields for all three | `cargo test --locked`: 247 passed, 1 ignored; clippy `-D warnings` clean; live on :8765 — HTTP handshake 2 ms + `echo` → `remote: hello over http`; SSE 5/3/2 ms + `echo` → `remote: hello over sse`, `ping` → `pong`; both `healthy` at version `2.0.0`; restart → `unknown`; unknown transport and `ftp://` 400 |
 | 1.36.0 | `7ec56fc` | Phase 7 close-out, connection half: per-server health from real handshakes (server version, protocol, tool count, latency, time), captured stderr plus client events in a bounded in-memory log, one retried handshake after 250 ms (never a retried `tools/call`), health/log routes and panel badges + Logs button | `cargo test --locked`: 239 passed, 1 ignored; clippy `-D warnings` clean; headless live smoke on :8765 — `unknown` before contact → `healthy` (`1.0.0`, protocol `2024-11-05`, 2 tools, 39 ms), sweep `{echo: ok}`, log `connected: 2 tools…`, an immediately-exiting server → `unhealthy` with `(one retry also failed: …)` and its stderr `boom` captured once per attempt, missing `name` on the log route 400 |
@@ -139,7 +140,7 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [x] `permission_audit` table + `/api/permissions/audit`; grants, revokes, refusals and approved installs are recorded (1.31.0)
 - [x] Routes: list, grant, revoke (local-origin guarded) (1.31.0)
 - [x] Settings → Permissions UI: add a rule, list rules in force, revoke, read the audit trail (1.32.0)
-- [ ] Wire the remaining privileged paths: terminal open, workspace writes from the editor, git, updates, settings/key changes
+- [x] Remaining privileged paths gated: terminal open (`command` → `terminal`), editor saves and workspace create/rename/delete (`fs_write` → the path), settings and key saves (`settings` → `config` / `config.key`) (1.40.0). Git has no mutating route and updates have no in-app route, so those two have nothing to wire yet
 - [ ] OS keychain for `api_key` / `search_api_key` / `openai_api_key` (still mode-restricted `config.json`)
 - [ ] Global emergency stop covering every agent run and terminal at once
 
@@ -164,8 +165,8 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 
 ## Next up
 
-1. Phase 10 close-out — remaining privileged call sites (terminal, editor
-   writes, git, updates, settings), keychain, global stop.
+1. Phase 10 close-out — OS keychain for saved keys, and a global emergency
+   stop for every agent run and terminal.
 2. Phase 2 close-out — configuration editor plus dependency/package-manager
    probing, so the router manager stops being "80 % delivered".
 3. Phase 7 leftovers — OAuth discovery/refresh for remote MCP servers (auth is

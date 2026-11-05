@@ -1267,6 +1267,37 @@ async fn routers_restart(Path(id): Path<String>) -> Response<Body> {
 }
 
 async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    // Keys travel through the same endpoint as ordinary settings, so they get
+    // their own target: a rule can deny `config.key` without freezing the
+    // rest of the form.
+    let key_change = ["api_key", "search_api_key", "openai_api_key"]
+        .iter()
+        .any(|field| {
+            input
+                .get(*field)
+                .and_then(Value::as_str)
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+        });
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let target = if key_change { "config.key" } else { "config" };
+    if let Some(response) = permissions::guard_user(
+        &state,
+        permissions::Action::Settings,
+        target,
+        "",
+        approve,
+        if key_change {
+            "change a saved key"
+        } else {
+            "save settings"
+        },
+    ) {
+        return response;
+    }
     let mut cfg = load_config(&state);
     let base_url = input
         .get("base_url")

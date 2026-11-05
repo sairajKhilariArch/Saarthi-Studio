@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.40.0
+
+- Phase 10 remainder: the privileged routes a person drives now consult the
+  permission store. Terminal open is `command` on `terminal`; editor saves and
+  workspace create/rename/delete are `fs_write` on the path; settings saves are
+  `settings` on `config`, with key changes on `config.key` so a rule can freeze
+  only the key fields.
+- A saved deny answers 403 and names the rule. A saved ask answers 409 with
+  `needs_approval`; the request runs only when it carries `approve: true`. The
+  reads, the UI's confirm, edit-save, delete and terminal-open calls retry once
+  after the person says yes. A deny still wins over `approve`, because the rule
+  is checked first.
+- No rule means no prompt: an editor save or an auto-opened terminal cannot turn
+  into a dialog nobody asked for. This is deliberately narrower than the agent
+  path, which keeps the ask-by-default matrix; both share the same resolution
+  order and audit table.
+- Every refusal and every approved ask is written to `permission_audit`, with
+  the route's own detail ("save a file from the editor", "change a saved key",
+  "open a terminal").
+- Not wired, because there is nothing to wire: git has only a read-only status
+  route, and updates have no in-app route. `project`-scoped rules still apply to
+  agent steps only, since the UI routes carry no project. The OS keychain and
+  the global emergency stop remain open.
+- Tests: 252 pass, 1 ignored (no new unit tests — `guard_user` needs an
+  `AppState`; the behavior is covered by the live route smoke instead). Clippy
+  `-D warnings` clean; `node --check app/static/app.js` clean.
+- Live smoke on :8765: a save with no rule returned 200; a session `fs_write`
+  deny on `blocked.txt` returned 403; revoking it allowed the save; a
+  `settings` ask on `config.key` returned 409 + `needs_approval`, then 200 with
+  `approve`; a `command` deny on `terminal` returned 403; revoking it opened a
+  terminal; the audit trail held both decisions and the approval.
+- Version 1.40.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 56).
+
 ## 1.39.0
 
 - Phase 7 remainder, connection half: an MCP server now keeps a live session

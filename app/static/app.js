@@ -574,13 +574,32 @@ function toast(message) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok && !data.error) data.error = `Request failed (HTTP ${response.status})`;
-  return { ok: response.ok, status: response.status, data };
+  const { confirmApproval, ...request } = options;
+  const send = async (body) => {
+    const response = await fetch(path, {
+      headers: { "Content-Type": "application/json", ...(request.headers || {}) },
+      ...request,
+      ...(body === undefined ? {} : { body }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok && !data.error) data.error = `Request failed (HTTP ${response.status})`;
+    return { ok: response.ok, status: response.status, data };
+  };
+  let result = await send(undefined);
+  // A saved "ask" rule answers 409 instead of running. The second request is
+  // the person's explicit yes — never a silent retry, and a deny rule still
+  // wins because the server checks it before reading `approve`.
+  if (confirmApproval && result.status === 409 && result.data.needs_approval) {
+    if (!window.confirm(`${result.data.error}\n\nApprove this one time?`)) return result;
+    let body = request.body;
+    try {
+      body = JSON.stringify({ ...JSON.parse(request.body || "{}"), approve: true });
+    } catch {
+      body = request.body;
+    }
+    result = await send(body);
+  }
+  return result;
 }
 
 function formatBytes(bytes) {
@@ -1932,6 +1951,7 @@ async function createItem(dir) {
   const path = dir.base ? `${dir.base}/${name}` : name;
   const result = await api("/api/workspace/create", {
     method: "POST",
+    confirmApproval: true,
     body: JSON.stringify({ path, dir: dir.isDir }),
   });
   if (!result.ok) {
@@ -1958,6 +1978,7 @@ async function renameSelected() {
   const target = `${parentPath(selected.path)}${parentPath(selected.path) ? "/" : ""}${name}`;
   const result = await api("/api/workspace/rename", {
     method: "POST",
+    confirmApproval: true,
     body: JSON.stringify({ from: selected.path, to: target }),
   });
   if (!result.ok) {
@@ -1981,6 +2002,7 @@ async function deleteSelected() {
   if (!confirm(`Delete "${selected.name}"? This removes it from disk.`)) return;
   const result = await api("/api/workspace/delete", {
     method: "POST",
+    confirmApproval: true,
     body: JSON.stringify({ path: selected.path }),
   });
   if (!result.ok) {
@@ -2183,6 +2205,7 @@ async function saveActiveFile() {
   }
   const result = await api("/api/workspace/file", {
     method: "PUT",
+    confirmApproval: true,
     body: JSON.stringify({ path: file.path, content: file.content }),
   });
   if (!result.ok) {
@@ -3648,7 +3671,11 @@ async function saveSettings(event) {
   if (openaiKey) payload.openai_api_key = openaiKey;
   const searchKey = $("searchApiKey").value.trim();
   if (searchKey) payload.search_api_key = searchKey;
-  const result = await api("/api/config", { method: "POST", body: JSON.stringify(payload) });
+  const result = await api("/api/config", {
+    method: "POST",
+    confirmApproval: true,
+    body: JSON.stringify(payload),
+  });
   if (!result.ok) {
     settingsNotice(result.data.error || "Could not save settings.", false);
     return false;
@@ -4902,7 +4929,11 @@ function renderConsoleModels() {
     use.textContent = state.model === name ? "Current" : "Use";
     use.disabled = state.model === name;
     use.addEventListener("click", async () => {
-      const result = await api("/api/config", { method: "POST", body: JSON.stringify({ model: name }) });
+      const result = await api("/api/config", {
+        method: "POST",
+        confirmApproval: true,
+        body: JSON.stringify({ model: name }),
+      });
       if (!result.ok) {
         toast(result.data.error || "Could not set that model.");
         return;
@@ -6191,6 +6222,7 @@ async function openTerminalSession(cwd) {
     }
     const result = await api("/api/terminal/open", {
       method: "POST",
+      confirmApproval: true,
       body: JSON.stringify({ cwd, ...terminalSize() }),
     });
     if (!result.ok || !result.data.ok) {
