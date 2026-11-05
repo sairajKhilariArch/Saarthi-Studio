@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "1.41.0"
+version = "1.42.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -35,6 +35,12 @@ portable-pty = "0.9"
 # Pinned: tauri 2.11 builds against an older tauri-runtime monitor API and
 # breaks when Cargo picks runtime 2.12. Keep the whole 2.12 line together.
 tauri = { version = "=2.12.5", optional = true }
+# Secrets in the OS credential store, not config.json (Phase 10). One crate,
+# three platform stores: Windows Credential Manager, macOS Keychain, Linux
+# Secret Service (sync) — maintained by the RustOS team lineage and the
+# de facto standard for this. Tests and dev runs use the built-in mock
+# store via FREE_AI_STUDIO_KEYCHAIN in ../.cargo/config.toml.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [features]
 default = ["gui"]

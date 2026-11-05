@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.42.0
+
+- Phase 10 close-out: saved API keys live in the OS credential store instead
+  of `config.json`. New `app/src/keychain.rs` on the `keyring` 3 crate — Windows
+  Credential Manager (`windows-native`), macOS Keychain (`apple-native`), Linux
+  Secret Service (`sync-secret-service`). Service
+  `io.github.sairajkhilariarch.SaarthiStudio` (the AppStream id), one entry per
+  field (`api_key`, `search_api_key`, `openai_api_key`).
+- `save_config_file` splits secrets out before writing: each non-empty one is
+  stored and blanked from the JSON. `load_config` merges stored values over
+  the file. A store failure keeps the value in the permission-restricted file
+  (the pre-keychain behavior) instead of dropping a key.
+- Upgrade path: one idempotent migration at startup moves any plaintext secret
+  still in `config.json` into the store and blanks the file.
+- Saved keys can now be removed deliberately: `POST /api/config/forget`, gated
+  on the same `settings`/`config.key` rule as a key change (deny → 403), with
+  a "Remove saved key" button under each key field. Blank inputs still mean
+  "keep the saved key" — removal is its own action.
+- `GET /api/config` reports `keychain: "os" | "mock" | "off"`, and the
+  Settings labels say where a key actually lives instead of claiming a store
+  the app is not using.
+- Test isolation: the keyring mock store keeps data inside the credential
+  object, so entries are cached per name for the process, and mock-mode
+  services are derived from the config directory's hash — parallel fixtures no
+  longer share credentials. `.cargo/config.toml` selects the mock store for
+  `cargo test`/`cargo run`, so no test or dev run touches a real vault;
+  installed binaries get the platform store. `FREE_AI_STUDIO_KEYCHAIN=off` is
+  the escape hatch (secrets stay in `config.json`).
+- New dependency, documented in `app/Cargo.toml`: `keyring` (one crate, three
+  platform stores; no existing equivalent in the tree).
+- Tests: 261 pass, 1 ignored (new: mode parsing/freezing, AppStream service id,
+  secret round-trip through the store, per-location isolation, unstored name).
+  Clippy `-D warnings` clean; `node --check app/static/app.js` clean.
+- Live smoke on :8878 against the real Windows Credential Manager (temp home
+  plus `FREE_AI_STUDIO_KEYCHAIN_SERVICE=…smoke`, so the production service and
+  the real config were untouched): a seeded plaintext key migrated on startup
+  (`config.json` field `''`), `cmdkey /list` showed the entry under
+  `api_key.<service>`, a fresh process with an empty file still reported
+  `has_api_key: true` (cross-process read), `forget` removed the entry and
+  flipped it to false, and a saved `settings` deny on `config.key` refused
+  removal with 403. The smoke credential was deleted; none remain.
+- Version 1.42.0 across `app/Cargo.toml`, `app/Cargo.lock`,
+  `app/tauri.conf.json`, the extension manifest and lock, and the Android
+  `versionName` (code 58).
+
 ## 1.41.0
 
 - Phase 10 remainder: a global emergency stop. `POST /api/emergency-stop`

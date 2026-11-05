@@ -587,8 +587,11 @@
           <label class="field">
             <span>Router API key</span>
             <input id="apiKey" type="password" placeholder="Paste your router API key" autocomplete="new-password">
-            <small id="keyStatus">Stored in a permission-restricted local config file.</small>
+            <small id="keyStatus">Stored in the OS credential store, not in config.json.</small>
           </label>
+          <div class="form-actions">
+            <button type="button" id="forgetApiKey" class="btn btn-quiet btn-small danger">Remove saved router key</button>
+          </div>
           <label class="field">
             <span>Model</span>
             <input id="model" type="text" value="auto" placeholder="auto">
@@ -607,7 +610,10 @@
           <label class="field">
             <span>Platform API key</span>
             <input id="openaiKey" type="password" placeholder="Paste an OpenAI Platform key" autocomplete="new-password">
-            <small id="openaiKeyStatus">Stored in a permission-restricted local config file.</small>
+            <small id="openaiKeyStatus">Stored in the OS credential store, not in config.json.</small>
+            <div class="form-actions">
+              <button type="button" id="forgetOpenaiKey" class="btn btn-quiet btn-small danger">Remove saved platform key</button>
+            </div>
           </label>
           <label class="field">
             <span>Platform base URL</span>
@@ -844,7 +850,10 @@
               <label class="field">
                 <span>Search API key</span>
                 <input id="searchApiKey" type="password" placeholder="Paste an Exa or Tavily key" autocomplete="new-password">
-                <small id="searchKeyStatus">Stored locally with the router key.</small>
+                <small id="searchKeyStatus">Stored in the OS credential store with the other keys.</small>
+                <div class="form-actions">
+                  <button type="button" id="forgetSearchKey" class="btn btn-quiet btn-small danger">Remove saved search key</button>
+                </div>
               </label>
             </div>
             <small>Runs up to 3 web queries, then answers with cited <code>[1]</code> sources. Direct Gemini/OpenAI backends use their built-in web tools without a search key.</small>

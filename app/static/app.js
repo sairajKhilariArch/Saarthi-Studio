@@ -3058,30 +3058,69 @@ async function loadSettings() {
   $("strongModel").value = result.data.strong_model || "";
   $("adaptiveTiersRow").classList.toggle("hidden", !adaptive);
   $("openaiBaseUrl").value = result.data.openai_base_url || "https://api.openai.com/v1";
+  const keychain = result.data.keychain || "os";
   $("openaiKey").value = "";
   $("openaiKey").placeholder = result.data.has_openai_key
     ? "Saved key (leave blank to keep it)"
     : "Paste an OpenAI Platform key";
   $("openaiKeyStatus").textContent = result.data.has_openai_key
-    ? "A platform key is saved locally. Leave the field blank to keep it."
-    : "No platform key saved. Needed for openai: models.";
+    ? `A platform key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it.`
+    : `No platform key saved. Needed for openai: models. A saved key goes to ${keychainStoreName(keychain)}.`;
   $("thinkingLevel").value = result.data.thinking_level || "";
   $("runThinkingLevel").value = result.data.run_thinking_level || "";
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
   $("searchKeyStatus").textContent = result.data.has_search_key
-    ? "A search key is saved. Leave the field blank to keep it."
-    : "Needed for Deep search with Exa or Tavily.";
+    ? `A search key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it.`
+    : `Needed for Deep search with Exa or Tavily. A saved key goes to ${keychainStoreName(keychain)}.`;
   updateContextMeter();
   $("modelChip").textContent = state.model;
   $("apiKey").value = "";
   $("apiKey").placeholder = result.data.has_api_key ? "Saved key (leave blank to keep it)" : "Paste your router API key";
   $("keyStatus").textContent = result.data.has_api_key
-    ? "A key is saved locally. Leave the field blank to keep it, or enter a new key to replace it."
-    : "No key saved yet. It is stored in a permission-restricted local config file.";
+    ? `A key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it, or enter a new key to replace it.`
+    : `No key saved yet. A saved key goes to ${keychainStoreName(keychain)}.`;
   renderBackendPresets();
   void loadPermissions();
+}
+
+// What the server says about where saved keys live, in words the settings
+// panel can show. The mock store exists in dev and test runs; the OS store
+// is the production case; `off` keeps secrets in the restricted config file.
+function keychainStoreName(mode) {
+  return { os: "in the OS credential store", mock: "in the dev mock keychain", off: "in the restricted local config file" }[mode] || "in the OS credential store";
+}
+
+// Remove one saved credential: the keychain entry and the config field both
+// go. Blank inputs always mean "keep the saved key", so removal is its own
+// deliberate action, gated on the same config.key rule as a key change.
+async function forgetSavedKey(field, button, statusElement) {
+  if (!confirm("Remove the saved key? Providers using it will stop working until you paste a new one.")) return;
+  button.disabled = true;
+  const result = await api("/api/config/forget", {
+    method: "POST",
+    body: JSON.stringify({ field }),
+  });
+  button.disabled = false;
+  if (!result.ok) {
+    // A 409 carries needs_approval the same way the save form does.
+    if (result.status === 409) {
+      const approved = await api("/api/config/forget", {
+        method: "POST",
+        body: JSON.stringify({ field, approve: true }),
+      });
+      if (approved.ok) {
+        if (statusElement) statusElement.textContent = "Key removed.";
+        toast("Saved key removed.");
+        return;
+      }
+    }
+    toast(result.data.error || "Could not remove the saved key.");
+    return;
+  }
+  if (statusElement) statusElement.textContent = "Key removed.";
+  toast("Saved key removed.");
 }
 
 /* ---- permissions: saved rules and what they decided lately --------- */
@@ -5394,6 +5433,9 @@ function bindEvents() {
 
   $("baseUrl").addEventListener("input", markActivePreset);
   $("settingsForm").addEventListener("submit", saveSettings);
+  $("forgetApiKey").addEventListener("click", () => forgetSavedKey("api_key", $("forgetApiKey"), $("keyStatus")));
+  $("forgetOpenaiKey").addEventListener("click", () => forgetSavedKey("openai_api_key", $("forgetOpenaiKey"), $("openaiKeyStatus")));
+  $("forgetSearchKey").addEventListener("click", () => forgetSavedKey("search_api_key", $("forgetSearchKey"), $("searchKeyStatus")));
   $("testConnection").addEventListener("click", testConnection);
   $("openProviderDashboardSettings").addEventListener("click", openProviderDashboard);
   $("adaptiveRouting").addEventListener("change", () => {

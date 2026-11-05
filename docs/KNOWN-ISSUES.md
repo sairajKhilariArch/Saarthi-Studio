@@ -18,7 +18,7 @@ Ordered by impact. `Open` = unresolved, `Fixed` = verified in a shipped commit,
 | 11 | Clippy runs only on ubuntu | Open | Windows/macOS clippy differences go unnoticed until release. |
 | 12 | No frontend tests | Open | `app/static/` has no runner; see `docs/TESTING-STRATEGY.md`. |
 | 13 | No end-to-end test | Open | Only ad-hoc local smokes so far. |
-| 14 | Secrets stored in `config.json`, not an OS keychain | Open | File mode restricted; keychain integration is Phase 10 work. |
+| 14 | Secrets stored in `config.json`, not an OS keychain | **Fixed** (1.42.0) | `app/src/keychain.rs` stores `api_key`, `search_api_key` and `openai_api_key` in Windows Credential Manager / macOS Keychain / Linux Secret Service; startup migrates plaintext keys and blanks the file, a store failure keeps the value in the permission-restricted file, and the store mode is reported in `GET /api/config`. |
 | 15 | MCP (Phase 7) and Thinking + OpenAI Platform (Phase 4) | **Partial** | Phase 4 landed in 1.29.0–1.30.0 (`/responses`, reasoning levels, platform key). MCP landed in 1.33.0 as registry + stdio session + gated calls, with no pooling, no SSE/HTTP transport, no manager UI and no agent integration yet. Tracked in `docs/FEATURE-STATUS.md`. |
 | 17 | Model capability table (Phase 3), codebase indexing/RAG (Phase 8), workflow graph (Phase 13), plugin ecosystem (Phase 15) | **Missing** | Partial phases, not defects; the capability table is the blocking prerequisite for Phase 4. |
 | 16 | No Windows installer / macOS bundle / auto-update | Open | Phase 18. Portable zip and unsigned tarball only. |

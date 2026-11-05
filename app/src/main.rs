@@ -39,6 +39,7 @@ mod host_auth;
 mod host_security;
 mod host_transport;
 mod installer;
+mod keychain;
 mod local;
 mod mcp;
 mod media;
@@ -484,18 +485,105 @@ fn ensure_setup(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
     initialize_database(&state.database_path)?;
     // Warm the active-project pointer (also creates the first project).
     active_project_id(state);
+    // Migration, idempotent: any credential still sitting as plaintext in
+    // config.json (pre-keychain stores and upgrades) moves into the OS
+    // credential store once, and the empty skipped runs cost one file read.
+    migrate_secrets_to_keychain(state);
     Ok(())
 }
 
-pub(crate) fn load_config(state: &AppState) -> Config {
-    fs::read(&state.config_path)
+/// True when a plaintext secret is still sitting in the config file.
+fn config_holds_plaintext_secrets(state: &AppState) -> bool {
+    // Deliberately NOT `load_config`: that merges the keychain, and a merged
+    // value must not look like plaintext on disk.
+    let raw = fs::read(&state.config_path)
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok())
-        .unwrap_or_else(Config::defaults)
+        .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok());
+    match raw {
+        Some(cfg) => {
+            !cfg.api_key.trim().is_empty()
+                || !cfg.search_api_key.trim().is_empty()
+                || !cfg.openai_api_key.trim().is_empty()
+        }
+        None => false,
+    }
 }
 
-pub(crate) fn save_config_file(path: &FsPath, cfg: &Config) -> io::Result<()> {
-    let bytes = serde_json::to_vec_pretty(cfg)
+/// One-shot migration of plaintext secrets into the keychain: the save path
+/// does the split (write to the store, blank the field), so a store failure
+/// leaves the existing file untouched and the next startup retries.
+fn migrate_secrets_to_keychain(state: &AppState) {
+    if !config_holds_plaintext_secrets(state) {
+        return;
+    }
+    let cfg = load_config(state);
+    let _ = save_config_file(&state.config_path, &cfg);
+}
+
+pub(crate) fn load_config(state: &AppState) -> Config {
+    let mut cfg = fs::read(&state.config_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok())
+        .unwrap_or_else(Config::defaults);
+    merge_keychain_secrets(state, &mut cfg);
+    cfg
+}
+
+/// The keychain location identity for this app instance: the directory the
+/// config lives in. Mock-mode tests hash it into the service name so parallel
+/// fixtures never share credentials; production lands on the stable default
+/// service every time.
+fn keychain_location(path: &FsPath) -> String {
+    path.parent()
+        .and_then(|dir| dir.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+/// Move secrets out of the JSON before it is written: each non-empty one
+/// goes to the OS credential store and is blanked from the record. When the
+/// store rejects the write, the value stays in the JSON — the file is
+/// permission-restricted and keeps the pre-keychain behavior — so a broken
+/// keychain degrades to plain config.json instead of losing a key.
+fn split_keychain_secrets(path: &FsPath, cfg: &mut Config) {
+    let location = keychain_location(path);
+    for (name, secret) in [
+        ("api_key", &mut cfg.api_key),
+        ("search_api_key", &mut cfg.search_api_key),
+        ("openai_api_key", &mut cfg.openai_api_key),
+    ] {
+        if secret.is_empty() {
+            continue;
+        }
+        if keychain::write_secret(&location, name, secret).is_ok() {
+            secret.clear();
+        }
+    }
+}
+
+/// Stored credentials win over the file, because the file is the legacy
+/// carrier: a store read error keeps whatever the file holds rather than
+/// dropping the secret.
+fn merge_keychain_secrets(state: &AppState, cfg: &mut Config) {
+    let location = keychain_location(&state.config_path);
+    for name in keychain::SECRET_FIELDS {
+        let stored = match keychain::read_secret(&location, name) {
+            Ok(Some(value)) => value,
+            _ => continue,
+        };
+        match name {
+            "api_key" => cfg.api_key = stored,
+            "search_api_key" => cfg.search_api_key = stored,
+            "openai_api_key" => cfg.openai_api_key = stored,
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn save_config_file(path: &FsPath, original: &Config) -> io::Result<()> {
+    let mut cfg = original.clone();
+    split_keychain_secrets(path, &mut cfg);
+    let bytes = serde_json::to_vec_pretty(&cfg)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let temp_path = path.with_extension("tmp");
     fs::write(&temp_path, bytes)?;
@@ -950,6 +1038,7 @@ async fn serve_static(state: AppState, relative: &str) -> Response<Body> {
 async fn get_config(State(state): State<AppState>) -> Json<Value> {
     let cfg = load_config(&state);
     Json(json!({
+        "keychain": keychain::current_mode().as_str(),
         "base_url": cfg.base_url,
         "model": cfg.model,
         "has_api_key": !cfg.api_key.is_empty(),
@@ -1380,6 +1469,54 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
     Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level})).into_response()
+}
+
+/// Remove one saved credential entirely — keychain entry first, then the
+/// config field. A posted key that stays empty always means "keep it", so a
+/// deliberate removal must name the field here.
+async fn forget_saved_key(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let field = input
+        .get("field")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !keychain::SECRET_FIELDS.contains(&field.as_str()) {
+        let names = keychain::SECRET_FIELDS.join(", ");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("Name one of these fields: {names}."),
+        );
+    }
+    if let Some(response) = permissions::guard_user(
+        &state,
+        permissions::Action::Settings,
+        "config.key",
+        "",
+        input
+            .get("approve")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "forget a saved key",
+    ) {
+        return response;
+    }
+    if let Err(error) = keychain::delete_secret(&keychain_location(&state.config_path), &field) {
+        // The store refusing to delete means the key is not gone: refuse the
+        // request rather than half-remove it.
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    let mut cfg = load_config(&state);
+    match field.as_str() {
+        "api_key" => cfg.api_key = String::new(),
+        "search_api_key" => cfg.search_api_key = String::new(),
+        "openai_api_key" => cfg.openai_api_key = String::new(),
+        _ => unreachable!(),
+    }
+    if let Err(e) = save_config_file(&state.config_path, &cfg) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    Json(json!({"ok": true, "field": field})).into_response()
 }
 
 /* Model catalog: fetched live from the configured router's /models so nothing
@@ -3338,6 +3475,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/", get(root))
         .route("/static/*file", get(static_file))
         .route("/api/config", get(get_config).post(post_config))
+        .route("/api/config/forget", post(forget_saved_key))
         .route(
             "/api/conversations",
             get(list_conversations).post(create_conversation),
