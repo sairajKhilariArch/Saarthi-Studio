@@ -6,12 +6,14 @@
 //! UI say "unknown" instead of promising something the model may not do. This
 //! is the Phase 3 table reduced to its only honest source: provider metadata.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Per-million-token prices, converted from whatever unit the provider used.
-/// Only present when the provider published both halves.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// Only present when the provider published both halves. `Deserialize` exists
+/// so a cached catalog row can be read back into the same shape for cost
+/// accounting, without a second definition of what a price is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Price {
     pub input_per_million: f64,
     pub output_per_million: f64,

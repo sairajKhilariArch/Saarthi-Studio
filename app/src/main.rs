@@ -30,6 +30,7 @@ mod agent;
 mod browser;
 mod capabilities;
 mod context;
+mod cost;
 mod deepsearch;
 mod events;
 #[cfg(feature = "gui")]
@@ -144,6 +145,10 @@ struct Config {
     /// (rate limit, 5xx, timeout, transport failure). Never on a 4xx refusal.
     #[serde(default)]
     fallback_models: Vec<String>,
+    /// Money allowed in a rolling 24-hour window, in USD. Zero means no limit,
+    /// which is the default: a fresh install must never block its first turn.
+    #[serde(default)]
+    daily_budget_usd: f64,
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -183,6 +188,7 @@ impl Config {
             run_thinking_level: String::new(),
             agent_model: String::new(),
             fallback_models: Vec::new(),
+            daily_budget_usd: 0.0,
         }
     }
 }
@@ -311,6 +317,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = migrate_projects(&conn);
     let _ = migrate_project_thinking(&conn);
     let _ = migrate_project_model(&conn);
+    let _ = migrate_request_log_costs(&conn);
     let _ = permissions::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
@@ -388,6 +395,25 @@ fn migrate_project_thinking(conn: &Connection) -> rusqlite::Result<()> {
     };
     if !has_column {
         conn.execute_batch("ALTER TABLE projects ADD COLUMN thinking TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+/// Give `request_log` its cost columns (`NULL` price / no basis until a provider
+/// publishes one), so an upgraded database and a fresh one share a schema.
+fn migrate_request_log_costs(conn: &Connection) -> rusqlite::Result<()> {
+    let names = {
+        let mut stmt = conn.prepare("PRAGMA table_info(request_log)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names
+    };
+    if !names.iter().any(|name| name == "cost_usd") {
+        conn.execute_batch("ALTER TABLE request_log ADD COLUMN cost_usd REAL;")?;
+    }
+    if !names.iter().any(|name| name == "cost_basis") {
+        conn.execute_batch("ALTER TABLE request_log ADD COLUMN cost_basis TEXT;")?;
     }
     Ok(())
 }
@@ -746,6 +772,8 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     // route.
     cfg.agent_model = cfg.agent_model.trim().to_string();
     cfg.fallback_models = model_scope::normalised(&cfg.fallback_models);
+    // A negative budget is meaningless; zero stays "no limit".
+    cfg.daily_budget_usd = cfg.daily_budget_usd.max(0.0);
 
     cfg.context_budget_tokens = cfg
         .context_budget_tokens
@@ -785,14 +813,15 @@ pub(crate) fn reach_error(base_url: &str, detail: String) -> String {
 /// Whether the router's catalog says this model accepts reasoning parameters.
 /// `None` means the catalog does not say (no metadata, or it could not be
 /// read), which is not evidence either way.
-async fn catalog_reasoning(state: &AppState, cfg: &Config, id: &str) -> Option<bool> {
-    let from_list = |models: &Value| -> Option<bool> {
+/// The catalog row for one model, from the same one-minute cache the model menu
+/// fills. `None` when the catalog cannot be read or does not list the id.
+async fn catalog_row(state: &AppState, cfg: &Config, id: &str) -> Option<Value> {
+    let from_list = |models: &Value| -> Option<Value> {
         models
             .as_array()?
             .iter()
-            .find(|model| model.get("id").and_then(Value::as_str) == Some(id))?
-            .pointer("/capabilities/reasoning")
-            .and_then(Value::as_bool)
+            .find(|model| model.get("id").and_then(Value::as_str) == Some(id))
+            .cloned()
     };
     let cache_key = format!(
         "{}|{}",
@@ -815,6 +844,65 @@ async fn catalog_reasoning(state: &AppState, cfg: &Config, id: &str) -> Option<b
         cache.insert(cache_key, (std::time::Instant::now(), models));
     }
     answer
+}
+
+async fn catalog_reasoning(state: &AppState, cfg: &Config, id: &str) -> Option<bool> {
+    let row = catalog_row(state, cfg, id).await?;
+    row.pointer("/capabilities/reasoning")
+        .and_then(Value::as_bool)
+}
+
+/// The price the provider publishes for a model, read from that same row. `None`
+/// when it publishes none — a cost is never assumed.
+async fn catalog_price(state: &AppState, cfg: &Config, id: &str) -> Option<capabilities::Price> {
+    let row = catalog_row(state, cfg, id).await?;
+    serde_json::from_value(row.pointer("/capabilities/pricing")?.clone()).ok()
+}
+
+/// What a recorded request cost: the provider's published price for the model
+/// that actually answered, times the tokens it reported. `None` unless both
+/// exist. Native platform picks have no router catalog row, so they stay
+/// unpriced rather than guessed.
+async fn priced_cost(state: &AppState, cfg: &Config, meta: &Value) -> Option<cost::Cost> {
+    let model = meta.get("model").and_then(Value::as_str)?;
+    if openai::platform_model(model).is_some() {
+        return None;
+    }
+    let price = catalog_price(state, cfg, model).await?;
+    cost::estimate(
+        &price,
+        meta.get("prompt_tokens").and_then(Value::as_i64),
+        meta.get("completion_tokens").and_then(Value::as_i64),
+    )
+}
+
+/// The budget window is a rolling 24 hours: timestamps are stored in UTC and
+/// there is no user timezone to cut a calendar day with.
+const BUDGET_WINDOW_SECONDS: f64 = 86_400.0;
+
+/// Money spent in the window, plus how many successful requests had no price.
+fn spend_window(state: &AppState, seconds: f64) -> cost::Spend {
+    let since = now_seconds() - seconds;
+    open_db(&state.database_path)
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT COALESCE(SUM(cost_usd),0), SUM(CASE WHEN cost_usd IS NULL AND status='ok' THEN 1 ELSE 0 END) FROM request_log WHERE created_at>=?1",
+                [since],
+                |r| Ok((r.get::<_, f64>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+            )
+        })
+        .map(|(usd, unknown)| cost::Spend { usd, unknown })
+        .unwrap_or(cost::Spend { usd: 0.0, unknown: 0 })
+}
+
+/// The gate every paid call goes through. Local inference is not a paid provider
+/// call, so local mode and `local:` picks never reach it.
+fn budget_gate(state: &AppState, cfg: &Config) -> Option<String> {
+    if cfg.daily_budget_usd <= 0.0 {
+        return None;
+    }
+    let spend = spend_window(state, BUDGET_WINDOW_SECONDS);
+    cost::budget_refusal(cfg.daily_budget_usd, &spend)
 }
 
 /// The thinking block a chat response reports: the level in force, where it
@@ -981,6 +1069,11 @@ pub(crate) async fn call_router_with(
     level: Option<thinking::ThinkingLevel>,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
+    // Checked once, before the chain: a spent budget must not be circumvented by
+    // trying the next model.
+    if let Some(refusal) = budget_gate(state, &cfg) {
+        return Err(refusal);
+    }
     let resolved = model_scope::resolve(model_override, None, None, Some(&cfg.model));
     let chain = model_scope::chain(&resolved.model, &cfg.fallback_models);
     let mut tried: Vec<Value> = Vec::new();
@@ -1140,6 +1233,9 @@ async fn open_stream(
     messages: &[Value],
     level: Option<thinking::ThinkingLevel>,
 ) -> Result<StreamStart, (StatusCode, String)> {
+    if let Some(refusal) = budget_gate(state, cfg) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, refusal));
+    }
     let mut fallbacks: Vec<Value> = Vec::new();
     for (index, candidate) in chain.iter().enumerate() {
         let mut request_body = json!({ "model": candidate, "messages": messages, "stream": true });
@@ -1276,6 +1372,7 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "run_thinking_level": cfg.run_thinking_level,
         "agent_model": cfg.agent_model,
         "fallback_models": cfg.fallback_models,
+        "daily_budget_usd": cfg.daily_budget_usd,
     }))
 }
 
@@ -1808,6 +1905,9 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
             .map(str::to_string)
             .collect();
     }
+    if let Some(budget) = input.get("daily_budget_usd").and_then(Value::as_f64) {
+        cfg.daily_budget_usd = budget;
+    }
     cfg.base_url = base_url;
     cfg.model = model;
     let cfg = match validate_config(cfg) {
@@ -1817,7 +1917,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models, "daily_budget_usd": cfg.daily_budget_usd})).into_response()
 }
 
 /// Remove one saved credential entirely — keychain entry first, then the
@@ -2561,7 +2661,7 @@ async fn usage(
         let pages = ((total + page_size - 1) / page_size).max(1);
 
         let sql = format!(
-            "SELECT id, created_at, conversation_id, model, provider, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, fallback_attempts, error \
+            "SELECT id, created_at, conversation_id, model, provider, status, latency_ms, prompt_tokens, completion_tokens, total_tokens, fallback_attempts, error, cost_usd, cost_basis \
              FROM request_log{where_sql}{order} LIMIT ? OFFSET ?",
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -2578,7 +2678,8 @@ async fn usage(
                         "provider": r.get::<_, Option<String>>(4)?, "status": r.get::<_, String>(5)?,
                         "latency_ms": r.get::<_, Option<i64>>(6)?, "prompt_tokens": r.get::<_, Option<i64>>(7)?,
                         "completion_tokens": r.get::<_, Option<i64>>(8)?, "total_tokens": r.get::<_, Option<i64>>(9)?,
-                        "fallback_attempts": r.get::<_, Option<String>>(10)?, "error": r.get::<_, Option<String>>(11)?
+                        "fallback_attempts": r.get::<_, Option<String>>(10)?, "error": r.get::<_, Option<String>>(11)?,
+                        "cost_usd": r.get::<_, Option<f64>>(12)?, "cost_basis": r.get::<_, Option<String>>(13)?.unwrap_or_default()
                     }))
                 },
             )?
@@ -2606,7 +2707,8 @@ async fn usage(
         let by_sql = format!(
             "SELECT COALESCE(model,'(unknown)') AS model, COALESCE(MAX(provider),'(unknown)') AS provider,\
              COUNT(*), SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END),\
-             COALESCE(SUM(total_tokens),0), COALESCE(AVG(latency_ms),0)\
+             COALESCE(SUM(total_tokens),0), COALESCE(AVG(latency_ms),0),\
+             COALESCE(SUM(cost_usd),0), SUM(CASE WHEN cost_usd IS NULL AND status='ok' THEN 1 ELSE 0 END)\
              FROM request_log{where_sql} GROUP BY model, provider ORDER BY COUNT(*) DESC LIMIT 20",
         );
         let mut by_stmt = conn.prepare(&by_sql)?;
@@ -2615,10 +2717,44 @@ async fn usage(
                 Ok(json!({
                     "model": r.get::<_, String>(0)?, "provider": r.get::<_, String>(1)?,
                     "requests": r.get::<_, i64>(2)?, "ok": r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    "tokens": r.get::<_, i64>(4)?, "avg_latency_ms": r.get::<_, f64>(5)?
+                    "tokens": r.get::<_, i64>(4)?, "avg_latency_ms": r.get::<_, f64>(5)?,
+                    "usd": r.get::<_, f64>(6)?, "unpriced": r.get::<_, Option<i64>>(7)?.unwrap_or(0)
                 }))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Cost is summed, never derived here: a row without a price stays out of
+        // the total and is counted instead, so the figure is a labelled floor.
+        let window_start = now_seconds() - BUDGET_WINDOW_SECONDS;
+        let spend_24h = spend_window(&state, BUDGET_WINDOW_SECONDS);
+        let cost_sql = format!(
+            "SELECT COALESCE(SUM(cost_usd),0), SUM(CASE WHEN cost_usd IS NULL AND status='ok' THEN 1 ELSE 0 END)\
+             FROM request_log{where_sql}",
+        );
+        let (filtered_usd, unpriced_filtered) =
+            conn.prepare(&cost_sql)?
+                .query_row(rusqlite::params_from_iter(args.iter()), |r| {
+                    Ok((
+                        r.get::<_, f64>(0)?,
+                        r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    ))
+                })?;
+        let by_project = {
+            let mut stmt = conn.prepare(
+                "SELECT COALESCE(p.name,'(no project)') AS name, COUNT(*), COALESCE(SUM(r.cost_usd),0),\
+                 SUM(CASE WHEN r.cost_usd IS NULL AND r.status='ok' THEN 1 ELSE 0 END)\
+                 FROM request_log r LEFT JOIN conversations c ON c.id=r.conversation_id\
+                 LEFT JOIN projects p ON p.id=c.project_id\
+                 WHERE r.created_at>=?1 GROUP BY p.name ORDER BY COUNT(*) DESC LIMIT 20",
+            )?;
+            let rows = stmt.query_map([window_start], |r| {
+                Ok(json!({
+                    "project": r.get::<_, String>(0)?, "requests": r.get::<_, i64>(1)?,
+                    "usd": r.get::<_, f64>(2)?, "unpriced": r.get::<_, Option<i64>>(3)?.unwrap_or(0)
+                }))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         Ok(json!({
             "summary": summary,
@@ -2629,6 +2765,18 @@ async fn usage(
             "requests": requests,
             "series": series,
             "by_model": by_model,
+            "by_project": by_project,
+            "cost": {
+                "window_hours": 24,
+                "usd_24h": spend_24h.usd,
+                "unpriced_24h": spend_24h.unknown,
+                "filtered_usd": filtered_usd,
+                "filtered_unpriced": unpriced_filtered,
+                "budget_usd": load_config(&state).daily_budget_usd,
+                // What the numbers are, said plainly: no provider bills this app
+                // per request, so every figure is an estimate from published prices.
+                "basis": "estimated from the provider's published price and its own reported token counts",
+            },
         }))
     })();
     match result {
@@ -3169,13 +3317,20 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         Ok((answer, mut meta)) => {
             meta["thinking"] = thinking_json(thinking);
             meta["model_scope"] = json!(model_scope_label);
+            meta["context_budget"] = json!(cfg.context_budget_tokens);
+            // Recorded only when the provider published a price for the model
+            // that answered; the token counts are the ones it reported.
+            let (cost_usd, cost_basis) = match priced_cost(&state, &cfg, &meta).await {
+                Some(cost) => (Some(cost.usd), cost.basis.to_string()),
+                None => (None, String::new()),
+            };
             let now = now_seconds();
             let log_result = (|| -> rusqlite::Result<()> {
                 let conn = open_db(&state.database_path)?;
                 conn.execute("INSERT INTO messages(conversation_id,role,content,created_at) VALUES(?1,'assistant',?2,?3)", params![cid, answer, now])?;
                 conn.execute(
-                    "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'')",
-                    params![now, cid, meta.get("model").and_then(Value::as_str).unwrap_or("auto"), meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"), meta.get("latency_ms").and_then(Value::as_i64), meta.get("prompt_tokens").and_then(Value::as_i64), meta.get("completion_tokens").and_then(Value::as_i64), meta.get("total_tokens").and_then(Value::as_i64), meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or("")],
+                    "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error,cost_usd,cost_basis) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'',?10,?11)",
+                    params![now, cid, meta.get("model").and_then(Value::as_str).unwrap_or("auto"), meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"), meta.get("latency_ms").and_then(Value::as_i64), meta.get("prompt_tokens").and_then(Value::as_i64), meta.get("completion_tokens").and_then(Value::as_i64), meta.get("total_tokens").and_then(Value::as_i64), meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or(""), cost_usd, cost_basis],
                 )?;
                 conn.execute(
                     "UPDATE conversations SET updated_at=?1 WHERE id=?2",
@@ -3273,6 +3428,10 @@ struct ReplyRecorder {
     started: Instant,
     saved: Arc<AtomicBool>,
     events: events::Hub,
+    /// The provider's published price for the model that answered, read while
+    /// the catalog was warm. The tokens only arrive with the stream, so the
+    /// cost is computed when the reply is saved; `None` means unpriced.
+    price: Option<capabilities::Price>,
 }
 
 impl ReplyRecorder {
@@ -3290,7 +3449,13 @@ impl ReplyRecorder {
             started: Instant::now(),
             saved: Arc::new(AtomicBool::new(false)),
             events,
+            price: None,
         }
+    }
+
+    fn with_price(mut self, price: Option<capabilities::Price>) -> Self {
+        self.price = price;
+        self
     }
 
     fn save(&self) {
@@ -3308,6 +3473,13 @@ impl ReplyRecorder {
             .map(|guard| guard.clone())
             .unwrap_or_else(|_| json!({}));
         let latency = self.started.elapsed().as_millis() as i64;
+        let cost = self.price.as_ref().and_then(|price| {
+            cost::estimate(
+                price,
+                meta.get("prompt_tokens").and_then(Value::as_i64),
+                meta.get("completion_tokens").and_then(Value::as_i64),
+            )
+        });
         let _ = open_db(&self.database_path).and_then(|conn| {
             let now = now_seconds();
             if !text.trim().is_empty() {
@@ -3318,7 +3490,7 @@ impl ReplyRecorder {
                 params![now, self.conversation_id],
             )?;
             conn.execute(
-                "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'')",
+                "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error,cost_usd,cost_basis) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'',?10,?11)",
                 params![now, self.conversation_id,
                     meta.get("model").and_then(Value::as_str).unwrap_or("auto"),
                     meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"),
@@ -3326,7 +3498,9 @@ impl ReplyRecorder {
                     meta.get("prompt_tokens").and_then(Value::as_i64),
                     meta.get("completion_tokens").and_then(Value::as_i64),
                     meta.get("total_tokens").and_then(Value::as_i64),
-                    meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or("")],
+                    meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or(""),
+                    cost.as_ref().map(|cost| cost.usd),
+                    cost.as_ref().map(|cost| cost.basis).unwrap_or("")],
             )?;
             Ok(())
         });
@@ -3670,16 +3844,20 @@ async fn chat_stream(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
+    // The price is read now, while the catalog is warm; the tokens arrive with
+    // the stream, so the cost itself is computed when the reply is saved.
     let recorder = ReplyRecorder::new(
         state.database_path.clone(),
         cid,
         context_tokens,
         state.events.clone(),
-    );
+    )
+    .with_price(catalog_price(&state, &cfg, &chosen_model).await);
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
         held["thinking"] = thinking_json(thinking);
         held["model_scope"] = json!(model_scope_label);
+        held["context_budget"] = json!(cfg.context_budget_tokens);
         if !fallbacks.is_empty() {
             held["fallbacks"] = json!(fallbacks);
         }
@@ -4111,7 +4289,20 @@ mod tests {
         let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let seen_for_route = seen.clone();
         let answer = answer.to_string();
-        let app = Router::new().route(
+        let app = Router::new()
+            // A catalog route so the cost tests can prove a published price is
+            // read rather than assumed.
+            .route(
+                "/models",
+                axum::routing::get(|| async {
+                    Json(json!({ "data": [
+                        { "id": "primary-model", "pricing": { "prompt": "0.000002", "completion": "0.000010" } },
+                        { "id": "backup-model", "pricing": { "prompt": "0.000003", "completion": "0.000015" } },
+                        { "id": "unpriced-model" }
+                    ]}))
+                }),
+            )
+            .route(
             "/chat/completions",
             axum::routing::post(move |Json(body): Json<Value>| {
                 let queue = queue.clone();
@@ -4234,6 +4425,99 @@ mod tests {
         assert_eq!(model, "project-model");
         let parsed: Value = serde_json::from_str(&snapshot).expect("snapshot json");
         assert_eq!(parsed["resolved_scope"], json!("project"));
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_published_price_is_read_from_the_catalog_and_never_invented() {
+        let (base, _seen) = scripted_router(&[], "unused").await;
+        let state = fixture("catalog-price");
+        let mut cfg = load_config(&state);
+        cfg.base_url = base;
+        cfg.api_key = "test-key".to_string();
+        save_config_file(&state.config_path, &cfg).expect("save config");
+
+        let price = catalog_price(&state, &cfg, "primary-model")
+            .await
+            .expect("a published price");
+        assert_eq!(price.input_per_million, 2.0);
+        assert_eq!(price.output_per_million, 10.0);
+        assert_eq!(
+            catalog_price(&state, &cfg, "unpriced-model").await,
+            None,
+            "a model with no published price must not be given one"
+        );
+
+        // What the chat path records becomes money only through that price.
+        let cost = priced_cost(
+            &state,
+            &cfg,
+            &json!({
+                "model": "primary-model", "prompt_tokens": 1_000_000, "completion_tokens": 0
+            }),
+        )
+        .await
+        .expect("a cost");
+        assert_eq!(cost.usd, 2.0);
+        assert_eq!(cost.basis, "estimated");
+
+        // No reported tokens means no cost, even with a price in hand.
+        assert!(
+            priced_cost(&state, &cfg, &json!({ "model": "primary-model" }))
+                .await
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_spent_daily_budget_refuses_the_call_before_the_router_is_asked() {
+        let (base, seen) = scripted_router(&[], "must not answer").await;
+        let state = fixture("daily-budget");
+        let mut cfg = load_config(&state);
+        cfg.base_url = base;
+        cfg.api_key = "test-key".to_string();
+        cfg.model = "primary-model".to_string();
+        cfg.daily_budget_usd = 0.05;
+        save_config_file(&state.config_path, &cfg).expect("save config");
+
+        let seed = |usd: f64| {
+            open_db(&state.database_path)
+                .expect("db")
+                .execute(
+                    "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,cost_usd,cost_basis) VALUES(?1,'','primary-model','router / test','ok',10,?2,'estimated')",
+                    params![now_seconds(), usd],
+                )
+                .expect("seed spend");
+        };
+
+        // Under the budget: the call goes through.
+        seed(0.02);
+        assert!(call_router(
+            &state,
+            vec![json!({ "role": "user", "content": "hi" })],
+            None
+        )
+        .await
+        .is_ok());
+        assert_eq!(seen.lock().unwrap().len(), 1, "the first turn was allowed");
+
+        // A second recorded spend takes the window to the limit.
+        seed(0.04);
+        let error = call_router(
+            &state,
+            vec![json!({ "role": "user", "content": "hi" })],
+            None,
+        )
+        .await
+        .expect_err("the budget must refuse the call");
+        assert!(error.contains("budget"), "{error}");
+        assert!(error.contains("0.0600"), "{error}");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "the refused call never reached the router"
+        );
         let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
     }
 

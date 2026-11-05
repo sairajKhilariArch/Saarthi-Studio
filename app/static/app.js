@@ -3098,6 +3098,7 @@ async function loadSettings() {
   $("runThinkingLevel").value = result.data.run_thinking_level || "";
   $("agentModel").value = result.data.agent_model || "";
   $("fallbackModels").value = (result.data.fallback_models || []).join(", ");
+  $("dailyBudget").value = result.data.daily_budget_usd ? String(result.data.daily_budget_usd) : "";
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
@@ -3815,6 +3816,7 @@ async function saveSettings(event) {
     run_thinking_level: $("runThinkingLevel").value,
     agent_model: $("agentModel").value.trim(),
     fallback_models: $("fallbackModels").value.split(",").map((s) => s.trim()).filter(Boolean),
+    daily_budget_usd: Number($("dailyBudget").value) || 0,
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();
@@ -4399,7 +4401,7 @@ async function loadUsage() {
   const result = await api(`/api/usage?${params}`);
   if (!result.ok) {
     const body = $("usageRows");
-    if (body) body.innerHTML = '<tr><td colspan="7" class="muted">Could not load usage records.</td></tr>';
+    if (body) body.innerHTML = '<tr><td colspan="8" class="muted">Could not load usage records.</td></tr>';
     return;
   }
   const summary = result.data.summary || {};
@@ -4410,6 +4412,18 @@ async function loadUsage() {
   $("statLatency").textContent = summary.avg_latency_ms
     ? `${Math.round(summary.avg_latency_ms)} ms`
     : "—";
+  // Spend is a floor, not a total: requests whose provider published no price
+  // are counted next to it rather than silently costing zero.
+  const cost = result.data.cost || {};
+  $("statSpend").textContent = cost.usd_24h == null ? "—" : `$${Number(cost.usd_24h).toFixed(4)}`;
+  const budget = Number(cost.budget_usd) || 0;
+  const spendParts = [budget > 0 ? `of $${budget.toFixed(2)} budget` : "no budget set"];
+  if (cost.unpriced_24h) spendParts.push(`${cost.unpriced_24h} unpriced`);
+  const spendNote = $("statSpendNote");
+  if (spendNote) {
+    spendNote.textContent = spendParts.join(" · ");
+    spendNote.title = cost.basis || "";
+  }
   state.usageMeta = result.data;
   const requests = Array.isArray(result.data.requests) ? result.data.requests : [];
   state.usageRows = requests;
@@ -4426,7 +4440,7 @@ function renderUsageTable() {
   body.replaceChildren();
   const requests = state.usageRows;
   if (!requests.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">No requests match. Send a message to start recording usage, or clear the filters.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="muted">No requests match. Send a message to start recording usage, or clear the filters.</td></tr>';
     return;
   }
   requests.forEach((request) => {
@@ -4434,6 +4448,7 @@ function renderUsageTable() {
     const provider = request.provider || "unknown";
     const model = request.model || "";
     const tokens = request.total_tokens == null ? "not reported" : Number(request.total_tokens).toLocaleString();
+    const cost = request.cost_usd == null ? "unpriced" : `$${Number(request.cost_usd).toFixed(4)}`;
     const detail = request.status === "ok"
       ? (request.fallback_attempts ? `Fallback attempts: ${request.fallback_attempts}` : "Completed")
       : (request.error || "Request failed");
@@ -4444,13 +4459,14 @@ function renderUsageTable() {
       model,
       request.latency_ms == null ? "—" : `${request.latency_ms} ms`,
       tokens,
+      cost,
       detail,
     ];
     cells.forEach((value, index) => {
       const cell = document.createElement("td");
       cell.textContent = value || "—";
       if (index === 1) cell.className = request.status === "ok" ? "status-ok" : "status-error";
-      if (index === 6) cell.className = "detail-cell";
+      if (index === 7) cell.className = "detail-cell";
       row.appendChild(cell);
     });
     body.appendChild(row);
@@ -4602,13 +4618,14 @@ function updateContextMeter() {
   const attached = state.chatContext ? state.chatContext.content.length : 0;
   const estimate = estimateTokensFromCharacters(typed + attached);
   const last = state.lastContextTokens;
-  meter.textContent = last
-    ? `~${formatCount(last)} / ${formatCount(budget)}`
-    : `~${formatCount(estimate)} / ${formatCount(budget)}`;
-  meter.title = last
-    ? "Tokens the router reported for the last request (budget: " + formatCount(budget) + ")"
-    : "Estimated tokens for the next request (budget: " + formatCount(budget) + ")";
-  meter.classList.toggle("over", estimate > budget);
+  const used = last || estimate;
+  const percent = budget > 0 ? Math.round((used / budget) * 100) : 0;
+  meter.textContent = `~${formatCount(used)} / ${formatCount(budget)} · ${percent}%`;
+  meter.title = (last
+    ? "Tokens the router reported for the last request"
+    : "Estimated tokens for the next request")
+    + ` — ${percent}% of the ${formatCount(budget)}-token context budget`;
+  meter.classList.toggle("over", used > budget);
 }
 
 function formatCount(value) {

@@ -656,6 +656,13 @@
               <small>Tried in order when the chosen model is rate-limited, times out or returns a server error. Never for a rejected request, and never after part of an answer has streamed.</small>
             </label>
           </div>
+          <div class="form-row">
+            <label class="field">
+              <span>Daily budget (USD)</span>
+              <input id="dailyBudget" type="number" min="0" step="0.01" placeholder="0 = no limit" autocomplete="off">
+              <small>Estimated spend allowed in a rolling 24 hours, from each provider's published prices. Reaching it refuses the next paid call and says why; local inference is unaffected.</small>
+            </label>
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save all settings</button>
             <button type="button" id="testOpenAI" class="btn btn-quiet">Test platform key</button>
@@ -938,6 +945,10 @@
           <div class="stat-card"><span>Errors</span><strong id="statErrors">0</strong></div>
           <div class="stat-card"><span>Reported tokens</span><strong id="statTokens">0</strong></div>
           <div class="stat-card"><span>Avg. latency</span><strong id="statLatency">—</strong></div>
+          <div class="stat-card">
+            <span>Est. spend (24 h)</span><strong id="statSpend">—</strong>
+            <small id="statSpendNote" class="muted"></small>
+          </div>
         </div>
         <div class="card table-card">
           <div class="table-head">
@@ -953,9 +964,10 @@
                 <th data-sort="model">Model</th>
                 <th data-sort="latency">Latency</th>
                 <th data-sort="tokens">Tokens</th>
+                <th>Cost</th>
                 <th data-sort="detail">Details</th>
               </tr></thead>
-              <tbody id="usageRows"><tr><td colspan="7" class="muted">No requests yet.</td></tr></tbody>
+              <tbody id="usageRows"><tr><td colspan="8" class="muted">No requests yet.</td></tr></tbody>
             </table>
           </div>
           <div id="usagePager" class="usage-pager"></div>

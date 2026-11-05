@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.47.0
+
+- Phase 11: spend is now derived from published prices only. New
+  `app/src/cost.rs` turns a provider's own per-million prices (already in
+  `capabilities::Price`, read from the same `/models` catalog the model menu
+  uses) and its own reported token counts into an estimate. When either is
+  missing the request is recorded as **unpriced** instead of costing zero — a
+  missing number is reported as missing, never as a free call.
+- `request_log` gains `cost_usd` and `cost_basis`, migrated in place on existing
+  databases. Both chat paths write them: a non-streaming reply prices the meta it
+  already has, and a streaming reply carries the price into `ReplyRecorder`
+  (`with_price`), so the cost is computed from the tokens that actually arrived —
+  including an aborted stream, because the recorder still saves what it got.
+- Budget enforcement that stops calls: `daily_budget_usd` (Settings → OpenAI
+  Platform → Daily budget) over a **rolling 24 hours**, because timestamps are
+  stored in UTC and the app has no user timezone to cut a calendar day with. The
+  gate runs once, before the fallback chain in `call_router_with` and before
+  `open_stream`, so a fallback cannot walk around it, and the refusal is a
+  non-retryable error naming the spend, the budget, and how many unpriced
+  requests the figure leaves out. Zero still means “no limit”, so a fresh install
+  never blocks its first turn. Local inference is not a paid provider call and
+  never reaches the gate.
+- `/api/usage` answers a `cost` block (`usd_24h`, `unpriced_24h`,
+  `filtered_usd`, `filtered_unpriced`, `budget_usd`, `basis`), per-request
+  `cost_usd`/`cost_basis`, per-model `usd`/`unpriced`, and the same for the last
+  24 hours per project through `conversations.project_id`. Unpriced requests are
+  counted next to the total rather than quietly dropped from it.
+- UI: an “Est. spend (24 h)” stat card showing the budget and the unpriced count,
+  a Cost column on the request table, and a context meter that now shows
+  utilisation (`~12.3k / 24k · 51%`) and turns over at the budget. Replies carry
+  `context_budget` in meta so other clients (the Android app, the extension) can
+  show the same figure without guessing.
+- Stated limitation, not papered over: native OpenAI Platform picks have no
+  router catalog row, so they stay unpriced — the platform publishes prices, but
+  this app does not mirror a price table and will not invent one. Attachment and
+  compression effects on context are still estimated, and every cost figure here
+  is an estimate, never a billed amount.
+- Tests: 289 pass, 1 ignored. New: cost arithmetic against a published price,
+  “no reported usage means no cost” (and one half reported is still a cost), the
+  allow/refuse boundary at the budget with the unpriced floor note, a live mock
+  catalog proving a published price is read and an unpriced model is not given
+  one, and a live test where a spent budget refuses before the mock router is
+  asked at all. Clippy `-D warnings` clean; `rustfmt` clean on the touched files;
+  `node --check app/static/app.js` clean. The UI changes were syntax-checked but
+  not viewed in a browser, and no live smoke was run for this slice.
+
 ## 1.46.0
 
 - Phase 3 rewiring: model choice now has the four scopes the specification
