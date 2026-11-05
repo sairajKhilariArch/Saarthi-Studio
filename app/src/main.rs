@@ -27,6 +27,7 @@ use tokio::net::TcpListener;
 use uuid::Uuid;
 
 mod agent;
+mod breaker;
 mod browser;
 mod capabilities;
 mod context;
@@ -35,6 +36,7 @@ mod deepsearch;
 mod events;
 #[cfg(feature = "gui")]
 mod gui;
+mod health;
 mod host_api;
 mod host_auth;
 mod host_security;
@@ -318,6 +320,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = migrate_project_thinking(&conn);
     let _ = migrate_project_model(&conn);
     let _ = migrate_request_log_costs(&conn);
+    let _ = migrate_conversation_model(&conn);
     let _ = permissions::initialize(&conn);
     let _ = skills::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
@@ -396,6 +399,22 @@ fn migrate_project_thinking(conn: &Connection) -> rusqlite::Result<()> {
     };
     if !has_column {
         conn.execute_batch("ALTER TABLE projects ADD COLUMN thinking TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+/// Give conversations their own model, so reopening a thread restores the model
+/// it actually ran on instead of falling back to whatever the default is today.
+fn migrate_conversation_model(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(conversations)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "model")
+    };
+    if !has_column {
+        conn.execute_batch("ALTER TABLE conversations ADD COLUMN model TEXT NOT NULL DEFAULT '';")?;
     }
     Ok(())
 }
@@ -896,6 +915,12 @@ fn spend_window(state: &AppState, seconds: f64) -> cost::Spend {
         .unwrap_or(cost::Spend { usd: 0.0, unknown: 0 })
 }
 
+/// Circuit state is per workspace: two configs in one process must not share a
+/// cooldown, and the tests depend on that isolation.
+pub(crate) fn breaker_scope(state: &AppState) -> String {
+    state.database_path.display().to_string()
+}
+
 /// The gate every paid call goes through. Local inference is not a paid provider
 /// call, so local mode and `local:` picks never reach it.
 fn budget_gate(state: &AppState, cfg: &Config) -> Option<String> {
@@ -1077,17 +1102,30 @@ pub(crate) async fn call_router_with(
     }
     let resolved = model_scope::resolve(model_override, None, None, Some(&cfg.model));
     let chain = model_scope::chain(&resolved.model, &cfg.fallback_models);
+    let scope = breaker_scope(state);
     let mut tried: Vec<Value> = Vec::new();
     let mut last_error = String::new();
+    let mut skipped = 0usize;
     for (index, candidate) in chain.iter().enumerate() {
+        // A model whose circuit is open is not asked at all: the point of the
+        // breaker is to stop paying for the same outage on every turn.
+        if !breaker::allow(&scope, candidate) {
+            skipped += 1;
+            tried.push(json!({ "model": candidate, "error": "circuit open: skipped" }));
+            continue;
+        }
         match attempt_router_once(state, candidate, messages.clone(), level).await {
             Ok((answer, mut meta)) => {
+                breaker::success(&scope, candidate);
                 if !tried.is_empty() {
                     meta["fallbacks"] = json!(tried);
                 }
                 return Ok((answer, meta));
             }
             Err(error) => {
+                if model_scope::retryable(&error) {
+                    breaker::failure(&scope, candidate, &error);
+                }
                 // A rejected request fails identically on every model; only an
                 // unavailable provider is worth the next candidate.
                 if index + 1 == chain.len() || !model_scope::retryable(&error) {
@@ -1097,6 +1135,9 @@ pub(crate) async fn call_router_with(
                 last_error = error;
             }
         }
+    }
+    if skipped == chain.len() {
+        return Err(breaker::all_open_message(&scope, &chain));
     }
     Err(last_error)
 }
@@ -1237,8 +1278,15 @@ async fn open_stream(
     if let Some(refusal) = budget_gate(state, cfg) {
         return Err((StatusCode::TOO_MANY_REQUESTS, refusal));
     }
+    let scope = breaker_scope(state);
     let mut fallbacks: Vec<Value> = Vec::new();
+    let mut skipped = 0usize;
     for (index, candidate) in chain.iter().enumerate() {
+        if !breaker::allow(&scope, candidate) {
+            skipped += 1;
+            fallbacks.push(json!({ "model": candidate, "error": "circuit open: skipped" }));
+            continue;
+        }
         let mut request_body = json!({ "model": candidate, "messages": messages, "stream": true });
         if let Some(level) = level {
             if let Some(effort) = thinking::completions_reasoning(level) {
@@ -1285,17 +1333,27 @@ async fn open_stream(
                 format!("Router returned HTTP {}: {}", status.as_u16(), detail)
             }
             Ok(response) => {
+                breaker::success(&scope, candidate);
                 return Ok(StreamStart {
                     response,
                     model: candidate.clone(),
                     fallbacks,
-                })
+                });
             }
         };
+        if model_scope::retryable(&message) {
+            breaker::failure(&scope, candidate, &message);
+        }
         if index + 1 == chain.len() || !model_scope::retryable(&message) {
             return Err((StatusCode::BAD_GATEWAY, message));
         }
         fallbacks.push(json!({ "model": candidate, "error": message }));
+    }
+    if skipped == chain.len() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            breaker::all_open_message(&scope, chain),
+        ));
     }
     Err((
         StatusCode::BAD_GATEWAY,
@@ -3505,6 +3563,15 @@ impl ReplyRecorder {
                 "UPDATE conversations SET updated_at=?1 WHERE id=?2",
                 params![now, self.conversation_id],
             )?;
+            // The thread keeps the model that answered it, so reopening it
+            // restores that choice instead of today's default.
+            conn.execute(
+                "UPDATE conversations SET model=?1 WHERE id=?2",
+                params![
+                    meta.get("model").and_then(Value::as_str).unwrap_or(""),
+                    self.conversation_id
+                ],
+            )?;
             conn.execute(
                 "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,prompt_tokens,completion_tokens,total_tokens,fallback_attempts,error,cost_usd,cost_basis) VALUES(?1,?2,?3,?4,'ok',?5,?6,?7,?8,?9,'',?10,?11)",
                 params![now, self.conversation_id,
@@ -4032,6 +4099,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/usage", get(usage))
         .route("/api/open", post(open_url))
         .route("/api/health", get(health))
+        .route("/api/health/providers", get(health::providers))
         .route("/api/test", post(test_router))
         .route("/api/models", get(models))
         .route("/api/thinking/levels", get(thinking_levels))
@@ -4546,6 +4614,36 @@ mod tests {
             seen.lock().unwrap().len(),
             1,
             "the refused call never reached the router"
+        );
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_open_circuit_skips_the_router_entirely() {
+        let (base, seen) = scripted_router(&[], "must not answer").await;
+        let state = fixture("circuit-open");
+        let mut cfg = load_config(&state);
+        cfg.base_url = base;
+        cfg.api_key = "test-key".to_string();
+        cfg.model = "primary-model".to_string();
+        save_config_file(&state.config_path, &cfg).expect("save config");
+
+        let scope = breaker_scope(&state);
+        for _ in 0..3 {
+            breaker::failure(&scope, "primary-model", "HTTP 503");
+        }
+        let error = call_router(
+            &state,
+            vec![json!({ "role": "user", "content": "hi" })],
+            None,
+        )
+        .await
+        .expect_err("an open circuit must refuse the call");
+        assert!(error.contains("cooling down"), "{error}");
+        assert!(error.contains("primary-model"), "{error}");
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "the router was never asked while the circuit was open"
         );
         let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
     }

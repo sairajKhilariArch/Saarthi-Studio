@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.50.0
+
+- Phase 3 remainder, part one: a circuit breaker per model. New
+  `app/src/breaker.rs` counts consecutive unavailable answers — only 429, 5xx,
+  timeouts and transport failures; a 4xx refusal never trips it, or a mistyped
+  model would hide behind a cooldown — opens after three, and refuses calls for
+  45 seconds before allowing exactly one probe. The state is process-local and
+  based on a monotonic clock (a system clock change must not extend an outage),
+  keyed per workspace so two configs in one process do not share a cooldown.
+- Both call paths use it: `call_router_with` and `open_stream` skip a model whose
+  circuit is open instead of paying a timeout per try, close it on a success, and
+  re-open it on a failed probe. When every candidate is cooling down the call
+  fails with a message naming each model and its remaining seconds instead of a
+  generic “unavailable”, and a skipped candidate is recorded in `fallbacks` as
+  `circuit open: skipped`, so an answer is never credited to a model that was
+  never asked.
+- Health monitoring: `GET /api/health/providers` merges the breaker's live state
+  with what `request_log` actually saw over 24 hours — requests, successes,
+  average latency and the provider's own last error per model — and states the
+  rule in the payload, so the UI does not have to invent it. `/api/health` keeps
+  its cheap liveness answer for the extension.
+- Usage page: a “Provider health” card showing each model's circuit state, the
+  retry countdown while it is open, ok/requests, latency, and the last error on
+  hover. A model that the breaker knows about but the log has no rows for is
+  listed rather than implied healthy.
+- Persisted model choice: `conversations.model` (migrated in place) records the
+  model that answered a thread, written by both reply paths and returned by
+  `/api/conversations`; opening a thread restores that choice instead of silently
+  snapping to today's default. The app-wide default stays `model` in config.
+- Tests: 307 pass, 1 ignored. New: the breaker's threshold, allow/refuse, success
+  reset, per-scope isolation and refusal wording, plus a live mock-router test
+  where an open circuit refuses before the router is called at all. Clippy
+  `-D warnings` clean; `rustfmt` clean on the touched files; `node --check
+  app/static/app.js` clean. Not verified in a browser: the Provider health card
+  was syntax-checked only, and no live smoke was run for this slice.
+
 ## 1.49.0
 
 - Phase 6 close-out: skills can now be installed, updated and removed, with

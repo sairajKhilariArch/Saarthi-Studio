@@ -1302,6 +1302,12 @@ async function openConversation(id) {
   state.currentId = id;
   const match = state.conversations.find((entry) => entry.id === id);
   state.currentTitle = match ? match.title : "Thread";
+  // The thread stores the model that answered it, so reopening it restores that
+  // choice instead of silently switching to today's default.
+  if (match && match.model) {
+    state.model = match.model;
+    $("modelChip").textContent = state.model;
+  }
   // A live streaming row for this thread keeps its place across re-renders:
   // switching away and back must not hide the in-flight reply.
   const liveRow = state.busy && streamRow && streamRow.isConnected && streamTargetId === id ? streamRow : null;
@@ -4597,6 +4603,7 @@ async function loadUsage() {
   renderUsageSeries(Array.isArray(result.data.series) ? result.data.series : []);
   renderUsageByModel(Array.isArray(result.data.by_model) ? result.data.by_model : []);
   renderUsageHead();
+  loadProviderHealth();
 }
 
 function renderUsageTable() {
@@ -4752,6 +4759,51 @@ function renderUsageByModel(rows) {
     note.className = "muted";
     note.textContent = `${row.requests} req · ${Number(row.tokens || 0).toLocaleString()} tok · ${Math.round(row.avg_latency_ms || 0)} ms`; 
     line.title = `${row.provider} — ${row.ok || 0} ok of ${row.requests}`;
+    line.appendChild(label);
+    line.appendChild(bar);
+    line.appendChild(note);
+    host.appendChild(line);
+  });
+}
+
+/* Breaker state plus what the log actually saw, on the same row: "open" with no
+   history and "healthy but failing one time in three" are different problems. */
+async function loadProviderHealth() {
+  const host = $("usageHealth");
+  if (!host) return;
+  const result = await api("/api/health/providers");
+  host.replaceChildren();
+  if (!result.ok) {
+    host.appendChild(pageNote("Provider health is unavailable."));
+    return;
+  }
+  const rows = Array.isArray(result.data.models) ? result.data.models : [];
+  host.title = result.data.rule || "";
+  if (!rows.length) {
+    host.appendChild(pageNote("No requests in the last 24 hours."));
+    return;
+  }
+  rows.slice(0, 12).forEach((row) => {
+    const circuit = row.breaker || {};
+    const state = circuit.state || "no failures";
+    const failed = Math.max(0, (row.requests || 0) - (row.ok || 0));
+    const rate = row.requests ? Math.round((failed / row.requests) * 100) : 0;
+    const line = document.createElement("div");
+    line.className = "usage-model-line";
+    const label = document.createElement("span");
+    label.className = "usage-model-name";
+    label.textContent = row.model;
+    const bar = document.createElement("span");
+    bar.className = "usage-model-bar" + (state === "open" ? " over" : "");
+    bar.style.width = `${row.requests ? Math.max(4, rate) : 0}%`;
+    const note = document.createElement("small");
+    note.className = "muted";
+    const facts = [state];
+    if (circuit.retry_in_seconds > 0) facts.push(`retry in ${Math.ceil(circuit.retry_in_seconds)}s`);
+    facts.push(`${row.ok || 0}/${row.requests || 0} ok`);
+    if (row.requests) facts.push(`${Math.round(row.avg_latency_ms || 0)} ms`);
+    note.textContent = facts.join(" · ");
+    line.title = circuit.breaker_error || row.last_error || "";
     line.appendChild(label);
     line.appendChild(bar);
     line.appendChild(note);

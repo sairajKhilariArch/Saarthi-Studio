@@ -74,8 +74,8 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 | Capability table (modalities, tools, reasoning, structured output) | Working (1.28.0) | `capabilities.rs` from `/models` rows and Ollama `/api/show`; unknown stays `null` |
 | Price table | Partial (1.28.0) | carried when the provider publishes `pricing.prompt`/`completion`; never inferred |
 | Model scope (task > agent > project > global) | Working (1.46.0) | `model_scope::resolve` with a reported origin; `projects.model`, `agent_model`, and a per-run `model`; the composer pick stays the task scope |
-| Fallback / retry | Partial (1.46.0) | ordered, capped, deduplicated client-side chain that retries only an unavailable provider and never replays a half-streamed answer; every attempt lands in meta. No circuit breaker yet |
-| Provider health monitoring | Missing | on-demand `/api/test` only |
+| Fallback / retry | Working (1.50.0) | ordered, capped, deduplicated chain that retries only an unavailable provider and never replays a half-streamed answer; every attempt lands in meta. A circuit breaker (`breaker.rs`) opens after three consecutive unavailable answers, refuses the model for 45 s, then allows one probe; a skipped candidate is recorded as `circuit open: skipped` and the whole-chain refusal names each model's remaining seconds |
+| Provider health monitoring | Working (1.50.0) | `GET /api/health/providers` merges the breaker's live state with 24 h of `request_log` (requests, successes, average latency, the provider's own last error) and states the opening rule; shown as a Provider health card on the usage page. `/api/health` remains the cheap liveness answer |
 
 ## Phase 4 — Thinking and OpenAI Platform
 
