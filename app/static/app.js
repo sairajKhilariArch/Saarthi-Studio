@@ -6292,19 +6292,60 @@ function runAgo(seconds) {
 }
 
 async function loadRuns() {
-  const result = await api("/api/runs");
+  // The board and the cards come from the same query on the server, so a run can
+  // never be counted in one and missing from the other.
+  const [result, overview] = await Promise.all([api("/api/runs"), api("/api/runs/overview")]);
   if (!result.ok) {
     toast(result.data.error || "Could not load agent runs.");
     return;
   }
   state.agentRuns = result.data.runs || [];
+  state.runOverview = overview.ok ? overview.data : null;
   renderRuns();
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(seconds || 0));
+  if (total < 60) return `${total}s`;
+  if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s`;
+  return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+}
+
+/* Cross-run dashboard: what is live now, what is stuck on a human, and what the
+   recent runs have cost in steps and tokens. */
+function renderRunBoard() {
+  const board = document.createElement("div");
+  board.className = "stats-grid run-board";
+  const overview = state.runOverview;
+  if (!overview) return board;
+  const counts = overview.counts || {};
+  const totals = overview.totals || {};
+  const facts = [
+    ["Live runs", totals.live || 0, "working or waiting for approval"],
+    ["Awaiting approval", counts.awaiting_approval || 0, "each blocks until answered"],
+    ["Failed", counts.failed || 0, "recent runs that ended badly"],
+    ["Tokens", Number(totals.tokens || 0).toLocaleString(), "reported by the run models"],
+    ["Steps", Number(totals.steps || 0).toLocaleString(), "across the runs listed"],
+  ];
+  facts.forEach(([label, value, hint]) => {
+    const card = document.createElement("div");
+    card.className = "stat-card";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    card.append(name, strong);
+    card.title = hint;
+    board.appendChild(card);
+  });
+  return board;
 }
 
 function renderRuns() {
   const box = $("runsList");
   if (!box) return;
   box.innerHTML = "";
+  if (state.runOverview) box.appendChild(renderRunBoard());
   if (!state.agentRuns.length) {
     const empty = document.createElement("p");
     empty.className = "run-empty";
@@ -6345,7 +6386,9 @@ function renderRunCard(run) {
   // The discovered tool count comes from the run's own catalogue snapshot, so
   // a run that found nothing says so instead of implying it had tools.
   const mcpTag = run.allowMcp ? ` · mcp: ${run.mcpTools || 0} tool${run.mcpTools === 1 ? "" : "s"}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"} · ${runAgo(run.updatedAt)}${profileTag}${modeTag}${modelTag}${mcpTag}`;
+  const tokenTag = run.tokens ? ` · ${Number(run.tokens).toLocaleString()} tokens` : "";
+  const durationTag = run.elapsedSeconds ? ` · ${formatDuration(run.elapsedSeconds)}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);

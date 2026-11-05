@@ -447,6 +447,9 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // The catalogue discovered at run start (JSON: tools + errors), so a
         // step prompt never has to spawn a server to describe it.
         "ALTER TABLE agent_runs ADD COLUMN mcp_tools TEXT NOT NULL DEFAULT ''",
+        // Tokens this run's model calls reported. Summed as the run works, so the
+        // monitor can show a per-agent total without re-reading every request.
+        "ALTER TABLE agent_runs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -489,6 +492,8 @@ struct RunRow {
     allow_mcp: bool,
     /// Catalogue snapshot taken at run start (empty until discovery runs).
     mcp_tools: String,
+    /// Total tokens the run's own model calls reported.
+    tokens: i64,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -514,7 +519,27 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         stage_max_steps: row.get(18)?,
         allow_mcp: row.get(19)?,
         mcp_tools: row.get(20)?,
+        tokens: row.get(21)?,
     })
+}
+
+/// Add the tokens a run's own model call reported to its running total. Fire and
+/// forget: the monitor is a convenience, and a failed count must never fail a
+/// run that otherwise worked.
+fn record_tokens(state: &AppState, run_id: &str, meta: &Value) {
+    let tokens = meta
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if tokens <= 0 {
+        return;
+    }
+    if let Ok(conn) = db(state) {
+        let _ = conn.execute(
+            "UPDATE agent_runs SET tokens=tokens+?1 WHERE id=?2",
+            rusqlite::params![tokens, run_id],
+        );
+    }
 }
 
 fn db(state: &AppState) -> Result<Connection, String> {
@@ -614,7 +639,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -655,11 +680,27 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "profile": row.profile, "mode": row.mode,
         "stagePolicy": row.stage_policy, "stageMaxSteps": row.stage_max_steps,
         "allowMcp": row.allow_mcp, "mcpTools": mcp_tool_count(&row.mcp_tools),
+        "tokens": row.tokens,
+        // A live run has no finished duration yet: measure from its start and say
+        // how long it has been quiet, rather than reporting "0 s" for a run that
+        // started ten minutes ago.
+        "elapsedSeconds": elapsed_seconds(row),
+        "idleSeconds": (now() - row.updated_at).max(0.0),
         "crew": serde_json::from_str::<Value>(&row.crew)
             .ok()
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default(),
     })
+}
+
+/// How long a run has been going: measured from its start while it is live, and
+/// from its last write once it has stopped.
+fn elapsed_seconds(row: &RunRow) -> f64 {
+    let end = match row.status.as_str() {
+        "running" | "awaiting_approval" | "paused" => now(),
+        _ => row.updated_at,
+    };
+    (end - row.created_at).max(0.0)
 }
 
 /// The approval UI never needs the file body — just what kind of action waits.
@@ -1228,7 +1269,8 @@ async fn plan_with_cloud(state: &AppState, run: &RunRow) -> Result<(), String> {
     ];
     // Always the cloud: a local model planning its own work defeats the
     // split this mode exists for.
-    let (plan, _meta) = crate::call_router(state, messages, None).await?;
+    let (plan, meta) = crate::call_router(state, messages, None).await?;
+    record_tokens(state, &run.id, &meta);
     let plan = plan.trim();
     if plan.is_empty() {
         return Err("The cloud model returned an empty plan.".to_string());
@@ -1338,7 +1380,8 @@ async fn ask_cloud_for_guidance(
             )
         }),
     ];
-    let (guidance, _meta) = crate::call_router(state, messages, None).await?;
+    let (guidance, meta) = crate::call_router(state, messages, None).await?;
+    record_tokens(state, &run.id, &meta);
     let guidance = guidance.trim().to_string();
     if guidance.is_empty() {
         return Err("The cloud model returned empty guidance.".to_string());
@@ -1520,6 +1563,7 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         stage_max_steps: run.stage_max_steps,
         allow_mcp: run.allow_mcp,
         mcp_tools: run.mcp_tools.clone(),
+        tokens: run.tokens,
     }
 }
 
@@ -2300,6 +2344,7 @@ pub(crate) fn host_router() -> Router<AppState> {
 fn run_routes(prefix: &'static str) -> Router<AppState> {
     Router::new()
         .route(prefix, post(create_run).get(list_runs))
+        .route(format!("{prefix}/overview").as_str(), get(runs_overview))
         .route(format!("{prefix}/:id").as_str(), get(get_run))
         .route(format!("{prefix}/:id/approve").as_str(), post(approve_run))
         .route(format!("{prefix}/:id/resume").as_str(), post(resume_run))
@@ -2625,7 +2670,7 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
 const RUN_LIST_SQL: &str = "SELECT r.id, r.project_id, r.goal, r.status, r.allow_writes, \
  r.allow_commands, r.auto_approve, r.max_steps, r.pending_action, r.error, r.created_at, \
  r.updated_at, r.router_config, r.model, r.profile, r.mode, r.crew, r.stage_policy, \
- r.stage_max_steps, r.allow_mcp, r.mcp_tools, \
+ r.stage_max_steps, r.allow_mcp, r.mcp_tools, r.tokens, \
  (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
  FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50";
 
@@ -2641,7 +2686,7 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(21)?;
+            let steps: i64 = row.get(22)?;
 
             Ok(run_json(&run, steps))
         })
@@ -2653,6 +2698,58 @@ async fn list_runs(State(state): State<AppState>) -> Response {
         }
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
+}
+
+/// The monitoring dashboard: every recent run with its timing and totals, plus
+/// the counts its header shows. It reuses the same rows as the list, so the board
+/// and the cards can never disagree about a run.
+async fn runs_overview(State(state): State<AppState>) -> Response {
+    let conn = match db(&state) {
+        Ok(conn) => conn,
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let mut stmt = match conn.prepare(RUN_LIST_SQL) {
+        Ok(stmt) => stmt,
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let rows = match stmt.query_map([], |row| {
+        let run = row_to_run(row)?;
+        let steps: i64 = row.get(22)?;
+        Ok(run_json(&run, steps))
+    }) {
+        Ok(rows) => rows.filter_map(|row| row.ok()).collect::<Vec<Value>>(),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let mut counts = serde_json::Map::new();
+    let mut tokens = 0i64;
+    let mut steps = 0i64;
+    for run in &rows {
+        let status = run["status"].as_str().unwrap_or("unknown").to_string();
+        let entry = counts.entry(status).or_insert_with(|| json!(0));
+        if let Some(value) = entry.as_i64() {
+            *entry = json!(value + 1);
+        }
+        tokens += run["tokens"].as_i64().unwrap_or(0);
+        steps += run["steps"].as_i64().unwrap_or(0);
+    }
+    // "Live" is the honest union: a run can be working, or stopped waiting for a
+    // human answer, and both block the queue in different ways.
+    let live = rows
+        .iter()
+        .filter(|run| {
+            matches!(
+                run["status"].as_str(),
+                Some("running" | "awaiting_approval" | "paused")
+            )
+        })
+        .count();
+    Json(json!({
+        "ok": true,
+        "counts": counts,
+        "totals": { "runs": rows.len(), "tokens": tokens, "steps": steps, "live": live },
+        "runs": rows,
+    }))
+    .into_response()
 }
 
 async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
@@ -3021,6 +3118,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_monitor_payload_carries_tokens_and_timing() {
+        let path =
+            std::env::temp_dir().join(format!("saarthi-runs-overview-{}.db", uuid::Uuid::new_v4()));
+        let conn = crate::open_db(&path).expect("temp db");
+        initialize(&conn).expect("schema");
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at,tokens) \
+             VALUES('run-1','proj','goal','running',0,0,0,8,10.0,20.0,1200)",
+            [],
+        )
+        .expect("insert run");
+        let mut stmt = conn.prepare(RUN_LIST_SQL).expect("list sql");
+        let payload = stmt
+            .query_row([], |row| {
+                let run = row_to_run(row)?;
+                let steps: i64 = row.get(22)?;
+                Ok(run_json(&run, steps))
+            })
+            .expect("row maps");
+        assert_eq!(payload["tokens"], json!(1200));
+        assert_eq!(payload["steps"], json!(0));
+        // A live run measures from its start, never from its last write.
+        assert!(
+            payload["elapsedSeconds"].as_f64().unwrap() > 1_000.0,
+            "{payload}"
+        );
+        assert!(payload["idleSeconds"].as_f64().unwrap() > 0.0, "{payload}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn parses_fenced_and_plain_json_replies() {
         let fenced = "Sure, here:\n```json\n{\"action\":\"read\",\"path\":\"src/main.rs\"}\n```";
         match parse_action(fenced) {
@@ -3228,6 +3356,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             stage_max_steps: 0,
             allow_mcp: false,
             mcp_tools: String::new(),
+            tokens: 0,
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -3350,6 +3479,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             stage_max_steps: 0,
             allow_mcp: false,
             mcp_tools: String::new(),
+            tokens: 0,
         }
     }
 
@@ -3631,6 +3761,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             stage_max_steps: 0,
             allow_mcp: false,
             mcp_tools: String::new(),
+            tokens: 0,
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -3666,6 +3797,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             stage_max_steps: 0,
             allow_mcp: false,
             mcp_tools: String::new(),
+            tokens: 0,
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
@@ -4297,7 +4429,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let (run, steps) = stmt
             .query_row([], |row| {
                 let run = row_to_run(row)?;
-                let steps: i64 = row.get(21)?;
+                let steps: i64 = row.get(22)?;
                 Ok((run, steps))
             })
             .expect("every list row maps");

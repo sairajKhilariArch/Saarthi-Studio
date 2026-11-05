@@ -186,10 +186,14 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 
 ## Phase 12 — Live agent monitoring
 
-Partial. `agent_runs`/`agent_steps`, SSE events and a runs panel with diffs,
-approve/reject, cancel and restore are real backend state. There is **no**
-cross-agent dashboard, no per-agent duration/token totals, no pause, and no
-queue view — consistent with Phase 5 having no queue.
+Working for monitoring (1.51.0), with two named gaps. `agent_runs`/`agent_steps`,
+SSE events and a runs panel with diffs, approve/reject, cancel and restore are
+real backend state; `GET /api/runs/overview` adds a cross-run dashboard (live,
+awaiting approval, failed, summed steps and tokens) built from the same rows as
+the panel, and every run reports `tokens`, `elapsedSeconds` and `idleSeconds`
+with a live run measured from its start. Still missing: **no pause** (a run is
+cancelled or waiting for approval, nothing in between) and **no queue view**,
+consistent with Phase 5 having no queue.
 
 ## Phase 13 — Workflow builder
 

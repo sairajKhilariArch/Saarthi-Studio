@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.51.0
+
+- Phase 12: live agent monitoring. A cross-run dashboard now sits above the runs
+  list: how many runs are live, how many are stopped waiting for a human answer,
+  how many failed, and the steps and tokens the listed runs have used. It comes
+  from one query — `GET /api/runs/overview` — that reuses the same rows as the
+  list, so the board and the cards can never disagree about a run.
+- Per-run totals that were missing: `agent_runs.tokens` (migrated in place) is
+  incremented by the run's own model calls, and every run row now reports
+  `tokens`, `elapsedSeconds` and `idleSeconds`. A live run's elapsed time is
+  measured from its start rather than its last write, so a run that has been going
+  for ten minutes no longer reads as “0 s”; once it stops, the duration is the
+  real start-to-last-write span. Cards show the duration and the token total
+  beside the step count and the last-activity time.
+- Live updates use the event stream the runs panel already listens on, so the
+  board refreshes when a run advances, pauses for approval or finishes; the
+  dashboard is a read of the same state, never a second source of truth.
+- Still honestly missing, and named rather than implied: no pause (a run is
+  cancelled or waiting for approval, nothing in between) and no queue view,
+  because Phase 5 has no queue.
+- Tests: 308 pass, 1 ignored. New: the monitor payload carries a run's stored
+  token total, its step count and both timings, and measures a live run from its
+  start. Clippy `-D warnings` clean; `rustfmt` clean on `agent.rs`; `node --check
+  app/static/app.js` clean. Not verified in a browser: the dashboard was
+  syntax-checked only, and no live smoke was run for this slice.
+
 ## 1.50.0
 
 - Phase 3 remainder, part one: a circuit breaker per model. New
