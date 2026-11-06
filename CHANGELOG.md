@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.65.0
+
+- Browser check of 1.64.0's Index pane, against a live app on `:8916` with a mock
+  embeddings endpoint. The pane works: the tab opens, the status reads `2 files ·
+  4 symbols`, `login` + Enter answered `1 by words · login · src/auth.rs:1 · fn ·
+  10`, saving `mock-embed` reached `/api/config`, "By meaning" answered `4 by
+  meaning` with `login`/`logout` at 100 and `charge`/`refund` at 1, clicking a hit
+  opened `auth.rs`, and Refresh re-walked the folder.
+- One real defect found and fixed: the sidebar's segmented control was a fixed
+  two-column grid, so the fifth tab pushed the control to three rows with an empty
+  cell and `Index` sat in the first column of the last row. It is now
+  `repeat(auto-fit, minmax(72px, 1fr))`: three columns and two full rows at the
+  sidebar's width, measured in the running app (66px tall instead of 96px).
+- Also confirmed in the running app: a narrow viewport scrolls the whole sidebar
+  off-screen, which is pre-existing behaviour, not something this tab introduced.
+- No Rust changed; `cargo test --locked` 362 pass, 1 ignored, clippy `-D warnings`
+  clean, `node --check app/static/app.js` clean.
+
 ## 1.64.0
 
 - The semantic search now has a home: a new **Index** tab in the sidebar. It shows

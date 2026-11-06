@@ -308,7 +308,7 @@ body.no-bottom { --bottom-h: 0px; }
 .brand-text span { display: block; font-size: 11px; color: var(--mute); margin-top: 2px; }
 
 .segmented {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 2px; padding: 3px;
   background: var(--surface); border: 1px solid var(--line-soft); border-radius: 9px;
   margin-bottom: 12px;
 }
