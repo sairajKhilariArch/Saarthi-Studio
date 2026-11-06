@@ -147,8 +147,9 @@ Delivered 1.60.0: retrieval — a chat turn carries the matched declarations wit
 their surrounding lines, each labelled with path and line. Delivered 1.61.0: agent
 runs open with the same background — the goal's matched memory (read without
 touching its usage counters) and its matched code, as one labelled system message
-ahead of the goal. The embeddings index behind a semantic version of this remains
-open.*
+ahead of the goal, and 1.62.0 stored that block on the run itself so the card can
+say what it was given. The embeddings index behind a semantic version of this
+remains open.*
 
 ## Phase 9 — Developer environment
 

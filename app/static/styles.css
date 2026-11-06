@@ -1462,6 +1462,7 @@ kbd {
 .run-controls { display: flex; gap: 10px; flex-wrap: wrap; }
 .run-error { margin: 0; font-size: 13px; color: var(--danger-ink); background: var(--danger-soft); border: 1px solid var(--danger-border); border-radius: 8px; padding: 10px 12px; }
 .run-empty { margin: 0; color: var(--dim); font-size: 13px; padding: 6px 2px; }
+.run-context { margin: 0; color: var(--dim); font-size: 13px; padding: 0 2px 6px; }
 .run-steps { display: grid; gap: 8px; }
 .run-step { display: flex; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(255, 255, 255, .02); }
 .run-step-bad { border-color: var(--danger-border); background: var(--danger-soft); }

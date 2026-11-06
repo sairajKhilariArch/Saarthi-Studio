@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.62.0
+
+- Phase 8 follow-on: **a run now records what it was given**. The block that 1.61.0
+  built is stored on the run when it is promoted (memory labels, code labels and
+  the exact prompt text), and every step reads that stored block back instead of
+  recalling again. A record saved while the run is working therefore cannot be
+  smuggled into a prompt the card does not mention.
+- `GET /api/runs` carries `context` (`{"memory": ["decision: Sessions use SQLite"],
+  "code": ["src/auth.rs:1"]}`) and one run's detail adds `contextBlock`, the exact
+  text the model saw. Fifty cards ship labels; only the open run ships the prompt.
+- The run card appends `· given 1 memory + 1 code` with the labels in its tooltip,
+  and the expanded run names them on a "Given at start" line. A run that was given
+  nothing says nothing, and a run started before this column existed reports empty
+  lists rather than inventing history.
+- The column is additive (`context` on `agent_runs`), so an existing database is
+  migrated in place on first start.
+- Tests: 358 pass, 1 ignored. Two new: a promoted run stores `decision: Use SQLite`
+  and `auth.rs:1`, hands the steps exactly that block, and ignores a record saved
+  after it started; a goal matching nothing stores empty lists and an empty block.
+- Clippy `-D warnings` clean; `rustfmt` clean; `node --check app/static/app.js`
+  clean; the UI change was not viewed in a browser. Live smoke on `:8916` against
+  a logging mock router: run "add a login session table in sqlite" → succeeded with
+  `context: {"code": ["src/auth.rs:1"], "memory": ["decision: Sessions use SQLite"]}`,
+  a non-empty `contextBlock` containing both blocks, the list request carrying the
+  same labels, and a run with goal "reticulate the splines" → succeeded with
+  `{"code": [], "memory": []}` and an empty block.
+
 ## 1.61.0
 
 - Phase 8 follow-on: **agent runs start with the memory and code that chat has**.

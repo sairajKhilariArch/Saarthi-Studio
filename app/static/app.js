@@ -6518,7 +6518,19 @@ function renderRunCard(run) {
   // A retry links back to the run it was started from, so the card says where
   // the goal and settings came from instead of looking like a duplicate.
   const retryTag = run.retryOf ? ` · retry of ${String(run.retryOf).slice(0, 8)}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${retryTag}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}`;
+  // What the run was handed before its first step: labels only, because the
+  // block itself belongs in the detail view, not on fifty cards.
+  const ctx = run.context || {};
+  const ctxMemory = Array.isArray(ctx.memory) ? ctx.memory : [];
+  const ctxCode = Array.isArray(ctx.code) ? ctx.code : [];
+  const ctxParts = [];
+  if (ctxMemory.length) ctxParts.push(`${ctxMemory.length} memory`);
+  if (ctxCode.length) ctxParts.push(`${ctxCode.length} code`);
+  const contextTag = ctxParts.length ? ` · given ${ctxParts.join(" + ")}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${retryTag}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}${contextTag}`;
+  if (ctxParts.length) {
+    meta.title = `Given at start:\n${[...ctxMemory, ...ctxCode].join("\n")}`;
+  }
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
@@ -6640,6 +6652,14 @@ function buildRunDetail(detail) {
   refresh.addEventListener('click', () => loadRunDetail());
   controls.appendChild(refresh);
   box.appendChild(controls);
+
+  const given = [...(detail.context?.memory || []), ...(detail.context?.code || [])];
+  if (given.length) {
+    const line = document.createElement("p");
+    line.className = "run-context";
+    line.textContent = `Given at start: ${given.join(", ")}`;
+    box.appendChild(line);
+  }
 
   if (detail.error) {
     const err = document.createElement("p");

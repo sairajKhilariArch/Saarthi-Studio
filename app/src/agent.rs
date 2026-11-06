@@ -478,6 +478,9 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // The finished run a retry was started from, so "same settings, clean
         // log" is a link in the record and not just a convention.
         "ALTER TABLE agent_runs ADD COLUMN retry_of TEXT NOT NULL DEFAULT ''",
+        // What the run was handed at start (JSON: block + memory/code labels),
+        // frozen here so the card can show it and the steps replay the same text.
+        "ALTER TABLE agent_runs ADD COLUMN context TEXT NOT NULL DEFAULT ''",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -529,6 +532,10 @@ struct RunRow {
     /// When execution actually began (0 while queued).
     started_at: f64,
     retry_of: String,
+    /// What this run was handed before its first step: the prompt block plus
+    /// the memory and code labels behind it. Empty for runs started before the
+    /// column existed.
+    context: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -559,6 +566,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         depends_on: row.get(23)?,
         started_at: row.get(24)?,
         retry_of: row.get(25)?,
+        context: row.get(26)?,
     })
 }
 
@@ -684,7 +692,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at, retry_of FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at, retry_of, context FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -841,12 +849,19 @@ fn queued_runs(state: &AppState) -> Result<Vec<(String, Vec<String>)>, String> {
 /// started behind the user's back.
 fn promote(state: &AppState, run_id: &str) -> bool {
     let stamp = now();
+    // What the run is handed is decided once, here, and stored with the run: the
+    // steps read it back, and the card can say what it was given.
+    let context = match load_run(state, run_id) {
+        Ok(Some(run)) => background_json(&run_background(state, &run)),
+        _ => return false,
+    };
     let changed = db(state).and_then(|conn| {
         conn.execute(
             "UPDATE agent_runs SET status=?2, \
              started_at=CASE WHEN started_at > 0 THEN started_at ELSE ?3 END, \
-             updated_at=?3, error='', pending_action='' WHERE id=?1 AND status=?4",
-            params![run_id, RUNNING, stamp, QUEUED],
+             updated_at=?3, error='', pending_action='', context=?5 \
+             WHERE id=?1 AND status=?4",
+            params![run_id, RUNNING, stamp, QUEUED, context],
         )
         .map_err(|e| e.to_string())
     });
@@ -983,6 +998,9 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         } else {
             Value::Null
         },
+        // What the run was given, as labels: the list carries these for fifty
+        // cards, so the prompt block itself stays out of it.
+        "context": context_json(&row.context),
         "retryOf": if row.retry_of.is_empty() {
             Value::Null
         } else {
@@ -1439,25 +1457,88 @@ fn build_messages(run: &RunRow, history: &str, background: &str) -> Vec<Value> {
     messages
 }
 
+/// What a run was handed before its first step: the block the model is given
+/// and the labels behind it, so the card can name the memory and files without
+/// shipping the whole prompt on every list request.
+#[derive(Default)]
+struct Background {
+    block: String,
+    memory: Vec<String>,
+    code: Vec<String>,
+}
+
 /// The background a run starts with: memory records the user saved for this
 /// project and the code the index matched to the goal. Both are optional — an
-/// empty string means the run is told nothing extra, exactly as before.
+/// empty block means the run is told nothing extra, exactly as before.
 ///
 /// Memory is read without touching its usage counters: a run asks on every step
 /// with the same goal, and counting each ask would inflate the history.
-fn run_background(state: &AppState, run: &RunRow) -> String {
+fn run_background(state: &AppState, run: &RunRow) -> Background {
     let mut blocks: Vec<String> = Vec::new();
     let recalled = crate::memory::recall_quiet(&state.database_path, &run.goal, &run.project_id);
+    let memory = recalled
+        .iter()
+        .map(|record| format!("{}: {}", record.kind, record.title))
+        .collect();
     if let Some(block) = crate::memory::prompt_block(&recalled) {
         blocks.push(block);
     }
+    let mut code: Vec<String> = Vec::new();
     if let Some(root) = state.workspace.current_root() {
         let snippets = crate::index::retrieve(&root, &state.database_path, &run.goal);
+        code = snippets
+            .iter()
+            .map(|snippet| format!("{}:{}", snippet.path, snippet.line))
+            .collect();
         if let Some(block) = crate::index::prompt_block(&snippets) {
             blocks.push(block);
         }
     }
-    blocks.join("\n\n")
+    Background {
+        block: blocks.join("\n\n"),
+        memory,
+        code,
+    }
+}
+
+fn background_json(background: &Background) -> String {
+    json!({
+        "block": background.block.clone(),
+        "memory": background.memory.clone(),
+        "code": background.code.clone(),
+    })
+    .to_string()
+}
+
+/// The block this run is given. A run started by this build reads back what was
+/// stored when it started, so a record added mid-run cannot rewrite what the run
+/// was shown; a run started before the column existed is given the block now
+/// rather than losing it.
+fn stored_background(state: &AppState, run: &RunRow) -> String {
+    if run.started_at > 0.0 && !run.context.is_empty() {
+        let stored = serde_json::from_str::<Value>(&run.context)
+            .ok()
+            .and_then(|stored| {
+                stored
+                    .get("block")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if let Some(block) = stored {
+            return block;
+        }
+    }
+    run_background(state, run).block
+}
+
+/// The labels the card shows. Empty lists mean the run was given nothing — the
+/// same answer for a goal that matched nothing and a run that predates this.
+fn context_json(stored: &str) -> Value {
+    let parsed = serde_json::from_str::<Value>(stored).unwrap_or(Value::Null);
+    json!({
+        "memory": parsed.get("memory").cloned().unwrap_or_else(|| json!([])),
+        "code": parsed.get("code").cloned().unwrap_or_else(|| json!([])),
+    })
 }
 
 /// How many tools the run's snapshot has, for the run card. A corrupt or
@@ -2025,6 +2106,7 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         priority: run.priority,
         depends_on: run.depends_on.clone(),
         started_at: run.started_at,
+        context: run.context.clone(),
         retry_of: run.retry_of.clone(),
     }
 }
@@ -2102,7 +2184,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     let mut messages = build_messages(
         &staged_run,
         &build_history(state, &run.id)?,
-        &run_background(state, run),
+        &stored_background(state, run),
     );
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
@@ -2210,7 +2292,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                 let base_messages = build_messages(
                     run,
                     &build_history(state, &run.id)?,
-                    &run_background(state, run),
+                    &stored_background(state, run),
                 );
                 let (reply, _) = crate::call_model(state, base_messages, None).await?;
                 (reply, None)
@@ -3286,12 +3368,12 @@ const RUN_LIST_SQL: &str = "SELECT r.id, r.project_id, r.goal, r.status, r.allow
  r.allow_commands, r.auto_approve, r.max_steps, r.pending_action, r.error, r.created_at, \
  r.updated_at, r.router_config, r.model, r.profile, r.mode, r.crew, r.stage_policy, \
  r.stage_max_steps, r.allow_mcp, r.mcp_tools, r.tokens, \
- r.priority, r.depends_on, r.started_at, r.retry_of, \
+ r.priority, r.depends_on, r.started_at, r.retry_of, r.context, \
  (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
  FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50";
 
 /// Zero-based column index of the step count in `RUN_LIST_SQL`.
-const RUN_LIST_STEPS_COLUMN: usize = 26;
+const RUN_LIST_STEPS_COLUMN: usize = 27;
 
 async fn list_runs(State(state): State<AppState>) -> Response {
     let conn = match db(&state) {
@@ -3410,6 +3492,14 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
     };
     let mut payload = run_json(&run, rows.len() as i64);
     payload["stepList"] = json!(rows);
+    // The detail view can show exactly what the model was handed.
+    payload["contextBlock"] = json!(serde_json::from_str::<Value>(&run.context)
+        .ok()
+        .and_then(|stored| stored
+            .get("block")
+            .and_then(Value::as_str)
+            .map(str::to_string))
+        .unwrap_or_default());
     // One run's detail still reports its queue position: "waiting" is only
     // useful with a place in line attached.
     if run.status == QUEUED {
@@ -4217,6 +4307,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            context: String::new(),
             retry_of: String::new(),
         };
         // Coding + every flag on: writes are allowed outright.
@@ -4344,6 +4435,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            context: String::new(),
             retry_of: String::new(),
         }
     }
@@ -4630,6 +4722,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            context: String::new(),
             retry_of: String::new(),
         };
         assert!(!run.allow_writes);
@@ -4670,6 +4763,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            context: String::new(),
             retry_of: String::new(),
         };
         assert!(matches!(
@@ -6561,7 +6655,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             .unwrap();
         let mut run = gated_run("coding");
         run.goal = "add login to auth.rs with sqlite".into();
-        let background = run_background(&fixture.state, &run);
+        let background = run_background(&fixture.state, &run).block;
         assert!(background.contains("Use SQLite"), "{background}");
         assert!(background.contains("auth.rs"), "{background}");
         // It rides in as a system message ahead of the goal, never as the goal.
@@ -6592,7 +6686,74 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let fixture = run_fixture("no-background", "http://127.0.0.1:1");
         let mut run = gated_run("coding");
         run.goal = "reticulate the splines".into();
-        assert_eq!(run_background(&fixture.state, &run), "");
+        assert_eq!(run_background(&fixture.state, &run).block, "");
         assert_eq!(build_messages(&run, "(no steps yet)", "").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_started_run_records_what_it_was_given() {
+        let fixture = run_fixture("run-context", "http://127.0.0.1:1");
+        let ws = fixture.root.join("ws");
+        std::fs::write(ws.join("auth.rs"), "pub fn login() {}\n").unwrap();
+        crate::index::refresh(&fixture.state.database_path, &ws, &[]).unwrap();
+        db(&fixture.state)
+            .unwrap()
+            .execute(
+                "INSERT INTO memory_records(id,kind,title,body,project_id,created_at,updated_at) \
+                 VALUES('m1','decision','Use SQLite','','p',1.0,1.0)",
+                [],
+            )
+            .unwrap();
+        // A queued run whose goal both halves match.
+        insert_run(&fixture.state, "q1", QUEUED);
+        db(&fixture.state)
+            .unwrap()
+            .execute(
+                "UPDATE agent_runs SET goal='add login to auth.rs with sqlite' WHERE id='q1'",
+                [],
+            )
+            .unwrap();
+        assert!(promote(&fixture.state, "q1"));
+        let run = load_run(&fixture.state, "q1").unwrap().unwrap();
+        let labels = context_json(&run.context);
+        assert_eq!(
+            labels["memory"],
+            json!(["decision: Use SQLite"]),
+            "{labels}"
+        );
+        assert_eq!(labels["code"], json!(["auth.rs:1"]), "{labels}");
+        // What the steps get is exactly what the card names.
+        let given = stored_background(&fixture.state, &run);
+        assert!(given.contains("Use SQLite"), "{given}");
+        assert!(given.contains("auth.rs:1"), "{given}");
+        // A record saved after the run started must not be smuggled into it.
+        db(&fixture.state)
+            .unwrap()
+            .execute(
+                "INSERT INTO memory_records(id,kind,title,body,project_id,created_at,updated_at) \
+                 VALUES('m2','fact','Late arrival','','p',1.0,1.0)",
+                [],
+            )
+            .unwrap();
+        assert!(!stored_background(&fixture.state, &run).contains("Late arrival"));
+    }
+
+    #[tokio::test]
+    async fn a_run_given_nothing_records_empty_context() {
+        let fixture = run_fixture("run-no-context", "http://127.0.0.1:1");
+        insert_run(&fixture.state, "q2", QUEUED);
+        db(&fixture.state)
+            .unwrap()
+            .execute(
+                "UPDATE agent_runs SET goal='reticulate the splines' WHERE id='q2'",
+                [],
+            )
+            .unwrap();
+        assert!(promote(&fixture.state, "q2"));
+        let run = load_run(&fixture.state, "q2").unwrap().unwrap();
+        let labels = context_json(&run.context);
+        assert_eq!(labels["memory"], json!([]), "{labels}");
+        assert_eq!(labels["code"], json!([]), "{labels}");
+        assert_eq!(stored_background(&fixture.state, &run), "");
     }
 }
