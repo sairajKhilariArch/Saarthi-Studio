@@ -48,6 +48,7 @@ mod local;
 mod mcp;
 mod mcp_oauth;
 mod media;
+mod index;
 mod memory;
 mod model_scope;
 mod openai;
@@ -345,6 +346,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = permissions::initialize(&conn);
     let _ = skills::initialize(&conn);
     let _ = memory::initialize(&conn);
+    let _ = index::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
     }
@@ -4261,6 +4263,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             workspace::guard_local_origin,
         )))
         .merge(memory::router().route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        )))
+        .merge(index::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
         )))

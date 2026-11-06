@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.59.0
+
+- Phase 8: **project code index**, the item that was listed as missing — file
+  discovery, language detection, symbol extraction, an incremental index and
+  ranked search, in `app/src/index.rs` with the `code_index_files` and
+  `code_index_symbols` tables.
+- The walk is bounded and refuses what it should not read: build and dependency
+  folders (`.git`, `node_modules`, `target`, `build`, `dist`, `out`, `vendor`,
+  `.venv`, `__pycache__`, …) are skipped by name, secret-shaped files (`*.pem`,
+  `*.key`, `id_rsa`, `.npmrc`, `.netrc`, anything starting `.env`) are never
+  read at all, the user's privacy exclusions are applied before the bytes are
+  read, files over 1 MiB or containing a NUL byte are skipped, and the walk stops
+  at 5,000 files and reports `truncated` instead of running on.
+- Symbols are extracted per language family — Rust, Python, JavaScript/
+  TypeScript, Go, Java/Kotlin/C#, Ruby, PHP, Swift, Bash — as path + line + kind
+  + name. It is a line scan, not a parser: it cannot hang and a missed symbol
+  costs a search hit, not a wrong answer.
+- Refresh is incremental by content digest: unchanged files are left untouched,
+  a changed file has its symbols replaced rather than appended, and a deleted
+  file is dropped with its symbols. The report counts added / updated / removed /
+  unchanged plus what was skipped and why.
+- Search scores symbol names (exact 10, prefix 6, contains 4) and file paths (2),
+  returns path, line, kind, name, language and score, caps at 50 hits, and
+  refuses a query with no usable words — every hit can be opened and checked.
+- Routes, behind the local-origin guard: `GET /api/index` (files, symbols,
+  languages, `indexed_at`, folder), `POST /api/index/refresh`, `GET
+  /api/index/search?q=`. Index state is a local SQLite file; nothing is sent
+  anywhere by indexing.
+- Tests: 352 pass, 1 ignored. Five new: per-language symbol extraction (including
+  that a `const` is only a symbol when it holds a function and that markdown
+  declares nothing), skipping secrets/build folders/oversize/binary, incremental
+  refresh across change and delete, ranked search with line numbers, and the
+  status report. Clippy `-D warnings` clean; `rustfmt` clean.
+- No UI in this slice: the index is exercised through its routes, and the search
+  results are already shaped for a results list.
+- Live smoke on `:8916` against a scratch folder holding Rust, Python, a
+  `node_modules` dependency, an `.env`, a `.pem`, a binary and an excluded
+  `vault/`: the first refresh reported `added 3, symbols 4, skipped {secret 2,
+  binary 1, excluded 1}`, status named `rust` and `python` and the search for
+  `login` returned `src/auth.rs:1 fn login` while `secret` returned nothing and a
+  blank query was refused 400. Rewriting one file gave `updated 1, unchanged 2`
+  with the old symbol gone and the new one found; deleting another gave
+  `removed 1` and its symbols disappeared with it.
+
 ## 1.58.0
 
 - Phase 8: **project memory** — records the user chooses to keep, in
