@@ -1356,7 +1356,7 @@ impl PermissionGate {
 
 /// The standing instruction: what one JSON action looks like and which tools
 /// this particular run may use.
-fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
+fn build_messages(run: &RunRow, history: &str, background: &str) -> Vec<Value> {
     // Profile rules override what the checkboxes say: the gate backs the
     // prompt up, so a denied tool is both forbidden in text and refused.
     let write_rule = if !profile_rule(&run.profile, true).is_empty() {
@@ -1425,12 +1425,39 @@ fn build_messages(run: &RunRow, history: &str) -> Vec<Value> {
             )
         }),
     ];
+    // What the run was given before it started: memory the user recorded and the
+    // code the index matched to the goal, both labelled and both bounded. It sits
+    // before the goal message so the goal reads as the task, not as context.
+    if !background.trim().is_empty() {
+        messages.insert(1, json!({ "role": "system", "content": background.trim() }));
+    }
     // The discovered tools ride along as their own message, so the action list
     // stays short and the catalogue is easy to read.
     if let Some(catalog) = mcp_block {
         messages.push(json!({ "role": "system", "content": catalog }));
     }
     messages
+}
+
+/// The background a run starts with: memory records the user saved for this
+/// project and the code the index matched to the goal. Both are optional — an
+/// empty string means the run is told nothing extra, exactly as before.
+///
+/// Memory is read without touching its usage counters: a run asks on every step
+/// with the same goal, and counting each ask would inflate the history.
+fn run_background(state: &AppState, run: &RunRow) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    let recalled = crate::memory::recall_quiet(&state.database_path, &run.goal, &run.project_id);
+    if let Some(block) = crate::memory::prompt_block(&recalled) {
+        blocks.push(block);
+    }
+    if let Some(root) = state.workspace.current_root() {
+        let snippets = crate::index::retrieve(&root, &state.database_path, &run.goal);
+        if let Some(block) = crate::index::prompt_block(&snippets) {
+            blocks.push(block);
+        }
+    }
+    blocks.join("\n\n")
 }
 
 /// How many tools the run's snapshot has, for the run card. A corrupt or
@@ -2072,7 +2099,11 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         crew.get(crew_stage_index(handoffs, crew.len()))
             .unwrap_or(&run.profile),
     );
-    let mut messages = build_messages(&staged_run, &build_history(state, &run.id)?);
+    let mut messages = build_messages(
+        &staged_run,
+        &build_history(state, &run.id)?,
+        &run_background(state, run),
+    );
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
     // The step log already carries them; this message tells the executor what
@@ -2176,7 +2207,11 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                     "Tier call failed; retrying on the base model.",
                     &cap_chars(&tier_error, 600),
                 )?;
-                let base_messages = build_messages(run, &build_history(state, &run.id)?);
+                let base_messages = build_messages(
+                    run,
+                    &build_history(state, &run.id)?,
+                    &run_background(state, run),
+                );
                 let (reply, _) = crate::call_model(state, base_messages, None).await?;
                 (reply, None)
             }
@@ -4430,7 +4465,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     #[test]
     fn a_refreshed_catalogue_reaches_the_next_prompt() {
         let refreshed = r#"{"tools":[{"server":"echo","name":"ping","description":"Answer pong","required":[]}],"errors":[],"refreshes":1}"#;
-        let prompt = build_messages(&mcp_run(true, refreshed), "(one failed step)")
+        let prompt = build_messages(&mcp_run(true, refreshed), "(one failed step)", "")
             .iter()
             .map(|message| message["content"].as_str().unwrap_or("").to_string())
             .collect::<Vec<_>>()
@@ -4445,7 +4480,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     #[test]
     fn the_mcp_action_is_advertised_only_when_a_tool_was_found() {
         let prompt = |run: &RunRow| {
-            build_messages(run, "(no steps yet)")
+            build_messages(run, "(no steps yet)", "")
                 .iter()
                 .map(|message| message["content"].as_str().unwrap_or("").to_string())
                 .collect::<Vec<_>>()
@@ -4600,7 +4635,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
         // The message should never merge what is forbidden and what is allowed.
-        let messages = build_messages(&run, "history");
+        let messages = build_messages(&run, "history", "");
         assert!(messages[0]["content"]
             .as_str()
             .unwrap()
@@ -6508,5 +6543,56 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
         assert_eq!(status, SUCCEEDED, "{actions:?}");
         assert_eq!(actions, ["read", "done"], "{actions:?}");
+    }
+
+    #[test]
+    fn a_run_starts_with_the_memory_and_code_the_goal_matches() {
+        let fixture = run_fixture("background", "http://127.0.0.1:1");
+        let ws = fixture.root.join("ws");
+        std::fs::write(ws.join("auth.rs"), "pub fn login() {}\n").unwrap();
+        crate::index::refresh(&fixture.state.database_path, &ws, &[]).unwrap();
+        db(&fixture.state)
+            .unwrap()
+            .execute(
+                "INSERT INTO memory_records(id,kind,title,body,project_id,created_at,updated_at) \
+                 VALUES('m1','decision','Use SQLite','No server database.','p',1.0,1.0)",
+                [],
+            )
+            .unwrap();
+        let mut run = gated_run("coding");
+        run.goal = "add login to auth.rs with sqlite".into();
+        let background = run_background(&fixture.state, &run);
+        assert!(background.contains("Use SQLite"), "{background}");
+        assert!(background.contains("auth.rs"), "{background}");
+        // It rides in as a system message ahead of the goal, never as the goal.
+        let messages = build_messages(&run, "(no steps yet)", &background);
+        assert_eq!(messages.len(), 3, "{messages:?}");
+        assert_eq!(messages[1]["role"], "system");
+        assert!(messages[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Use SQLite"));
+        assert!(messages[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("add login"));
+        // Reading the background on every step must not inflate the record's
+        // usage counters: the memory pane would then lie about its history.
+        let uses: i64 = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT uses FROM memory_records WHERE id='m1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(uses, 0);
+    }
+
+    #[test]
+    fn a_goal_nothing_matches_adds_no_background_block() {
+        let fixture = run_fixture("no-background", "http://127.0.0.1:1");
+        let mut run = gated_run("coding");
+        run.goal = "reticulate the splines".into();
+        assert_eq!(run_background(&fixture.state, &run), "");
+        assert_eq!(build_messages(&run, "(no steps yet)", "").len(), 2);
     }
 }

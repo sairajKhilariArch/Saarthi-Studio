@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.61.0
+
+- Phase 8 follow-on: **agent runs start with the memory and code that chat has**.
+  `agent::run_background` recalls the records the goal matches (project or global)
+  and retrieves the index hits for it, and `build_messages` carries both as one
+  labelled system message placed ahead of the goal, so the goal still reads as the
+  task and the blocks stay background.
+- Memory is read through `memory::recall_quiet`: a run asks on every step with the
+  same goal, and counting each ask as a use would make the memory pane's history
+  lie. Chat still bumps `uses`; a run leaves the counters alone.
+- Both halves are optional and independent: no matching record means no memory
+  block, no open workspace or nothing indexed means no code block. A goal that
+  matches nothing is told exactly what it was told before.
+- Known gap: a run card shows its steps, not the context it was given — there is no
+  per-run context field yet, so the background is visible in the request the model
+  received but not on the run itself.
+- Tests: 356 pass, 1 ignored. Two new: a goal matching a saved record and an
+  indexed `login` gets both blocks in one system message ahead of the goal while
+  the record's `uses` stays 0, and a goal matching nothing produces no block and
+  the unchanged two-message prompt.
+- Clippy `-D warnings` clean; `rustfmt` clean; `node --check app/static/app.js`
+  clean. Live smoke on `:8916` against a logging mock router: record "Sessions use
+  SQLite" saved, `src/auth.rs` indexed, run "add a login session table in sqlite"
+  → succeeded, and both model requests carried "Memory the user recorded for this
+  work" and "Project code the index matched" with `src/auth.rs:1 — fn login`; the
+  record's `uses` stayed 0.
+
 ## 1.60.0
 
 - Phase 8: **RAG over the project** — a chat turn now carries the code the index

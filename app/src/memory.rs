@@ -197,6 +197,17 @@ fn delete_at(db: &FsPath, id: &str) -> bool {
 /// recently updated record, then on id. Recall is recorded (`uses`,
 /// `last_used_at`) so the user can see what the assistant actually leaned on.
 pub(crate) fn recall(db: &FsPath, message: &str, project: &str) -> Vec<Record> {
+    recall_inner(db, message, project, true)
+}
+
+/// The same recall without touching the usage counters. An agent run asks once
+/// per step with the same goal; counting that as a dozen uses would make the
+/// history lie about how often the record actually mattered.
+pub(crate) fn recall_quiet(db: &FsPath, message: &str, project: &str) -> Vec<Record> {
+    recall_inner(db, message, project, false)
+}
+
+fn recall_inner(db: &FsPath, message: &str, project: &str, touch: bool) -> Vec<Record> {
     let wanted = crate::skills::keywords(message);
     if wanted.is_empty() {
         return Vec::new();
@@ -230,7 +241,7 @@ pub(crate) fn recall(db: &FsPath, message: &str, project: &str) -> Vec<Record> {
             break;
         }
     }
-    if !chosen.is_empty() {
+    if touch && !chosen.is_empty() {
         let _ = open_db(db).and_then(|conn| {
             let now = crate::now_seconds();
             for record in &chosen {

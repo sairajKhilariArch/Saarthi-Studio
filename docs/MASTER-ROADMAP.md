@@ -144,8 +144,11 @@ forget them. Delivered 1.59.0: the code index — bounded discovery with
 exclusions, language detection, line-based symbol extraction, incremental
 refresh by content digest, and ranked search returning a path and a line.
 Delivered 1.60.0: retrieval — a chat turn carries the matched declarations with
-their surrounding lines, each labelled with path and line. The embeddings index
-behind a semantic version of this remains open.*
+their surrounding lines, each labelled with path and line. Delivered 1.61.0: agent
+runs open with the same background — the goal's matched memory (read without
+touching its usage counters) and its matched code, as one labelled system message
+ahead of the goal. The embeddings index behind a semantic version of this remains
+open.*
 
 ## Phase 9 — Developer environment
 
