@@ -148,7 +148,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Embeddings *probe* | Partial | `media.rs` proxies one `/api/embeddings` call; nothing is stored or indexed |
 | Codebase indexing / symbols / incremental updates | **Missing** | — |
 | RAG over the project | Missing | `deepsearch.rs` is web research, not codebase retrieval |
-| Memory records + management UI | Missing | — |
+| Memory records + management UI | Working (1.58.0) | `app/src/memory.rs`: `memory_records` with kinds decision/preference/task/fact, a required title, optional details and a scope (one project or every project); `GET /api/memory`, `POST /api/memory`, `POST /api/memory/:id/delete`, local-origin guarded; recall by shared words (title 3, body 1, floor 2, 6 records / 900 tokens) with `uses`/`last_used_at` and `memory_used` in the reply meta; sidebar Memory pane with form, list and forget. The model never writes a record |
 
 ## Phase 9 — Developer environment
 

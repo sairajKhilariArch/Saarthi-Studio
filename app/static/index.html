@@ -67,6 +67,7 @@
       <button id="modeThreads" class="segmented-btn active" role="tab" aria-selected="true">Threads</button>
       <button id="modeFiles" class="segmented-btn" role="tab" aria-selected="false">Files</button>
       <button id="modeSkills" class="segmented-btn" role="tab" aria-selected="false">Skills</button>
+      <button id="modeMemory" class="segmented-btn" role="tab" aria-selected="false">Memory</button>
     </div>
 
     <section id="threadsPane" class="pane">
@@ -104,6 +105,34 @@
         </div>
         <div id="skillDetailBody" class="skill-detail-body"></div>
       </div>
+    </section>
+
+    <section id="memoryPane" class="pane hidden">
+      <p class="pane-label">Remembered for this project</p>
+      <div id="memoryList" class="skill-list">
+        <p class="empty-note">Loading memory…</p>
+      </div>
+      <details id="memoryAdd" class="skill-install">
+        <summary>Remember something…</summary>
+        <label class="field"><span>Kind</span>
+          <select id="memoryKind">
+            <option value="decision">Decision</option>
+            <option value="preference">Preference</option>
+            <option value="task">Task</option>
+            <option value="fact">Fact</option>
+          </select>
+        </label>
+        <label class="field"><span>Title</span><input id="memoryTitle" type="text" placeholder="Auth uses local sessions" autocomplete="off"></label>
+        <label class="field"><span>Details</span><textarea id="memoryBody" rows="3" placeholder="What the assistant should know next time."></textarea></label>
+        <label class="field"><span>Scope</span>
+          <select id="memoryScope">
+            <option value="project">This project</option>
+            <option value="global">Every project</option>
+          </select>
+        </label>
+        <div class="form-actions"><button type="button" id="memorySave" class="btn btn-accent btn-small">Remember</button></div>
+        <small class="muted">A record reaches a message only when they share words, and the reply says which records it was given.</small>
+      </details>
     </section>
 
     <section id="filesPane" class="pane hidden">

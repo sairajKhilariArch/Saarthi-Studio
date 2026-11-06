@@ -328,7 +328,7 @@ const NOISE: &[&str] = &[
 /// A word the message and a skill can agree on: lowercase alphanumeric runs of
 /// three or more characters, minus the noise list. Numbers are dropped, so a
 /// version or an issue id never selects a skill on its own.
-fn keywords(text: &str) -> HashSet<String> {
+pub(crate) fn keywords(text: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut word = String::new();
     for ch in text.chars() {

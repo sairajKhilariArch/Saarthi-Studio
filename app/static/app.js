@@ -382,6 +382,88 @@ async function loadSkills() {
   renderSkillChip();
 }
 
+/* ------------------------------------------------------------------ */
+/* memory: records the user asked the project to keep                   */
+/* ------------------------------------------------------------------ */
+
+async function loadMemory() {
+  wireMemoryForm();
+  const box = $("memoryList");
+  const result = await api("/api/memory");
+  if (!result.ok) {
+    box.replaceChildren();
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = result.data.error || "Memory could not be read.";
+    box.appendChild(note);
+    return;
+  }
+  state.memory = Array.isArray(result.data.records) ? result.data.records : [];
+  renderMemory();
+}
+
+function renderMemory() {
+  const box = $("memoryList");
+  box.replaceChildren();
+  const records = state.memory || [];
+  if (!records.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "Nothing remembered yet. A record reaches a message only when they share words.";
+    box.appendChild(note);
+    return;
+  }
+  records.forEach((record) => {
+    const card = document.createElement("div");
+    card.className = "skill-card";
+    card.innerHTML = '<span class="skill-card-text"><strong></strong><small></small></span>';
+    card.querySelector("strong").textContent = record.title;
+    const scope = record.global ? "every project" : "this project";
+    card.querySelector("small").textContent = `${record.kind} · ${scope} · used ${record.uses || 0}×`;
+    card.title = record.body || record.title;
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "icon-btn tiny";
+    forget.textContent = "×";
+    forget.title = "Forget this record";
+    forget.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const result = await api(`/api/memory/${encodeURIComponent(record.id)}/delete`, { method: "POST" });
+      if (result.ok) loadMemory();
+      else alert(result.data.error || "Could not forget that record.");
+    });
+    card.appendChild(forget);
+    box.appendChild(card);
+  });
+}
+
+function wireMemoryForm() {
+  if (state.memoryWired) return;
+  state.memoryWired = true;
+  const save = async () => {
+    const title = $("memoryTitle").value.trim();
+    if (!title) {
+      $("memoryTitle").focus();
+      return;
+    }
+    const body = { kind: $("memoryKind").value, title, body: $("memoryBody").value };
+    // An absent project means "the one I am working in"; empty means every one.
+    if ($("memoryScope").value === "global") body.project = "";
+    const result = await api("/api/memory", { method: "POST", body: JSON.stringify(body) });
+    if (!result.ok) {
+      alert(result.data.error || "Could not save that record.");
+      return;
+    }
+    $("memoryTitle").value = "";
+    $("memoryBody").value = "";
+    loadMemory();
+  };
+  $("memorySave").addEventListener("click", save);
+  $("memoryTitle").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") save();
+  });
+}
+
 function skillById(id) {
   return state.skills.find((skill) => skill.id === id) || null;
 }
@@ -1063,6 +1145,9 @@ function addMessage(role, content, options = {}) {
     if (Array.isArray(meta.auto_skills) && meta.auto_skills.length) {
       parts.push(`skill ${meta.auto_skills.join(", ")}`);
     }
+    if (Array.isArray(meta.memory_used) && meta.memory_used.length) {
+      parts.push(`${meta.memory_used.length} memor${meta.memory_used.length === 1 ? "y" : "ies"}`);
+    }
     if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
     if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
     pushContextMeta(parts, meta);
@@ -1118,6 +1203,9 @@ function contextMetaTitle(meta) {
   const bits = [];
   if (Array.isArray(meta.auto_skills) && meta.auto_skills.length) {
     bits.push(`matched skill${meta.auto_skills.length === 1 ? "" : "s"}: ${meta.auto_skills.join(", ")}`);
+  }
+  if (Array.isArray(meta.memory_used) && meta.memory_used.length) {
+    bits.push(`memory given to the model: ${meta.memory_used.join("; ")}`);
   }
   if (meta.context_tokens != null) bits.push(`${formatCount(meta.context_tokens)} tokens sent`);
   if (meta.context_budget) bits.push(`budget ${formatCount(meta.context_budget)}`);
@@ -1935,7 +2023,7 @@ function scheduleRightPanelTimer() {
 
 function setSidebarMode(mode) {
   state.sidebarMode = mode;
-  ["threads", "files", "skills"].forEach((name) => {
+  ["threads", "files", "skills", "memory"].forEach((name) => {
     const button = $(`mode${name.charAt(0).toUpperCase()}${name.slice(1)}`);
     if (!button) return;
     const active = mode === name;
@@ -1945,6 +2033,7 @@ function setSidebarMode(mode) {
   $("threadsPane").classList.toggle("hidden", mode !== "threads");
   $("filesPane").classList.toggle("hidden", mode !== "files");
   if ($("skillsPane")) $("skillsPane").classList.toggle("hidden", mode !== "skills");
+  if ($("memoryPane")) $("memoryPane").classList.toggle("hidden", mode !== "memory");
 }
 
 async function loadWorkspace() {
@@ -5606,6 +5695,7 @@ function bindEvents() {
   $("modeThreads").addEventListener("click", () => setSidebarMode("threads"));
   $("modeFiles").addEventListener("click", () => setSidebarMode("files"));
   $("modeSkills").addEventListener("click", () => { setSidebarMode("skills"); loadSkills(); });
+  if ($("modeMemory")) $("modeMemory").addEventListener("click", () => { setSidebarMode("memory"); loadMemory(); });
   $("newChat").addEventListener("click", newConversation);
   $("newChatTop").addEventListener("click", newConversation);
   // Thread pane scope: flip between this-project threads and all-project recents.

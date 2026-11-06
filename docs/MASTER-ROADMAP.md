@@ -138,6 +138,9 @@ File discovery, language detection, symbol extraction, incremental index,
 search + relevance ranking, exclusions (secrets, build output, deps), and
 traceable retrieval. Memory records for decisions/preferences/tasks with a
 management UI.
+*Delivered 1.58.0: memory records — four kinds, project or global scope, scored
+recall capped by count and tokens, usage history, and a sidebar pane to add and
+forget them. Codebase indexing, symbol extraction and RAG retrieval remain open.*
 
 ## Phase 9 — Developer environment
 

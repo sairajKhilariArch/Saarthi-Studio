@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.58.0
+
+- Phase 8: **project memory** — records the user chooses to keep, in
+  `app/src/memory.rs` and the `memory_records` table. Four kinds (`decision`,
+  `preference`, `task`, `fact`), a required title, optional details, and a scope:
+  one project or every project. Nothing writes a record on the model's behalf.
+- API: `GET /api/memory` (the global records plus the active project's — never
+  another project's), `POST /api/memory` (create, or update in place when the id
+  is known, keeping the creation time), `POST /api/memory/:id/delete`. All three
+  are behind the local-origin guard; no write route touches the filesystem.
+- Recall is scored, not dumped: a record earns 3 per title word and 1 per body
+  word the user's message shares with it, needs 2 points, and the result is
+  capped at 6 records / 900 tokens with ties going to the most recently updated.
+  The block tells the model these are background facts, not instructions, so a
+  stored preference cannot quietly become a command; recalled records have
+  `uses`/`last_used_at` bumped and the reply meta carries `memory_used`.
+- UI: a Memory mode in the sidebar beside Threads, Files and Skills — the
+  project's records with kind, scope and use count, a form (kind, title,
+  details, scope) and a forget button. The reply row says how many records the
+  turn was given, and its tooltip names them.
+- Tests: 347 pass, 1 ignored. Seven new for memory: project scoping with global
+  records, refusal of an unknown kind or an empty title (storing nothing),
+  update keeping the id and creation time, delete removing only its record, recall
+  by shared words with the usage counters moved, a title match outranking a body
+  match with the labelled block, and the recall budgets.
+- Clippy `-D warnings` clean; `rustfmt` clean; `node --check app/static/app.js`
+  clean. Live smoke on `:8916` against a logging mock router: a real project was
+  created and activated, three records saved (one for another project, one
+  global), an unknown kind answered 400, and `GET /api/memory` listed only the
+  global record and the active project's — the other project's stayed hidden.
+  "how does auth keep sessions?" answered with `memory_used: ["decision: Auth
+  uses local sessions"]`, that record's block was in the system prompt and
+  labelled as background facts, and the unrelated preference did not leak in;
+  "keep the replies short please" recalled the preference; both records showed a
+  bumped use count afterwards.
+
 ## 1.57.0
 
 - Phase 6: **automatic skill selection**, the gap where a skill only ever rode

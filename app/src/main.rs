@@ -48,6 +48,7 @@ mod local;
 mod mcp;
 mod mcp_oauth;
 mod media;
+mod memory;
 mod model_scope;
 mod openai;
 mod permissions;
@@ -343,6 +344,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = migrate_conversation_model(&conn);
     let _ = permissions::initialize(&conn);
     let _ = skills::initialize(&conn);
+    let _ = memory::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
     }
@@ -2972,6 +2974,9 @@ struct ChatPrep {
     /// Skills attached by matching, not by the composer; their ids ride in the
     /// reply meta so the user sees what the turn was told to follow.
     auto_skills: Vec<String>,
+    /// Memory records recalled for this message, as "kind: title", so the reply
+    /// can say what background it was given.
+    memory_used: Vec<String>,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -3204,6 +3209,10 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             last["content"] = json!(prompt);
         }
     }
+    // One project pointer for the whole turn: it scopes recall, the model
+    // default and the Thinking default, so a stale pointer cannot disagree with
+    // itself halfway through.
+    let active_project = active_project_id(state);
     let outline = if cfg.send_workspace_outline {
         state.workspace.outline()
     } else {
@@ -3213,6 +3222,17 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     if let Some(index) = skills::index_text(&cfg.disabled_skills, &available) {
         system.push_str("\n\n");
         system.push_str(&index);
+    }
+    // Recall runs on the user's own words, before any skill or mode preamble
+    // decorates them, so a preamble cannot select its own memory.
+    let recalled = memory::recall(&state.database_path, &message, &active_project);
+    let memory_used: Vec<String> = recalled
+        .iter()
+        .map(|record| format!("{}: {}", record.kind, record.title))
+        .collect();
+    if let Some(block) = memory::prompt_block(&recalled) {
+        system.push_str("\n\n");
+        system.push_str(&block);
     }
     let packed = context::pack(
         &system,
@@ -3225,7 +3245,6 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     // Chat has no agent scope: agent runs resolve their own level.
     // Both project-scoped defaults come from the same repaired pointer, so a
     // stale active_project in config never scopes a turn to a deleted project.
-    let active_project = active_project_id(state);
     let project_level = project_thinking_level(state, &active_project);
     let message_level = input
         .get("thinking")
@@ -3247,6 +3266,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         thinking: resolved,
         project_model: project_model(state, &active_project),
         auto_skills,
+        memory_used,
     })
 }
 
@@ -3322,6 +3342,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         thinking,
         project_model,
         auto_skills,
+        memory_used,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3386,6 +3407,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         meta["context_saved_tokens"] = json!(context_saved);
         if !auto_skills.is_empty() {
             meta["auto_skills"] = json!(&auto_skills);
+        }
+        if !memory_used.is_empty() {
+            meta["memory_used"] = json!(&memory_used);
         }
         return Json(json!({
             "ok": true,
@@ -3506,6 +3530,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
             meta["context_saved_tokens"] = json!(context_saved);
             if !auto_skills.is_empty() {
                 meta["auto_skills"] = json!(&auto_skills);
+            }
+            if !memory_used.is_empty() {
+                meta["memory_used"] = json!(&memory_used);
             }
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
         }
@@ -3834,6 +3861,7 @@ async fn chat_stream(
         thinking,
         project_model,
         auto_skills,
+        memory_used,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3887,6 +3915,9 @@ async fn chat_stream(
             held["model"] = json!(&chosen_model);
             if !auto_skills.is_empty() {
                 held["auto_skills"] = json!(&auto_skills);
+                if !memory_used.is_empty() {
+                    held["memory_used"] = json!(&memory_used);
+                }
             }
             held["deepsearch"] = json!(true);
         }
@@ -4045,6 +4076,9 @@ async fn chat_stream(
         held["model"] = json!(&chosen_model);
         if !auto_skills.is_empty() {
             held["auto_skills"] = json!(&auto_skills);
+            if !memory_used.is_empty() {
+                held["memory_used"] = json!(&memory_used);
+            }
         }
         held["thinking"] = thinking_json(thinking);
         held["model_scope"] = json!(model_scope_label);
@@ -4223,6 +4257,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             post(delete_crew_template),
         )
         .merge(skills::router().route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        )))
+        .merge(memory::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
         )))
