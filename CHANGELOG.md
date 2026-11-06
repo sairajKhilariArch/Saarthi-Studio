@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.66.0
+
+- Phase 9's Git half: the Source Control pane can now change the repository
+  instead of only watching it. Clicking a file shows its real `git diff`
+  (`+`/`-`/`@@` coloured, an untracked file shown as a new file, a large diff
+  marked truncated); `+`/`−` stage and unstage; `↺` discards after a
+  confirmation; a message box commits (`Ctrl+Enter` too); `Branch…` creates or
+  switches branches; `History` lists the last 20 commits with author and date.
+  The pane groups merge conflicts, staged, changed and untracked files, and the
+  branch row carries `↑ahead ↓behind` when the branch tracks an upstream.
+- Backend `app/src/git.rs` — nine routes under `/api/workspace/git`, merged into
+  the workspace router so they inherit the loopback `Host`/`Origin` guard and
+  the request-body cap: `GET /diff`, `POST /stage`, `/unstage`, `/discard`,
+  `/commit`, `GET /branches`, `POST /branch`, `/checkout`, `GET /log`. Every
+  path is validated before argv — relative only, no `..`, no drive letter, no
+  control characters, no `.git` — and arguments are passed as an array, never
+  through a shell. Every mutation consults the existing permission store on the
+  `git` action: a saved deny is a 403, a saved ask is a 409 until
+  `approve: true`, and both land in `permission_audit`.
+- Failure text is git's own sentence, not the first line of its output. In an
+  empty repository `git commit` prints `On branch main` first; that was hiding
+  `nothing to commit`, and a refused checkout (`would be overwritten`) now
+  answers 409 instead of pretending to be a malformed request.
+- `/api/workspace/vcs` gained per-file `conflicted`/`untracked` flags and
+  `ahead`/`behind` from `# branch.ab`, so the pane can tell an unmerged path
+  from an ordinary edit and a tracked branch from one with no upstream.
+- `cargo test --locked`: **372 passed, 1 ignored** (10 new: path/message
+  validation, log parsing with tabs in a subject, UTF-8-safe truncation, and
+  five tests against real temporary repositories — stage → commit → diff →
+  discard, untracked shown as a new file then removed, branch create/switch,
+  empty history and nothing-to-commit, missing repository). Clippy
+  `-D warnings` clean, `rustfmt --check` clean on the touched files,
+  `node --check app/static/ide.js` and `app.js` clean.
+- Live smoke on `:8931` against a real repository: `new file:` diff for an
+  untracked path, stage of two files, commit `19141ae` with the expected
+  subject, `log` returning it, `feature/smoke` created then `main` restored,
+  a tracked edit producing a unified diff (`-beta`/`+changed`), discard
+  restoring `alpha`/`beta`, `../evil` refused 400, a saved `git` deny on
+  `b.txt` refusing stage with 403 (audited), revoke then stage succeeding.
+- The pane's rendering was exercised only through the routes; its layout,
+  colours and inline diff were not viewed in a browser.
+- Not built: per-hunk staging, a commit-detail diff, merge/pull/push/fetch and
+  worktree checkpoints. Merge-conflict resolution is therefore manual in the
+  editor; the pane only identifies the conflicted paths.
+
 ## 1.65.0
 
 - Browser check of 1.64.0's Index pane, against a live app on `:8916` with a mock

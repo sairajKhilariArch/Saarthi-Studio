@@ -36,6 +36,7 @@ mod deepsearch;
 mod embeddings;
 mod events;
 mod filelock;
+mod git;
 #[cfg(feature = "gui")]
 mod gui;
 mod health;

@@ -19,6 +19,8 @@
     problems: [],
     output: [],
     vcs: null,
+    diffKey: null,
+    scmHistory: false,
     searchSeq: 0,
     paletteIndex: 0,
     paletteItems: [],
@@ -161,9 +163,21 @@
     const scm = el("section", "pane hidden scm-pane");
     scm.id = "scmPane";
     scm.innerHTML = [
-      '<div class="pane-head"><p class="pane-label">Working tree</p>',
+      '<div class="pane-head"><p class="pane-label">Source control</p>',
       '<button id="scmRefresh" class="tiny-toggle" type="button">Refresh</button></div>',
+      `<div class="scm-branch hidden" id="scmBranchBar">${svg("branch")}<span id="scmBranchName">—</span><small id="scmBranchMeta"></small></div>`,
       '<div id="scmBody" class="scm-list"><p class="empty-note">Open a folder to check its Git state.</p></div>',
+      '<div class="scm-commit hidden" id="scmCommitBox">',
+      '<textarea id="scmMessage" rows="2" placeholder="Commit message (Ctrl+Enter)" aria-label="Commit message"></textarea>',
+      '<div class="scm-commit-row"><button id="scmCommit" class="tiny-toggle primary" type="button">Commit</button>',
+      '<button id="scmBranchBtn" class="tiny-toggle" type="button">Branch…</button>',
+      '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button></div>',
+      '<div class="scm-branch-form hidden" id="scmBranchForm">',
+      '<input id="scmBranchInput" type="text" placeholder="branch name" aria-label="Branch name" autocomplete="off">',
+      '<button id="scmBranchCreate" class="tiny-toggle" type="button">Create</button>',
+      '<button id="scmBranchSwitch" class="tiny-toggle" type="button">Switch</button></div>',
+      '<p class="scm-hint" id="scmHint"></p>',
+      "</div>",
     ].join("");
     sidebar.insertBefore(scm, foot);
 
@@ -409,35 +423,200 @@
   async function refreshScm() {
     const box = $("scmBody");
     if (!box) return;
-    if (!state.workspace) { box.innerHTML = '<p class="empty-note">Open a folder to check its Git state.</p>'; setBranchStatus(null); return; }
+    const commitBox = $("scmCommitBox");
+    const branchBar = $("scmBranchBar");
+    IDE.diffKey = null;
+    IDE.scmHistory = false;
+    if (!state.workspace) {
+      box.innerHTML = '<p class="empty-note">Open a folder to check its Git state.</p>';
+      setBranchStatus(null);
+      if (commitBox) commitBox.classList.add("hidden");
+      if (branchBar) branchBar.classList.add("hidden");
+      return;
+    }
     box.innerHTML = '<p class="empty-note">Reading git status…</p>';
     const result = await api("/api/workspace/vcs");
-    if (!result.ok) { box.innerHTML = `<p class="empty-note">${escapeHtml(result.data.error || "Could not read git status.")}</p>`; return; }
+    if (!result.ok) {
+      box.innerHTML = `<p class="empty-note">${escapeHtml(result.data.error || "Could not read git status.")}</p>`;
+      return;
+    }
     IDE.vcs = result.data;
     if (!result.data.available) {
       box.innerHTML = `<p class="empty-note">${escapeHtml(result.data.message || "This folder is not a Git repository.")}</p>`;
       setBranchStatus(null);
+      if (commitBox) commitBox.classList.add("hidden");
+      if (branchBar) branchBar.classList.add("hidden");
       return;
+    }
+    if (commitBox) commitBox.classList.remove("hidden");
+    if (branchBar) branchBar.classList.remove("hidden");
+    if ($("scmBranchName")) $("scmBranchName").textContent = result.data.branch || "detached";
+    if ($("scmBranchMeta")) {
+      const ahead = Number(result.data.ahead || 0);
+      const behind = Number(result.data.behind || 0);
+      $("scmBranchMeta").textContent = `${ahead ? `↑${ahead}` : ""}${behind ? ` ↓${behind}` : ""}`.trim();
     }
     setBranchStatus(result.data.branch);
     const changes = result.data.changes || [];
-    if (!changes.length) { box.innerHTML = '<p class="empty-note">Working tree clean.</p>'; return; }
+    if (!changes.length) {
+      box.innerHTML = '<p class="empty-note">Working tree clean.</p>';
+      setScmHint("");
+      return;
+    }
     box.innerHTML = "";
-    appendScmGroup(box, "Staged", changes.filter((c) => c.staged));
-    appendScmGroup(box, "Changes", changes.filter((c) => !c.staged));
+    const conflicted = changes.filter((c) => c.conflicted);
+    const staged = changes.filter((c) => c.staged && !c.conflicted);
+    const untracked = changes.filter((c) => !c.staged && !c.conflicted && c.untracked);
+    const unstaged = changes.filter((c) => !c.staged && !c.conflicted && !c.untracked);
+    appendScmGroup(box, "Merge conflicts", conflicted, "conflict");
+    appendScmGroup(box, "Staged", staged, "staged");
+    appendScmGroup(box, "Changes", unstaged, "work");
+    appendScmGroup(box, "Untracked", untracked, "work");
+    setScmHint(staged.length ? `${staged.length} staged · commit when ready` : "");
   }
 
-  function appendScmGroup(box, label, changes) {
+  function setScmHint(text) {
+    if ($("scmHint")) $("scmHint").textContent = text;
+  }
+
+  function scmAction(glyph, title, run) {
+    const button = el("button", "scm-act", escapeHtml(glyph));
+    button.type = "button";
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.addEventListener("click", (event) => { event.stopPropagation(); void run(); });
+    return button;
+  }
+
+  function appendScmGroup(box, label, changes, group) {
     if (!changes.length) return;
-    box.appendChild(el("div", "scm-group-label", label));
+    box.appendChild(el("div", "scm-group-label", `${label} <span class="count">${changes.length}</span>`));
     changes.forEach((change) => {
       const code = change.code === "?" ? "U" : change.code.replace(/\./g, "") || "M";
-      const cls = code === "D" ? " del" : (code === "?" || code === "A") ? " add" : "";
-      const row = el("button", "scm-item", `<span class="code${cls}">${escapeHtml(code)}</span><span class="path">${escapeHtml(change.path)}</span>`);
-      row.type = "button"; row.title = change.path;
-      row.addEventListener("click", () => { void openFile(change.path); });
+      const cls = change.conflicted ? " conflict"
+        : code === "D" ? " del"
+        : (code === "?" || code === "A" || change.untracked) ? " add" : "";
+      const row = el("div", "scm-item");
+      const open = el("button", "scm-open", `<span class="code${cls}">${escapeHtml(code)}</span><span class="path">${escapeHtml(change.path)}</span>`);
+      open.type = "button";
+      open.title = `${change.path} — show its diff`;
+      open.addEventListener("click", () => { void toggleScmDiff(change, row); });
+      row.appendChild(open);
+      const actions = el("div", "scm-actions");
+      if (change.staged) {
+        actions.appendChild(scmAction("−", `Unstage ${change.path}`, () => scmMutate("/api/workspace/git/unstage", { paths: [change.path] }, `Unstaged ${change.path}`)));
+      } else {
+        actions.appendChild(scmAction("+", `Stage ${change.path}`, () => scmMutate("/api/workspace/git/stage", { paths: [change.path] }, `Staged ${change.path}`)));
+      }
+      actions.appendChild(scmAction("↺", `Discard changes to ${change.path}`, async () => {
+        if (!window.confirm(`Discard the changes to ${change.path}?\n\nThis cannot be undone.`)) return;
+        await scmMutate("/api/workspace/git/discard", { paths: [change.path] }, `Discarded ${change.path}`);
+      }));
+      row.appendChild(actions);
       box.appendChild(row);
     });
+  }
+
+  async function scmMutate(path, body, successMessage) {
+    const result = await api(path, { method: "POST", body: JSON.stringify(body), confirmApproval: true });
+    if (!result.ok) {
+      toast(result.data.error || "Git operation failed.");
+      return;
+    }
+    toast(successMessage);
+    await refreshScm();
+  }
+
+  async function toggleScmDiff(change, row) {
+    const key = `${change.staged ? "staged:" : "work:"}${change.path}`;
+    const open = document.querySelector(".scm-diff");
+    if (IDE.diffKey === key) { IDE.diffKey = null; if (open) open.remove(); return; }
+    if (open) open.remove();
+    IDE.diffKey = key;
+    const query = `/api/workspace/git/diff?path=${encodeURIComponent(change.path)}${change.staged ? "&staged=1" : ""}`;
+    const result = await api(query);
+    if (!result.ok) {
+      IDE.diffKey = null;
+      toast(result.data.error || "Could not read the diff.");
+      return;
+    }
+    const pre = el("pre", "scm-diff");
+    const text = String(result.data.diff || "");
+    if (!text.trim()) {
+      pre.innerHTML = `<span class="meta">No textual changes to show for ${escapeHtml(change.path)}.</span>`;
+    } else {
+      pre.innerHTML = text.split("\n").slice(0, 400).map((line) => {
+        const cls = line.startsWith("@@") ? "hunk"
+          : line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("new file") ? "meta"
+          : line.startsWith("+") ? "add"
+          : line.startsWith("-") ? "del" : "";
+        return `<span class="${cls}">${escapeHtml(line)}</span>`;
+      }).join("\n");
+      if (result.data.truncated) pre.insertAdjacentHTML("beforeend", '\n<span class="meta">… diff truncated …</span>');
+    }
+    row.insertAdjacentElement("afterend", pre);
+  }
+
+  async function commitScm() {
+    const message = $("scmMessage").value.trim();
+    if (!message) { setScmHint("Write a commit message first."); $("scmMessage").focus(); return; }
+    const button = $("scmCommit");
+    button.disabled = true;
+    try {
+      const result = await api("/api/workspace/git/commit", {
+        method: "POST",
+        body: JSON.stringify({ message }),
+        confirmApproval: true,
+      });
+      if (!result.ok) {
+        setScmHint(result.data.error || "Commit failed.");
+        toast(result.data.error || "Commit failed.");
+        return;
+      }
+      $("scmMessage").value = "";
+      toast(`Committed ${result.data.commit || ""}`.trim());
+      await refreshScm();
+      setScmHint(`Committed ${result.data.commit || ""}`.trim());
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function toggleScmHistory() {
+    const box = $("scmBody");
+    if (!box) return;
+    if (IDE.scmHistory) { await refreshScm(); return; }
+    const result = await api("/api/workspace/git/log?limit=20");
+    if (!result.ok) { toast(result.data.error || "Could not read the history."); return; }
+    const commits = result.data.commits || [];
+    IDE.scmHistory = true;
+    IDE.diffKey = null;
+    box.innerHTML = "";
+    if (!commits.length) {
+      box.innerHTML = '<p class="empty-note">No commits yet.</p>';
+      return;
+    }
+    box.appendChild(el("div", "scm-group-label", `Recent commits <span class="count">${commits.length}</span>`));
+    commits.forEach((commit) => {
+      const row = el("div", "scm-commit-line");
+      row.innerHTML = `<span class="short">${escapeHtml(commit.short || "")}</span>` +
+        `<span class="subject">${escapeHtml(commit.subject || "")}</span>` +
+        `<span class="author">${escapeHtml(commit.author || "")}</span>`;
+      row.title = `${commit.hash || ""}\n${commit.author || ""} · ${commit.date || ""}`;
+      box.appendChild(row);
+    });
+  }
+
+  async function branchScm(mode) {
+    const name = $("scmBranchInput").value.trim();
+    if (!name) { toast("Name the branch first."); $("scmBranchInput").focus(); return; }
+    const path = mode === "create" ? "/api/workspace/git/branch" : "/api/workspace/git/checkout";
+    const result = await api(path, { method: "POST", body: JSON.stringify({ name }), confirmApproval: true });
+    if (!result.ok) { toast(result.data.error || "Branch operation failed."); return; }
+    $("scmBranchInput").value = "";
+    $("scmBranchForm").classList.add("hidden");
+    toast(`${mode === "create" ? "Created" : "Switched to"} ${name}`);
+    await refreshScm();
   }
 
   function setBranchStatus(branch) {
@@ -580,6 +759,21 @@
       if (event.key === "Escape") { input.value = ""; $("searchResults").replaceChildren(); }
     });
     $("scmRefresh").addEventListener("click", () => void refreshScm());
+    $("scmCommit").addEventListener("click", () => void commitScm());
+    $("scmMessage").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void commitScm(); }
+    });
+    $("scmBranchBtn").addEventListener("click", () => {
+      const form = $("scmBranchForm");
+      form.classList.toggle("hidden");
+      if (!form.classList.contains("hidden")) $("scmBranchInput").focus();
+    });
+    $("scmHistoryBtn").addEventListener("click", () => void toggleScmHistory());
+    $("scmBranchCreate").addEventListener("click", () => void branchScm("create"));
+    $("scmBranchSwitch").addEventListener("click", () => void branchScm("switch"));
+    $("scmBranchInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void branchScm("switch"); }
+    });
   }
   const KEYWORDS = {
     rust: "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while",

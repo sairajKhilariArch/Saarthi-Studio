@@ -221,13 +221,43 @@ body.no-right { --right-w: 0px; }
 .scm-branch .icon { width: 13px; height: 13px; color: var(--accent); }
 .scm-branch small { margin-left: auto; color: var(--mute); font-size: 10px; }
 .scm-group-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); padding: 6px 2px 2px; }
+.scm-group-label .count { margin-left: 4px; color: var(--dim); }
 .scm-list { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; min-height: 0; }
-.scm-item { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; width: 100%; text-align: left; font: inherit; font-size: 11.5px; color: var(--dim); padding: 3px 4px; border-radius: 5px; cursor: pointer; }
-.scm-item:hover { background: var(--surface-2); color: var(--text); }
-.scm-item .code { font-family: var(--mono); font-size: 10px; font-weight: 700; width: 18px; flex: none; color: var(--accent); text-align: center; }
-.scm-item .code.del { color: var(--danger); }
-.scm-item .code.add { color: var(--ok); }
-.scm-item .path { font-family: var(--mono); font-size: 10.8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-item { display: flex; align-items: center; border-radius: 5px; }
+.scm-item:hover { background: var(--surface-2); }
+.scm-open { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; font: inherit; font-size: 11.5px; color: var(--dim); padding: 3px 4px; border-radius: 5px; cursor: pointer; }
+.scm-open:hover { color: var(--text); }
+.scm-open .code { font-family: var(--mono); font-size: 10px; font-weight: 700; width: 18px; flex: none; color: var(--accent); text-align: center; }
+.scm-open .code.del { color: var(--danger); }
+.scm-open .code.add { color: var(--ok); }
+.scm-open .code.conflict { color: var(--warn, #e0a030); }
+.scm-open .path { font-family: var(--mono); font-size: 10.8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-actions { display: flex; align-items: center; gap: 1px; flex: none; }
+.scm-act { border: 0; background: transparent; color: var(--mute); font: inherit; font-size: 11px; line-height: 1; padding: 3px 5px; border-radius: 4px; cursor: pointer; opacity: 0; }
+.scm-item:hover .scm-act { opacity: 1; }
+.scm-act:hover { background: var(--surface-3); color: var(--text); }
+.scm-act:focus-visible { opacity: 1; outline: 1px solid var(--accent); }
+.scm-diff { font-family: var(--mono); font-size: 10.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 6px 8px; margin: 2px 0 6px; max-height: 240px; overflow: auto; }
+.scm-diff .add { color: var(--ok); }
+.scm-diff .del { color: var(--danger); }
+.scm-diff .hunk { color: var(--accent); }
+.scm-diff .meta { color: var(--mute); }
+.scm-commit { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 0; margin-top: 8px; border-top: 1px solid var(--line-soft); flex: none; }
+.scm-commit textarea { width: 100%; resize: vertical; min-height: 46px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; color: var(--text); font: inherit; font-size: 11.5px; padding: 6px 8px; }
+.scm-commit textarea:focus { outline: none; border-color: var(--accent); }
+.scm-commit-row { display: flex; gap: 6px; }
+.scm-commit-row .primary { border-color: var(--accent); color: var(--text-strong); }
+.scm-branch-form { display: flex; gap: 4px; }
+.scm-branch-form.hidden { display: none; }
+.scm-branch-form input { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 11.5px; padding: 4px 6px; }
+.scm-branch-form input:focus { outline: none; border-color: var(--accent); }
+.scm-commit-line { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--dim); padding: 3px 4px; border-radius: 5px; }
+.scm-commit-line:hover { background: var(--surface-2); }
+.scm-commit-line .short { font-family: var(--mono); font-size: 10px; color: var(--accent); flex: none; }
+.scm-commit-line .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.scm-commit-line .author { font-size: 10px; color: var(--mute); flex: none; }
+.scm-hint { font-size: 10.5px; color: var(--mute); min-height: 14px; }
+.scm-hint:empty { display: none; }
 
 /* ---------- status bar ---------- */
 .status-bar { display: flex; align-items: center; flex: none; height: var(--status-h); padding: 0 4px; background: var(--surface); border-top: 1px solid var(--line); font-size: 11px; color: var(--dim); overflow: hidden; }

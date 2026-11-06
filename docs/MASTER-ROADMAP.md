@@ -159,6 +159,15 @@ Editor niceties that do not require a bundled editor engine, real git
 operations (status/branch/diff/stage/commit/worktree checkpoints), build/test
 runner with a problems panel, and diagnostics tied to real file locations.
 
+*Delivered 1.66.0: the Git half — `app/src/git.rs` (diff, stage, unstage,
+discard, commit, branches, log) behind the `git` permission action with paths
+validated before argv, plus the Source Control pane that drives all of it
+(inline diff, stage/unstage/discard, commit box, branch create/switch, history,
+conflict/staged/changed/untracked groups, ahead/behind). Remaining: worktree
+checkpoints before an agent writes, merge/pull/push/fetch, per-hunk staging, a
+commit-detail diff, and the build/test runner feeding compiler diagnostics into
+the Problems panel.*
+
 ## Phase 10 — Safety and permissions
 
 Central policy store covering files, directories, terminal, network, MCP,

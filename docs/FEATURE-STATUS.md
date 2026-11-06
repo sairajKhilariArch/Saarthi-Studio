@@ -157,10 +157,11 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 |---|---|---|
 | File tree, editor, save, workspace search | Working | `workspace.rs` + `ide.js` |
 | Real PTY terminal (ConPTY/unix pty, SSE, resize) | Working | `terminal.rs`, `portable-pty` |
-| Git status | Partial | `vcs_status` / `parse_git_status` reads state only |
-| Git stage/commit/diff/branch/worktree checkpoints | **Missing** | — |
+| Git status | Working (1.66.0) | `/api/workspace/vcs` reports the branch, `ahead`/`behind` from `# branch.ab`, and per-file `staged`/`unstaged`/`untracked`/`conflicted` flags parsed from `git status --porcelain=v2` |
+| Git diff, stage, unstage, discard, commit, branches, log | Working (1.66.0) | `app/src/git.rs`: nine routes under `/api/workspace/git`, each a real `git` invocation in the open folder. Paths are validated before argv (relative, no `..`, no drive letter, no control characters, no `.git`) and passed as an array, never a shell. Every mutation is gated on the `git` action (deny 403, ask 409 until `approve: true`, audited). Failures surface git's own sentence with 409 for a refused checkout / nothing to commit. UI: per-row diff, stage/unstage/discard, commit box, branch create/switch, history list, conflict/staged/changed/untracked groups |
+| Git worktree checkpoints / merge / pull / push | **Missing** | no worktree per run and no remote operations; merge-conflict resolution is manual in the editor, the pane only names the conflicted paths. Per-hunk staging and a commit-detail diff are also absent |
 | Syntax highlighting, diagnostics, completion, formatting | Missing | no editor engine, by design |
-| Build/test runner, problems panel, debugger | Missing | agent can run commands; no runner UI |
+| Build/test runner, problems panel, debugger | Partial | the Problems panel records failed requests and is clickable back to files; there is no build/test runner and no compiler or test diagnostics |
 
 ## Phase 10 — Safety and permissions
 
@@ -171,7 +172,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Outbound secret detection | Working | `privacy.rs` |
 | Host API bearer auth + TLS + body caps | Working | `host_auth.rs`, `host_transport.rs` |
 | Central policy store (once/session/project/deny) | Working (1.31.0) | `permissions.rs`; rules scoped once/session/project/always, resolved longest-target → deny → scope |
-| Privileged UI routes gated | Working (1.40.0) | terminal open, editor saves, workspace create/rename/delete and settings/key saves consult saved rules; deny → 403, ask → 409 until `approve: true`, both audited. No rule means no prompt — the click is the consent. UI routes pass an empty project, so `project`-scoped rules still apply to agent steps only. Git has no mutating route; updates have no in-app route |
+| Privileged UI routes gated | Working (1.40.0, 1.66.0) | terminal open, editor saves, workspace create/rename/delete, settings/key saves and — since 1.66.0 — git stage/unstage/discard/commit/branch create/switch consult saved rules on their own actions (`command`, `fs_write`, `settings`, `git`); deny → 403, ask → 409 until `approve: true`, both audited. No rule means no prompt — the click is the consent. UI routes pass an empty project, so `project`-scoped rules still apply to agent steps only. Updates have no in-app route |
 | Enforcement of that store | Partial (1.31.0) | agent steps and router installs consult it; terminal, editor writes, git, updates and settings do not yet |
 | OS keychain for secrets | Missing | keys live in mode-restricted `config.json` |
 | Privileged-operation audit log | Working (1.31.0) | `permission_audit` table + `/api/permissions/audit` |

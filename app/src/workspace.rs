@@ -1117,7 +1117,8 @@ async fn search_workspace(
 }
 
 /// `git status --porcelain=v2` parsed into the shape the Source Control pane
-/// renders. Nothing here stages, commits, fetches or writes.
+/// renders. Nothing here stages, commits, fetches or writes; the write
+/// operations live in `crate::git`.
 fn parse_git_status(output: &str) -> (Option<String>, Vec<Value>) {
     let mut branch = None;
     let mut changes = Vec::new();
@@ -1131,12 +1132,26 @@ fn parse_git_status(output: &str) -> (Option<String>, Vec<Value>) {
             });
             continue;
         }
-        let (code, path) = if let Some(path) = line.strip_prefix("? ") {
-            ("?".to_string(), path.trim().to_string())
-        } else if let Some(rest) = line.strip_prefix("1 ").or_else(|| line.strip_prefix("u ")) {
+        // `u` lines are unmerged entries: both sides of a merge conflict. The
+        // pane colours them as conflicts rather than as ordinary modifications.
+        let (code, path, conflicted) = if let Some(path) = line.strip_prefix("? ") {
+            ("?".to_string(), path.trim().to_string(), false)
+        } else if let Some(rest) = line.strip_prefix("u ") {
             let mut parts = rest.splitn(8, ' ');
             let xy = parts.next().unwrap_or_default().to_string();
-            (xy, parts.nth(6).unwrap_or_default().trim().to_string())
+            (
+                xy,
+                parts.nth(6).unwrap_or_default().trim().to_string(),
+                true,
+            )
+        } else if let Some(rest) = line.strip_prefix("1 ") {
+            let mut parts = rest.splitn(8, ' ');
+            let xy = parts.next().unwrap_or_default().to_string();
+            (
+                xy,
+                parts.nth(6).unwrap_or_default().trim().to_string(),
+                false,
+            )
         } else if let Some(rest) = line.strip_prefix("2 ") {
             let mut parts = rest.splitn(9, ' ');
             let xy = parts.next().unwrap_or_default().to_string();
@@ -1148,6 +1163,7 @@ fn parse_git_status(output: &str) -> (Option<String>, Vec<Value>) {
                     .unwrap_or_default()
                     .trim()
                     .to_string(),
+                false,
             )
         } else {
             continue;
@@ -1163,6 +1179,8 @@ fn parse_git_status(output: &str) -> (Option<String>, Vec<Value>) {
             "code": code,
             "staged": index_state != '.' && index_state != '?',
             "unstaged": worktree_state != '.' || index_state == '?',
+            "untracked": index_state == '?',
+            "conflicted": conflicted || code.contains('U') || code == "AA" || code == "DD",
         }));
     }
     (branch, changes)
@@ -1179,9 +1197,28 @@ async fn vcs_status(State(state): State<AppState>) -> Result<Json<Value>, Worksp
         Ok(result) if result.status.success() => {
             let text = String::from_utf8_lossy(&result.stdout);
             let (branch, changes) = parse_git_status(&text);
+            // `# branch.ab +N -M` is only present when the branch has an
+            // upstream; absent means "not tracking", which is different from
+            // "nothing to push".
+            let mut ahead = 0;
+            let mut behind = 0;
+            for line in text.lines() {
+                let Some(rest) = line.strip_prefix("# branch.ab ") else {
+                    continue;
+                };
+                for part in rest.split_whitespace() {
+                    if let Some(count) = part.strip_prefix('+') {
+                        ahead = count.parse().unwrap_or(0);
+                    } else if let Some(count) = part.strip_prefix('-') {
+                        behind = count.parse().unwrap_or(0);
+                    }
+                }
+            }
             Ok(Json(json!({
                 "available": true,
                 "branch": branch,
+                "ahead": ahead,
+                "behind": behind,
                 "changes": changes,
                 "clean": changes.is_empty(),
             })))
@@ -1296,6 +1333,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/workspace/delete", post(remove))
         .route("/api/workspace/search", get(search_workspace))
         .route("/api/workspace/vcs", get(vcs_status))
+        .merge(crate::git::router())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(
             LocalOriginGuard { port },

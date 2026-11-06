@@ -26,7 +26,8 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `main.rs` | 3628 | App state, config load/save, SQLite open/migrate, chat + streaming chat, Thinking resolution, conversations, usage, router/omniroute status, static serving, listener setup |
 | `agent.rs` | 3591 | Bounded autonomous run loop: one JSON action per model step (`think`/`list`/`read`/`write`/`command`/`done`/`fail`), permissions, approval pauses, checkpoints, diffs, cancellation, `agent_runs`/`agent_steps` persistence |
 | `host_api.rs` | 1807 | Authenticated router for the Android companion (health, capabilities, models, chat, conversations, messages) |
-| `workspace.rs` | 1599 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, git status/vcs |
+| `workspace.rs` | 1699 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, and the read-only `git status` the Source Control pane loads |
+| `git.rs` | 983 | Real Git operations in the open folder: diff, stage, unstage, discard, commit, branches and log. Argv-only invocations, validated workspace-relative paths, every mutation behind the `git` permission action |
 | `local.rs` | 1167 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
 | `deepsearch.rs` | 714 | Research answers: provider-native grounding (Gemini, OpenAI `web_search`) or Exa/Tavily loop; bounded queries; SSE steps; citations |
 | `host_auth.rs` | 595 | Host token lifecycle (issue/redeem/rotate/revoke), paired-device records |
@@ -61,6 +62,7 @@ Loopback UI/API (`main.rs`):
 Mounted sub-routers:
 
 - Workspace: `/api/workspace`, `/open`, `/pick`, `/close`, `/entries`, `/files`, `/file` (GET+PUT), `/create`, `/rename`, `/delete`, `/search`, `/vcs`
+- Git (same router, so the same origin guard and body cap): `GET /api/workspace/git/diff`, `POST /git/stage`, `/git/unstage`, `/git/discard`, `/git/commit`, `GET /git/branches`, `POST /git/branch`, `/git/checkout`, `GET /git/log`
 - Skills: `GET /api/skills`, `GET /api/skills/:id`, `POST /api/skills/:id/state`
 - Terminal: `POST /api/terminal/open`, `/api/terminal/:id/input`, `/resize`, `/close`, `GET /api/terminal/:id/stream` (SSE)
 - Local inference: `GET /api/local/status`, `/models`, `/hardware`, `POST /api/local/select`, `/api/local/pull`
