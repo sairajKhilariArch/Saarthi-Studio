@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.54.0
+
+- Phase 5 item 4, first half: **file leases between live runs**. Concurrent runs
+  share one folder, and nothing on the filesystem stopped both writing the same
+  file — last writer wins, silently. `app/src/filelock.rs` now records which live
+  run has claimed a path, plus the fingerprint of the content each run last read.
+  A write is refused when another live run holds the claim, or when the content
+  on disk is not what this run last read, and either way it is refused **before**
+  anything is written.
+- A refusal is a `write-conflict` step, not a failure: the run keeps going, the
+  model sees the reason and can re-read the file and rewrite from what is
+  actually there. The two messages name the blocker explicitly — the owning run
+  and its liveness, or “changed on disk since this run last read it — another run
+  or another program wrote it”.
+- The baseline is the file as it is, read from disk for the write's checkpoint,
+  never the model's memory of it. A read records that content; a successful write
+  records what the run just wrote, so a run's own edit is not mistaken for
+  somebody else's change on the next write. That second half was a real defect
+  found here: the team-review path's repair write failed after its own first
+  write, and `team_run_repairs_after_review_findings` caught it.
+- Leases are bounded and never permanent: at most 256 tracked paths per run, and
+  a claim held by a run that is no longer `running` or `awaiting_approval` is
+  dropped on the next claim, so a crash or a cancel cannot keep a file locked.
+  A paused run holds no claim (it released its loop) but keeps its read
+  fingerprints, so a resumed run still notices a file that moved while it was
+  parked. `finish` releases everything a run holds, on every path that can end
+  one — success, failure, cancel, emergency stop, exhausted ceiling.
+- Scope stated honestly: only the agent's own `write` action is guarded. A
+  command step, an editor save or another program can still change a file with no
+  lease; the run's next write is caught by the fingerprint check instead. There is
+  no worktree per run, and the ledger is in-process only, so
+  `max_concurrent_runs` still defaults to 1 — the limit is now guarded rather than
+  unguarded, but two agents in one folder remain the user's explicit choice.
+- Tests: 326 pass, 1 ignored. New: a write refused when the file changed between
+  the run's read and its write (a mock that edits the workspace on the request
+  before the write) with the run then recovering by re-reading and finishing, a
+  second live run unable to claim a claimed path (the refusal names the owner), a
+  finished run's claim not outliving it, a cancelled run's claim released by
+  `finish`, a paused run holding no claim while keeping what it read, and a file
+  that appeared since the read counting as a conflict. Clippy `-D warnings` clean;
+  `rustfmt` clean on `agent.rs` and `filelock.rs`.
+- Verified live on :8913 with `max_concurrent_runs: 2` and a prompt-scripted mock:
+  with run ONE still working after its write, run TWO's write was refused as
+  `shared.txt is claimed by run f371ece2-…, which is still live.` while ONE was
+  `running`, TWO continued to `done`, and the file kept ONE's content; run THREE,
+  whose file was rewritten by the mock between its read and its write, got
+  `shared.txt changed on disk since this run last read it` and left the other
+  writer's content untouched. The first attempt at this smoke *looked* like a
+  missing guard: the single-threaded mock serialised the second run's calls behind
+  the first run's sleep, so the second write landed after the first run had
+  already finished. Re-running against a threaded mock showed the refusal at
+  0.38 s with the first run still live.
+
 ## 1.53.0
 
 - Phase 5, the **task queue**: a run no longer starts the instant it is created.

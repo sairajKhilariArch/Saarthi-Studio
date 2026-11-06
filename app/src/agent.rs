@@ -667,6 +667,10 @@ fn set_run(
 }
 
 fn finish(state: &AppState, run_id: &str, status: &str, error: &str) -> Result<(), String> {
+    // A run that has stopped holds no claim on a file any more. Released here
+    // rather than in the loop tail so every way a run can end — cancel, the
+    // emergency stop, an exhausted step ceiling — frees the same leases.
+    crate::filelock::release(run_id);
     set_run(state, run_id, status, Some(error), Some(""))
 }
 
@@ -2342,6 +2346,20 @@ async fn execute_action_step(
         Action::Write { path, .. } => capture_checkpoint(&root, path),
         _ => (String::new(), None),
     };
+    // Isolation between runs sharing this folder: refuse a write that another
+    // live run has claimed, or one that would overwrite a change this run never
+    // saw. `old_content` is the file as it is right now, not as the model
+    // remembers it. Refusal is a step, not a failure — the next model turn reads
+    // the conflict and can re-read the file and try again.
+    if let Action::Write { path, .. } = action {
+        if let Err(conflict) =
+            crate::filelock::claim_write(state, &run.id, path, old_content.as_deref())
+        {
+            add_step(state, &run.id, "write-conflict", &summary, &conflict)?;
+            notify(state, Some(&run.id));
+            return Ok(true);
+        }
+    }
     // Privacy: a read or listing of an excluded path is replaced by a notice,
     // so credential-bearing files never reach the provider in a run prompt.
     let exclusions = crate::load_config(state).privacy_exclusions.clone();
@@ -2361,6 +2379,26 @@ async fn execute_action_step(
     };
     let output = match outcome {
         Ok(output) => {
+            // A read is the baseline a later write is checked against: what this
+            // run has actually seen of the file, taken from the disk rather than
+            // from the (possibly truncated) text the model was shown.
+            if excluded_path.is_none() {
+                match action {
+                    Action::Read { path } => {
+                        let content = crate::workspace::read_text_file(&root, path)
+                            .ok()
+                            .map(|file| file.content);
+                        crate::filelock::record_read(&run.id, path, content.as_deref());
+                    }
+                    // This run wrote the file, so what it has seen is now the
+                    // content it wrote — otherwise its own edit would look like
+                    // somebody else's change on the next write.
+                    Action::Write { path, content } => {
+                        crate::filelock::record_read(&run.id, path, Some(content));
+                    }
+                    _ => {}
+                }
+            }
             let diff = match action {
                 Action::Write { path, content } => format!(
                     "\n--- diff ---\n{}",
@@ -5687,5 +5725,228 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let (status, actions) = wait_for_terminal(&fixture.state, "r-boot-queued").await;
         assert_eq!(status, SUCCEEDED, "{actions:?}");
         assert!(started_at_of(&fixture.state, "r-boot-queued") > 0.0);
+    }
+    /// Inserts a run row without starting a loop: a lease only ever reads the
+    /// record's status, so this is the whole fixture it needs.
+    fn insert_run(state: &AppState, id: &str, status: &str) {
+        db(state)
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at) \
+                 VALUES(?1,'p','g',?2,0,0,1,4,1.0,1.0)",
+                params![id, status],
+            )
+            .unwrap();
+    }
+
+    fn set_status(state: &AppState, id: &str, status: &str) {
+        db(state)
+            .unwrap()
+            .execute(
+                "UPDATE agent_runs SET status=?2 WHERE id=?1",
+                params![id, status],
+            )
+            .unwrap();
+    }
+
+    fn step_output(state: &AppState, id: &str, action: &str) -> String {
+        db(state)
+            .unwrap()
+            .query_row(
+                "SELECT output FROM agent_steps WHERE run_id=?1 AND action=?2 ORDER BY seq DESC LIMIT 1",
+                params![id, action],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// A mock that answers from a script and, on one chosen request, edits a
+    /// workspace file before replying — the deterministic way to reproduce
+    /// "something else wrote this file between my read and my write".
+    async fn mutating_router(
+        replies: &[&str],
+        mutate_on_call: usize,
+        target: std::sync::Arc<std::sync::Mutex<Option<(std::path::PathBuf, String)>>>,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+            replies.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+        )));
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |body: axum::Json<Value>| {
+                let queue = queue.clone();
+                let calls = calls.clone();
+                let target = target.clone();
+                async move {
+                    let _ = body;
+                    let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    if call == mutate_on_call {
+                        if let Some((path, content)) = target.lock().unwrap().clone() {
+                            std::fs::write(&path, content).unwrap();
+                        }
+                    }
+                    let reply = queue.lock().unwrap().pop_front().unwrap_or_else(|| {
+                        "{\"action\":\"fail\",\"reason\":\"mock out of replies\"}".to_string()
+                    });
+                    axum::Json(json!({
+                        "choices": [{ "message": { "role": "assistant", "content": reply } }]
+                    }))
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_write_that_would_overwrite_an_unseen_change_is_refused() {
+        // The file changes between the run's read and its write. The write must
+        // not land, the run must not die, and a re-read must let it finish.
+        let target = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let base = mutating_router(
+            &[
+                "{\"action\":\"read\",\"path\":\"notes.txt\"}",
+                "{\"action\":\"write\",\"path\":\"notes.txt\",\"content\":\"v2\"}",
+                "{\"action\":\"read\",\"path\":\"notes.txt\"}",
+                "{\"action\":\"write\",\"path\":\"notes.txt\",\"content\":\"v2\"}",
+                "{\"action\":\"done\",\"summary\":\"notes.txt now says v2\"}",
+            ],
+            2,
+            target.clone(),
+        )
+        .await;
+        let fixture = run_fixture("write-conflict", &base);
+        let file = fixture.root.join("ws").join("notes.txt");
+        std::fs::write(&file, "v1").unwrap();
+        *target.lock().unwrap() = Some((file.clone(), "v2 from another program".to_string()));
+
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "change notes.txt to v2",
+                "allowWrites": true,
+                "autoApprove": true,
+                "maxSteps": 6
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        let error: String = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT error FROM agent_runs WHERE id=?1", [&id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, SUCCEEDED, "{actions:?} error={error}");
+        assert!(
+            actions.contains(&"write-conflict".to_string()),
+            "the change must be refused with a step, not written silently: {actions:?}"
+        );
+        // The refused write changed nothing, and the run's later write won on a
+        // baseline it had actually read.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v2");
+        let conflict = step_output(&fixture.state, &id, "write-conflict");
+        assert!(conflict.contains("changed on disk"), "{conflict}");
+    }
+
+    #[tokio::test]
+    async fn a_second_live_run_cannot_write_a_file_the_first_one_claimed() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-claimed", &base);
+        let a = format!("run-a-{}", uuid::Uuid::new_v4());
+        let b = format!("run-b-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, RUNNING);
+        insert_run(&fixture.state, &b, RUNNING);
+
+        crate::filelock::claim_write(&fixture.state, &a, "src/main.rs", Some("same")).unwrap();
+        let error = crate::filelock::claim_write(&fixture.state, &b, "src/main.rs", Some("same"))
+            .unwrap_err();
+        assert!(
+            error.contains(&a),
+            "the refusal must name the run holding the file: {error}"
+        );
+        // A different file is nobody's business but this run's.
+        crate::filelock::claim_write(&fixture.state, &b, "src/lib.rs", Some("other")).unwrap();
+        crate::filelock::release(&a);
+        crate::filelock::release(&b);
+    }
+
+    #[tokio::test]
+    async fn a_finished_runs_claim_does_not_outlive_it() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-released", &base);
+        let a = format!("run-a-{}", uuid::Uuid::new_v4());
+        let b = format!("run-b-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, RUNNING);
+        crate::filelock::claim_write(&fixture.state, &a, "shared.txt", Some("content")).unwrap();
+        // Finished without releasing: the claim must not keep the file locked.
+        set_status(&fixture.state, &a, SUCCEEDED);
+        insert_run(&fixture.state, &b, RUNNING);
+        crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("content")).unwrap();
+        crate::filelock::release(&a);
+        crate::filelock::release(&b);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_cannot_keep_a_file_locked() {
+        // The cancel path calls `finish`, which releases; the liveness sweep is
+        // the second line of defence if a run ends some other way.
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-cancel", &base);
+        let a = format!("run-a-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, RUNNING);
+        crate::filelock::claim_write(&fixture.state, &a, "shared.txt", Some("v1")).unwrap();
+        finish(&fixture.state, &a, CANCELLED, "test cancel").unwrap();
+        let b = format!("run-b-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &b, RUNNING);
+        crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("v1")).unwrap();
+        crate::filelock::release(&b);
+    }
+
+    #[tokio::test]
+    async fn a_paused_run_keeps_what_it_read_but_holds_no_claim() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-paused", &base);
+        let a = format!("run-a-{}", uuid::Uuid::new_v4());
+        let b = format!("run-b-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, PAUSED);
+        insert_run(&fixture.state, &b, RUNNING);
+        crate::filelock::claim_write(&fixture.state, &a, "shared.txt", Some("v1")).unwrap();
+        // Parked: the loop is gone, so a live run may take the file.
+        crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("v1")).unwrap();
+
+        // A resumed run still notices that the file it read is not what it was,
+        // even though it was parked when the change happened.
+        let parked = format!("run-parked-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &parked, PAUSED);
+        crate::filelock::record_read(&parked, "notes.txt", Some("v1"));
+        set_status(&fixture.state, &parked, RUNNING);
+        let error = crate::filelock::claim_write(&fixture.state, &parked, "notes.txt", Some("v2"))
+            .unwrap_err();
+        assert!(error.contains("changed on disk"), "{error}");
+        crate::filelock::release(&a);
+        crate::filelock::release(&b);
+        crate::filelock::release(&parked);
+    }
+
+    #[tokio::test]
+    async fn a_file_that_appeared_since_the_read_is_a_conflict_too() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-missing", &base);
+        let a = format!("run-a-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, RUNNING);
+        // The run looked, found nothing, and plans to create the file.
+        crate::filelock::record_read(&a, "new.txt", None);
+        let error = crate::filelock::claim_write(&fixture.state, &a, "new.txt", Some("now here"))
+            .unwrap_err();
+        assert!(error.contains("changed on disk"), "{error}");
+        // Still absent: exactly the state the run saw, so the write may land.
+        crate::filelock::claim_write(&fixture.state, &a, "still-absent.txt", None).unwrap();
+        crate::filelock::release(&a);
     }
 }

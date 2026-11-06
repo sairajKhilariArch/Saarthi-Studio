@@ -34,6 +34,7 @@ mod context;
 mod cost;
 mod deepsearch;
 mod events;
+mod filelock;
 #[cfg(feature = "gui")]
 mod gui;
 mod health;

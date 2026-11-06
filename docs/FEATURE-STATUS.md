@@ -106,8 +106,9 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Hybrid cloud-plan / local-execute | Working | plan step, bounded escalation |
 | Multi-agent parity in VS Code | Working | `agent.ts` port |
 | Task queue, priority, dependencies | Working (1.53.0) | every run is created `queued` and admitted by one dispatcher pass ordered by `priority` (-10…10) then age; `dependsOn` is validated at creation (unknown/self/loop/empty/>8 all 400) and a dependency is only satisfied by `succeeded`, while a dependent of a failed/cancelled/interrupted run is failed with the dependency's name. A queued run survives a restart and is admitted at boot; pause names it as queued, cancel and the emergency stop include it |
-| Concurrency limit (`max_concurrent_runs`) | Working (1.53.0) | clamped 1–4, default 1; a run waiting for approval still holds its slot, a paused or queued run does not |
-| Parallel execution + worktree isolation / file locks | **Missing** | no `worktree`, no per-file lock and no conflict detection before a write; that is why `max_concurrent_runs` defaults to 1 rather than the limit being raised for the user |
+| Concurrency limit (`max_concurrent_runs`) | Working (1.53.0) | clamped 1–4, default 1; a run waiting for approval still holds its slot, a paused or queued run does not. Above 1, writes to a claimed or changed file are refused per run (1.54.0) |
+| Conflict detection before a write | Working (1.54.0) | `app/src/filelock.rs`: a `write` is refused as a non-fatal `write-conflict` step when another live run has claimed the path or the file on disk is not what this run last read; the run re-reads and continues. Claims are dropped for any run no longer `running`/`awaiting_approval` and released by `finish` |
+| Parallel execution + worktree isolation / file locks | Partial (1.54.0) | leases guard the agent's own `write` only — a command step, an editor save or another program is caught after the fact by the fingerprint check; there is no `worktree` per run and the ledger is in-process, so `max_concurrent_runs` still defaults to 1 |
 | Verification step before `succeeded` | Partial | reviewer stage is opt-in, not enforced |
 | Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
 

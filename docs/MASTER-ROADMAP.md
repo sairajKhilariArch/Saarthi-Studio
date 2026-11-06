@@ -109,6 +109,9 @@ Remaining for Phase 1 sign-off:
 3. Role-specialised agents with explicit tools/permissions/budgets.
 4. Parallel execution guarded by worktree isolation or file locks; conflict
    detection before write.
+   *Partially delivered 1.54.0: conflict detection before a `write` and leases
+   between live runs (`app/src/filelock.rs`). Worktrees, a lease that also covers
+   command steps and the editor, and a cross-process ledger are still open.*
 5. Verification step before a run is marked complete.
 
 ## Phase 6 — Skills management
