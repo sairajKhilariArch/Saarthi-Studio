@@ -6860,8 +6860,28 @@ async function restoreRun(runId) {
     toast(result.data.error || "Could not restore the run's files.");
     return;
   }
-  const skipped = (result.data.skipped || []).length;
-  toast(`Restored ${result.data.count} file${result.data.count === 1 ? "" : "s"}${skipped ? `; ${skipped} skipped` : ""}.`);
+  let data = result.data;
+  const changed = (data.skipped || []).filter((entry) => entry.changed);
+  if (changed.length) {
+    const names = changed.map((entry) => entry.path).join("\n");
+    if (!confirm(`${changed.length} file${changed.length === 1 ? " was" : "s were"} edited after the run:\n\n${names}\n\nRestore ${changed.length === 1 ? "it" : "them"} anyway? The later edits will be lost.`)) {
+      toast(`Left ${changed.length} changed file${changed.length === 1 ? "" : "s"} alone.`);
+      await loadRunDetail();
+      return;
+    }
+    const forced = await api(`/api/runs/${encodeURIComponent(runId)}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ force: true }),
+      confirmApproval: true,
+    });
+    if (!forced.ok) {
+      toast(forced.data.error || "Could not force the restore.");
+      return;
+    }
+    data = forced.data;
+  }
+  const skipped = (data.skipped || []).length;
+  toast(`Restored ${data.count} file${data.count === 1 ? "" : "s"}${skipped ? `; ${skipped} skipped` : ""}.`);
   await loadRunDetail();
 }
 

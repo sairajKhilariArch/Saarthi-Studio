@@ -17,6 +17,11 @@ use axum::routing::{get, post};
 use axum::Router;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+/// One restorable path: the file, its content before the run, and the digest of
+/// what the run wrote (absent on checkpoints saved before 1.71.0).
+type RestoreFile = (String, String, Option<String>);
 use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
 use std::process::Stdio;
@@ -1116,11 +1121,17 @@ fn notify(state: &AppState, run_id: Option<&str>) {
 // ---------------------------------------------------------------------------
 // Checkpoints & diffs: every write stays previewable and reversible.
 
+fn content_digest(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Snapshot the file a write is about to replace. The checkpoint (a JSON
-/// record of the old content) is only kept when the file existed and is small
-/// enough to store; the old content is still returned for a live diff whenever
-/// it can be read.
-fn capture_checkpoint(root: &FsPath, path: &str) -> (String, Option<String>) {
+/// record of the old content plus the digest of the new content) is only kept
+/// when the file existed and is small enough to store; the old content is still
+/// returned for a live diff whenever it can be read. The digest is what lets a
+/// later restore tell the run's own result from somebody else's edit.
+fn capture_checkpoint(root: &FsPath, path: &str, new_content: &str) -> (String, Option<String>) {
     let Ok(file) = crate::workspace::read_text_file(root, path) else {
         return (String::new(), None); // new file: nothing to roll back to
     };
@@ -1128,7 +1139,12 @@ fn capture_checkpoint(root: &FsPath, path: &str) -> (String, Option<String>) {
     if old.chars().count() > CHECKPOINT_CAP {
         return (String::new(), Some(old)); // too big to persist, still diffable
     }
-    let checkpoint = json!({ "path": path, "old": old }).to_string();
+    let checkpoint = json!({
+        "path": path,
+        "old": old,
+        "sha256": content_digest(new_content),
+    })
+    .to_string();
     (checkpoint, Some(old))
 }
 
@@ -2579,7 +2595,7 @@ async fn execute_action_step(
     // Snapshot before writing: the change is then previewable as a diff and
     // reversible from the run log.
     let (checkpoint, old_content) = match action {
-        Action::Write { path, .. } => capture_checkpoint(&root, path),
+        Action::Write { path, content } => capture_checkpoint(&root, path, content),
         _ => (String::new(), None),
     };
     // Isolation between runs sharing this folder: refuse a write that another
@@ -3536,7 +3552,7 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
 fn run_restore_candidates(
     state: &crate::AppState,
     run_id: &str,
-) -> Result<Vec<(String, String)>, (StatusCode, String)> {
+) -> Result<Vec<RestoreFile>, (StatusCode, String)> {
     let run = match load_run(state, run_id) {
         Ok(Some(run)) => run,
         Ok(None) => return Err((StatusCode::NOT_FOUND, "No such run.".to_string())),
@@ -3571,7 +3587,8 @@ fn run_restore_candidates(
         Err(error) => return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
     };
     let mut seen: HashSet<String> = HashSet::new();
-    let mut files: Vec<(String, String)> = Vec::new();
+    // path, old content, digest of what the run wrote (absent on old records)
+    let mut files: Vec<RestoreFile> = Vec::new();
     for checkpoint in rows {
         let Ok(parsed) = serde_json::from_str::<Value>(&checkpoint) else {
             continue;
@@ -3583,7 +3600,11 @@ fn run_restore_candidates(
             continue;
         };
         if seen.insert(path.to_string()) {
-            files.push((path.to_string(), old.to_string()));
+            let wrote = parsed
+                .get("sha256")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            files.push((path.to_string(), old.to_string(), wrote));
         }
     }
     if files.is_empty() {
@@ -3610,11 +3631,30 @@ fn restore_run_files(
     state: &crate::AppState,
     root: &FsPath,
     run_id: &str,
-    files: &[(String, String)],
+    files: &[RestoreFile],
+    force: bool,
 ) -> Value {
     let mut restored: Vec<String> = Vec::new();
     let mut skipped: Vec<Value> = Vec::new();
-    for (path, old) in files {
+    for (path, old, wrote) in files {
+        // A run's result is only safe to overwrite while it is still what the
+        // run left. A digest-bearing checkpoint from a newer record can prove
+        // that; older records cannot, so they keep the pre-1.71 behaviour.
+        if !force {
+            if let Some(expected) = wrote {
+                let current = crate::workspace::read_text_file(root, path)
+                    .ok()
+                    .map(|file| content_digest(&file.content));
+                if current.as_deref() != Some(expected.as_str()) {
+                    skipped.push(json!({
+                        "path": path,
+                        "error": "changed since the run wrote it",
+                        "changed": true,
+                    }));
+                    continue;
+                }
+            }
+        }
         match crate::workspace::write_text_file(root, path, old) {
             Ok(_) => restored.push(path.clone()),
             Err(error) => skipped.push(json!({ "path": path, "error": error.message() })),
@@ -3636,7 +3676,10 @@ fn restore_run_files(
             if skipped.is_empty() {
                 "".to_string()
             } else {
-                format!(" {} could not be restored.", skipped.len())
+                format!(
+                    " {} were left alone or could not be restored.",
+                    skipped.len()
+                )
             }
         ),
     );
@@ -3670,7 +3713,8 @@ async fn restore_run(
         .get("approve")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    for (path, _) in &files {
+    let force = input.get("force").and_then(Value::as_bool).unwrap_or(false);
+    for (path, _, _) in &files {
         if let Some(response) = crate::permissions::guard_user(
             &state,
             crate::permissions::Action::FsWrite,
@@ -3682,7 +3726,7 @@ async fn restore_run(
             return response;
         }
     }
-    Json(restore_run_files(&state, &root, &run_id, &files)).into_response()
+    Json(restore_run_files(&state, &root, &run_id, &files, force)).into_response()
 }
 
 /// Restore a written file to the content snapshotted before an agent wrote to
@@ -4160,7 +4204,7 @@ async fn approve_run(
     };
     let summary = pending_summary(&action);
     let (checkpoint, old_content) = match &action {
-        Action::Write { path, .. } => capture_checkpoint(&root, path),
+        Action::Write { path, content } => capture_checkpoint(&root, path, content),
         _ => (String::new(), None),
     };
     match dispatch_step(&state, &root, &action).await {
@@ -5052,15 +5096,16 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let root = FsPath::new(&dir);
 
         // Missing file: nothing was replaced, so there is nothing to roll back to.
-        let (checkpoint, old) = capture_checkpoint(root, "missing.txt");
+        let (checkpoint, old) = capture_checkpoint(root, "missing.txt", "new");
         assert!(checkpoint.is_empty() && old.is_none());
 
         std::fs::write(dir.join("real.txt"), "previous content").unwrap();
-        let (checkpoint, old) = capture_checkpoint(root, "real.txt");
+        let (checkpoint, old) = capture_checkpoint(root, "real.txt", "replacement");
         assert_eq!(old.as_deref(), Some("previous content"));
         let parsed: Value = serde_json::from_str(&checkpoint).unwrap();
         assert_eq!(parsed["path"], "real.txt");
         assert_eq!(parsed["old"], "previous content");
+        assert_eq!(parsed["sha256"], content_digest("replacement"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -6293,7 +6338,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
         let files = run_restore_candidates(&fixture.state, &id).unwrap();
         assert_eq!(files.len(), 2, "one entry per path");
-        let value = restore_run_files(&fixture.state, ws.as_path(), &id, &files);
+        let value = restore_run_files(&fixture.state, ws.as_path(), &id, &files, false);
         assert_eq!(value["count"], 2, "{value}");
         assert_eq!(std::fs::read_to_string(ws.join("a.txt")).unwrap(), "one");
         assert_eq!(
@@ -6301,6 +6346,34 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             "b-start"
         );
         // The restore is itself recorded, so the log remains an honest history.        assert!(step_output(&fixture.state, &id, "restored").contains("a.txt"));
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[test]
+    fn a_restore_skips_a_file_edited_after_the_run_unless_forced() {
+        let fixture = run_fixture("restore-guard", "http://127.0.0.1:1");
+        let id = format!("restore-guard-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &id, SUCCEEDED);
+        let ws = fixture.root.join("ws");
+        // The run wrote "run-wrote"; somebody then edited it to "edited".
+        std::fs::write(ws.join("a.txt"), "edited").unwrap();
+        let checkpoint = json!({
+            "path": "a.txt",
+            "old": "before",
+            "sha256": content_digest("run-wrote"),
+        })
+        .to_string();
+        add_step_with_checkpoint(&fixture.state, &id, "write", "write a", "", &checkpoint).unwrap();
+
+        let files = run_restore_candidates(&fixture.state, &id).unwrap();
+        let value = restore_run_files(&fixture.state, ws.as_path(), &id, &files, false);
+        assert_eq!(value["count"], 0, "{value}");
+        assert_eq!(value["skipped"][0]["changed"], true, "{value}");
+        assert_eq!(std::fs::read_to_string(ws.join("a.txt")).unwrap(), "edited");
+
+        let forced = restore_run_files(&fixture.state, ws.as_path(), &id, &files, true);
+        assert_eq!(forced["count"], 1, "{forced}");
+        assert_eq!(std::fs::read_to_string(ws.join("a.txt")).unwrap(), "before");
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
 

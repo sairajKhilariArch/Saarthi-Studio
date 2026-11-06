@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.71.0
+
+- Run restore no longer overwrites an edit made after the agent finished. Every
+  write checkpoint now records a sha256 of the content the run wrote, and a
+  restore compares it with the file on disk: a mismatch is skipped and returned
+  as `changed`, so the response says why instead of silently losing the edit.
+- The Runs panel names the changed paths and, after one explicit confirmation,
+  retries with `force: true` for a deliberate overwrite. Checkpoints saved before
+  this release carry no digest, so those paths keep the old behaviour; that
+  limitation is recorded in `docs/KNOWN-ISSUES.md`.
+- `cargo test --locked`: **391 passed, 1 ignored** (1 new: an edited file is
+  skipped and left untouched, then restored only when forced; the existing
+  checkpoint test now also pins the recorded digest to the written content).
+  Clippy `-D warnings` clean, `rustfmt --check` clean, `node --check` clean.
+- The guard is unit-tested through the same functions the route calls; the
+  confirmation flow itself was not exercised over HTTP or in a browser.
+
 ## 1.70.0
 
 - A finished agent run can be undone across every file it wrote. `POST
