@@ -151,7 +151,7 @@ ahead of the goal, and 1.62.0 stored that block on the run itself so the card ca
 say what it was given. Delivered 1.63.0: the semantic layer - indexed symbols are
 embedded through the configured router, cached by model and file digest, and
 ranked by cosine similarity, with the word search unchanged when no embedding
-model is set.*
+model is set, and a sidebar Index tab to search both ways (1.64.0).*
 
 ## Phase 9 — Developer environment
 

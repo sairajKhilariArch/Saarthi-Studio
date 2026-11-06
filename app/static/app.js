@@ -464,6 +464,118 @@ function wireMemoryForm() {
   });
 }
 
+/* ------------------------------------------------------------------ */
+/* code index                                                          */
+/* ------------------------------------------------------------------ */
+
+async function loadIndex() {
+  const label = $("indexStatus");
+  const result = await api("/api/index");
+  if (!result.ok) {
+    label.textContent = result.data.error || "The index could not be read.";
+    return;
+  }
+  const files = Number(result.data.files || 0);
+  const symbols = Number(result.data.symbols || 0);
+  const languages = Array.isArray(result.data.languages) ? result.data.languages : [];
+  label.textContent = `${files} file${files === 1 ? "" : "s"} · ${symbols} symbol${symbols === 1 ? "" : "s"}`;
+  // The index says what it holds, and which languages it found it in, so an empty
+  // index looks empty instead of broken.
+  label.title = languages.length
+    ? languages.map((entry) => `${entry.language}: ${entry.files}`).join(", ")
+    : "Refresh to walk this folder.";
+  wireIndex();
+}
+
+function renderIndexNote(text) {
+  const box = $("indexResults");
+  box.replaceChildren();
+  const note = document.createElement("p");
+  note.className = "empty-note";
+  note.textContent = text;
+  box.appendChild(note);
+}
+
+async function runIndexSearch(semantic) {
+  const query = $("indexQuery").value.trim();
+  if (!query) {
+    $("indexQuery").focus();
+    return;
+  }
+  const button = semantic ? $("indexMeaningBtn") : $("indexWordsBtn");
+  button.disabled = true;
+  const result = await api(`/api/index/${semantic ? "semantic" : "search"}?q=${encodeURIComponent(query)}`);
+  button.disabled = false;
+  if (!result.ok) {
+    renderIndexNote(result.data.error || "The search failed.");
+    return;
+  }
+  const hits = Array.isArray(result.data.hits) ? result.data.hits : [];
+  if (!hits.length) {
+    renderIndexNote(semantic
+      ? "Nothing matched by meaning. A large index may still be embedding — search again in a moment."
+      : "Nothing matched those words.");
+    return;
+  }
+  const box = $("indexResults");
+  box.replaceChildren();
+  // A semantic pass that has not embedded everything says so, so a partial
+  // ranking is never mistaken for a complete one.
+  const header = document.createElement("p");
+  header.className = "empty-note";
+  header.textContent = semantic
+    ? `${hits.length} by meaning${result.data.pending ? ` · ${result.data.embedded} embedded, ${result.data.pending} still to embed` : ""}`
+    : `${hits.length} by words`;
+  box.appendChild(header);
+  hits.forEach((hit) => {
+    const card = document.createElement("div");
+    card.className = "skill-card";
+    card.innerHTML = '<span class="skill-card-text"><strong></strong><small></small></span>';
+    card.querySelector("strong").textContent = hit.name || hit.path;
+    card.querySelector("small").textContent = `${hit.path}:${hit.line} · ${hit.kind} · ${hit.score}`;
+    card.title = "Open this file";
+    card.addEventListener("click", () => { openFile(hit.path); });
+    box.appendChild(card);
+  });
+}
+
+async function refreshIndex() {
+  const button = $("indexRefreshBtn");
+  button.disabled = true;
+  const result = await api("/api/index/refresh", { method: "POST" });
+  button.disabled = false;
+  if (!result.ok) {
+    renderIndexNote(result.data.error || "The index could not be refreshed.");
+    return;
+  }
+  await loadIndex();
+  const skipped = (result.data.skipped_secret || 0) + (result.data.skipped_binary || 0)
+    + (result.data.skipped_oversize || 0) + (result.data.skipped_excluded || 0);
+  toast(`Index refreshed: ${result.data.added || 0} added, ${result.data.updated || 0} updated, ${result.data.removed || 0} removed${skipped ? `, ${skipped} skipped` : ""}.`);
+}
+
+async function saveEmbeddingModel() {
+  const model = $("indexEmbeddingModel").value.trim();
+  const result = await api("/api/config", { method: "POST", body: JSON.stringify({ embedding_model: model }) });
+  if (!result.ok) {
+    renderIndexNote(result.data.error || "The embedding model could not be saved.");
+    return;
+  }
+  toast(model ? `Search by meaning uses ${model}.` : "Search by meaning is off: no embedding model set.");
+}
+
+function wireIndex() {
+  if (state.indexWired) return;
+  state.indexWired = true;
+  $("indexWordsBtn").addEventListener("click", () => runIndexSearch(false));
+  $("indexMeaningBtn").addEventListener("click", () => runIndexSearch(true));
+  $("indexRefreshBtn").addEventListener("click", refreshIndex);
+  $("indexEmbeddingSave").addEventListener("click", saveEmbeddingModel);
+  $("indexQuery").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") runIndexSearch(false);
+  });
+}
+
 function skillById(id) {
   return state.skills.find((skill) => skill.id === id) || null;
 }
@@ -2029,7 +2141,7 @@ function scheduleRightPanelTimer() {
 
 function setSidebarMode(mode) {
   state.sidebarMode = mode;
-  ["threads", "files", "skills", "memory"].forEach((name) => {
+  ["threads", "files", "index", "skills", "memory"].forEach((name) => {
     const button = $(`mode${name.charAt(0).toUpperCase()}${name.slice(1)}`);
     if (!button) return;
     const active = mode === name;
@@ -2039,6 +2151,7 @@ function setSidebarMode(mode) {
   $("threadsPane").classList.toggle("hidden", mode !== "threads");
   $("filesPane").classList.toggle("hidden", mode !== "files");
   if ($("skillsPane")) $("skillsPane").classList.toggle("hidden", mode !== "skills");
+  if ($("indexPane")) $("indexPane").classList.toggle("hidden", mode !== "index");
   if ($("memoryPane")) $("memoryPane").classList.toggle("hidden", mode !== "memory");
 }
 
@@ -3357,6 +3470,7 @@ async function loadSettings() {
   $("sendOutline").checked = result.data.send_workspace_outline !== false;
   $("searchProvider").value = result.data.search_provider || "";
   $("privacyExclusions").value = (result.data.privacy_exclusions || []).join(", ");
+  if ($("indexEmbeddingModel")) $("indexEmbeddingModel").value = result.data.embedding_model || "";
   const adaptive = result.data.adaptive_routing === true;
   $("adaptiveRouting").checked = adaptive;
   $("cheapModel").value = result.data.cheap_model || "";
@@ -5702,6 +5816,7 @@ function bindEvents() {
   $("modeFiles").addEventListener("click", () => setSidebarMode("files"));
   $("modeSkills").addEventListener("click", () => { setSidebarMode("skills"); loadSkills(); });
   if ($("modeMemory")) $("modeMemory").addEventListener("click", () => { setSidebarMode("memory"); loadMemory(); });
+  if ($("modeIndex")) $("modeIndex").addEventListener("click", () => { setSidebarMode("index"); loadIndex(); });
   $("newChat").addEventListener("click", newConversation);
   $("newChatTop").addEventListener("click", newConversation);
   // Thread pane scope: flip between this-project threads and all-project recents.

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.64.0
+
+- The semantic search now has a home: a new **Index** tab in the sidebar. It shows
+  what the index holds (`files · symbols`, with the languages in the tooltip),
+  refreshes the walk, and searches the indexed symbols two ways — **By words**
+  (`/api/index/search`, unchanged) and **By meaning** (`/api/index/semantic`).
+- A hit names `path:line · kind · score` and opens the file in the editor when
+  clicked, so a search result is a step towards the code rather than a dead line.
+- The pane carries the embedding model field itself, since it is what the feature
+  needs: saving it posts `embedding_model` to `/api/config`, and clearing it says
+  plainly that searching by meaning is off. A semantic pass that has not embedded
+  the whole index says `N embedded, N still to embed` instead of presenting a
+  partial ranking as complete.
+- Empty states are specific: an unread index, a word search with no hits, a meaning
+  search with no hits (and why that can happen while embedding is still running),
+  and a failed search each say what happened.
+- No Rust changed; `cargo test --locked` still passes (362, 1 ignored) with the
+  bumped version, clippy `-D warnings` clean, `node --check app/static/app.js`
+  clean, and every element id the new code addresses exists in `index.html`.
+- Not viewed in a browser: the pane's layout, the tooltip and the toast were
+  checked only by reading the code and the id audit above.
+
 ## 1.63.0
 
 - Phase 8's last piece: **semantic search over the code index**. `app/src/embeddings.rs`

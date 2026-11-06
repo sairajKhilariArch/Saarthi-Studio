@@ -66,6 +66,7 @@
     <div class="segmented" role="tablist" aria-label="Sidebar view">
       <button id="modeThreads" class="segmented-btn active" role="tab" aria-selected="true">Threads</button>
       <button id="modeFiles" class="segmented-btn" role="tab" aria-selected="false">Files</button>
+      <button id="modeIndex" class="segmented-btn" role="tab" aria-selected="false">Index</button>
       <button id="modeSkills" class="segmented-btn" role="tab" aria-selected="false">Skills</button>
       <button id="modeMemory" class="segmented-btn" role="tab" aria-selected="false">Memory</button>
     </div>
@@ -133,6 +134,28 @@
         <div class="form-actions"><button type="button" id="memorySave" class="btn btn-accent btn-small">Remember</button></div>
         <small class="muted">A record reaches a message only when they share words, and the reply says which records it was given.</small>
       </details>
+    </section>
+
+    <section id="indexPane" class="pane hidden">
+      <div class="pane-head">
+        <p class="pane-label" id="indexStatus">Index not read yet</p>
+        <button id="indexRefreshBtn" class="tiny-toggle" title="Walk the open folder again and re-read changed files">Refresh</button>
+      </div>
+      <label class="field"><span>Search the index</span>
+        <input id="indexQuery" type="text" placeholder="login, charge, session handling" autocomplete="off">
+      </label>
+      <div class="form-actions">
+        <button type="button" id="indexWordsBtn" class="btn btn-quiet btn-small">By words</button>
+        <button type="button" id="indexMeaningBtn" class="btn btn-accent btn-small">By meaning</button>
+      </div>
+      <label class="field"><span>Embedding model</span>
+        <input id="indexEmbeddingModel" type="text" placeholder="text-embedding-3-small" autocomplete="off">
+      </label>
+      <div class="form-actions"><button type="button" id="indexEmbeddingSave" class="btn btn-quiet btn-small">Save model</button></div>
+      <small class="muted">Searching by meaning needs an embedding model and your router key; symbols are embedded once and cached. Empty turns it off, and the word search always works.</small>
+      <div id="indexResults" class="skill-list">
+        <p class="empty-note">Enter a query to search the indexed symbols.</p>
+      </div>
     </section>
 
     <section id="filesPane" class="pane hidden">
