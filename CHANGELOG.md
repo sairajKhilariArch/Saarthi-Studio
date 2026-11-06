@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.63.0
+
+- Phase 8's last piece: **semantic search over the code index**. `app/src/embeddings.rs`
+  embeds each indexed symbol (`kind name in path (language)`) through the configured
+  router, caches the vectors in `embedding_cache` keyed by model, symbol and the file's
+  digest, and ranks them by cosine similarity. `GET /api/index/semantic?q=` returns
+  path/line/kind/name/language/score plus `embedded`, `cached` and `pending`.
+- Opt-in by construction: with no `embedding_model` set the route answers 400 and the
+  word search is what every install already had. A provider failure is a 502 carrying
+  its message — semantic search never quietly falls back to the word ranking.
+- Bounded: one request embeds at most 32 documents, a single search at most 128 new
+  ones and reports the rest as `pending`, so a large index fills in across searches
+  instead of blocking on one long call. A model change, an edited file or a renamed
+  symbol misses the cache, and a dimension change scores 0 rather than comparing
+  vectors that no longer mean the same thing.
+- Tests: 362 pass, 1 ignored. Four new: cosine alignment plus mismatched dimensions,
+  ranking order with a key tie-break, cache hits keyed by model and digest with a
+  re-store replacing the old vector, and documents carrying symbol, file and digest.
+- Clippy `-D warnings` clean; `rustfmt` clean; `node --check app/static/app.js` clean
+  (no UI changed). Live smoke on `:8916` against a mock embeddings endpoint: an
+  unconfigured query → 400 "Set an embedding model before searching by meaning"; with
+  `embedding_model: mock-embed`, "session handling" (words no symbol shares) →
+  `embedded 4, cached 0`, hits `login`/`logout` at 100 and `charge` at 1; the second
+  search → `embedded 0, cached 4`; "invoice amounts" → `charge`/`refund` at 100; and
+  `/api/index/search?q=login` still answers exactly as before.
+
 ## 1.62.0
 
 - Phase 8 follow-on: **a run now records what it was given**. The block that 1.61.0

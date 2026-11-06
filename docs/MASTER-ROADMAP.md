@@ -148,8 +148,10 @@ their surrounding lines, each labelled with path and line. Delivered 1.61.0: age
 runs open with the same background — the goal's matched memory (read without
 touching its usage counters) and its matched code, as one labelled system message
 ahead of the goal, and 1.62.0 stored that block on the run itself so the card can
-say what it was given. The embeddings index behind a semantic version of this
-remains open.*
+say what it was given. Delivered 1.63.0: the semantic layer - indexed symbols are
+embedded through the configured router, cached by model and file digest, and
+ranked by cosine similarity, with the word search unchanged when no embedding
+model is set.*
 
 ## Phase 9 — Developer environment
 

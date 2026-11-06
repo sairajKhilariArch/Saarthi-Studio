@@ -33,6 +33,7 @@ mod capabilities;
 mod context;
 mod cost;
 mod deepsearch;
+mod embeddings;
 mod events;
 mod filelock;
 #[cfg(feature = "gui")]
@@ -42,13 +43,13 @@ mod host_api;
 mod host_auth;
 mod host_security;
 mod host_transport;
+mod index;
 mod installer;
 mod keychain;
 mod local;
 mod mcp;
 mod mcp_oauth;
 mod media;
-mod index;
 mod memory;
 mod model_scope;
 mod openai;
@@ -87,6 +88,10 @@ struct Config {
     model: String,
     #[serde(default)]
     api_key: String,
+    /// Model used to embed code-index symbols for semantic search. Empty means
+    /// the word search is the only one, which is what every install has today.
+    #[serde(default)]
+    embedding_model: String,
     /// Per-request token budget for the packed context.
     #[serde(default = "default_context_budget_tokens")]
     context_budget_tokens: usize,
@@ -190,6 +195,7 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:3001/v1".to_string()),
             model: "auto".to_string(),
             api_key: String::new(),
+            embedding_model: String::new(),
             context_budget_tokens: default_context_budget_tokens(),
             history_messages: default_history_messages(),
             send_workspace_outline: true,
@@ -346,6 +352,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = permissions::initialize(&conn);
     let _ = skills::initialize(&conn);
     let _ = memory::initialize(&conn);
+    let _ = embeddings::initialize(&conn);
     let _ = index::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
@@ -792,6 +799,7 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
         cfg.model.trim().to_string()
     };
     cfg.api_key = cfg.api_key.trim().to_string();
+    cfg.embedding_model = cfg.embedding_model.trim().to_string();
     cfg.search_provider = match cfg.search_provider.to_lowercase().as_str() {
         "exa" | "tavily" => cfg.search_provider.to_lowercase(),
         _ => String::new(),
@@ -1439,6 +1447,7 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "keychain": keychain::current_mode().as_str(),
         "base_url": cfg.base_url,
         "model": cfg.model,
+        "embedding_model": cfg.embedding_model,
         "has_api_key": !cfg.api_key.is_empty(),
         "context_budget_tokens": cfg.context_budget_tokens,
         "history_messages": cfg.history_messages,
@@ -1923,6 +1932,9 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
         if !key.trim().is_empty() {
             cfg.api_key = key.trim().to_string();
         }
+    }
+    if let Some(model) = input.get("embedding_model").and_then(Value::as_str) {
+        cfg.embedding_model = model.trim().to_string();
     }
     if let Some(budget) = input.get("context_budget_tokens").and_then(Value::as_u64) {
         cfg.context_budget_tokens = budget as usize;

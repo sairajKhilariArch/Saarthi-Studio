@@ -744,6 +744,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/index", get(get_status))
         .route("/api/index/refresh", post(refresh_index))
         .route("/api/index/search", get(search_index))
+        .route(
+            "/api/index/semantic",
+            get(crate::embeddings::semantic_endpoint),
+        )
 }
 
 #[cfg(test)]
