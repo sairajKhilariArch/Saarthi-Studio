@@ -164,14 +164,21 @@ discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it
 (inline diff, stage/unstage/discard, commit box, branch create/switch, history,
 conflict/staged/changed/untracked groups, ahead/behind). Remaining: worktree
-checkpoints before an agent writes, merge/pull/push/fetch, per-hunk staging and a
-commit-detail diff.*
+checkpoints before an agent writes, per-hunk staging and a commit-detail diff
+(merge/pull/push/fetch followed in 1.68.0).*
 
 *Delivered 1.67.0: the build/test loop — detected `cargo build`/`cargo test` and
 `package.json` build/test scripts run from the Problems pane, stdout/stderr
 captured with a timeout and bounded output, and Rust/TypeScript/generic
 diagnostics parsed into clickable `path:line:col` problems. Still open: a
 debugger, watch mode, and arbitrary command presets.*
+
+*Delivered 1.68.0: the remote half — fetch with a resolved remote,
+fast-forward-only pull that refuses a diverged history with a 409, and push that
+never forces and sets the upstream once. Remote commands have a 90 s deadline,
+no terminal credential prompt, drained and bounded streams, and the `git`
+permission action. Still open: merge/rebase, adding remotes from the UI, and
+force push (deliberately).*
 
 ## Phase 10 — Safety and permissions
 

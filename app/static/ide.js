@@ -167,6 +167,11 @@
       '<div class="pane-head"><p class="pane-label">Source control</p>',
       '<button id="scmRefresh" class="tiny-toggle" type="button">Refresh</button></div>',
       `<div class="scm-branch hidden" id="scmBranchBar">${svg("branch")}<span id="scmBranchName">—</span><small id="scmBranchMeta"></small></div>`,
+      '<div class="scm-sync hidden" id="scmSync">' +
+      '<button id="scmFetch" class="tiny-toggle" type="button" title="Fetch from the default remote">Fetch</button>' +
+      '<button id="scmPull" class="tiny-toggle" type="button" title="Pull the current branch (fast-forward only)">Pull</button>' +
+      '<button id="scmPush" class="tiny-toggle" type="button" title="Push the current branch">Push</button>' +
+      '<span class="scm-sync-state" id="scmSyncState"></span></div>' +
       '<div id="scmBody" class="scm-list"><p class="empty-note">Open a folder to check its Git state.</p></div>',
       '<div class="scm-commit hidden" id="scmCommitBox">',
       '<textarea id="scmMessage" rows="2" placeholder="Commit message (Ctrl+Enter)" aria-label="Commit message"></textarea>',
@@ -433,6 +438,7 @@
     if (!box) return;
     const commitBox = $("scmCommitBox");
     const branchBar = $("scmBranchBar");
+    const syncBar = $("scmSync");
     IDE.diffKey = null;
     IDE.scmHistory = false;
     if (!state.workspace) {
@@ -440,6 +446,7 @@
       setBranchStatus(null);
       if (commitBox) commitBox.classList.add("hidden");
       if (branchBar) branchBar.classList.add("hidden");
+      if (syncBar) syncBar.classList.add("hidden");
       return;
     }
     box.innerHTML = '<p class="empty-note">Reading git status…</p>';
@@ -454,10 +461,12 @@
       setBranchStatus(null);
       if (commitBox) commitBox.classList.add("hidden");
       if (branchBar) branchBar.classList.add("hidden");
+      if (syncBar) syncBar.classList.add("hidden");
       return;
     }
     if (commitBox) commitBox.classList.remove("hidden");
     if (branchBar) branchBar.classList.remove("hidden");
+    if (syncBar) syncBar.classList.remove("hidden");
     if ($("scmBranchName")) $("scmBranchName").textContent = result.data.branch || "detached";
     if ($("scmBranchMeta")) {
       const ahead = Number(result.data.ahead || 0);
@@ -485,6 +494,48 @@
 
   function setScmHint(text) {
     if ($("scmHint")) $("scmHint").textContent = text;
+  }
+
+  function setScmRemoteState(text) {
+    if ($("scmSyncState")) $("scmSyncState").textContent = text;
+  }
+
+  /* Fetch, pull and push are the only SCM operations that leave this machine.
+     Pull is fast-forward only on the server side, so the confirm says what it
+     will not do: merge, rebase, or overwrite local commits. */
+  async function gitRemote(kind) {
+    const labels = { fetch: "Fetch", pull: "Pull", push: "Push" };
+    const label = labels[kind] || kind;
+    if (!IDE.vcs || !IDE.vcs.available) { toast("Open a Git repository first."); return; }
+    if (kind === "pull" && !window.confirm("Pull the current branch?\n\nOnly a fast-forward is applied; local commits are never merged or overwritten.")) return;
+    const buttons = ["scmFetch", "scmPull", "scmPush"].map((id) => $(id)).filter(Boolean);
+    buttons.forEach((button) => { button.disabled = true; });
+    setScmRemoteState(`${label}…`);
+    try {
+      const result = await api(`/api/workspace/git/${kind}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+        confirmApproval: true,
+      });
+      if (!result.ok) {
+        const message = result.data.error || `${label} failed.`;
+        setScmRemoteState(message);
+        toast(message);
+        return;
+      }
+      const data = result.data;
+      const where = data.upstream || data.remote || "";
+      const message = kind === "fetch" ? `Fetched ${data.remote}`
+        : kind === "pull" ? `Pulled ${data.branch}${where ? ` from ${where}` : ""}`
+        : `Pushed ${data.branch}${where ? ` to ${where}` : ""}`;
+      toast(message);
+      const summary = (data.summary || []).filter((line) => !line.startsWith("From "));
+      setScmRemoteState(summary.length ? summary[summary.length - 1] : message);
+      await refreshScm();
+      if (kind === "pull") setScmRemoteState(`${message} — reload an open file to see the changes`);
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+    }
   }
 
   function scmAction(glyph, title, run) {
@@ -868,6 +919,9 @@
       if (event.key === "Escape") { input.value = ""; $("searchResults").replaceChildren(); }
     });
     $("scmRefresh").addEventListener("click", () => void refreshScm());
+    $("scmFetch").addEventListener("click", () => void gitRemote("fetch"));
+    $("scmPull").addEventListener("click", () => void gitRemote("pull"));
+    $("scmPush").addEventListener("click", () => void gitRemote("push"));
     $("scmCommit").addEventListener("click", () => void commitScm());
     $("scmMessage").addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void commitScm(); }

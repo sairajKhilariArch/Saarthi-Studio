@@ -224,6 +224,9 @@ body.no-right { --right-w: 0px; }
 .scm-branch { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; font-size: 11.5px; color: var(--text-strong); }
 .scm-branch .icon { width: 13px; height: 13px; color: var(--accent); }
 .scm-branch small { margin-left: auto; color: var(--mute); font-size: 10px; }
+.scm-sync { display: flex; align-items: center; gap: 4px; padding: 0 2px; }
+.scm-sync-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--mute); }
+.scm-sync.hidden { display: none; }
 .scm-group-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); padding: 6px 2px 2px; }
 .scm-group-label .count { margin-left: 4px; color: var(--dim); }
 .scm-list { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; min-height: 0; }

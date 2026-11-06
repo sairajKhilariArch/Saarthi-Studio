@@ -24,8 +24,10 @@
 //! The read routes (`diff`, `branches`, `log`) do not mutate anything and are
 //! left ungated, matching the existing `/api/workspace/vcs` read.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -47,6 +49,13 @@ const MAX_PATHS: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 4000;
 /// History entries one request may ask for.
 const MAX_LOG_ENTRIES: usize = 200;
+/// A remote operation can wait on a server, a proxy or a credential helper, so
+/// it needs a ceiling a local command does not. Without one an unreachable host
+/// would hold the HTTP request (and the pane) open indefinitely.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(90);
+/// Output kept per stream from a remote operation. Progress and ref summaries
+/// are small; a misbehaving remote must not be allowed to fill memory.
+const MAX_NETWORK_BYTES: u64 = 64 * 1024;
 
 fn fail(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
@@ -75,6 +84,70 @@ fn git(root: &Path, args: &[&str]) -> Result<GitOutput, String> {
     }
 }
 
+/// Git with a deadline and no terminal prompt. A credential prompt on a process
+/// with no terminal would wait until the deadline anyway, and an unreachable
+/// host would wait forever; `GIT_TERMINAL_PROMPT=0` makes git fail honestly
+/// instead. Both streams are drained on their own threads so a chatty remote
+/// cannot deadlock on a full pipe while the parent waits for exit.
+fn git_network(root: &Path, args: &[&str]) -> Result<GitOutput, String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "Git is not installed, or not on PATH.".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Git did not give us its output.")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Git did not give us its output.")?;
+    let out_thread = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stdout.take(MAX_NETWORK_BYTES).read_to_end(&mut buffer);
+        buffer
+    });
+    let err_thread = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stderr.take(MAX_NETWORK_BYTES).read_to_end(&mut buffer);
+        buffer
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < NETWORK_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    // Killing the child closes its pipes, so both readers finish before join.
+    let stdout = out_thread.join().unwrap_or_default();
+    let stderr = err_thread.join().unwrap_or_default();
+    match status {
+        Some(status) => Ok(GitOutput {
+            ok: status.success(),
+            stdout: String::from_utf8_lossy(&stdout).to_string(),
+            stderr: String::from_utf8_lossy(&stderr).to_string(),
+        }),
+        None => Err(format!(
+            "The remote did not answer within {} seconds. Check the connection and try again.",
+            NETWORK_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 /// Git's own useful line, because it names the real cause. The first non-empty
 /// line is often just context ("On branch main"); a `fatal:`/`error:` line or
 /// the sentence that actually explains the refusal is what the person needs.
@@ -98,6 +171,14 @@ fn git_error(output: &GitOutput, fallback: &str) -> String {
             || lower.contains("would be overwritten")
             || lower.contains("not a git repository")
             || lower.contains("unmerged files")
+            || lower.contains("not possible to fast-forward")
+            || lower.contains("non-fast-forward")
+            || lower.contains("no upstream branch")
+            || lower.contains("could not read username")
+            || lower.contains("authentication failed")
+            || lower.contains("permission denied (publickey)")
+            || lower.contains("could not resolve host")
+            || lower.contains("repository not found")
     }
     let chosen = lines
         .iter()
@@ -130,8 +211,24 @@ fn git_failure(message: String) -> Response {
         || lower.contains("not possible because you have unmerged files")
         || lower.contains("nothing to commit")
         || lower.contains("no changes added to commit")
+        || lower.contains("not possible to fast-forward")
+        || lower.contains("non-fast-forward")
+        || lower.contains("rejected")
+        || lower.contains("diverged")
     {
         return fail(StatusCode::CONFLICT, message);
+    }
+    // A remote that cannot be reached is not a bad request; it is an upstream
+    // failure, and the person needs to know the difference.
+    if lower.contains("could not read username")
+        || lower.contains("authentication failed")
+        || lower.contains("permission denied (publickey)")
+        || lower.contains("could not resolve host")
+        || lower.contains("connection refused")
+        || lower.contains("repository not found")
+        || lower.contains("unable to access")
+    {
+        return fail(StatusCode::BAD_GATEWAY, message);
     }
     bad(message)
 }
@@ -364,6 +461,169 @@ fn discard_paths(root: &Path, paths: &[String]) -> Result<Value, String> {
         }
     }
     Ok(json!({ "ok": true, "discarded": paths.len() }))
+}
+
+/// A remote name from the request. Kept narrow because it reaches argv: it must
+/// not be able to look like an option or carry punctuation git reinterprets.
+fn requested_remote(input: &Value) -> Result<Option<String>, String> {
+    let Some(value) = input.get("remote") else {
+        return Ok(None);
+    };
+    let name = value
+        .as_str()
+        .ok_or("The remote must be a name, not a number or object.")?
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return Err("Name the remote first.".to_string());
+    }
+    if name.starts_with('-') {
+        return Err("A remote name cannot start with a dash.".to_string());
+    }
+    if name.chars().count() > 100
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/'))
+    {
+        return Err("That remote name is not valid.".to_string());
+    }
+    Ok(Some(name))
+}
+
+/// The remote that actually exists: the requested one, else `origin`, else the
+/// first configured remote. Resolving before the operation means the permission
+/// target and the error name the thing that was really contacted.
+fn remote_target(root: &Path, requested: Option<&str>) -> Result<String, String> {
+    let output = git(root, &["remote"])?;
+    if !output.ok {
+        return Err(git_error(&output, "git remote failed"));
+    }
+    let remotes: Vec<&str> = output
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let Some(first) = remotes.first() else {
+        return Err(
+            "This repository has no remote. Add one with `git remote add origin <url>` first."
+                .to_string(),
+        );
+    };
+    match requested {
+        Some(name) if !name.is_empty() => {
+            if remotes.contains(&name) {
+                Ok(name.to_string())
+            } else {
+                Err(format!("`{name}` is not a remote of this repository."))
+            }
+        }
+        _ if remotes.contains(&"origin") => Ok("origin".to_string()),
+        _ => Ok((*first).to_string()),
+    }
+}
+
+fn current_branch(root: &Path) -> Result<String, String> {
+    let output = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if !output.ok {
+        return Err(git_error(&output, "git rev-parse failed"));
+    }
+    let branch = output.stdout.trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        return Err("HEAD is detached. Check out a branch before pulling or pushing.".to_string());
+    }
+    Ok(branch)
+}
+
+fn upstream_of(root: &Path) -> Option<String> {
+    git(
+        root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .filter(|output| output.ok)
+    .map(|output| output.stdout.trim().to_string())
+    .filter(|name| !name.is_empty())
+}
+
+/// The lines worth showing: git's progress and ref summaries without blank
+/// noise, bounded so a large fetch cannot become a large JSON response.
+fn network_summary(output: &GitOutput) -> Vec<String> {
+    output
+        .stderr
+        .lines()
+        .chain(output.stdout.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(30)
+        .map(|line| line.chars().take(300).collect())
+        .collect()
+}
+
+fn fetch_remote(root: &Path, remote: &str) -> Result<Value, String> {
+    let output = git_network(root, &["fetch", "--prune", remote])?;
+    if !output.ok {
+        return Err(git_error(&output, "git fetch failed"));
+    }
+    Ok(json!({
+        "ok": true,
+        "remote": remote,
+        "summary": network_summary(&output),
+    }))
+}
+
+fn pull_branch(root: &Path) -> Result<Value, String> {
+    let branch = current_branch(root)?;
+    let Some(upstream) = upstream_of(root) else {
+        return Err(format!(
+            "`{branch}` has no upstream branch. Push it first, then pull."
+        ));
+    };
+    // `--ff-only` is the whole policy: a pull never creates a merge commit or
+    // leaves conflict markers on disk behind the person's back. When it cannot
+    // fast-forward, git's refusal is the answer.
+    let output = git_network(root, &["pull", "--ff-only"])?;
+    if !output.ok {
+        return Err(git_error(&output, "git pull failed"));
+    }
+    let commit = git(root, &["rev-parse", "--short", "HEAD"])
+        .ok()
+        .filter(|output| output.ok)
+        .map(|output| output.stdout.trim().to_string())
+        .unwrap_or_default();
+    Ok(json!({
+        "ok": true,
+        "branch": branch,
+        "upstream": upstream,
+        "commit": commit,
+        "summary": network_summary(&output),
+    }))
+}
+
+fn push_branch(root: &Path) -> Result<Value, String> {
+    let branch = current_branch(root)?;
+    let had_upstream = upstream_of(root).is_some();
+    let mut args: Vec<String> = vec!["push".to_string()];
+    if !had_upstream {
+        // A first push that only prints git's "no upstream branch" paragraph is
+        // not useful. Name the default remote explicitly instead, and only then.
+        let remote = remote_target(root, None)?;
+        args.push("-u".to_string());
+        args.push(remote);
+        args.push(branch.clone());
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = git_network(root, &borrowed)?;
+    if !output.ok {
+        return Err(git_error(&output, "git push failed"));
+    }
+    Ok(json!({
+        "ok": true,
+        "branch": branch,
+        "upstream": upstream_of(root),
+        "upstreamSet": !had_upstream,
+        "summary": network_summary(&output),
+    }))
 }
 
 fn commit(root: &Path, message: &str, paths: &[String]) -> Result<Value, String> {
@@ -732,6 +992,80 @@ async fn checkout_route(State(state): State<AppState>, Json(input): Json<Value>)
     }
 }
 
+async fn fetch_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let requested = match requested_remote(&input) {
+        Ok(remote) => remote,
+        Err(message) => return bad(message),
+    };
+    let remote = match remote_target(&root, requested.as_deref()) {
+        Ok(remote) => remote,
+        Err(message) => return bad(message),
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &format!("fetch {remote}"),
+        "",
+        approve,
+        "fetch from a remote",
+    ) {
+        return response;
+    }
+    match fetch_remote(&root, &remote) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn pull_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        "pull",
+        "",
+        approve,
+        "pull the current branch",
+    ) {
+        return response;
+    }
+    match pull_branch(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn push_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        "push",
+        "",
+        approve,
+        "push the current branch",
+    ) {
+        return response;
+    }
+    match push_branch(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
 async fn log_route(
     State(state): State<AppState>,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -762,6 +1096,9 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/branches", get(branches_route))
         .route("/api/workspace/git/branch", post(create_branch_route))
         .route("/api/workspace/git/checkout", post(checkout_route))
+        .route("/api/workspace/git/fetch", post(fetch_route))
+        .route("/api/workspace/git/pull", post(pull_route))
+        .route("/api/workspace/git/push", post(push_route))
         .route("/api/workspace/git/log", get(log_route))
 }
 
@@ -971,6 +1308,202 @@ mod tests {
         let response = git_failure(error);
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn run_git(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
+    fn temp_bare(name: &str) -> Option<PathBuf> {
+        if !git_available() {
+            return None;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "saarthi-bare-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let output = Command::new("git")
+            .args(["init", "-q", "--bare", "-b", "main"])
+            .arg(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some(root)
+    }
+
+    fn clone_repo(remote: &Path, name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let dest = std::env::temp_dir().join(format!(
+            "saarthi-clone-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dest);
+        let output = Command::new("git")
+            .arg("clone")
+            .arg("-q")
+            .arg(remote)
+            .arg(&dest)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for (key, value) in [
+            ("user.email", "test@example.com"),
+            ("user.name", "Test"),
+            ("commit.gpgsign", "false"),
+        ] {
+            run_git(&dest, &["config", key, value]);
+        }
+        dest
+    }
+
+    fn commit_file(root: &Path, name: &str, body: &str, message: &str) {
+        std::fs::write(root.join(name), body).unwrap();
+        let paths = clean_paths(&json!({ "path": name })).unwrap();
+        stage_paths(root, &paths).unwrap();
+        commit(root, message, &[]).unwrap();
+    }
+
+    #[test]
+    fn pushes_to_a_real_remote_and_fetches_another_clone_s_work() {
+        let (Some(source), Some(remote)) = (temp_repo("push-source"), temp_bare("push")) else {
+            return;
+        };
+        commit_file(&source, "a.txt", "one\n", "first");
+        run_git(
+            &source,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+
+        let pushed = push_branch(&source).unwrap();
+        assert_eq!(pushed["branch"], "main");
+        assert_eq!(pushed["upstreamSet"], true);
+        assert_eq!(pushed["upstream"], "origin/main");
+        // The second push uses the upstream it just set instead of setting it again.
+        assert_eq!(push_branch(&source).unwrap()["upstreamSet"], false);
+
+        let clone = clone_repo(&remote, "push");
+        commit_file(&clone, "b.txt", "two\n", "second");
+        push_branch(&clone).unwrap();
+
+        let fetched = fetch_remote(&source, "origin").unwrap();
+        assert_eq!(fetched["remote"], "origin");
+        assert_eq!(
+            run_git(&source, &["log", "-1", "--format=%s", "origin/main"]).trim(),
+            "second"
+        );
+
+        let pulled = pull_branch(&source).unwrap();
+        assert_eq!(pulled["upstream"], "origin/main");
+        assert_eq!(
+            std::fs::read_to_string(source.join("b.txt")).unwrap(),
+            "two\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&remote);
+        let _ = std::fs::remove_dir_all(&clone);
+    }
+
+    #[test]
+    fn refuses_a_pull_that_is_not_a_fast_forward() {
+        let (Some(source), Some(remote)) = (temp_repo("div-source"), temp_bare("div")) else {
+            return;
+        };
+        commit_file(&source, "a.txt", "one\n", "first");
+        run_git(
+            &source,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        push_branch(&source).unwrap();
+        let clone = clone_repo(&remote, "div");
+
+        commit_file(&clone, "b.txt", "clone\n", "clone work");
+        push_branch(&clone).unwrap();
+
+        commit_file(&source, "c.txt", "source\n", "source work");
+        let error = pull_branch(&source).unwrap_err();
+        assert!(
+            error.to_ascii_lowercase().contains("fast-forward"),
+            "{error}"
+        );
+        assert_eq!(git_failure(error).status(), StatusCode::CONFLICT);
+        // The refusal must leave both histories alone: no merge, no conflict markers.
+        assert!(!source.join("b.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(source.join("c.txt")).unwrap(),
+            "source\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&remote);
+        let _ = std::fs::remove_dir_all(&clone);
+    }
+
+    #[test]
+    fn validates_remote_names_and_requires_a_configured_remote() {
+        assert_eq!(requested_remote(&json!({})).unwrap(), None);
+        assert_eq!(
+            requested_remote(&json!({"remote": " upstream "}))
+                .unwrap()
+                .as_deref(),
+            Some("upstream")
+        );
+        assert!(requested_remote(&json!({"remote": "-x"})).is_err());
+        assert!(requested_remote(&json!({"remote": "a b"})).is_err());
+        assert!(requested_remote(&json!({"remote": "  "})).is_err());
+        assert!(requested_remote(&json!({"remote": 7})).is_err());
+
+        let Some(root) = temp_repo("no-remote") else {
+            return;
+        };
+        assert!(remote_target(&root, None)
+            .unwrap_err()
+            .contains("no remote"));
+        assert!(remote_target(&root, Some("origin"))
+            .unwrap_err()
+            .contains("no remote"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn maps_remote_failures_to_the_right_status() {
+        let auth = git_failure(
+            "fatal: could not read Username for 'https://example.com': terminal prompts disabled"
+                .to_string(),
+        );
+        assert_eq!(auth.status(), StatusCode::BAD_GATEWAY);
+        let rejected = git_failure("! [rejected] main -> main (non-fast-forward)".to_string());
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        let unreachable =
+            git_failure("fatal: unable to access 'https://example.com/x.git'".to_string());
+        assert_eq!(unreachable.status(), StatusCode::BAD_GATEWAY);
     }
 
     #[test]

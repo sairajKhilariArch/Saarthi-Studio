@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.68.0
+
+- Phase 9's Git loop now reaches the remote: **Fetch**, **Pull** and **Push** in
+  the Source Control pane, backed by `POST /api/workspace/git/fetch`, `/pull`
+  and `/push` in `app/src/git.rs`. Nothing leaves the machine until the person
+  clicks one of them.
+- The remote is resolved, not assumed: a requested name must be configured,
+  otherwise `origin`, otherwise the first configured remote. A repository with
+  no remote says exactly that instead of failing deep inside git. Remote names
+  are restricted to safe characters and cannot start with a dash, because the
+  name reaches argv.
+- Pull is **fast-forward only**. It needs a checked-out branch with an upstream,
+  and when the histories have diverged git's own `Not possible to fast-forward`
+  comes back as a 409 with nothing applied — no merge commit, no rebase, no
+  conflict markers written behind the person's back. Push is never forced, and
+  a first push sets the upstream once (`git push -u <remote> <branch>`) instead
+  of printing git's "no upstream branch" paragraph.
+- Remote operations are not local commands: each runs with a 90 s deadline,
+  `GIT_TERMINAL_PROMPT=0` so a credential prompt cannot hang a request with no
+  terminal, stdin closed, and stdout/stderr drained on their own threads, with
+  64 KiB kept per stream. Authentication and unreachable-host failures are a
+  502; a rejected non-fast-forward is a 409; a missing or invalid remote is a
+  400.
+- All three consult the `git` permission action with the real target
+  (`fetch <remote>`, `pull`, `push`): deny 403, ask 409 until approved, audited.
+  The pane gains Fetch/Pull/Push under the branch, Pull confirms what it will
+  not do, and the state line shows git's last ref summary.
+- `cargo test --locked`: **385 passed, 1 ignored** (4 new, against real temp
+  repositories and a local bare remote: a first push setting the upstream and a
+  second not, a clone's commit fetched and pulled into the source, a diverged
+  pull refused with both histories intact, and remote-name/status mapping).
+  Clippy `-D warnings` clean, `rustfmt --check` clean on the touched files,
+  `node --check` clean.
+- Live smoke on `:8933` against a bare remote: first push `upstreamSet true`,
+  upstream `origin/main`; fetch reported `bd8b845..a4f25ca main -> origin/main`;
+  `/vcs` read `ahead 0, behind 1`; pull fast-forwarded and wrote `b.txt`;
+  after both sides committed, pull answered 409 `Not possible to fast-forward`
+  and the remote file was not applied; a saved `git` deny on `push` answered
+  403; `-x` as a remote 400; a repository without a remote 400 with the add-a-
+  remote message. The pane was not viewed in a browser.
+- Not built: merge/rebase, force push, adding or removing remotes from the UI,
+  fetching every remote at once, and credential prompts (authentication must
+  already be configured; the app will not ask for a password).
+
 ## 1.67.0
 
 - Phase 9's developer loop: **Build** and **Test** buttons in the Problems panel
