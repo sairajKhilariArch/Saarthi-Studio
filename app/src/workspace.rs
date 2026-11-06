@@ -1334,6 +1334,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/workspace/search", get(search_workspace))
         .route("/api/workspace/vcs", get(vcs_status))
         .merge(crate::git::router())
+        .merge(crate::runner::router())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(
             LocalOriginGuard { port },

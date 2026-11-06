@@ -192,6 +192,10 @@ body.no-right { --right-w: 0px; }
 .problem-row .sev { width: 14px; text-align: center; flex: none; color: var(--danger); font-weight: 700; }
 .problem-row .where { font-family: var(--mono); font-size: 10.5px; color: var(--info); flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problem-row .what { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem-row .sev.warning { color: var(--warn, #e0a030); }
+.pane-tools #runnerStatus { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
+.runner-output { flex: none; margin: 0 10px 10px; padding: 8px; max-height: 46%; overflow: auto; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 7px; font-family: var(--mono); font-size: 10.5px; line-height: 1.45; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+.runner-output.hidden { display: none; }
 .run-line .state, .task-line .state { font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--mute); flex: none; min-width: 62px; }
 .run-line .goal, .task-line .goal { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
 .run-line .state.succeeded, .run-line .state.approved { color: var(--ok); }

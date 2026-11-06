@@ -28,6 +28,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `host_api.rs` | 1807 | Authenticated router for the Android companion (health, capabilities, models, chat, conversations, messages) |
 | `workspace.rs` | 1699 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, and the read-only `git status` the Source Control pane loads |
 | `git.rs` | 983 | Real Git operations in the open folder: diff, stage, unstage, discard, commit, branches and log. Argv-only invocations, validated workspace-relative paths, every mutation behind the `git` permission action |
+| `runner.rs` | 817 | Detected build/test presets, bounded process capture (separate stdout/stderr threads, 300 s ceiling, 1 MiB per stream) and compiler/test output parsed into clickable `path:line:col` problems |
 | `local.rs` | 1167 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
 | `deepsearch.rs` | 714 | Research answers: provider-native grounding (Gemini, OpenAI `web_search`) or Exa/Tavily loop; bounded queries; SSE steps; citations |
 | `host_auth.rs` | 595 | Host token lifecycle (issue/redeem/rotate/revoke), paired-device records |
@@ -63,6 +64,7 @@ Mounted sub-routers:
 
 - Workspace: `/api/workspace`, `/open`, `/pick`, `/close`, `/entries`, `/files`, `/file` (GET+PUT), `/create`, `/rename`, `/delete`, `/search`, `/vcs`
 - Git (same router, so the same origin guard and body cap): `GET /api/workspace/git/diff`, `POST /git/stage`, `/git/unstage`, `/git/discard`, `/git/commit`, `GET /git/branches`, `POST /git/branch`, `/git/checkout`, `GET /git/log`
+- Runner (same router): `GET /api/workspace/runner` (detected presets), `POST /api/workspace/run` (one preset id)
 - Skills: `GET /api/skills`, `GET /api/skills/:id`, `POST /api/skills/:id/state`
 - Terminal: `POST /api/terminal/open`, `/api/terminal/:id/input`, `/resize`, `/close`, `GET /api/terminal/:id/stream` (SSE)
 - Local inference: `GET /api/local/status`, `/models`, `/hardware`, `POST /api/local/select`, `/api/local/pull`

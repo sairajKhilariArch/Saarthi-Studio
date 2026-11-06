@@ -164,9 +164,14 @@ discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it
 (inline diff, stage/unstage/discard, commit box, branch create/switch, history,
 conflict/staged/changed/untracked groups, ahead/behind). Remaining: worktree
-checkpoints before an agent writes, merge/pull/push/fetch, per-hunk staging, a
-commit-detail diff, and the build/test runner feeding compiler diagnostics into
-the Problems panel.*
+checkpoints before an agent writes, merge/pull/push/fetch, per-hunk staging and a
+commit-detail diff.*
+
+*Delivered 1.67.0: the build/test loop — detected `cargo build`/`cargo test` and
+`package.json` build/test scripts run from the Problems pane, stdout/stderr
+captured with a timeout and bounded output, and Rust/TypeScript/generic
+diagnostics parsed into clickable `path:line:col` problems. Still open: a
+debugger, watch mode, and arbitrary command presets.*
 
 ## Phase 10 — Safety and permissions
 

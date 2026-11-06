@@ -60,6 +60,7 @@ mod router;
 mod router_console;
 mod router_env;
 mod router_registry;
+mod runner;
 mod skills;
 mod terminal;
 mod thinking;

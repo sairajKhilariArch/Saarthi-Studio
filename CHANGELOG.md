@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.67.0
+
+- Phase 9's developer loop: **Build** and **Test** buttons in the Problems panel
+  run the project's own commands and turn the real output into clickable
+  diagnostics. Detection is by manifest, not guesswork: `Cargo.toml` offers
+  `cargo build` / `cargo test`; a `package.json` with `scripts.build` /
+  `scripts.test` offers the matching npm, pnpm or yarn command from its
+  lockfile. A folder with neither says so instead of showing a dead button.
+- Backend `app/src/runner.rs`: `GET /api/workspace/runner` (detected presets,
+  whether one is already running) and `POST /api/workspace/run` (runs exactly
+  one preset id). The request names an id, never a command line, so the route
+  cannot execute arbitrary text; it is still gated on the `command` action with
+  the exact command as its target (deny 403, ask 409 until approved, audited).
+  One run at a time; a second is 409 rather than two compilers sharing
+  `target/`.
+- Runs have a 300 s ceiling, capture stdout and stderr on separate threads (so
+  a talkative build cannot deadlock on a full pipe), keep 1 MiB per stream and
+  return the last 200 000 characters with `outputTruncated` when anything was
+  cut. A failing build is a 200 with `success: false`, its exit code and its
+  diagnostics — not an API error.
+- Diagnostics are parsed from what the tools actually print: Rust
+  `error`/`warning` lines with their `--> path:line:column`, TypeScript
+  `path(line,col): error TSxxxx`, and the generic `path:line[:col]: error:`
+  shape. Duplicates collapse, the list caps at 200, and a location outside the
+  open folder is dropped rather than offered as clickable — including on
+  Windows, where `/other/x` is rooted but not `is_absolute`.
+- The Problems list navigates to the real position now (`path:line:col`, then
+  the editor's line focus) and colours warnings differently; build output is
+  shown above it with the runner status (`cargo build · exit 101 · 2 problems ·
+  0.2s`) in the pane header.
+- `cargo test --locked`: **381 passed, 1 ignored** (9 new: preset detection for
+  Cargo and npm/pnpm with only declared scripts, Rust/TypeScript/generic
+  diagnostic parsing, outside-workspace and duplicate filtering, the 200 cap,
+  a real `cargo --version` run through the capture path, the one-run slot, and
+  UTF-8-safe tail truncation). Clippy `-D warnings` clean, `rustfmt --check`
+  clean on the touched files, `node --check` clean.
+- Live smoke on `:8932` with a deliberately broken crate: presets
+  `cargo-build`/`cargo-test`, the run answered `success false`, exit `101`,
+  `src/lib.rs:2:25 error: mismatched types` and the real second error at `:3:5`
+  in `245 ms`; an injected id (`rm -rf /`) was refused 400; a saved `command`
+  deny on `cargo build` refused 403; after revoke the presets read `[]` on a
+  folder with no manifest. The panel itself was not viewed in a browser.
+- Not built: a debugger, watch mode, arbitrary command presets, and a Problems
+  entry for compiler warnings that carry no file location.
+
 ## 1.66.0
 
 - Phase 9's Git half: the Source Control pane can now change the repository

@@ -21,6 +21,7 @@
     vcs: null,
     diffKey: null,
     scmHistory: false,
+    runner: { presets: [], running: false },
     searchSeq: 0,
     paletteIndex: 0,
     paletteItems: [],
@@ -263,9 +264,14 @@
     terminalPane.id = "terminalPane";
     terminalPane.appendChild($("terminalHost"));
     body.appendChild(terminalPane);
-    body.appendChild(makePane("problemsPane", "problemsBody",
-      '<span>Failures recorded by this session</span><button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
-      "No problems recorded. Failed saves, reads and requests land here."));
+    const problemsPane = makePane("problemsPane", "problemsBody",
+      '<span id="runnerStatus">No build run yet</span>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="runBuild">Build</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="runTest">Test</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
+      "No problems. Failed saves and requests, and build or test diagnostics, land here.");
+    problemsPane.insertAdjacentHTML("beforeend", '<pre id="runnerOutput" class="runner-output hidden" aria-label="Build output"></pre>');
+    body.appendChild(problemsPane);
     body.appendChild(makePane("runsPane", "runsBody",
       '<span>Agent runs on this machine</span><button type="button" class="btn btn-quiet btn-small" id="runsRefresh">Refresh</button>',
       "Loading runs…"));
@@ -278,6 +284,8 @@
     panel.appendChild(body);
 
     $("problemsClear").addEventListener("click", () => { IDE.problems = []; renderProblems(); updateProblemCounts(); });
+    $("runBuild").addEventListener("click", () => void runBuild("build"));
+    $("runTest").addEventListener("click", () => void runBuild("test"));
     $("outputClear").addEventListener("click", () => { IDE.output = []; renderOutput(); });
     $("runsRefresh").addEventListener("click", () => void loadRunsPane());
     $("tasksRefresh").addEventListener("click", () => void loadTasksPane());
@@ -306,7 +314,7 @@
     });
     if (state.panelShow && !state.panelShow.bottom) togglePanel("bottom");
     if (id === "terminal") showTerminalPanel();
-    if (id === "problems") renderProblems();
+    if (id === "problems") { renderProblems(); void loadRunnerPresets(); }
     if (id === "runs") void loadRunsPane();
     if (id === "tasks") void loadTasksPane();
     if (id === "output") renderOutput();
@@ -636,18 +644,119 @@
     const box = $("problemsBody");
     if (!box) return;
     if (!IDE.problems.length) {
-      box.innerHTML = '<p class="pane-empty">No problems recorded. Failed saves, reads and requests land here.</p>';
+      box.innerHTML = '<p class="pane-empty">No problems. Failed saves and requests, and build or test diagnostics, land here.</p>';
       return;
     }
     box.innerHTML = "";
     IDE.problems.forEach((problem) => {
+      const severity = problem.severity || "";
+      const where = problem.where || "app";
+      const at = problem.line ? `:${problem.line}${problem.column ? `:${problem.column}` : ""}` : "";
+      const glyph = severity === "warning" ? "!" : severity ? "×" : "!";
       const row = el("button", "problem-row",
-        `<span class="sev">!</span><span class="where">${escapeHtml(problem.where || "app")}</span>` +
+        `<span class="sev ${escapeHtml(severity)}">${glyph}</span>` +
+        `<span class="where">${escapeHtml(where)}${escapeHtml(at)}</span>` +
         `<span class="what">${escapeHtml(problem.message)}</span>`);
       row.type = "button";
-      if (problem.where) row.addEventListener("click", () => { void openFile(problem.where); });
+      if (problem.where) {
+        row.addEventListener("click", () => {
+          void (async () => {
+            await openFile(problem.where);
+            if (problem.line) focusLine(problem.line, problem.column || 1);
+          })();
+        });
+      }
       box.appendChild(row);
     });
+  }
+
+  function setRunnerStatus(text) {
+    if ($("runnerStatus")) $("runnerStatus").textContent = text;
+  }
+
+  function updateRunnerButtons() {
+    [["runBuild", "build"], ["runTest", "test"]].forEach(([id, kind]) => {
+      const button = $(id);
+      if (!button) return;
+      const preset = IDE.runner.presets.find((entry) => entry.kind === kind);
+      button.disabled = IDE.runner.running || !preset;
+      button.title = preset ? `Run ${preset.command}` : `No ${kind} command detected in this folder`;
+    });
+  }
+
+  async function loadRunnerPresets() {
+    if (!state.workspace) {
+      IDE.runner = { presets: [], running: false };
+      updateRunnerButtons();
+      return;
+    }
+    const result = await api("/api/workspace/runner");
+    if (!result.ok) {
+      setRunnerStatus(result.data.error || "Could not detect build commands.");
+      return;
+    }
+    IDE.runner = { presets: result.data.presets || [], running: Boolean(result.data.running) };
+    updateRunnerButtons();
+    const shown = $("runnerStatus") ? $("runnerStatus").textContent : "";
+    const untouched = !shown || shown === "No build run yet" || shown.startsWith("No build or test command");
+    if (!IDE.runner.presets.length) {
+      setRunnerStatus("No build or test command detected. Add Cargo.toml or a package.json script.");
+    } else if (!IDE.runner.running && untouched) {
+      setRunnerStatus(IDE.runner.presets.map((preset) => preset.label).join(" · "));
+    }
+  }
+
+  function showRunnerOutput(data) {
+    const pre = $("runnerOutput");
+    if (!pre) return;
+    const text = String(data.output || "");
+    pre.classList.remove("hidden");
+    pre.textContent = text
+      ? (data.outputTruncated ? "… output truncated; the tail is shown …\n" + text : text)
+      : "(the command produced no output)";
+    pre.scrollTop = 0;
+  }
+
+  async function runBuild(kind) {
+    const preset = IDE.runner.presets.find((entry) => entry.kind === kind);
+    if (!preset) { toast(`No ${kind} command detected in this folder.`); return; }
+    if (IDE.runner.running) { toast("A build or test is already running."); return; }
+    IDE.runner.running = true;
+    updateRunnerButtons();
+    setRunnerStatus(`${preset.command} …`);
+    const started = performance.now();
+    try {
+      const result = await api("/api/workspace/run", {
+        method: "POST",
+        body: JSON.stringify({ id: preset.id }),
+        confirmApproval: true,
+      });
+      if (!result.ok) {
+        setRunnerStatus(result.data.error || `${preset.command} could not start.`);
+        toast(result.data.error || "Could not run that command.");
+        return;
+      }
+      const data = result.data;
+      const problems = data.problems || [];
+      IDE.problems = problems.map((problem) => ({
+        where: problem.path,
+        line: problem.line,
+        column: problem.column,
+        severity: problem.severity,
+        message: problem.message,
+        at: Date.now(),
+      }));
+      renderProblems();
+      updateProblemCounts();
+      showRunnerOutput(data);
+      const seconds = ((data.durationMs || Math.round(performance.now() - started)) / 1000).toFixed(1);
+      const count = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
+      setRunnerStatus(`${data.command} · exit ${data.exitCode}${data.timedOut ? " (timed out)" : ""} · ${count} · ${seconds}s`);
+      toast(data.success ? `${data.command} passed` : `${data.command} failed`);
+    } finally {
+      IDE.runner.running = false;
+      updateRunnerButtons();
+    }
   }
 
   function updateProblemCounts() {
