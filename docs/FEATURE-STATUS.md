@@ -105,8 +105,9 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Crew pipeline + per-stage budgets/policies | Working | `crew` roster 1–6, `stage_max_steps`, fail/skip |
 | Hybrid cloud-plan / local-execute | Working | plan step, bounded escalation |
 | Multi-agent parity in VS Code | Working | `agent.ts` port |
-| Task queue, priority, dependencies | **Missing** | states are run states only |
-| Parallel execution + worktree isolation / file locks | **Missing** | no `worktree` use; the only match is git-status parsing |
+| Task queue, priority, dependencies | Working (1.53.0) | every run is created `queued` and admitted by one dispatcher pass ordered by `priority` (-10…10) then age; `dependsOn` is validated at creation (unknown/self/loop/empty/>8 all 400) and a dependency is only satisfied by `succeeded`, while a dependent of a failed/cancelled/interrupted run is failed with the dependency's name. A queued run survives a restart and is admitted at boot; pause names it as queued, cancel and the emergency stop include it |
+| Concurrency limit (`max_concurrent_runs`) | Working (1.53.0) | clamped 1–4, default 1; a run waiting for approval still holds its slot, a paused or queued run does not |
+| Parallel execution + worktree isolation / file locks | **Missing** | no `worktree`, no per-file lock and no conflict detection before a write; that is why `max_concurrent_runs` defaults to 1 rather than the limit being raised for the user |
 | Verification step before `succeeded` | Partial | reviewer stage is opt-in, not enforced |
 | Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
 
@@ -197,10 +198,13 @@ run measured from its start. Pause parks a run at the next step boundary and a
 paused run holds no live task, so start/pause/resume/cancel all act on real
 state, and the emergency stop reaches parked runs too.
 
-Still missing: **a queue view**, because Phase 5 has no task queue - runs
-execute immediately, so there is no queued state, priority or dependency to
-display. Retry is `resume` on a failed, interrupted, cancelled or paused run;
-there is no separate "retry from scratch" control.
+The queue is real as of 1.53.0: a run is created `queued`, takes a place in line
+(`queue #N` on the card, a Queued count on the board, a waiting note with Cancel
+only while it waits), can carry a `priority` and a `dependsOn` list, and starts
+itself when a slot frees and its dependencies succeeded. Retry is `resume` on a
+failed, interrupted, cancelled or paused run; there is no separate "retry from
+scratch" control, and there is no drag-to-reorder — priority is a number on the
+form.
 
 ## Phase 13 — Workflow builder
 

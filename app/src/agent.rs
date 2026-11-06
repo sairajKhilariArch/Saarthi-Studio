@@ -43,6 +43,9 @@ const DIFF_CAP: usize = 8_000;
 const MCP_PROMPT_TOOLS: usize = 30;
 
 const RUNNING: &str = "running";
+/// Waiting for a free execution slot (or for its dependencies). A queued run
+/// holds no task and no step: it becomes `running` when the queue admits it.
+const QUEUED: &str = "queued";
 const AWAITING_APPROVAL: &str = "awaiting_approval";
 /// A run parked by the user between steps. Nothing is executing; the step log
 /// is intact and `resume` continues from it. It deliberately survives a restart
@@ -464,6 +467,14 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // Tokens this run's model calls reported. Summed as the run works, so the
         // monitor can show a per-agent total without re-reading every request.
         "ALTER TABLE agent_runs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0",
+        // Queue ordering (higher first, creation time breaks ties) and the runs
+        // that must succeed before this one may start (JSON array of ids).
+        "ALTER TABLE agent_runs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agent_runs ADD COLUMN depends_on TEXT NOT NULL DEFAULT ''",
+        // When the run actually started executing: 0 while it is still queued.
+        // Queue wait is `started_at - created_at`, and a live run's duration is
+        // measured from here so waiting time is not billed as execution.
+        "ALTER TABLE agent_runs ADD COLUMN started_at REAL NOT NULL DEFAULT 0",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -508,6 +519,12 @@ struct RunRow {
     mcp_tools: String,
     /// Total tokens the run's own model calls reported.
     tokens: i64,
+    /// Queue ordering: higher runs first, ties by creation time.
+    priority: i64,
+    /// JSON array of run ids that must succeed before this run may start.
+    depends_on: String,
+    /// When execution actually began (0 while queued).
+    started_at: f64,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -534,6 +551,9 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         allow_mcp: row.get(19)?,
         mcp_tools: row.get(20)?,
         tokens: row.get(21)?,
+        priority: row.get(22)?,
+        depends_on: row.get(23)?,
+        started_at: row.get(24)?,
     })
 }
 
@@ -655,7 +675,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -671,6 +691,254 @@ fn step_count(state: &AppState, run_id: &str) -> Result<i64, String> {
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// The queue: creation always lands in `queued`; one admission pass decides what
+// may run. Dependencies are checked at admission, never trusted from the caller.
+
+/// Runs that occupy a slot. A run waiting for approval still owns its loop —
+/// approving it resumes immediately — so it counts; a paused or queued run holds
+/// no loop and does not.
+fn count_live_slots(state: &AppState) -> Result<i64, String> {
+    db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_runs WHERE status IN (?1, ?2)",
+            params![RUNNING, AWAITING_APPROVAL],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())
+}
+
+/// Priority is a small ordering hint, not a scheduler: clamped to a range an API
+/// caller and the UI can both send without surprises.
+fn parse_priority(input: &Value) -> i64 {
+    input
+        .get("priority")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .clamp(-10, 10)
+}
+
+/// Would starting `dep` before `target` ever finish? A dependency that (directly
+/// or transitively) depends on the run being created is a loop, and a loop in a
+/// queue means waiting forever - so it is refused before the row exists.
+fn dependency_reaches(conn: &Connection, start: &str, target: &str) -> Result<bool, String> {
+    let mut stack = vec![start.to_string()];
+    let mut visited = 0;
+    while let Some(current) = stack.pop() {
+        if current == target {
+            return Ok(true);
+        }
+        visited += 1;
+        if visited > 64 {
+            // Bounded walk: a pathological chain is treated as "not proven a
+            // loop" rather than making creation slow or unbounded.
+            return Ok(false);
+        }
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT depends_on FROM agent_runs WHERE id=?1",
+                [&current],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let deps: Vec<String> = raw
+            .as_deref()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_default();
+        stack.extend(deps);
+    }
+    Ok(false)
+}
+
+/// Validate the requested dependencies: known runs, no self-reference, no loop,
+/// a bounded list. Refusing at creation is what stops a run sitting in the queue
+/// forever behind a typo.
+fn parse_depends_on(state: &AppState, input: &Value, id: &str) -> Result<Vec<String>, String> {
+    let items = match input.get("dependsOn") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err("dependsOn must be a JSON array of run ids.".to_string()),
+    };
+    let mut deps: Vec<String> = Vec::new();
+    for item in items {
+        let dep = item.as_str().map(str::trim).unwrap_or("");
+        if dep.is_empty() {
+            return Err("A dependency id cannot be empty.".to_string());
+        }
+        if dep == id {
+            return Err("A run cannot depend on itself.".to_string());
+        }
+        if !deps.iter().any(|seen| seen == dep) {
+            deps.push(dep.to_string());
+        }
+    }
+    if deps.len() > 8 {
+        return Err("A run can depend on at most 8 other runs.".to_string());
+    }
+    if deps.is_empty() {
+        return Ok(deps);
+    }
+    let conn = db(state)?;
+    for dep in &deps {
+        let exists: bool = conn
+            .query_row("SELECT 1 FROM agent_runs WHERE id=?1", [dep], |_| Ok(true))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(false);
+        if !exists {
+            return Err(format!("Dependency {dep} does not exist."));
+        }
+        if dependency_reaches(&conn, dep, id)? {
+            return Err(format!(
+                "Dependency {dep} already waits on this run - that would deadlock the queue."
+            ));
+        }
+    }
+    Ok(deps)
+}
+
+/// Queued runs in admission order: priority first, then oldest first.
+fn queued_runs(state: &AppState) -> Result<Vec<(String, Vec<String>)>, String> {
+    let conn = db(state)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, depends_on FROM agent_runs WHERE status=?1 \
+             ORDER BY priority DESC, created_at ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([QUEUED], |row| {
+            let id: String = row.get(0)?;
+            let deps: String = row.get(1)?;
+            Ok((id, deps))
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .flatten()
+        .map(|(id, deps)| {
+            (
+                id,
+                serde_json::from_str::<Vec<String>>(&deps).unwrap_or_default(),
+            )
+        })
+        .collect())
+}
+
+/// Start one queued run. The update is conditional on the row still being
+/// queued, so a run cancelled between the queue read and this line is never
+/// started behind the user's back.
+fn promote(state: &AppState, run_id: &str) -> bool {
+    let stamp = now();
+    let changed = db(state).and_then(|conn| {
+        conn.execute(
+            "UPDATE agent_runs SET status=?2, \
+             started_at=CASE WHEN started_at > 0 THEN started_at ELSE ?3 END, \
+             updated_at=?3, error='', pending_action='' WHERE id=?1 AND status=?4",
+            params![run_id, RUNNING, stamp, QUEUED],
+        )
+        .map_err(|e| e.to_string())
+    });
+    match changed {
+        Ok(1) => {
+            spawn_run(state.clone(), run_id.to_string());
+            notify(state, Some(run_id));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// One admission pass. Queued runs are promoted in priority order while a slot
+/// is free and every dependency has succeeded; a run whose dependency ended
+/// badly is failed here with a reason that names it, so a queue entry can never
+/// wait forever on something that will never arrive.
+///
+/// Two passes at once could both see the same free slot, so the pass holds one
+/// process-wide lock. The status change is conditional as well, which is what
+/// keeps a raced promotion from starting the same run twice.
+async fn dispatch(state: &AppState) -> Vec<String> {
+    static PASS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+    let _pass = PASS.lock().await;
+    let limit = crate::load_config(state).max_concurrent_runs.clamp(1, 4);
+    let mut started = Vec::new();
+    while let Ok(active) = count_live_slots(state) {
+        let mut slots = limit - active;
+        if slots <= 0 {
+            break;
+        }
+        let candidates = match queued_runs(state) {
+            Ok(candidates) => candidates,
+            Err(_) => break,
+        };
+        let mut progressed = false;
+        for (run_id, deps) in candidates {
+            if slots <= 0 {
+                break;
+            }
+            let mut ready = true;
+            let mut blocker: Option<(String, String)> = None;
+            for dep in &deps {
+                match run_status(state, dep) {
+                    Ok(Some(status)) if status == SUCCEEDED => {}
+                    Ok(Some(status))
+                        if matches!(status.as_str(), FAILED | CANCELLED | INTERRUPTED) =>
+                    {
+                        blocker = Some((dep.clone(), status));
+                        break;
+                    }
+                    // Still queued, running, paused or missing: wait.
+                    _ => {
+                        ready = false;
+                        break;
+                    }
+                }
+            }
+            if let Some((dep, status)) = blocker {
+                let _ = add_step(
+                    state,
+                    &run_id,
+                    "queue",
+                    "Dependency ended without succeeding",
+                    &format!(
+                        "This run never started: dependency {dep} ended {status}, so the work it was waiting for will not complete."
+                    ),
+                );
+                let _ = finish(
+                    state,
+                    &run_id,
+                    FAILED,
+                    &format!("Dependency {dep} ended {status}."),
+                );
+                progressed = true;
+                continue;
+            }
+            if !ready {
+                continue;
+            }
+            if promote(state, &run_id) {
+                started.push(run_id);
+                slots -= 1;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+    if !started.is_empty() {
+        notify(state, None);
+    }
+    started
+}
+
+/// Boot-time admission: queued runs that were persisted before a restart are
+/// started here, after the lives that never resumed have been marked
+/// `interrupted` (which frees their slots).
+pub(crate) async fn start_queued(state: &AppState) {
+    let _ = dispatch(state).await;
 }
 
 fn run_status(state: &AppState, run_id: &str) -> Result<Option<String>, String> {
@@ -697,6 +965,12 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "stagePolicy": row.stage_policy, "stageMaxSteps": row.stage_max_steps,
         "allowMcp": row.allow_mcp, "mcpTools": mcp_tool_count(&row.mcp_tools),
         "tokens": row.tokens,
+        "priority": row.priority,
+        "dependsOn": serde_json::from_str::<Vec<String>>(&row.depends_on).unwrap_or_default(),
+        // Assigned by `queue_positions` from the same rows, so a card never
+        // reports a position the queue itself would contradict.
+        "queuePosition": Value::Null,
+        "startedAt": if row.started_at > 0.0 { json!(row.started_at) } else { Value::Null },
         // A live run has no finished duration yet: measure from its start and say
         // how long it has been quiet, rather than reporting "0 s" for a run that
         // started ten minutes ago.
@@ -716,7 +990,35 @@ fn elapsed_seconds(row: &RunRow) -> f64 {
         "running" | "awaiting_approval" | "paused" => now(),
         _ => row.updated_at,
     };
-    (end - row.created_at).max(0.0)
+    // A queued run has not executed at all, and a run that waited must not have
+    // its queue time counted as work: measure from when execution began.
+    let start = if row.started_at > 0.0 {
+        row.started_at
+    } else {
+        row.created_at
+    };
+    (end - start).max(0.0)
+}
+
+/// Give every queued run in a payload its 1-based place in the queue, using the
+/// same ordering the dispatcher admits by (priority, then age).
+fn queue_positions(runs: &mut [Value]) {
+    let mut queued: Vec<(usize, i64, f64)> = runs
+        .iter()
+        .enumerate()
+        .filter(|(_, run)| run["status"] == QUEUED)
+        .map(|(index, run)| {
+            (
+                index,
+                run["priority"].as_i64().unwrap_or(0),
+                run["createdAt"].as_f64().unwrap_or(0.0),
+            )
+        })
+        .collect();
+    queued.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.total_cmp(&b.2)));
+    for (position, (index, _, _)) in queued.into_iter().enumerate() {
+        runs[index]["queuePosition"] = json!(position + 1);
+    }
 }
 
 /// The approval UI never needs the file body — just what kind of action waits.
@@ -1580,6 +1882,9 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         allow_mcp: run.allow_mcp,
         mcp_tools: run.mcp_tools.clone(),
         tokens: run.tokens,
+        priority: run.priority,
+        depends_on: run.depends_on.clone(),
+        started_at: run.started_at,
     }
 }
 
@@ -2366,6 +2671,9 @@ async fn run_loop(state: AppState, run_id: String, control: Arc<RunControl>) {
     }
     release_control(&run_id, &control);
     notify(&state, Some(&run_id));
+    // This loop has ended, so it may have freed the only slot: admit the next
+    // queued run now rather than waiting for the next unrelated request.
+    let _ = dispatch(&state).await;
 }
 
 /// Starts (or resumes) the loop for one run. Both a fresh run and an approval
@@ -2714,6 +3022,18 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     }
     let project_id = crate::active_project_id(&state);
     let id = uuid::Uuid::new_v4().to_string();
+    let priority = parse_priority(&input);
+    // Dependencies are validated before the row exists: an unknown id, a self
+    // reference or a loop would otherwise sit in the queue forever.
+    let depends_on = match parse_depends_on(&state, &input, &id) {
+        Ok(deps) => deps,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let depends_json = if depends_on.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&depends_on).unwrap_or_default()
+    };
     let stamp = now();
     // Reproducible-run record: freeze the routing config as it was when the
     // run started, so the run shows which model setup produced it. A run may
@@ -2727,21 +3047,46 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
-                id, project_id, goal, RUNNING,
+                id, project_id, goal, QUEUED,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
                 snapshot, base_model, profile, mode, crew_json, stage_policy, stage_max_steps,
-                allow_mcp
+                allow_mcp, priority, depends_json
             ],
         ).map_err(|e| e.to_string())
     ) {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
     }
-    spawn_run(state.clone(), id.clone());
+    // Every run is created queued and admitted by one pass, so "start now" and
+    // "wait your turn" can never disagree about the rules.
+    let _ = dispatch(&state).await;
+    let status = run_status(&state, &id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| QUEUED.to_string());
+    let queue_position = if status == QUEUED {
+        queued_position(&state, &id).unwrap_or(None)
+    } else {
+        None
+    };
     notify(&state, Some(&id));
-    Json(json!({ "ok": true, "run": { "id": id, "status": RUNNING } })).into_response()
+    Json(json!({
+        "ok": true,
+        "run": { "id": id, "status": status, "queuePosition": queue_position }
+    }))
+    .into_response()
+}
+
+/// This run's 1-based place in the queue, from the same ordering the dispatcher
+/// admits by, so the card and the queue can never disagree.
+fn queued_position(state: &AppState, run_id: &str) -> Result<Option<i64>, String> {
+    let queued = queued_runs(state)?;
+    Ok(queued
+        .iter()
+        .position(|(id, _)| id == run_id)
+        .map(|index| index as i64 + 1))
 }
 
 /// Column order must match `row_to_run` exactly, `model` included: a list that
@@ -2751,8 +3096,12 @@ const RUN_LIST_SQL: &str = "SELECT r.id, r.project_id, r.goal, r.status, r.allow
  r.allow_commands, r.auto_approve, r.max_steps, r.pending_action, r.error, r.created_at, \
  r.updated_at, r.router_config, r.model, r.profile, r.mode, r.crew, r.stage_policy, \
  r.stage_max_steps, r.allow_mcp, r.mcp_tools, r.tokens, \
+ r.priority, r.depends_on, r.started_at, \
  (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
  FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50";
+
+/// Zero-based column index of the step count in `RUN_LIST_SQL`.
+const RUN_LIST_STEPS_COLUMN: usize = 25;
 
 async fn list_runs(State(state): State<AppState>) -> Response {
     let conn = match db(&state) {
@@ -2766,14 +3115,17 @@ async fn list_runs(State(state): State<AppState>) -> Response {
     let rows = stmt
         .query_map([], |row| {
             let run = row_to_run(row)?;
-            let steps: i64 = row.get(22)?;
+            let steps: i64 = row.get(RUN_LIST_STEPS_COLUMN)?;
 
             Ok(run_json(&run, steps))
         })
         .map_err(|e| e.to_string());
     match rows {
         Ok(rows) => {
-            let runs = rows.filter_map(|row| row.ok()).collect::<Vec<_>>();
+            let mut runs = rows.filter_map(|row| row.ok()).collect::<Vec<_>>();
+            // Queue position comes from the same rows, ordered the way the
+            // dispatcher admits, so a card never claims a place it does not hold.
+            queue_positions(&mut runs);
             Json(json!({ "runs": runs })).into_response()
         }
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
@@ -2794,7 +3146,7 @@ async fn runs_overview(State(state): State<AppState>) -> Response {
     };
     let rows = match stmt.query_map([], |row| {
         let run = row_to_run(row)?;
-        let steps: i64 = row.get(22)?;
+        let steps: i64 = row.get(RUN_LIST_STEPS_COLUMN)?;
         Ok(run_json(&run, steps))
     }) {
         Ok(rows) => rows.filter_map(|row| row.ok()).collect::<Vec<Value>>(),
@@ -2803,6 +3155,8 @@ async fn runs_overview(State(state): State<AppState>) -> Response {
     let mut counts = serde_json::Map::new();
     let mut tokens = 0i64;
     let mut steps = 0i64;
+    let mut rows = rows;
+    queue_positions(&mut rows);
     for run in &rows {
         let status = run["status"].as_str().unwrap_or("unknown").to_string();
         let entry = counts.entry(status).or_insert_with(|| json!(0));
@@ -2866,6 +3220,12 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
     };
     let mut payload = run_json(&run, rows.len() as i64);
     payload["stepList"] = json!(rows);
+    // One run's detail still reports its queue position: "waiting" is only
+    // useful with a place in line attached.
+    if run.status == QUEUED {
+        payload["queuePosition"] =
+            json!(queued_position(&state, &run_id).ok().flatten().unwrap_or(0));
+    }
     // A pending write is previewed as a diff against the file on disk right
     // now, so approval happens with the actual change in view.
     if run.status == AWAITING_APPROVAL {
@@ -2967,11 +3327,14 @@ pub(crate) fn cancel_all_active(state: &AppState, reason: &str) -> Vec<String> {
     // Include it here or an emergency stop would leave a paused run armed to be
     // resumed after the stop the user just asked for.
     if let Ok(conn) = db(state) {
-        if let Ok(mut stmt) = conn.prepare("SELECT id FROM agent_runs WHERE status IN (?1, ?2, ?3)")
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT id FROM agent_runs WHERE status IN (?1, ?2, ?3, ?4)")
         {
-            if let Ok(rows) = stmt.query_map(params![RUNNING, AWAITING_APPROVAL, PAUSED], |row| {
-                row.get::<_, String>(0)
-            }) {
+            if let Ok(rows) = stmt
+                .query_map(params![RUNNING, AWAITING_APPROVAL, PAUSED, QUEUED], |row| {
+                    row.get::<_, String>(0)
+                })
+            {
                 for run_id in rows.flatten() {
                     if !run_ids.contains(&run_id) {
                         run_ids.push(run_id);
@@ -2984,7 +3347,7 @@ pub(crate) fn cancel_all_active(state: &AppState, reason: &str) -> Vec<String> {
     for run_id in run_ids {
         let live = matches!(
             run_status(state, &run_id).ok().flatten().as_deref(),
-            Some(RUNNING) | Some(AWAITING_APPROVAL) | Some(PAUSED)
+            Some(RUNNING) | Some(AWAITING_APPROVAL) | Some(PAUSED) | Some(QUEUED)
         );
         if !live {
             continue;
@@ -3024,6 +3387,8 @@ async fn pause_run(State(state): State<AppState>, Path(run_id): Path<String>) ->
     if run.status != RUNNING {
         let reason = if run.status == AWAITING_APPROVAL {
             "This run is waiting for your approval - approve or reject the action, or cancel the run."
+        } else if run.status == QUEUED {
+            "This run is queued, not running - cancel it to take it out of the queue."
         } else {
             "This run is not running."
         };
@@ -3043,6 +3408,8 @@ async fn pause_run(State(state): State<AppState>, Path(run_id): Path<String>) ->
             return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
         }
         notify(&state, Some(&run_id));
+        // A parked run has freed its slot.
+        let _ = dispatch(&state).await;
         return Json(json!({ "ok": true, "status": PAUSED })).into_response();
     }
     notify(&state, Some(&run_id));
@@ -3050,6 +3417,11 @@ async fn pause_run(State(state): State<AppState>, Path(run_id): Path<String>) ->
         .ok()
         .flatten()
         .unwrap_or_default();
+    if status == PAUSED {
+        // The loop parked while this request was being answered, so its slot is
+        // free now and the next queued run may start.
+        let _ = dispatch(&state).await;
+    }
     Json(json!({
         "ok": true,
         "status": status,
@@ -3064,7 +3436,10 @@ async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
-    if !matches!(run.status.as_str(), RUNNING | AWAITING_APPROVAL | PAUSED) {
+    if !matches!(
+        run.status.as_str(),
+        RUNNING | AWAITING_APPROVAL | PAUSED | QUEUED
+    ) {
         return error_response(StatusCode::BAD_REQUEST, "Run is not running.");
     }
     // 1) wake the cancel flag so a live loop exits, 2) persist the state, and
@@ -3074,6 +3449,10 @@ async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -
     }
     let outcome = finish(&state, &run_id, CANCELLED, "Cancelled by user.");
     notify(&state, Some(&run_id));
+    if outcome.is_ok() {
+        // A cancelled run frees its slot (or its queue entry).
+        let _ = dispatch(&state).await;
+    }
     match outcome {
         Ok(()) => Json(json!({ "ok": true, "status": CANCELLED })).into_response(),
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
@@ -3145,12 +3524,24 @@ async fn resume_run(State(state): State<AppState>, Path(run_id): Path<String>) -
         &format!("Run resumed.{}", stage_note),
         "Picking up from the recorded step log: finished stages stay finished, unfinished work continues.",
     );
-    if let Err(error) = set_run(&state, &run_id, RUNNING, None, Some("")) {
+    // Resuming is a queue entry like any other: if a slot is free it starts at
+    // once, and if the workspace is already busy it waits its turn instead of
+    // silently making a second agent edit the same folder.
+    if let Err(error) = set_run(&state, &run_id, QUEUED, None, Some("")) {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
     }
     notify(&state, Some(&run_id));
-    spawn_run(state, run_id);
-    Json(json!({ "ok": true, "status": RUNNING })).into_response()
+    let _ = dispatch(&state).await;
+    let status = run_status(&state, &run_id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| QUEUED.to_string());
+    let queue_position = if status == QUEUED {
+        queued_position(&state, &run_id).unwrap_or(None)
+    } else {
+        None
+    };
+    Json(json!({ "ok": true, "status": status, "queuePosition": queue_position })).into_response()
 }
 
 async fn approve_run(
@@ -3241,11 +3632,19 @@ async fn approve_run(
                 &output,
                 &checkpoint,
             );
-            if let Err(error) = set_run(&state, &run_id, RUNNING, None, Some("")) {
+            // The approved action has run; the rest of the loop is a queue entry
+            // like any other, so approving while another run holds the slot waits
+            // instead of starting a second agent. `started_at` is already set, so
+            // duration keeps measuring the run, not the wait.
+            if let Err(error) = set_run(&state, &run_id, QUEUED, None, Some("")) {
                 return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
             }
-            spawn_run(state, run_id.clone());
-            Json(json!({ "ok": true, "status": RUNNING })).into_response()
+            let _ = dispatch(&state).await;
+            let status = run_status(&state, &run_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| QUEUED.to_string());
+            Json(json!({ "ok": true, "status": status })).into_response()
         }
         Err(error) => {
             let _ = finish(&state, &run_id, FAILED, &error);
@@ -3291,7 +3690,7 @@ mod tests {
         let payload = stmt
             .query_row([], |row| {
                 let run = row_to_run(row)?;
-                let steps: i64 = row.get(22)?;
+                let steps: i64 = row.get(RUN_LIST_STEPS_COLUMN)?;
                 Ok(run_json(&run, steps))
             })
             .expect("row maps");
@@ -3515,6 +3914,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             allow_mcp: false,
             mcp_tools: String::new(),
             tokens: 0,
+            priority: 0,
+            depends_on: String::new(),
+            started_at: 0.0,
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -3638,6 +4040,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             allow_mcp: false,
             mcp_tools: String::new(),
             tokens: 0,
+            priority: 0,
+            depends_on: String::new(),
+            started_at: 0.0,
         }
     }
 
@@ -3920,6 +4325,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             allow_mcp: false,
             mcp_tools: String::new(),
             tokens: 0,
+            priority: 0,
+            depends_on: String::new(),
+            started_at: 0.0,
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -3956,6 +4364,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             allow_mcp: false,
             mcp_tools: String::new(),
             tokens: 0,
+            priority: 0,
+            depends_on: String::new(),
+            started_at: 0.0,
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
@@ -4590,7 +5001,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let (run, steps) = stmt
             .query_row([], |row| {
                 let run = row_to_run(row)?;
-                let steps: i64 = row.get(22)?;
+                let steps: i64 = row.get(RUN_LIST_STEPS_COLUMN)?;
                 Ok((run, steps))
             })
             .expect("every list row maps");
@@ -4987,5 +5398,294 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             })
             .unwrap();
         assert!(error.contains("MCP tool calls"), "{error}");
+    }
+    /// `POST /api/runs` that reports its answer instead of asserting success, so
+    /// a refused request can be checked rather than panicking.
+    async fn try_start_run(app: &Router, body: Value) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/runs")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let code = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let payload = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (code, payload)
+    }
+
+    async fn post_cancel(app: &Router, id: &str) -> StatusCode {
+        app.clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/cancel"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    fn started_at_of(state: &AppState, id: &str) -> f64 {
+        db(state)
+            .unwrap()
+            .query_row("SELECT started_at FROM agent_runs WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_dependency_that_does_not_exist_is_refused_before_the_run_exists() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("queue-unknown-dep", &base);
+        let (code, payload) = try_start_run(
+            &fixture.app,
+            json!({
+                "goal": "wait on a run that was never created",
+                "autoApprove": true,
+                "dependsOn": ["no-such-run"]
+            }),
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{payload}");
+        let message = payload["error"].as_str().unwrap_or_default();
+        assert!(message.contains("does not exist"), "{message}");
+        // A refused request leaves nothing behind: no half-created queue entry
+        // that would never start.
+        let total: i64 = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM agent_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn the_cycle_guard_sees_a_loop_in_stored_dependencies() {
+        // Creation ids are server-generated, so a loop cannot be built through
+        // the API alone; the guard is what protects a record edited out of band,
+        // and it is tested against exactly such a record.
+        let path =
+            std::env::temp_dir().join(format!("saarthi-queue-cycle-{}.db", uuid::Uuid::new_v4()));
+        let conn = crate::open_db(&path).expect("temp db");
+        initialize(&conn).expect("schema");
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at,depends_on) \
+             VALUES('a','p','g','queued',0,0,1,4,1.0,1.0,'[\"b\"]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at,depends_on) \
+             VALUES('b','p','g','queued',0,0,1,4,2.0,2.0,'[\"a\"]')",
+            [],
+        )
+        .unwrap();
+        assert!(dependency_reaches(&conn, "b", "a").unwrap());
+        assert!(!dependency_reaches(&conn, "a", "missing").unwrap());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn a_queued_run_waits_for_a_free_slot_and_priority_decides_the_order() {
+        let base = slow_scripted_router(
+            &[
+                "{\"action\":\"done\",\"summary\":\"first\"}",
+                "{\"action\":\"done\",\"summary\":\"high priority\"}",
+                "{\"action\":\"done\",\"summary\":\"low priority\"}",
+            ],
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+        let fixture = run_fixture("queue-priority", &base);
+        let first = start_run(
+            &fixture.app,
+            json!({ "goal": "hold the only slot", "autoApprove": true, "maxSteps": 4 }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &first, RUNNING).await;
+        let (code, low) = try_start_run(
+            &fixture.app,
+            json!({ "goal": "low", "autoApprove": true, "maxSteps": 4, "priority": 0 }),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{low}");
+        assert_eq!(low["run"]["status"], json!(QUEUED), "{low}");
+        let low_id = low["run"]["id"].as_str().unwrap().to_string();
+        let (code, high) = try_start_run(
+            &fixture.app,
+            json!({ "goal": "high", "autoApprove": true, "maxSteps": 4, "priority": 5 }),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{high}");
+        assert_eq!(high["run"]["status"], json!(QUEUED), "{high}");
+        // Higher priority takes the front of the queue, ahead of the run that
+        // arrived first.
+        assert_eq!(high["run"]["queuePosition"], json!(1), "{high}");
+        assert_eq!(queued_position(&fixture.state, &low_id).unwrap(), Some(2));
+        let high_id = high["run"]["id"].as_str().unwrap().to_string();
+
+        let (status, actions) = wait_for_terminal(&fixture.state, &first).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        let (status, actions) = wait_for_terminal(&fixture.state, &high_id).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        let (status, actions) = wait_for_terminal(&fixture.state, &low_id).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        // The point of the limit and the ordering: the newer, higher-priority run
+        // was admitted first, and nothing ran beside the run holding the slot.
+        assert!(
+            started_at_of(&fixture.state, &high_id) < started_at_of(&fixture.state, &low_id),
+            "priority must decide admission order, not creation order"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_waits_for_its_dependency_then_starts() {
+        let base = slow_scripted_router(
+            &[
+                "{\"action\":\"done\",\"summary\":\"dependency done\"}",
+                "{\"action\":\"done\",\"summary\":\"dependent done\"}",
+            ],
+            std::time::Duration::from_millis(120),
+        )
+        .await;
+        let fixture = run_fixture("queue-dependency", &base);
+        let first = start_run(
+            &fixture.app,
+            json!({ "goal": "the dependency", "autoApprove": true, "maxSteps": 4 }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &first, RUNNING).await;
+        let (code, dependent) = try_start_run(
+            &fixture.app,
+            json!({
+                "goal": "the dependent",
+                "autoApprove": true,
+                "maxSteps": 4,
+                "dependsOn": [first]
+            }),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{dependent}");
+        assert_eq!(dependent["run"]["status"], json!(QUEUED), "{dependent}");
+        let dependent_id = dependent["run"]["id"].as_str().unwrap().to_string();
+
+        let (status, actions) = wait_for_terminal(&fixture.state, &first).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        let (status, actions) = wait_for_terminal(&fixture.state, &dependent_id).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        assert!(
+            started_at_of(&fixture.state, &dependent_id) >= started_at_of(&fixture.state, &first),
+            "the dependent must start only after its dependency succeeded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dependency_that_ends_without_succeeding_fails_the_waiting_run() {
+        let base = scripted_router(&["{\"action\":\"fail\",\"reason\":\"cannot proceed\"}"]).await;
+        let fixture = run_fixture("queue-dependency-fails", &base);
+        let first = start_run(
+            &fixture.app,
+            json!({ "goal": "will fail", "autoApprove": true, "maxSteps": 4 }),
+        )
+        .await;
+        let (status, _) = wait_for_terminal(&fixture.state, &first).await;
+        assert_eq!(status, FAILED);
+        let (code, dependent) = try_start_run(
+            &fixture.app,
+            json!({
+                "goal": "waits on a failure",
+                "autoApprove": true,
+                "maxSteps": 4,
+                "dependsOn": [first]
+            }),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{dependent}");
+        let dependent_id = dependent["run"]["id"].as_str().unwrap().to_string();
+        let (status, actions) = wait_for_terminal(&fixture.state, &dependent_id).await;
+        assert_eq!(status, FAILED, "{actions:?}");
+        assert!(actions.contains(&"queue".to_string()), "{actions:?}");
+        let error: String = db(&fixture.state)
+            .unwrap()
+            .query_row(
+                "SELECT error FROM agent_runs WHERE id=?1",
+                [&dependent_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            error.contains(&first),
+            "the reason must name the dependency: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_queued_run_takes_it_out_of_the_queue() {
+        let base = slow_scripted_router(
+            &[
+                "{\"action\":\"done\",\"summary\":\"the only run that executes\"}",
+                "{\"action\":\"done\",\"summary\":\"must never be called\"}",
+            ],
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+        let fixture = run_fixture("queue-cancel", &base);
+        let first = start_run(
+            &fixture.app,
+            json!({ "goal": "hold the slot", "autoApprove": true, "maxSteps": 4 }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &first, RUNNING).await;
+        let second = start_run(
+            &fixture.app,
+            json!({ "goal": "cancelled while waiting", "autoApprove": true, "maxSteps": 4 }),
+        )
+        .await;
+        assert_eq!(
+            run_status(&fixture.state, &second).unwrap().as_deref(),
+            Some(QUEUED)
+        );
+        assert_eq!(post_cancel(&fixture.app, &second).await, StatusCode::OK);
+        let (status, actions) = wait_for_terminal(&fixture.state, &second).await;
+        assert_eq!(status, CANCELLED, "{actions:?}");
+        let (status, actions) = wait_for_terminal(&fixture.state, &first).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        // A cancelled queue entry is never admitted afterwards, and it never ran.
+        assert_eq!(
+            run_status(&fixture.state, &second).unwrap().as_deref(),
+            Some(CANCELLED)
+        );
+        assert_eq!(started_at_of(&fixture.state, &second), 0.0);
+    }
+
+    #[tokio::test]
+    async fn a_queued_run_is_admitted_at_boot() {
+        // A row persisted as queued is not a run that never started: boot adopts
+        // it, because the interrupted sweep has freed the slots it waited on.
+        let base = scripted_router(&["{\"action\":\"done\",\"summary\":\"from the queue\"}"]).await;
+        let fixture = run_fixture("queue-boot", &base);
+        db(&fixture.state)
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
+                 VALUES('r-boot-queued','p','queued before a restart','queued',0,0,1,4,'','',1.0,1.0)",
+                [],
+            )
+            .unwrap();
+        start_queued(&fixture.state).await;
+        let (status, actions) = wait_for_terminal(&fixture.state, "r-boot-queued").await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        assert!(started_at_of(&fixture.state, "r-boot-queued") > 0.0);
     }
 }

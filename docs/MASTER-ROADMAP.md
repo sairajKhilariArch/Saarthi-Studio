@@ -103,6 +103,9 @@ Remaining for Phase 1 sign-off:
    Executing → Verifying → Completed/Failed/Cancelled`) with persistence and
    resume, building on `agent_runs`/`agent_steps`.
 2. Task queue with priority, dependencies, retry, cancellation, checkpoints.
+   *Delivered 1.53.0: `queued` state, priority, dependencies and in-order
+   admission behind `max_concurrent_runs`; retry is `resume`, checkpoints and
+   cancellation already existed.*
 3. Role-specialised agents with explicit tools/permissions/budgets.
 4. Parallel execution guarded by worktree isolation or file locks; conflict
    detection before write.
@@ -149,11 +152,13 @@ with "estimate" labelling when usage is not reported.
 Backend-truth dashboard: agents, task, model, router, tokens, duration, tool,
 files touched, approvals, errors, with start/pause/resume/cancel/retry/logs.
 
-Delivered: the cross-run board and per-run timing/token facts (1.51.0), and
-pause/resume of a live run at a step boundary (1.52.0), which completes the
-control set against real state. Remaining: a queue view, which needs the Phase 5
-task queue first, and a live stepping view of the current step while a model
-call is in flight.
+Delivered: the cross-run board and per-run timing/token facts (1.51.0),
+pause/resume of a live run at a step boundary (1.52.0), and the task queue
+(1.53.0) — a queued pill, `queue #N` on the card, a Queued count on the board, a
+waiting note with Cancel only, and priority / depends-on on the run form — which
+completes the control set against real state, queued runs included. Remaining: a
+live stepping view of the current step while a model call is in flight, and any
+reordering beyond a numeric priority.
 
 ## Phase 13 — Workflow builder
 

@@ -3273,6 +3273,7 @@ async function loadSettings() {
   $("agentModel").value = result.data.agent_model || "";
   $("fallbackModels").value = (result.data.fallback_models || []).join(", ");
   $("dailyBudget").value = result.data.daily_budget_usd ? String(result.data.daily_budget_usd) : "";
+  $("maxConcurrentRuns").value = String(result.data.max_concurrent_runs || 1);
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
@@ -3991,6 +3992,7 @@ async function saveSettings(event) {
     agent_model: $("agentModel").value.trim(),
     fallback_models: $("fallbackModels").value.split(",").map((s) => s.trim()).filter(Boolean),
     daily_budget_usd: Number($("dailyBudget").value) || 0,
+    max_concurrent_runs: Number($("maxConcurrentRuns").value) || 1,
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();
@@ -6278,6 +6280,7 @@ state.openRun = null;
 state.runDetail = null;
 
 const RUN_STATUS_CLASS = {
+  queued: "run-queue",
   running: "run-running",
   awaiting_approval: "run-await",
   paused: "run-pause",
@@ -6336,6 +6339,7 @@ function renderRunBoard() {
   const totals = overview.totals || {};
   const facts = [
     ["Live runs", totals.live || 0, "working, waiting for approval, or paused"],
+    ["Queued", counts.queued || 0, "waiting for a free slot or for a dependency to succeed"],
     ["Awaiting approval", counts.awaiting_approval || 0, "each blocks until answered"],
     ["Paused", counts.paused || 0, "parked between steps; resume when ready"],
     ["Failed", counts.failed || 0, "recent runs that ended badly"],
@@ -6403,7 +6407,11 @@ function renderRunCard(run) {
   const mcpTag = run.allowMcp ? ` · mcp: ${run.mcpTools || 0} tool${run.mcpTools === 1 ? "" : "s"}` : "";
   const tokenTag = run.tokens ? ` · ${Number(run.tokens).toLocaleString()} tokens` : "";
   const durationTag = run.elapsedSeconds ? ` · ${formatDuration(run.elapsedSeconds)}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}`;
+  // A queued run has done no work yet, so it says where it is in line instead of
+  // implying progress; a run that waited shows the work time, not the wait.
+  const queueTag = run.status === "queued" && run.queuePosition ? ` · queue #${run.queuePosition}` : "";
+  const depTag = Array.isArray(run.dependsOn) && run.dependsOn.length ? ` · waits on ${run.dependsOn.length} run${run.dependsOn.length === 1 ? "" : "s"}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
@@ -6464,6 +6472,14 @@ function buildRunDetail(detail) {
 
   const controls = document.createElement("div");
   controls.className = "run-controls";
+  if (detail.status === "queued") {
+    const waiting = document.createElement("span");
+    waiting.className = "run-queue-note";
+    waiting.textContent = detail.queuePosition
+      ? `Waiting in the queue (position ${detail.queuePosition}) — it starts when a slot frees and every dependency has succeeded.`
+      : "Waiting for a free run slot — it starts on its own, no need to do anything.";
+    controls.appendChild(waiting);
+  }
   if (detail.status === "running") {
     const pause = document.createElement("button");
     pause.type = "button";
@@ -6482,7 +6498,7 @@ function buildRunDetail(detail) {
     resume.addEventListener('click', () => resumeAgentRun(detail.id));
     controls.appendChild(resume);
   }
-  if (detail.status === "running" || detail.status === "awaiting_approval" || detail.status === "paused") {
+  if (detail.status === "running" || detail.status === "awaiting_approval" || detail.status === "paused" || detail.status === "queued") {
     const stop = document.createElement("button");
     stop.type = "button";
     stop.className = "btn btn-quiet btn-small";
@@ -6613,6 +6629,12 @@ async function submitRun(event) {
     allowMcp: $("runAllowMcp").checked,
     autoApprove: $("runAutoApprove").checked,
   };
+  const priority = Number($("runPriority").value);
+  if (priority) payload.priority = priority;
+  // Dependencies are ids the server validates; blank means "start as soon as a
+  // slot frees" rather than a dependency on nothing.
+  const dependsOn = ($("runDependsOn").value || "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (dependsOn.length) payload.dependsOn = dependsOn;
   if ($("runMode").value === "crew") {
     const roles = ($("runCrew").value || "").split(",").map((r) => r.trim()).filter(Boolean);
     if (roles.length) payload.crew = roles;
@@ -6629,7 +6651,10 @@ async function submitRun(event) {
     return;
   }
   $("runGoal").value = "";
-  toast("Agent run started.");
+  const queued = result.data.run && result.data.run.status === "queued";
+  toast(queued
+    ? `Run queued${result.data.run.queuePosition ? ` (position ${result.data.run.queuePosition})` : ""} — it starts when a slot frees.`
+    : "Agent run started.");
   state.openRun = result.data.run && result.data.run.id;
   state.runDetail = null;
   await loadRuns();

@@ -151,6 +151,16 @@ struct Config {
     /// which is the default: a fresh install must never block its first turn.
     #[serde(default)]
     daily_budget_usd: f64,
+    /// How many agent runs may execute at the same time. One by default: runs
+    /// share the open workspace, and there is no per-file locking yet, so two
+    /// agents editing the same folder is a conflict waiting to happen. Queued
+    /// runs start as slots free.
+    #[serde(default = "default_max_concurrent_runs")]
+    max_concurrent_runs: i64,
+}
+
+fn default_max_concurrent_runs() -> i64 {
+    1
 }
 
 fn default_context_budget_tokens() -> usize {
@@ -191,6 +201,7 @@ impl Config {
             agent_model: String::new(),
             fallback_models: Vec::new(),
             daily_budget_usd: 0.0,
+            max_concurrent_runs: default_max_concurrent_runs(),
         }
     }
 }
@@ -794,6 +805,9 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     cfg.fallback_models = model_scope::normalised(&cfg.fallback_models);
     // A negative budget is meaningless; zero stays "no limit".
     cfg.daily_budget_usd = cfg.daily_budget_usd.max(0.0);
+    // Concurrency is a range, not a wish: zero active runs would stall the
+    // queue forever, and past four the runs compete for one workspace anyway.
+    cfg.max_concurrent_runs = cfg.max_concurrent_runs.clamp(1, 4);
 
     cfg.context_budget_tokens = cfg
         .context_budget_tokens
@@ -1432,6 +1446,7 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "agent_model": cfg.agent_model,
         "fallback_models": cfg.fallback_models,
         "daily_budget_usd": cfg.daily_budget_usd,
+        "max_concurrent_runs": cfg.max_concurrent_runs,
     }))
 }
 
@@ -1967,6 +1982,9 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Some(budget) = input.get("daily_budget_usd").and_then(Value::as_f64) {
         cfg.daily_budget_usd = budget;
     }
+    if let Some(limit) = input.get("max_concurrent_runs").and_then(Value::as_i64) {
+        cfg.max_concurrent_runs = limit;
+    }
     cfg.base_url = base_url;
     cfg.model = model;
     let cfg = match validate_config(cfg) {
@@ -1976,7 +1994,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models, "daily_budget_usd": cfg.daily_budget_usd})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models, "daily_budget_usd": cfg.daily_budget_usd, "max_concurrent_runs": cfg.max_concurrent_runs})).into_response()
 }
 
 /// Remove one saved credential entirely — keychain entry first, then the
@@ -4047,6 +4065,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
     // call paying the full operation timeout to discover it.
     mcp::start_supervisor();
     agent::mark_interrupted(&state);
+    // Queued runs outlive a restart on purpose: the interrupted sweep above has
+    // freed the slots they were waiting for, so admit them now instead of
+    // leaving them parked until something else happens to dispatch.
+    agent::start_queued(&state).await;
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
         .ok()
         .and_then(|v| v.parse().ok())

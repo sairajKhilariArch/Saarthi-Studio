@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.53.0
+
+- Phase 5, the **task queue**: a run no longer starts the instant it is created.
+  Every run is inserted as `queued` and admitted by one dispatcher pass, so
+  "start now" and "wait your turn" cannot disagree about the rules. The pass
+  honours a new `max_concurrent_runs` setting (1–4, default 1) because runs share
+  the open workspace and nothing locks the files they edit; runs past the limit
+  wait, in priority order, oldest first on a tie.
+- `priority` (clamped to -10…10) and `dependsOn` (a list of run ids) are stored on
+  the run (`priority`, `depends_on`, `started_at` migrated in place) and validated
+  at the door: an unknown id, a self reference, a loop found by walking the stored
+  dependencies, an empty id or more than eight entries is a 400 **before any row
+  exists**, so a typo cannot create a queue entry that waits forever.
+- A dependency only counts once it has `succeeded`. While it is queued, running or
+  paused the dependent keeps waiting; when it ends `failed`, `cancelled` or
+  `interrupted` the dependent is failed with a `queue` step and an error naming
+  the dependency, rather than being left queued against work that will never
+  arrive.
+- `started_at` separates queue wait from real work: `elapsedSeconds` now measures
+  from when execution began instead of when the row was created, and a queued run
+  reports no duration at all rather than "0 s".
+- One admission pass, with a status change conditional on the row still being
+  `queued`: two passes cannot start the same run twice, and a run cancelled while
+  it was being promoted is never started behind the user's back. The pass runs on
+  create, on resume, after an approval, after a pause parks a run, after a cancel,
+  at the end of every run loop, and at boot — a queued run survives a restart and
+  is admitted once `mark_interrupted` has freed the slot it was waiting for.
+- Pause names a queued run's real state (“queued, not running — cancel it to take
+  it out of the queue”), cancel accepts one, and the emergency stop includes
+  queued runs. Approval is a queue entry too: approving while another run holds
+  the slot waits instead of starting a second agent, and `started_at` is kept so
+  the run's own duration is not reset by the wait.
+- Isolation is **not** done: there is no worktree or per-file locking and no
+  conflict detection before a write, so the limit defaults to 1 and raising it is
+  the user's explicit choice. That is Phase 5 item 4, still open and stated as
+  such in `docs/FEATURE-STATUS.md`.
+- Runs panel: a `queued` pill (dashed, quieter than running), `queue #N` and
+  `waits on N runs` in the card meta, a Queued count on the dashboard, a “waiting
+  in the queue (position N)” note with only Cancel while queued, Queue priority
+  and “Wait for runs (ids)” fields on the run form, and “Agent runs at once” in
+  Settings.
+- Tests: 320 pass, 1 ignored. New: an unknown dependency refused before the row
+  exists, the cycle guard against a stored loop, priority ordering under the limit
+  (a later, higher-priority run is admitted first, and nothing runs beside the
+  slot holder), a dependent waiting for its dependency and starting after it, a
+  dependency that was cancelled failing its dependent with the named reason, a
+  queued run cancelled out of the queue and never started, and a queued row
+  admitted at boot with `started_at` recorded. Clippy `-D warnings` clean;
+  `rustfmt` clean on `agent.rs`; `node --check app/static/app.js` clean.
+- Verified live on :8911, not merely compiled. Against a mock router holding each
+  reply 0.6 s: A `running`, B `queued` at position 1, C (priority 5) `queued` at
+  position 1 with B moved to 2, then all three `succeeded` with C's `startedAt`
+  before B's; a run depending on a cancelled run failed as
+  `Dependency 8a2780f3-… ended cancelled.`; an unknown dependency answered
+  `400 Dependency nope does not exist.`. With a slow mock, a second run created
+  against the same workspace stayed `queued` and then started and succeeded on its
+  own when the slot freed. In the browser the queued card carried class
+  `run-queue` with meta `0 steps · just now · queue #1 · mock`, the board read
+  `Queued 1`, its detail showed the waiting note with Cancel/Refresh only, and
+  Settings read back `1`.
+
 ## 1.52.0
 
 - Phase 12 close-out, part one: a run can now be **paused** instead of only

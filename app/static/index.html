@@ -521,6 +521,18 @@
             <label class="run-perm"><input id="runAllowMcp" type="checkbox"><span>May call MCP tools</span></label>
             <label class="run-perm"><input id="runAutoApprove" type="checkbox"><span>Auto-approve (no pauses)</span></label>
           </div>
+          <div class="form-row">
+            <label class="field">
+              <span>Queue priority</span>
+              <input id="runPriority" type="number" min="-10" max="10" step="1" placeholder="0" autocomplete="off">
+              <small>-10 to 10. When runs are waiting, the higher priority starts first; the older one wins a tie. A run that finds every slot busy waits instead of starting a second agent in the same folder.</small>
+            </label>
+            <label class="field">
+              <span>Wait for runs (ids)</span>
+              <input id="runDependsOn" type="text" placeholder="comma-separated run ids" autocomplete="off">
+              <small>This run starts only after every listed run succeeded. If one of them fails or is cancelled, this run fails with the reason instead of waiting forever. Copy an id from a run's detail.</small>
+            </label>
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent btn-small">
               <svg class="icon"><use href="#i-play"/></svg>Start run
@@ -670,6 +682,11 @@
               <span>Daily budget (USD)</span>
               <input id="dailyBudget" type="number" min="0" step="0.01" placeholder="0 = no limit" autocomplete="off">
               <small>Estimated spend allowed in a rolling 24 hours, from each provider's published prices. Reaching it refuses the next paid call and says why; local inference is unaffected.</small>
+            </label>
+            <label class="field">
+              <span>Agent runs at once</span>
+              <input id="maxConcurrentRuns" type="number" min="1" max="4" step="1" placeholder="1" autocomplete="off">
+              <small>How many agent runs may work in the same workspace together (1-4). Further runs wait in the queue. 1 is the safe default: runs share one folder and nothing locks the files they edit.</small>
             </label>
           </div>
           <div class="form-actions">
