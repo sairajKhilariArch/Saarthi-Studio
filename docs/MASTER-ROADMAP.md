@@ -113,6 +113,9 @@ Remaining for Phase 1 sign-off:
    between live runs (`app/src/filelock.rs`). Worktrees, a lease that also covers
    command steps and the editor, and a cross-process ledger are still open.*
 5. Verification step before a run is marked complete.
+   *Delivered 1.56.0: a run that changed the workspace goes to the verifier and
+   is only marked complete on `APPROVE`; ISSUES allows one repair round and then
+   fails the run with the findings kept.*
 
 ## Phase 6 — Skills management
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.56.0
+
+- Phase 5 item 5: **verification is enforced**, closing the last Phase 5 gap. A
+  run that changed the workspace — a `write`, a `command` or an `mcp` step in its
+  log — is no longer marked `succeeded` because the model said `done`: its goal
+  and full persisted step log go to the verifier (`call_reviewer`, the same
+  shared model router every agent step uses), which must start its reply with
+  `APPROVE`.
+- Approval writes a `verify` step holding the verdict and then the closing `done`
+  step. Anything else counts as ISSUES: a `verify` step holds the findings, a
+  `handoff` step sends them back for one repair round, and a second ISSUES verdict
+  ends the run `failed` with the findings kept verbatim and an error that says the
+  repair round did not settle them — nothing is marked fixed that was not fixed.
+- A verifier that cannot answer cannot approve: the call's error propagates and
+  the run fails rather than being called complete. Two rounds is the ceiling, so a
+  disagreement cannot loop.
+- Runs that changed nothing skip verification — a read-only run's output is a
+  report and there is nothing on disk to check — and `team` mode is not verified
+  twice, because its reviewer already is the verifier.
+- Tests: 334 pass, 1 ignored. New: a written file approved by the verifier (step
+  list `write, verify, done` with the verdict stored), a verifier reporting issues
+  twice (the run ends `failed` with the findings kept in both `verify` steps), and
+  a read-only run ending without a verifier. Three existing tests changed because
+  verification now runs: the crew handoff test and its resume test gain the
+  verifier's approval reply and a `verify` step, and the write-conflict test's
+  script gains the approval its write now requires. Clippy `-D warnings` clean;
+  `rustfmt` clean; `node --check app/static/app.js` clean.
+- Live smoke (headless build on `:8916`, scripted router on `:8917`): a run that
+  wrote a file and claimed done, with the verifier replying ISSUES twice, ended
+  `failed` with steps `write, verify, handoff, write, verify, done`, both findings
+  kept in their `verify` steps, and the error "Verification still reported issues
+  after a repair round; nothing was marked fixed that was not fixed." A second run
+  whose verifier approved ended `succeeded` with steps `write, verify, done`, the
+  approval stored as the `verify` step's output.
+- The run board and detail panel need no change: verification shows up as the
+  existing `verify` and `handoff` steps with their output, and a refused run is the
+  ordinary `failed` state with its error in the card.
+
 ## 1.55.0
 
 - Phase 5 lifecycle: **retry as its own control**, not a synonym for resume.

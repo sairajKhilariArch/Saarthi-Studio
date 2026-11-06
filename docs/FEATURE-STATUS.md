@@ -110,7 +110,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Concurrency limit (`max_concurrent_runs`) | Working (1.53.0) | clamped 1–4, default 1; a run waiting for approval still holds its slot, a paused or queued run does not. Above 1, writes to a claimed or changed file are refused per run (1.54.0) |
 | Conflict detection before a write | Working (1.54.0) | `app/src/filelock.rs`: a `write` is refused as a non-fatal `write-conflict` step when another live run has claimed the path or the file on disk is not what this run last read; the run re-reads and continues. Claims are dropped for any run no longer `running`/`awaiting_approval` and released by `finish` |
 | Parallel execution + worktree isolation / file locks | Partial (1.54.0) | leases guard the agent's own `write` only — a command step, an editor save or another program is caught after the fact by the fingerprint check; there is no `worktree` per run and the ledger is in-process, so `max_concurrent_runs` still defaults to 1 |
-| Verification step before `succeeded` | Partial | reviewer stage is opt-in, not enforced |
+| Verification step before `succeeded` | Working (1.56.0) | a run that wrote, ran a command or called a tool goes to the verifier, which must answer `APPROVE`; ISSUES hands the findings back for one repair round and a second ISSUES ends the run `failed` with the findings kept. Read-only runs and `team` mode are not verified twice. No human sign-off step: the verifier is a model on the same router |
 | Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
 
 ## Phase 6 — Skills

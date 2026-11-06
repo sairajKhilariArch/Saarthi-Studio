@@ -1824,6 +1824,102 @@ async fn team_review_done(
     Ok(false)
 }
 
+/// Whether this run changed anything that needs verifying. A run that only read
+/// and planned produced a report; a run that wrote, ran a command or called a
+/// tool changed the workspace, and its `done` claim is not evidence on its own.
+fn changed_the_workspace(state: &AppState, run_id: &str) -> Result<bool, String> {
+    let changed: i64 = db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action IN ('write','command','mcp')",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed > 0)
+}
+
+/// Enforced verification: a run that changed the workspace is not finished
+/// because the model says so. The result goes to the verifier, which reads the
+/// goal and the whole log and must approve it. One ISSUES verdict hands the
+/// findings back for a single repair round; a second one ends the run FAILED with
+/// the findings kept, because "we could not verify it" is not "it worked".
+async fn verify_done(state: &AppState, run: &RunRow, summary: &str) -> Result<bool, String> {
+    let rounds: i64 = db(state)?
+        .query_row(
+            "SELECT COUNT(*) FROM agent_steps WHERE run_id=?1 AND action='verify'",
+            [&run.id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if rounds >= 2 {
+        add_step(
+            state,
+            &run.id,
+            "done",
+            "Run stopped: verification still reported issues",
+            &format!(
+                "{summary}\nBoth verification rounds reported findings, so this run was not \
+                 marked complete. The findings are kept verbatim in its verify steps."
+            ),
+        )?;
+        finish(
+            state,
+            &run.id,
+            FAILED,
+            "Verification reported issues twice.",
+        )?;
+        return Ok(false);
+    }
+    let reply = call_reviewer(state, run).await?;
+    let (approved, findings) = interpret_verdict(&reply);
+    if approved {
+        add_step(
+            state,
+            &run.id,
+            "verify",
+            "Verification approved the result against the goal",
+            &reply,
+        )?;
+        add_step(state, &run.id, "done", "Run complete (verified)", summary)?;
+        finish(state, &run.id, SUCCEEDED, "")?;
+        return Ok(false);
+    }
+    add_step(
+        state,
+        &run.id,
+        "verify",
+        "Verification found issues",
+        &findings,
+    )?;
+    if rounds == 0 {
+        add_step(
+            state,
+            &run.id,
+            "handoff",
+            "Findings handed back for one repair round.",
+            "Fix every finding above, re-verify your own work, then claim done again.",
+        )?;
+        return Ok(true);
+    }
+    add_step(
+        state,
+        &run.id,
+        "done",
+        "Run stopped with unverified findings",
+        &format!(
+            "{summary}\nThe repair round did not settle the findings, so this run was not \
+             marked complete. They stay in the verify steps of this log."
+        ),
+    )?;
+    finish(
+        state,
+        &run.id,
+        FAILED,
+        "Verification still reported issues after a repair round; nothing was marked fixed that was not fixed.",
+    )?;
+    Ok(false)
+}
+
 /// The REVIEWER agent sees the goal and the full persisted execution log and
 /// answers with APPROVE or ISSUES. Same call_model surface as every other
 /// agent step: the shared model router decides which provider serves it.
@@ -2141,6 +2237,12 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             // review has, same shared model router).
             if run.mode == "team" {
                 return team_review_done(state, run, &summary, false).await;
+            }
+            // Enforced verification (Phase 5 item 5): a run that touched the
+            // workspace must be checked by the verifier, not trusted. A read-only
+            // run's output is a report, and there is nothing on disk to check.
+            if changed_the_workspace(state, &run.id)? {
+                return verify_done(state, run, &summary).await;
             }
             add_step(state, &run.id, "done", "Run complete", &summary)?;
             finish(state, &run.id, SUCCEEDED, "")?;
@@ -4881,6 +4983,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             // Stage 2 (review): inspect and finish the whole run.
             "{\"action\":\"read\",\"path\":\"hello.txt\"}",
             "{\"action\":\"done\",\"summary\":\"the file content checks out\"}",
+            // Enforced verification: the run wrote a file, so its done claim goes
+            // to the verifier before the run may be called complete.
+            "APPROVE: hello.txt exists and says what the goal asked for.",
         ])
         .await;
         let fixture = run_fixture("crew", &base);
@@ -4896,7 +5001,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         .await;
         let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
         assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
-        assert_eq!(actions, ["write", "handoff", "read", "done"]);
+        assert_eq!(actions, ["write", "handoff", "read", "verify", "done"]);
         assert_eq!(
             std::fs::read_to_string(fixture.root.join("ws/hello.txt")).unwrap(),
             "hi from coding"
@@ -4986,6 +5091,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             // Resumed coding stage finishes; the reviewer then verifies.
             "{\"action\":\"done\",\"summary\":\"hello.txt is written\"}",
             "{\"action\":\"done\",\"summary\":\"the file content checks out\"}",
+            // Verifier approval: the resumed run wrote a file, so it is verified.
+            "APPROVE: the resumed run's file matches the goal.",
         ])
         .await;
         let fixture = run_fixture("crew-resume", &base);
@@ -5012,7 +5119,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(resumed_status, SUCCEEDED, "actions: {resumed_actions:?}");
         assert_eq!(
             resumed_actions,
-            ["write", "fail", "resume", "handoff", "done"]
+            ["write", "fail", "resume", "handoff", "verify", "done"]
         );
 
         // A finished run must not be resumed again.
@@ -5944,6 +6051,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 "{\"action\":\"read\",\"path\":\"notes.txt\"}",
                 "{\"action\":\"write\",\"path\":\"notes.txt\",\"content\":\"v2\"}",
                 "{\"action\":\"done\",\"summary\":\"notes.txt now says v2\"}",
+                // The run wrote a file, so the verifier checks the result.
+                "APPROVE: notes.txt says v2 and no other change was lost.",
             ],
             2,
             target.clone(),
@@ -6297,5 +6406,107 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(code, StatusCode::BAD_REQUEST, "{payload}");
         let message = payload["error"].as_str().unwrap_or_default();
         assert!(message.contains("resume it"), "{message}");
+    }
+    #[tokio::test]
+    async fn a_run_that_changed_files_is_not_complete_until_the_verifier_approves() {
+        let base = scripted_router(&[
+            "{\"action\":\"write\",\"path\":\"report.md\",\"content\":\"# Report\\n\\nDone.\"}",
+            "{\"action\":\"done\",\"summary\":\"wrote report.md\"}",
+            "APPROVE: report.md exists and starts with a heading, as asked.",
+        ])
+        .await;
+        let fixture = run_fixture("verify-approve", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write report.md with a heading",
+                "allowWrites": true,
+                "autoApprove": true,
+                "maxSteps": 5
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        // The executor's done claim does not end the run: the verify step and
+        // the closing done are written by the verifier's approval.
+        assert_eq!(actions, ["write", "verify", "done"], "{actions:?}");
+        let verdict = step_output(&fixture.state, &id, "verify");
+        assert!(verdict.contains("APPROVE"), "{verdict}");
+    }
+
+    #[tokio::test]
+    async fn a_verifier_that_reports_issues_means_the_run_does_not_succeed() {
+        // The model says done twice and the verifier disagrees both times. The
+        // run must not be marked complete just because the model claimed it.
+        let base = scripted_router(&[
+            "{\"action\":\"write\",\"path\":\"report.md\",\"content\":\"# Report\"}",
+            "{\"action\":\"done\",\"summary\":\"wrote report.md\"}",
+            "ISSUES: the report has no conclusions section, which the goal asked for.",
+            "{\"action\":\"write\",\"path\":\"report.md\",\"content\":\"# Report\\n\\n## Conclusions\\n\\nNone.\"}",
+            "{\"action\":\"done\",\"summary\":\"added the conclusions section\"}",
+            "ISSUES: the conclusions section is empty, so the goal is still not met.",
+        ])
+        .await;
+        let fixture = run_fixture("verify-issues", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write report.md with a heading and conclusions",
+                "allowWrites": true,
+                "autoApprove": true,
+                "maxSteps": 8
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(
+            status, FAILED,
+            "an unverified result must not be called complete: {actions:?}"
+        );
+        assert_eq!(
+            actions,
+            ["write", "verify", "handoff", "write", "verify", "done"],
+            "{actions:?}"
+        );
+        let error: String = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT error FROM agent_runs WHERE id=?1", [&id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(error.contains("Verification"), "{error}");
+        // Both rounds of findings are kept: nothing was silently dropped.
+        let findings = step_output(&fixture.state, &id, "verify");
+        assert!(
+            findings.contains("conclusions") || findings.contains("ISSUES"),
+            "{findings}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_only_run_needs_no_verifier() {
+        // Nothing on disk changed, so there is nothing to verify beyond the
+        // model's own report; the second reply is `done` and the run ends there.
+        let base = scripted_router(&[
+            "{\"action\":\"read\",\"path\":\"seed.txt\"}",
+            "{\"action\":\"done\",\"summary\":\"seed.txt contains hi\"}",
+        ])
+        .await;
+        let fixture = run_fixture("verify-readonly", &base);
+        std::fs::write(fixture.root.join("ws/seed.txt"), "hi").unwrap();
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "read seed.txt and report what it says",
+                "allowWrites": true,
+                "autoApprove": true,
+                "maxSteps": 4
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        assert_eq!(actions, ["read", "done"], "{actions:?}");
     }
 }
