@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.57.0
+
+- Phase 6: **automatic skill selection**, the gap where a skill only ever rode
+  along if the user picked it in the composer. `skills::select_for` scores every
+  enabled skill against the message: 4 for each word its id or name shares with
+  the message, 2 for each word of its one-line description, noise words and
+  numbers dropped, so "please review src/main.rs for bugs" selects `code-review`
+  and "what is the weather today" selects nothing.
+- Selection is bounded and repeatable: a message must share at least 2 points of
+  score before anything is attached, at most two skills ride along, ties break on
+  id, and the cropped instructions must fit 1,200 tokens together — the same
+  message always selects the same skills. Disabled and broken skills are never
+  selected.
+- A manual pick still wins: matching only runs when the composer names no skill,
+  and `auto_select_skills` (default on, stored in `config.json`) turns it off.
+  The reply meta carries `auto_skills`, the reply row shows `skill <id>`, and the
+  match is recorded in `skill_usage` so the skills panel's history is honest.
+- Defect found by the live smoke and fixed here: the chat path stored the
+  decorated prompt as the user's message, so a skill's instructions were written
+  into the transcript and replayed as the user's own words on every later turn
+  (and once matching ran, they would have compounded). The transcript now stores
+  what the user typed plus the editor code they attached; the newest outbound
+  turn is the decorated prompt, assembled on the way out.
+- Tests: 340 pass, 1 ignored. Six new for selection: a name match, a
+  description-only match, an unrelated message and a messageless one selecting
+  nothing, disabled and broken skills skipped, the cap plus repeatability, and the
+  token budget declining a second full-size skill. Clippy `-D warnings` clean;
+  `rustfmt` clean; `node --check app/static/app.js` clean.
+- Live smoke on `:8916` with two fixture skills (`code-review`, `changelog`) and a
+  mock router that logs each request: "please review src/main.rs for bugs"
+  answered with `meta.auto_skills: ["code-review"]` and the request carried the
+  skill's instructions; a manual `changelog` pick sent `auto_skills: null` with
+  only that skill's body; "what is the weather today" sent neither; "review the
+  changelog for the release" selected both; the transcript held only the typed
+  message, and usage counts rose for both skills.
+
 ## 1.56.0
 
 - Phase 5 item 5: **verification is enforced**, closing the last Phase 5 gap. A

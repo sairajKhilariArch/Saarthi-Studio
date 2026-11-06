@@ -122,6 +122,10 @@ Remaining for Phase 1 sign-off:
 Install from local dir / git, version tracking, update preserving config,
 permission constraints, usage history, automatic selection — on top of the
 existing discovery/registry.
+*Delivered 1.57.0: a message that names no skill is matched against the enabled
+skills' names and descriptions, with a floor, a two-skill cap and a token
+budget; the reply reports what was attached. Per-skill permissions remain open,
+and only matter if a skill ever executes.*
 
 ## Phase 7 — MCP manager
 

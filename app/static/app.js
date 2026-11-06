@@ -1058,6 +1058,11 @@ function addMessage(role, content, options = {}) {
     if (Array.isArray(meta.fallbacks) && meta.fallbacks.length) {
       parts.push(`${meta.fallbacks.length} fallback${meta.fallbacks.length === 1 ? "" : "s"}`);
     }
+    // A skill the user did not pick is shown, never silent: the reply says which
+    // instructions were attached on its behalf.
+    if (Array.isArray(meta.auto_skills) && meta.auto_skills.length) {
+      parts.push(`skill ${meta.auto_skills.join(", ")}`);
+    }
     if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
     if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
     pushContextMeta(parts, meta);
@@ -1111,6 +1116,9 @@ function pushContextMeta(parts, meta) {
 
 function contextMetaTitle(meta) {
   const bits = [];
+  if (Array.isArray(meta.auto_skills) && meta.auto_skills.length) {
+    bits.push(`matched skill${meta.auto_skills.length === 1 ? "" : "s"}: ${meta.auto_skills.join(", ")}`);
+  }
   if (meta.context_tokens != null) bits.push(`${formatCount(meta.context_tokens)} tokens sent`);
   if (meta.context_budget) bits.push(`budget ${formatCount(meta.context_budget)}`);
   if (meta.context_saved_tokens) bits.push(`${formatCount(meta.context_saved_tokens)} estimated tokens kept out`);

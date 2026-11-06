@@ -100,6 +100,9 @@ struct Config {
     /// Skills the user switched off; everything discovered is on by default.
     #[serde(default)]
     disabled_skills: Vec<String>,
+    /// Attach a matching skill automatically when a message picks none.
+    #[serde(default = "default_auto_skills")]
+    auto_select_skills: bool,
     /// Deep-search backend: "", "exa" or "tavily".
     #[serde(default)]
     search_provider: String,
@@ -164,6 +167,10 @@ fn default_max_concurrent_runs() -> i64 {
     1
 }
 
+fn default_auto_skills() -> bool {
+    true
+}
+
 fn default_context_budget_tokens() -> usize {
     context::DEFAULT_BUDGET_TOKENS
 }
@@ -186,6 +193,7 @@ impl Config {
             send_workspace_outline: true,
             active_project: String::new(),
             disabled_skills: Vec::new(),
+            auto_select_skills: true,
             search_provider: String::new(),
             search_api_key: String::new(),
             privacy_exclusions: Vec::new(),
@@ -2961,6 +2969,9 @@ struct ChatPrep {
     thinking: Option<thinking::Resolved>,
     /// The active project's model default, or empty when it inherits.
     project_model: String,
+    /// Skills attached by matching, not by the composer; their ids ride in the
+    /// reply meta so the user sees what the turn was told to follow.
+    auto_skills: Vec<String>,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -3045,6 +3056,10 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         format!("{message}\n\nHere is the code from my editor (language: {language}):\n```{language}\n{code}\n```")
     };
 
+    // The transcript keeps what the user actually sent. Skill and mode
+    // preambles are prompt engineering for this request only: stored, they
+    // would be replayed as the user's words on every later turn.
+    let stored = prompt.clone();
     // Skills: the system prompt carries one line per enabled skill, and the
     // picked skill's instructions ride with this message only.
     let workspace_root = state.workspace.current_root();
@@ -3058,6 +3073,36 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
                     skill.name, skill.body, prompt
                 );
             }
+        }
+    }
+    // Automatic selection is the fallback for a message that names no skill:
+    // the composer's pick above means the user already decided.
+    let mut auto_skills: Vec<String> = Vec::new();
+    if input
+        .get("skill")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty()
+        && cfg.auto_select_skills
+    {
+        let chosen = skills::select_for(&message, &cfg.disabled_skills, &available);
+        if !chosen.is_empty() {
+            let names: Vec<String> = chosen
+                .iter()
+                .map(|skill| format!("\"{}\"", skill.name))
+                .collect();
+            let bodies: Vec<String> = chosen
+                .iter()
+                .map(|skill| format!("## {}\n{}", skill.name, skill.body))
+                .collect();
+            prompt = format!(
+                "Follow the skill{} {} for this message:\n\n{}\n\n---\n\n{}",
+                if chosen.len() == 1 { "" } else { "s" },
+                names.join(", "),
+                bodies.join("\n\n"),
+                prompt
+            );
+            auto_skills = chosen.iter().map(|skill| skill.id.clone()).collect();
         }
     }
     // Mode rides with the message too: plan first, build second.
@@ -3097,7 +3142,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         }
         tx.execute(
             "INSERT INTO messages(conversation_id,role,content,created_at,attachments) VALUES(?1,'user',?2,?3,?4)",
-            params![cid, prompt, now_seconds(),            serde_json::to_string(&attachment_records)
+            params![cid, stored, now_seconds(),            serde_json::to_string(&attachment_records)
                 .ok()
                 .filter(|_| !attachment_records.is_empty())],
         )?;
@@ -3145,11 +3190,20 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             )))
         }
     };
-    let history: Vec<Value> = rows
+    let mut history: Vec<Value> = rows
         .into_iter()
         .rev()
         .map(|(role, content)| json!({"role": role, "content": content}))
         .collect();
+    // The turn being sent is `prompt` — the user's words plus any preamble that
+    // belongs to this request only (skills, plan/decide mode). The transcript
+    // keeps `stored`, so the newest row is replaced here instead of the
+    // preamble being written into history and replayed as the user's words.
+    if let Some(last) = history.last_mut() {
+        if last.get("role").and_then(Value::as_str) == Some("user") {
+            last["content"] = json!(prompt);
+        }
+    }
     let outline = if cfg.send_workspace_outline {
         state.workspace.outline()
     } else {
@@ -3192,6 +3246,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         attachments,
         thinking: resolved,
         project_model: project_model(state, &active_project),
+        auto_skills,
     })
 }
 
@@ -3266,6 +3321,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         attachments,
         thinking,
         project_model,
+        auto_skills,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3279,6 +3335,11 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         if !skill_id.is_empty() {
             skills::record_pick(&state, skill_id, &cid);
         }
+    }
+    // Matching counts as use too, otherwise the skills panel would claim a
+    // skill that answered a dozen turns was never used.
+    for skill_id in &auto_skills {
+        skills::record_pick(&state, skill_id, &cid);
     }
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
@@ -3323,6 +3384,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         meta["context_trimmed"] = json!(context_trimmed);
         meta["context_dropped"] = json!(context_dropped);
         meta["context_saved_tokens"] = json!(context_saved);
+        if !auto_skills.is_empty() {
+            meta["auto_skills"] = json!(&auto_skills);
+        }
         return Json(json!({
             "ok": true,
             "answer": answer,
@@ -3440,6 +3504,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
             meta["context_trimmed"] = json!(context_trimmed);
             meta["context_dropped"] = json!(context_dropped);
             meta["context_saved_tokens"] = json!(context_saved);
+            if !auto_skills.is_empty() {
+                meta["auto_skills"] = json!(&auto_skills);
+            }
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
         }
         Err(error) => {
@@ -3766,6 +3833,7 @@ async fn chat_stream(
         attachments,
         thinking,
         project_model,
+        auto_skills,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3779,6 +3847,11 @@ async fn chat_stream(
         if !skill_id.is_empty() {
             skills::record_pick(&state, skill_id, &cid);
         }
+    }
+    // Matching counts as use too, otherwise the skills panel would claim a
+    // skill that answered a dozen turns was never used.
+    for skill_id in &auto_skills {
+        skills::record_pick(&state, skill_id, &cid);
     }
     let context_tokens = packed.estimated_tokens;
     let context_trimmed = packed.trimmed_messages;
@@ -3812,6 +3885,9 @@ async fn chat_stream(
         );
         if let Ok(mut held) = recorder.meta.lock() {
             held["model"] = json!(&chosen_model);
+            if !auto_skills.is_empty() {
+                held["auto_skills"] = json!(&auto_skills);
+            }
             held["deepsearch"] = json!(true);
         }
         if let Ok(mut held) = recorder.text.lock() {
@@ -3967,6 +4043,9 @@ async fn chat_stream(
     .with_price(catalog_price(&state, &cfg, &chosen_model).await);
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
+        if !auto_skills.is_empty() {
+            held["auto_skills"] = json!(&auto_skills);
+        }
         held["thinking"] = thinking_json(thinking);
         held["model_scope"] = json!(model_scope_label);
         held["context_budget"] = json!(cfg.context_budget_tokens);

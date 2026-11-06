@@ -57,6 +57,14 @@ const MAX_BODY_TOKENS: usize = 900;
 /// A skill installed without a stated version still gets one, so the record can
 /// show that it predates the first explicit update.
 const DEFAULT_VERSION: &str = "0.1.0";
+/// A message must share at least this much with a skill before the skill is
+/// attached automatically (see [`select_for`]).
+const AUTO_MIN_SCORE: usize = 2;
+/// Ceiling on automatically attached skills: two related ones can help, five
+/// bury the message under instructions.
+const AUTO_MAX_SKILLS: usize = 2;
+/// Ceiling on the instructions automatic selection may add to one turn.
+const AUTO_MAX_TOKENS: usize = 1200;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Skill {
@@ -303,6 +311,92 @@ pub(crate) fn instructions_for(id: &str, all: &[Skill]) -> Option<Skill> {
         skill.body = crate::context::crop(&skill.body, MAX_BODY_TOKENS);
         skill
     })
+}
+
+/// Words that say nothing about which skill a message needs. They are dropped
+/// before scoring so a sentence like "please review this for me" matches a
+/// review skill on "review" and not on "this".
+const NOISE: &[&str] = &[
+    "the", "and", "for", "this", "that", "with", "from", "into", "about", "when", "then", "you",
+    "your", "are", "was", "were", "have", "has", "had", "not", "but", "all", "any", "can", "how",
+    "what", "why", "who", "its", "its", "use", "using", "please", "make", "need", "want", "let",
+    "get", "one", "two", "also", "just", "like", "should", "would", "could", "will", "shall",
+    "may", "might", "must", "here", "there", "some", "more", "very", "much", "them", "they",
+    "than", "out", "off", "our", "his", "her", "they",
+];
+
+/// A word the message and a skill can agree on: lowercase alphanumeric runs of
+/// three or more characters, minus the noise list. Numbers are dropped, so a
+/// version or an issue id never selects a skill on its own.
+fn keywords(text: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut word = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            word.extend(ch.to_lowercase());
+        } else {
+            if word.len() >= 3
+                && !NOISE.contains(&word.as_str())
+                && !word.chars().all(char::is_numeric)
+            {
+                out.insert(std::mem::take(&mut word));
+            } else {
+                word.clear();
+            }
+        }
+    }
+    if word.len() >= 3 && !NOISE.contains(&word.as_str()) && !word.chars().all(char::is_numeric) {
+        out.insert(word);
+    }
+    out
+}
+
+/// Skills a message should carry when the user picked none.
+///
+/// A skill scores 4 for each word its id or name shares with the message and 2
+/// for each word of its one-line description: the name is what the skill is
+/// called, the description is what it is for, and both are short. The message
+/// must reach [`AUTO_MIN_SCORE`] to select anything, so a single incidental
+/// word in a long description is not enough. Ties break on id, and the result
+/// is capped by [`AUTO_MAX_SKILLS`] and [`AUTO_MAX_TOKENS`], so the same message
+/// always selects the same skills and never blows the context budget.
+pub(crate) fn select_for(text: &str, disabled: &[String], all: &[Skill]) -> Vec<Skill> {
+    let wanted = keywords(text);
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(usize, &Skill)> = all
+        .iter()
+        .filter(|skill| skill.error.is_none() && !disabled.contains(&skill.id))
+        .filter_map(|skill| {
+            let title = keywords(&format!(
+                "{} {}",
+                skill.id.replace(['-', '_'], " "),
+                skill.name
+            ));
+            let about = keywords(&skill.description);
+            let score =
+                title.intersection(&wanted).count() * 4 + about.intersection(&wanted).count() * 2;
+            (score >= AUTO_MIN_SCORE).then_some((score, skill))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+    let mut chosen: Vec<Skill> = Vec::new();
+    let mut tokens = 0usize;
+    for (_, skill) in scored {
+        let mut skill = skill.clone();
+        skill.body = crate::context::crop(&skill.body, MAX_BODY_TOKENS);
+        let cost = crate::context::estimate_tokens(&skill.body);
+        if tokens + cost > AUTO_MAX_TOKENS {
+            continue;
+        }
+        tokens += cost;
+        chosen.push(skill);
+        if chosen.len() == AUTO_MAX_SKILLS {
+            break;
+        }
+    }
+    chosen
 }
 
 /* ---------------------------------------------------------------- */
@@ -1222,5 +1316,97 @@ mod tests {
         let none = usage_detail(&db, "missing", 10);
         assert_eq!(none["uses"], 0);
         assert_eq!(none["recent"].as_array().map(Vec::len), Some(0));
+    }
+    /// A skill with nothing on disk behind it, for the selection tests.
+    fn built(id: &str, description: &str, body: &str) -> Skill {
+        Skill {
+            id: id.to_string(),
+            name: id.replace('-', " "),
+            description: description.to_string(),
+            version: "1.0.0".to_string(),
+            body: body.to_string(),
+            path: format!("/skills/{id}/SKILL.md"),
+            source: "user",
+            fingerprint: String::new(),
+            error: None,
+        }
+    }
+
+    fn ids(skills: &[Skill]) -> Vec<String> {
+        skills.iter().map(|skill| skill.id.clone()).collect()
+    }
+
+    #[test]
+    fn a_message_selects_the_skill_whose_name_it_uses() {
+        let all = vec![
+            built(
+                "code-review",
+                "Review a file for bugs and security problems.",
+                "Read it.",
+            ),
+            built(
+                "changelog",
+                "Write a changelog entry for a release.",
+                "Write it.",
+            ),
+        ];
+        let chosen = select_for("please review src/main.rs before I merge", &[], &all);
+        assert_eq!(ids(&chosen), ["code-review"]);
+        // The cropped body is what an attachment would carry.
+        assert_eq!(chosen[0].body, "Read it.");
+    }
+
+    #[test]
+    fn a_description_alone_can_select_a_skill() {
+        let all = vec![built(
+            "house-style",
+            "Keep the writing plain and short.",
+            "Be plain.",
+        )];
+        let chosen = select_for("make the writing plain here", &[], &all);
+        assert_eq!(ids(&chosen), ["house-style"]);
+    }
+
+    #[test]
+    fn an_unrelated_message_selects_nothing() {
+        let all = vec![built("code-review", "Review a file for bugs.", "Read it.")];
+        assert!(select_for("what is the weather today", &[], &all).is_empty());
+        assert!(select_for("??", &[], &all).is_empty());
+        assert!(select_for("", &[], &all).is_empty());
+    }
+
+    #[test]
+    fn selection_skips_disabled_and_broken_skills() {
+        let all = vec![built("code-review", "Review a file for bugs.", "Read it.")];
+        assert!(select_for("review this", &["code-review".to_string()], &all).is_empty());
+        let mut broken = built("broken-review", "Review a file for bugs.", "");
+        broken.error = Some("no instructions".to_string());
+        assert!(select_for("review this", &[], &[broken]).is_empty());
+    }
+
+    #[test]
+    fn selection_is_capped_and_the_same_message_picks_the_same_skills() {
+        let all = vec![
+            built("zeta-review", "Review things carefully.", ""),
+            built("alpha-review", "Review things carefully.", ""),
+            built("beta-review", "Review things carefully.", ""),
+        ];
+        let first = select_for("review this change", &[], &all);
+        let second = select_for("review this change", &[], &all);
+        // Equal scores break on id, and only two may ride along.
+        assert_eq!(ids(&first), ["alpha-review", "beta-review"]);
+        assert_eq!(ids(&first), ids(&second));
+    }
+
+    #[test]
+    fn selection_stays_inside_its_token_budget() {
+        let long = "x ".repeat(4000);
+        let all = vec![
+            built("alpha-review", "Review things carefully.", &long),
+            built("beta-review", "Review things carefully.", &long),
+        ];
+        let chosen = select_for("review this change", &[], &all);
+        assert_eq!(chosen.len(), 1, "a second full skill would blow the budget");
+        assert!(crate::context::estimate_tokens(&chosen[0].body) <= 1200);
     }
 }
