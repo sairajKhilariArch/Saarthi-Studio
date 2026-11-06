@@ -97,7 +97,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Item | Status | Notes |
 |---|---|---|
 | Real execution loop with tools | Working | `agent.rs`: think/list/read/write/command/done/fail |
-| Approval pauses, checkpoints, diffs, restore | Working | `awaiting_approval`, per-step checkpoint (200 kB cap) |
+| Approval pauses, checkpoints, diffs, restore | Working (1.70.0) | `awaiting_approval`, per-step checkpoint (200 kB cap), per-step restore and run-level restore of every file a finished run wrote; `fs_write` is checked per path before a bulk restore writes anything |
 | Cancellation, crash recovery (`interrupted`) | Working | `ACTIVE` map; startup sweep |
 | Pause / resume between steps | Working (1.52.0) | `POST /api/runs/:id/pause` parks a live run at the next step boundary (never mid-action), writes a `pause` step, sets `paused` and releases its control entry; `resume` continues from the same step log. A pause is durable across a restart and is only refused when there is nothing to stop (a run awaiting approval) |
 | Resume from the step log | Working | `POST /api/runs/:id/resume` + 2 tests |

@@ -6759,6 +6759,15 @@ function buildRunDetail(detail) {
       : "Start a new run with the same goal and settings; its step log starts empty";
     retry.addEventListener('click', () => retryAgentRun(detail.id));
     controls.appendChild(retry);
+    if ((detail.stepList || []).some((step) => step.hasCheckpoint)) {
+      const undo = document.createElement("button");
+      undo.type = "button";
+      undo.className = "btn btn-quiet btn-small run-restore";
+      undo.textContent = "Restore all files";
+      undo.title = "Put every file this run changed back to the content it had before the run first wrote it";
+      undo.addEventListener('click', () => restoreRun(detail.id));
+      controls.appendChild(undo);
+    }
   }
   const refresh = document.createElement("button");
   refresh.type = "button";
@@ -6838,6 +6847,22 @@ function buildRunDetail(detail) {
   });
   box.appendChild(list);
   return box;
+}
+
+async function restoreRun(runId) {
+  if (!confirm("Restore every file this run changed to its content before the run first wrote it?\n\nThis overwrites the files' current contents; edits made after the run are lost.")) return;
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/restore`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not restore the run's files.");
+    return;
+  }
+  const skipped = (result.data.skipped || []).length;
+  toast(`Restored ${result.data.count} file${result.data.count === 1 ? "" : "s"}${skipped ? `; ${skipped} skipped` : ""}.`);
+  await loadRunDetail();
 }
 
 async function restoreRunStep(runId, seq) {

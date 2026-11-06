@@ -17,7 +17,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +39,9 @@ const HISTORY_STEPS: i64 = 40;
 const CHECKPOINT_CAP: usize = 200_000;
 /// How many characters of unified diff one step may log.
 const DIFF_CAP: usize = 8_000;
+/// Files one run-level restore may write. A run that touched more than this is
+/// better restored a step at a time than in one request.
+const RESTORE_MAX_FILES: usize = 200;
 /// How many discovered tools one agent prompt may list.
 const MCP_PROMPT_TOOLS: usize = 30;
 
@@ -3008,6 +3011,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(format!("{prefix}/:id/resume").as_str(), post(resume_run))
         .route(format!("{prefix}/:id/pause").as_str(), post(pause_run))
         .route(format!("{prefix}/:id/retry").as_str(), post(retry_run))
+        .route(format!("{prefix}/:id/restore").as_str(), post(restore_run))
         .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
@@ -3524,6 +3528,161 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
         }
     }
     Json(payload).into_response()
+}
+
+/// Every file a finished run wrote, mapped to the content it had before the
+/// run first touched it. The earliest checkpoint per path wins: rolling back to
+/// the last pre-write state would leave the run's earlier writes in place.
+fn run_restore_candidates(
+    state: &crate::AppState,
+    run_id: &str,
+) -> Result<Vec<(String, String)>, (StatusCode, String)> {
+    let run = match load_run(state, run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "No such run.".to_string())),
+        Err(error) => return Err((StatusCode::INTERNAL_SERVER_ERROR, error)),
+    };
+    if !matches!(
+        run.status.as_str(),
+        SUCCEEDED | FAILED | CANCELLED | INTERRUPTED
+    ) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "This run is still {}. Finish or cancel it before restoring its files.",
+                run.status
+            ),
+        ));
+    }
+    let rows = match db(state).and_then(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT checkpoint FROM agent_steps WHERE run_id=?1 AND action='write' AND checkpoint<>'' ORDER BY seq ASC",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map([run_id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<String>, rusqlite::Error>>()
+            .map_err(|error| error.to_string())?;
+        Ok(rows)
+    }) {
+        Ok(rows) => rows,
+        Err(error) => return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+    for checkpoint in rows {
+        let Ok(parsed) = serde_json::from_str::<Value>(&checkpoint) else {
+            continue;
+        };
+        let (Some(path), Some(old)) = (
+            parsed.get("path").and_then(Value::as_str),
+            parsed.get("old").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if seen.insert(path.to_string()) {
+            files.push((path.to_string(), old.to_string()));
+        }
+    }
+    if files.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "This run has no file checkpoints to restore.".to_string(),
+        ));
+    }
+    if files.len() > RESTORE_MAX_FILES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "This run changed {} files; restore at most {RESTORE_MAX_FILES} at once.",
+                files.len()
+            ),
+        ));
+    }
+    Ok(files)
+}
+
+/// Write the collected pre-run contents back. One unreadable or newly invalid
+/// path is reported and skipped instead of aborting the other files.
+fn restore_run_files(
+    state: &crate::AppState,
+    root: &FsPath,
+    run_id: &str,
+    files: &[(String, String)],
+) -> Value {
+    let mut restored: Vec<String> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    for (path, old) in files {
+        match crate::workspace::write_text_file(root, path, old) {
+            Ok(_) => restored.push(path.clone()),
+            Err(error) => skipped.push(json!({ "path": path, "error": error.message() })),
+        }
+    }
+    let _ = add_step(
+        state,
+        run_id,
+        "restored",
+        &format!("restore {} file(s)", restored.len()),
+        &format!(
+            "Restored {} file(s) to their pre-run content{}.{}",
+            restored.len(),
+            if restored.is_empty() {
+                "".to_string()
+            } else {
+                format!(": {}", restored.join(", "))
+            },
+            if skipped.is_empty() {
+                "".to_string()
+            } else {
+                format!(" {} could not be restored.", skipped.len())
+            }
+        ),
+    );
+    notify(state, Some(run_id));
+    json!({
+        "ok": true,
+        "count": restored.len(),
+        "restored": restored,
+        "skipped": skipped,
+    })
+}
+
+/// Restore every file a finished run wrote to the content it had before the run
+/// first touched it. This is a user-initiated write, so every path consults the
+/// `fs_write` rule before the first byte is written: a deny stops the whole
+/// restore rather than half-applying it.
+async fn restore_run(
+    State(state): State<crate::AppState>,
+    Path(run_id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let files = match run_restore_candidates(&state, &run_id) {
+        Ok(files) => files,
+        Err((status, message)) => return error_response(status, message),
+    };
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.message()),
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    for (path, _) in &files {
+        if let Some(response) = crate::permissions::guard_user(
+            &state,
+            crate::permissions::Action::FsWrite,
+            path,
+            "",
+            approve,
+            "restore files an agent run changed",
+        ) {
+            return response;
+        }
+    }
+    Json(restore_run_files(&state, &root, &run_id, &files)).into_response()
 }
 
 /// Restore a written file to the content snapshotted before an agent wrote to
@@ -6112,6 +6271,49 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 params![id, status],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn a_run_restore_uses_the_earliest_checkpoint_per_file() {
+        let base = "http://127.0.0.1:1";
+        let fixture = run_fixture("restore-all", base);
+        let id = format!("restore-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &id, SUCCEEDED);
+        let ws = fixture.root.join("ws");
+        // What the run left behind on disk.
+        std::fs::write(ws.join("a.txt"), "three").unwrap();
+        std::fs::write(ws.join("b.txt"), "b-final").unwrap();
+        let first = json!({"path": "a.txt", "old": "one"}).to_string();
+        let second = json!({"path": "a.txt", "old": "two"}).to_string();
+        let other = json!({"path": "b.txt", "old": "b-start"}).to_string();
+        add_step_with_checkpoint(&fixture.state, &id, "write", "write a", "", &first).unwrap();
+        add_step_with_checkpoint(&fixture.state, &id, "write", "write a again", "", &second)
+            .unwrap();
+        add_step_with_checkpoint(&fixture.state, &id, "write", "write b", "", &other).unwrap();
+
+        let files = run_restore_candidates(&fixture.state, &id).unwrap();
+        assert_eq!(files.len(), 2, "one entry per path");
+        let value = restore_run_files(&fixture.state, ws.as_path(), &id, &files);
+        assert_eq!(value["count"], 2, "{value}");
+        assert_eq!(std::fs::read_to_string(ws.join("a.txt")).unwrap(), "one");
+        assert_eq!(
+            std::fs::read_to_string(ws.join("b.txt")).unwrap(),
+            "b-start"
+        );
+        // The restore is itself recorded, so the log remains an honest history.        assert!(step_output(&fixture.state, &id, "restored").contains("a.txt"));
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[test]
+    fn a_live_run_cannot_be_restored() {
+        let base = "http://127.0.0.1:1";
+        let fixture = run_fixture("restore-live", base);
+        let id = format!("restore-live-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &id, RUNNING);
+        let error = run_restore_candidates(&fixture.state, &id).unwrap_err();
+        assert_eq!(error.0, StatusCode::CONFLICT);
+        assert!(error.1.contains("still running"), "{}", error.1);
+        let _ = std::fs::remove_dir_all(&fixture.root);
     }
 
     fn step_output(state: &AppState, id: &str, action: &str) -> String {

@@ -105,7 +105,8 @@ Remaining for Phase 1 sign-off:
 2. Task queue with priority, dependencies, retry, cancellation, checkpoints.
    *Delivered 1.53.0 for the queue (`queued` state, priority, dependencies and
    in-order admission behind `max_concurrent_runs`) and 1.55.0 for retry as its
-   own control alongside resume; checkpoints and cancellation already existed.*
+   own control alongside resume; checkpoints and cancellation already existed,
+   and 1.70.0 added run-level restore across every file a finished run wrote.*
 3. Role-specialised agents with explicit tools/permissions/budgets.
 4. Parallel execution guarded by worktree isolation or file locks; conflict
    detection before write.

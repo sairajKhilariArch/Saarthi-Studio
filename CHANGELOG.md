@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.70.0
+
+- A finished agent run can be undone across every file it wrote. `POST
+  /api/runs/:id/restore` (local and host prefix) reads the earliest pre-write
+  checkpoint for each path the run touched and writes it back; the Runs panel
+  offers **Restore all files** on finished runs, with a confirmation that says
+  later edits are overwritten.
+- Restore is deliberately bounded: only `succeeded`, `failed`, `cancelled` and
+  `interrupted` runs qualify (a live or paused run is a 409), a run with no
+  checkpoints is a 400, and more than 200 files is refused rather than partially
+  applied. Every path consults the `fs_write` rule **before the first write**, so
+  a saved deny is a 403 and nothing changes; a path that can no longer be
+  written is reported and skipped while the rest still restore.
+- The action is recorded as a `restored` step on the run and publishes the usual
+  run-changed event, so the log stays an honest history instead of silently
+  rewriting the past.
+- `cargo test --locked`: **390 passed, 1 ignored** (2 new: the earliest
+  checkpoint per path wins while a later checkpoint for the same file is
+  ignored, a second file restores too, and the `restored` step is written; a
+  running run is refused with a 409 and nothing is written). Clippy `-D
+  warnings` clean, `rustfmt --check` clean on the touched files, `node --check`
+  clean.
+- Live smoke on `:8937` with two seeded checkpoints for `a.txt` (`one`, then
+  `two`) and the file on disk at `three`: restore answered 200 `{count: 1,
+  restored: ["a.txt"]}`, the file became `one`, the run detail gained `restored
+  restore 1 file(s)`, a running run answered 409 with its status, and a saved
+  `fs_write` deny answered 403 leaving `three` untouched. The button itself was
+  not viewed in a browser.
+- Not built: a whole-folder snapshot or worktree (only files the run wrote are
+  restored, and only files whose old content was ≤200 000 characters are
+  checkpointed), and a content guard against edits made after the run — the
+  confirmation is the only protection there.
+
 ## 1.69.0
 
 - The Source Control diff is no longer all-or-nothing: each hunk has a **Stage
