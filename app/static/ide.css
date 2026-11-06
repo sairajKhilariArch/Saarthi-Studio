@@ -244,7 +244,14 @@ body.no-right { --right-w: 0px; }
 .scm-item:hover .scm-act { opacity: 1; }
 .scm-act:hover { background: var(--surface-3); color: var(--text); }
 .scm-act:focus-visible { opacity: 1; outline: 1px solid var(--accent); }
-.scm-diff { font-family: var(--mono); font-size: 10.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 6px 8px; margin: 2px 0 6px; max-height: 240px; overflow: auto; }
+.scm-diff { display: flex; flex-direction: column; gap: 5px; font-family: var(--mono); font-size: 10.5px; line-height: 1.45; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 6px 8px; margin: 2px 0 6px; max-height: 320px; overflow: auto; }
+.scm-diff-body, .scm-hunk-body { margin: 0; font: inherit; white-space: pre-wrap; word-break: break-word; }
+.scm-hunk { border-top: 1px solid var(--line-soft); padding-top: 4px; }
+.scm-hunk-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.scm-hunk-head .hunk-index { font-size: 10px; color: var(--accent); }
+.scm-hunk-head .tiny-toggle { opacity: 1; }
+.scm-commit-meta { white-space: pre-wrap; font-size: 10.5px; color: var(--dim); padding: 2px 4px 6px; }
+.scm-commit-line { cursor: pointer; }
 .scm-diff .add { color: var(--ok); }
 .scm-diff .del { color: var(--danger); }
 .scm-diff .hunk { color: var(--accent); }

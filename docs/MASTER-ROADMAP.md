@@ -164,8 +164,8 @@ discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it
 (inline diff, stage/unstage/discard, commit box, branch create/switch, history,
 conflict/staged/changed/untracked groups, ahead/behind). Remaining: worktree
-checkpoints before an agent writes, per-hunk staging and a commit-detail diff
-(merge/pull/push/fetch followed in 1.68.0).*
+checkpoints before an agent writes (merge/pull/push/fetch followed in 1.68.0;
+per-hunk staging and commit detail in 1.69.0).*
 
 *Delivered 1.67.0: the build/test loop — detected `cargo build`/`cargo test` and
 `package.json` build/test scripts run from the Problems pane, stdout/stderr
@@ -179,6 +179,13 @@ never forces and sets the upstream once. Remote commands have a 90 s deadline,
 no terminal credential prompt, drained and bounded streams, and the `git`
 permission action. Still open: merge/rebase, adding remotes from the UI, and
 force push (deliberately).*
+
+*Delivered 1.69.0: per-hunk staging — the diff is split into its real hunks and
+one hunk is applied to the index through `git apply --cached` (reversed to
+unstage), with the patch built server-side from git's own preamble so the client
+never supplies patch text — plus a commit-detail diff from history. Still open:
+merge/rebase, staging individual lines, and worktree checkpoints before an agent
+writes.*
 
 ## Phase 10 — Safety and permissions
 

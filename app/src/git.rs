@@ -24,7 +24,7 @@
 //! The read routes (`diff`, `branches`, `log`) do not mutate anything and are
 //! left ungated, matching the existing `/api/workspace/vcs` read.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -215,6 +215,8 @@ fn git_failure(message: String) -> Response {
         || lower.contains("non-fast-forward")
         || lower.contains("rejected")
         || lower.contains("diverged")
+        || lower.contains("patch failed")
+        || lower.contains("does not apply")
     {
         return fail(StatusCode::CONFLICT, message);
     }
@@ -735,6 +737,148 @@ fn checkout_branch(root: &Path, raw: &str) -> Result<Value, String> {
     Ok(json!({ "ok": true, "branch": name }))
 }
 
+/// Split a one-file diff into its preamble (`diff --git`, `index`, `---`,
+/// `+++`) and its hunks, each starting at `@@`. Git's own header is reused
+/// verbatim, so modes, rename lines and line counts are never re-derived.
+fn split_hunks(diff: &str) -> (String, Vec<String>) {
+    let mut preamble = String::new();
+    let mut hunks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in diff.split_inclusive('\n') {
+        if line.starts_with("@@ ") {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            current = Some(line.to_string());
+        } else if let Some(hunk) = current.as_mut() {
+            hunk.push_str(line);
+        } else {
+            preamble.push_str(line);
+        }
+    }
+    if let Some(hunk) = current {
+        hunks.push(hunk);
+    }
+    (preamble, hunks)
+}
+
+/// A valid patch for one hunk of one file. The preamble is required: without
+/// `---`/`+++` git apply has no file to patch.
+fn hunk_patch(diff: &str, index: usize) -> Result<String, String> {
+    let (preamble, hunks) = split_hunks(diff);
+    if preamble.trim().is_empty() || hunks.is_empty() {
+        return Err(
+            "This file has no hunks to move. Stage or unstage the whole file instead.".to_string(),
+        );
+    }
+    let Some(hunk) = hunks.get(index) else {
+        return Err(format!(
+            "Hunk {} does not exist; this diff has {}.",
+            index + 1,
+            hunks.len()
+        ));
+    };
+    Ok(format!("{preamble}{hunk}"))
+}
+
+/// Apply one hunk to the index. Staging takes the worktree-vs-index diff and
+/// applies it forward; unstaging takes the index-vs-HEAD diff and reverses it.
+/// The patch travels on stdin, never in argv.
+fn apply_hunk(root: &Path, path: &str, index: usize, reverse: bool) -> Result<Value, String> {
+    let mut diff_args: Vec<&str> = vec!["diff", "--no-color", "--no-ext-diff", "-U3"];
+    if reverse {
+        diff_args.push("--cached");
+    }
+    diff_args.push("--");
+    diff_args.push(path);
+    let diff = git(root, &diff_args)?;
+    if !diff.ok {
+        return Err(git_error(&diff, "git diff failed"));
+    }
+    let patch = hunk_patch(&diff.stdout, index)?;
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .args(["apply", "--cached", "--whitespace=nowarn"]);
+    if reverse {
+        command.arg("--reverse");
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "Git is not installed, or not on PATH.".to_string())?;
+    {
+        let mut stdin = child.stdin.take().ok_or("Git did not accept the patch.")?;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
+    let result = GitOutput {
+        ok: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    };
+    if !result.ok {
+        return Err(git_error(&result, "git could not apply that hunk"));
+    }
+    Ok(json!({ "ok": true, "path": path, "hunk": index, "reverse": reverse }))
+}
+
+fn valid_commit_hash(raw: &str) -> Result<String, String> {
+    let hash = raw.trim().to_ascii_lowercase();
+    if hash.len() < 4 || hash.len() > 40 || !hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("That is not a commit hash.".to_string());
+    }
+    Ok(hash)
+}
+
+fn show_commit(root: &Path, raw: &str) -> Result<Value, String> {
+    let hash = valid_commit_hash(raw)?;
+    let meta = git(
+        root,
+        &[
+            "show",
+            "-s",
+            "--no-color",
+            "--format=%H%x09%h%x09%an%x09%aI%x09%s",
+            &hash,
+        ],
+    )?;
+    if !meta.ok {
+        return Err(git_error(&meta, "git show failed"));
+    }
+    let line = meta.stdout.lines().next().unwrap_or("");
+    let mut parts = line.splitn(5, '\t');
+    let full = parts.next().unwrap_or("").trim().to_string();
+    let short = parts.next().unwrap_or("").trim().to_string();
+    let author = parts.next().unwrap_or("").trim().to_string();
+    let date = parts.next().unwrap_or("").trim().to_string();
+    let subject = parts.next().unwrap_or("").trim().to_string();
+    let patch = git(
+        root,
+        &["show", "--no-color", "--no-ext-diff", "--format=", &hash],
+    )?;
+    if !patch.ok {
+        return Err(git_error(&patch, "git show failed"));
+    }
+    let (diff, truncated) = truncate(&patch.stdout, MAX_DIFF_BYTES);
+    Ok(json!({
+        "hash": full,
+        "short": short,
+        "author": author,
+        "date": date,
+        "subject": subject,
+        "diff": diff,
+        "truncated": truncated,
+    }))
+}
+
 pub(crate) fn parse_log(output: &str) -> Vec<Value> {
     output
         .lines()
@@ -1066,6 +1210,67 @@ async fn push_route(State(state): State<AppState>, Json(input): Json<Value>) -> 
     }
 }
 
+async fn hunk_route(state: AppState, input: Value, reverse: bool) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let raw = match input.get("path").and_then(Value::as_str) {
+        Some(value) => value,
+        None => return bad("Provide the file path."),
+    };
+    let path = match normalise_path(raw) {
+        Ok(path) => path,
+        Err(message) => return bad(message),
+    };
+    let index = match input.get("hunk").and_then(Value::as_u64) {
+        Some(value) if value < 10_000 => value as usize,
+        _ => return bad("Name the hunk by its index, starting at 0."),
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &path,
+        "",
+        approve,
+        if reverse {
+            "unstage a hunk"
+        } else {
+            "stage a hunk"
+        },
+    ) {
+        return response;
+    }
+    match apply_hunk(&root, &path, index, reverse) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn stage_hunk_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    hunk_route(state, input, false).await
+}
+
+async fn unstage_hunk_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    hunk_route(state, input, true).await
+}
+
+async fn show_route(
+    State(state): State<AppState>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let hash = query.get("hash").map(String::as_str).unwrap_or("");
+    match show_commit(&root, hash) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
 async fn log_route(
     State(state): State<AppState>,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -1099,6 +1304,9 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/fetch", post(fetch_route))
         .route("/api/workspace/git/pull", post(pull_route))
         .route("/api/workspace/git/push", post(push_route))
+        .route("/api/workspace/git/stage-hunk", post(stage_hunk_route))
+        .route("/api/workspace/git/unstage-hunk", post(unstage_hunk_route))
+        .route("/api/workspace/git/show", get(show_route))
         .route("/api/workspace/git/log", get(log_route))
 }
 
@@ -1504,6 +1712,67 @@ mod tests {
         let unreachable =
             git_failure("fatal: unable to access 'https://example.com/x.git'".to_string());
         assert_eq!(unreachable.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn stages_and_unstages_a_single_hunk() {
+        let Some(root) = temp_repo("hunks") else {
+            return;
+        };
+        let original: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(root.join("a.txt"), &original).unwrap();
+        let paths = clean_paths(&json!({"path": "a.txt"})).unwrap();
+        stage_paths(&root, &paths).unwrap();
+        commit(&root, "base", &[]).unwrap();
+
+        let mut changed: Vec<String> = original.lines().map(str::to_string).collect();
+        changed[1] = "line 2 changed".to_string();
+        changed[17] = "line 18 changed".to_string();
+        std::fs::write(root.join("a.txt"), changed.join("\n") + "\n").unwrap();
+
+        let diff = git(&root, &["diff", "--unified=3", "--", "a.txt"]).unwrap();
+        let (_, hunks) = split_hunks(&diff.stdout);
+        assert_eq!(hunks.len(), 2, "{}", diff.stdout);
+
+        apply_hunk(&root, "a.txt", 0, false).unwrap();
+        let staged = git(&root, &["diff", "--cached", "--", "a.txt"]).unwrap();
+        assert!(staged.stdout.contains("line 2 changed"));
+        assert!(!staged.stdout.contains("line 18 changed"));
+        let work = git(&root, &["diff", "--", "a.txt"]).unwrap();
+        assert!(!work.stdout.contains("line 2 changed"));
+        assert!(work.stdout.contains("line 18 changed"));
+
+        apply_hunk(&root, "a.txt", 0, true).unwrap();
+        let after = git(&root, &["diff", "--cached", "--", "a.txt"]).unwrap();
+        assert!(after.stdout.trim().is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_a_hunk_index_the_diff_does_not_have() {
+        let diff = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n";
+        assert!(hunk_patch(diff, 0).is_ok());
+        assert!(hunk_patch(diff, 1).is_err());
+        assert!(hunk_patch("", 0).is_err());
+    }
+
+    #[test]
+    fn shows_a_commit_with_its_metadata_and_patch() {
+        let Some(root) = temp_repo("show") else {
+            return;
+        };
+        commit_file(&root, "a.txt", "one\n", "first commit");
+        let hash = run_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        let shown = show_commit(&root, &hash).unwrap();
+        assert_eq!(shown["subject"], "first commit");
+        assert!(shown["short"].as_str().unwrap().len() >= 7);
+        assert!(shown["diff"].as_str().unwrap().contains("+one"));
+        assert_eq!(shown["truncated"], false);
+
+        assert!(show_commit(&root, "not-a-hash").is_err());
+        assert!(show_commit(&root, "main; rm -rf /").is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

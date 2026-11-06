@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.69.0
+
+- The Source Control diff is no longer all-or-nothing: each hunk has a **Stage
+  hunk** / **Unstage hunk** button, and history entries open the commit's own
+  diff. Backed by `POST /api/workspace/git/stage-hunk`, `/unstage-hunk` and
+  `GET /api/workspace/git/show` in `app/src/git.rs`.
+- Hunk staging never trusts patch text from the browser. The server reads the
+  real `git diff` for the one validated path, splits it at its `@@` headers, and
+  keeps git's own `diff --git`/`--`/`+++` preamble for the chosen hunk; that
+  patch travels to `git apply --cached` on stdin. Unstaging takes
+  `git diff --cached` and reverses the same way. An index that moved under the
+  hunk is a 409 with git's apply failure; an index past the end of the diff is a
+  400 naming how many hunks exist.
+- The commit view validates the hash before argv (4–40 hexadecimal characters,
+  case-normalised), reads metadata and the patch with `git show`, and caps the
+  diff at the same 128 KiB as the working-tree diff. An empty diff (for example
+  a merge commit) says so instead of showing a blank box.
+- Both hunk routes keep the existing rules: the path goes through
+  `normalise_path` (relative only, no `..`, no drive letter, no control
+  characters, no `.git`) and the `git` permission action with that path as the
+  target (deny 403, ask 409 until approved, audited). Hunk indexes are bounded
+  before they reach git.
+- UI: the inline diff shows its real hunks, each with its own stage/unstage
+  button; untracked files (which have no textual diff) still show their new-file
+  body without a dead button. History rows are focusable buttons that open the
+  commit's metadata and patch, with a Back-to-history control.
+- `cargo test --locked`: **388 passed, 1 ignored** (3 new, against a real temp
+  repository: only the first of two separated hunks staged, the second left in
+  the worktree, then the staged hunk reversed out cleanly; a missing hunk index
+  refused; a commit shown with its subject, short hash, author and `+line`
+  patch, with non-hex input refused). Clippy `-D warnings` clean, `rustfmt
+  --check` clean on the touched files, `node --check` clean.
+- Live smoke on `:8934` with two changed lines 16 lines apart: the diff reported
+  `2 hunks`; staging hunk 0 left only `line 2 changed` staged and only `line 18
+  changed` in the worktree; unstaging it left the index clean; staging it again
+  and committing produced `3cebfc4`; `show` returned subject `stage one hunk`,
+  author `Smoke` and a patch with `+line 2 changed` but not line 18; hunk 99
+  answered 400 with the real count; `main;rm -rf` as a hash answered 400; a
+  saved `git` deny on `a.txt` answered 403; the uncommitted line 18 change
+  survived. The pane was not viewed in a browser.
+- Not built: merge/rebase, staging individual lines inside a hunk, image or
+  binary diffs (no textual hunks), and worktree checkpoints before an agent
+  writes.
+
 ## 1.68.0
 
 - Phase 9's Git loop now reaches the remote: **Fetch**, **Pull** and **Push** in

@@ -586,6 +586,64 @@
     await refreshScm();
   }
 
+  function scmDiffLineHtml(line) {
+    const cls = line.startsWith("@@") ? "hunk"
+      : line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("new file") ? "meta"
+      : line.startsWith("+") ? "add"
+      : line.startsWith("-") ? "del" : "";
+    return `<span class="${cls}">${escapeHtml(line)}</span>`;
+  }
+
+  function splitScmDiff(text) {
+    const preamble = [];
+    const hunks = [];
+    let current = null;
+    text.split("\n").forEach((line) => {
+      if (line.startsWith("@@ ")) {
+        if (current) hunks.push(current);
+        current = [line];
+      } else if (current) {
+        current.push(line);
+      } else {
+        preamble.push(line);
+      }
+    });
+    if (current) hunks.push(current);
+    return { preamble, hunks };
+  }
+
+  function renderScmDiff(box, text, change, truncated) {
+    const { preamble, hunks } = splitScmDiff(text);
+    if (!hunks.length) {
+      const body = el("pre", "scm-diff-body");
+      body.innerHTML = text.split("\n").slice(0, 400).map(scmDiffLineHtml).join("\n") +
+        (truncated ? '\n<span class="meta">… diff truncated …</span>' : "");
+      box.appendChild(body);
+      return;
+    }
+    if (preamble.length) {
+      const head = el("pre", "scm-diff-body");
+      head.innerHTML = preamble.filter((line) => line !== "").map(scmDiffLineHtml).join("\n");
+      box.appendChild(head);
+    }
+    hunks.forEach((lines, index) => {
+      const hunk = el("div", "scm-hunk");
+      const head = el("div", "scm-hunk-head");
+      head.appendChild(el("span", "hunk-index", `Hunk ${index + 1}`));
+      const action = el("button", "tiny-toggle", change.staged ? "Unstage hunk" : "Stage hunk");
+      action.type = "button";
+      action.title = `${change.staged ? "Unstage" : "Stage"} only this hunk of ${change.path}`;
+      action.addEventListener("click", () => { void scmHunk(change, index); });
+      head.appendChild(action);
+      hunk.appendChild(head);
+      const body = el("pre", "scm-hunk-body");
+      body.innerHTML = lines.map(scmDiffLineHtml).join("\n");
+      hunk.appendChild(body);
+      box.appendChild(hunk);
+    });
+    if (truncated) box.insertAdjacentHTML("beforeend", '<p class="scm-hint">… diff truncated; only the hunks above are shown …</p>');
+  }
+
   async function toggleScmDiff(change, row) {
     const key = `${change.staged ? "staged:" : "work:"}${change.path}`;
     const open = document.querySelector(".scm-diff");
@@ -599,21 +657,29 @@
       toast(result.data.error || "Could not read the diff.");
       return;
     }
-    const pre = el("pre", "scm-diff");
+    const box = el("div", "scm-diff");
     const text = String(result.data.diff || "");
     if (!text.trim()) {
-      pre.innerHTML = `<span class="meta">No textual changes to show for ${escapeHtml(change.path)}.</span>`;
+      box.innerHTML = `<span class="meta">No textual changes to show for ${escapeHtml(change.path)}.</span>`;
     } else {
-      pre.innerHTML = text.split("\n").slice(0, 400).map((line) => {
-        const cls = line.startsWith("@@") ? "hunk"
-          : line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("new file") ? "meta"
-          : line.startsWith("+") ? "add"
-          : line.startsWith("-") ? "del" : "";
-        return `<span class="${cls}">${escapeHtml(line)}</span>`;
-      }).join("\n");
-      if (result.data.truncated) pre.insertAdjacentHTML("beforeend", '\n<span class="meta">… diff truncated …</span>');
+      renderScmDiff(box, text, change, Boolean(result.data.truncated));
     }
-    row.insertAdjacentElement("afterend", pre);
+    row.insertAdjacentElement("afterend", box);
+  }
+
+  async function scmHunk(change, index) {
+    const path = change.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
+    const result = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ path: change.path, hunk: index }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      toast(result.data.error || "Could not move that hunk.");
+      return;
+    }
+    toast(`${change.staged ? "Unstaged" : "Staged"} hunk ${index + 1} of ${change.path}`);
+    await refreshScm();
   }
 
   async function commitScm() {
@@ -656,14 +722,47 @@
       return;
     }
     box.appendChild(el("div", "scm-group-label", `Recent commits <span class="count">${commits.length}</span>`));
+    box.appendChild(el("p", "scm-hint", "Select a commit to read its diff."));
     commits.forEach((commit) => {
       const row = el("div", "scm-commit-line");
       row.innerHTML = `<span class="short">${escapeHtml(commit.short || "")}</span>` +
         `<span class="subject">${escapeHtml(commit.subject || "")}</span>` +
         `<span class="author">${escapeHtml(commit.author || "")}</span>`;
-      row.title = `${commit.hash || ""}\n${commit.author || ""} · ${commit.date || ""}`;
+      row.title = `${commit.hash || ""}\n${commit.author || ""} · ${commit.date || ""}\nOpen this commit's diff`;
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.addEventListener("click", () => { void showScmCommit(commit); });
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void showScmCommit(commit); }
+      });
       box.appendChild(row);
     });
+  }
+
+  async function showScmCommit(commit) {
+    const result = await api(`/api/workspace/git/show?hash=${encodeURIComponent(commit.hash || "")}`);
+    if (!result.ok) { toast(result.data.error || "Could not read that commit."); return; }
+    const data = result.data;
+    const box = $("scmBody");
+    if (!box) return;
+    IDE.scmHistory = true;
+    IDE.diffKey = null;
+    box.innerHTML = "";
+    box.appendChild(el("div", "scm-group-label", `Commit ${escapeHtml(data.short || "")}`));
+    box.appendChild(el("div", "scm-commit-meta", `${data.subject || ""}\n${data.author || ""} · ${data.date || ""}`));
+    const diff = el("pre", "scm-diff");
+    const text = String(data.diff || "");
+    if (!text.trim()) {
+      diff.innerHTML = '<span class="meta">This commit has no textual diff against its parent.</span>';
+    } else {
+      diff.innerHTML = text.split("\n").map(scmDiffLineHtml).join("\n") +
+        (data.truncated ? '\n<span class="meta">… diff truncated …</span>' : "");
+    }
+    box.appendChild(diff);
+    const back = el("button", "tiny-toggle", "Back to history");
+    back.type = "button";
+    back.addEventListener("click", () => void toggleScmHistory());
+    box.appendChild(back);
   }
 
   async function branchScm(mode) {
