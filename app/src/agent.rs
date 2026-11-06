@@ -475,6 +475,9 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // Queue wait is `started_at - created_at`, and a live run's duration is
         // measured from here so waiting time is not billed as execution.
         "ALTER TABLE agent_runs ADD COLUMN started_at REAL NOT NULL DEFAULT 0",
+        // The finished run a retry was started from, so "same settings, clean
+        // log" is a link in the record and not just a convention.
+        "ALTER TABLE agent_runs ADD COLUMN retry_of TEXT NOT NULL DEFAULT ''",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -525,6 +528,7 @@ struct RunRow {
     depends_on: String,
     /// When execution actually began (0 while queued).
     started_at: f64,
+    retry_of: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -554,6 +558,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         priority: row.get(22)?,
         depends_on: row.get(23)?,
         started_at: row.get(24)?,
+        retry_of: row.get(25)?,
     })
 }
 
@@ -670,7 +675,7 @@ fn finish(state: &AppState, run_id: &str, status: &str, error: &str) -> Result<(
     // A run that has stopped holds no claim on a file any more. Released here
     // rather than in the loop tail so every way a run can end — cancel, the
     // emergency stop, an exhausted step ceiling — frees the same leases.
-    crate::filelock::release(run_id);
+    crate::filelock::release(state, run_id);
     set_run(state, run_id, status, Some(error), Some(""))
 }
 
@@ -679,7 +684,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at, retry_of FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -973,8 +978,16 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "dependsOn": serde_json::from_str::<Vec<String>>(&row.depends_on).unwrap_or_default(),
         // Assigned by `queue_positions` from the same rows, so a card never
         // reports a position the queue itself would contradict.
-        "queuePosition": Value::Null,
-        "startedAt": if row.started_at > 0.0 { json!(row.started_at) } else { Value::Null },
+        "queuePosition": Value::Null,        "startedAt": if row.started_at > 0.0 {
+            json!(row.started_at)
+        } else {
+            Value::Null
+        },
+        "retryOf": if row.retry_of.is_empty() {
+            Value::Null
+        } else {
+            json!(row.retry_of)
+        },
         // A live run has no finished duration yet: measure from its start and say
         // how long it has been quiet, rather than reporting "0 s" for a run that
         // started ten minutes ago.
@@ -1889,6 +1902,7 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         priority: run.priority,
         depends_on: run.depends_on.clone(),
         started_at: run.started_at,
+        retry_of: run.retry_of.clone(),
     }
 }
 
@@ -2388,13 +2402,13 @@ async fn execute_action_step(
                         let content = crate::workspace::read_text_file(&root, path)
                             .ok()
                             .map(|file| file.content);
-                        crate::filelock::record_read(&run.id, path, content.as_deref());
+                        crate::filelock::record_read(state, &run.id, path, content.as_deref());
                     }
                     // This run wrote the file, so what it has seen is now the
                     // content it wrote — otherwise its own edit would look like
                     // somebody else's change on the next write.
                     Action::Write { path, content } => {
-                        crate::filelock::record_read(&run.id, path, Some(content));
+                        crate::filelock::record_read(state, &run.id, path, Some(content));
                     }
                     _ => {}
                 }
@@ -2774,6 +2788,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(format!("{prefix}/:id/approve").as_str(), post(approve_run))
         .route(format!("{prefix}/:id/resume").as_str(), post(resume_run))
         .route(format!("{prefix}/:id/pause").as_str(), post(pause_run))
+        .route(format!("{prefix}/:id/retry").as_str(), post(retry_run))
         .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
@@ -3134,12 +3149,12 @@ const RUN_LIST_SQL: &str = "SELECT r.id, r.project_id, r.goal, r.status, r.allow
  r.allow_commands, r.auto_approve, r.max_steps, r.pending_action, r.error, r.created_at, \
  r.updated_at, r.router_config, r.model, r.profile, r.mode, r.crew, r.stage_policy, \
  r.stage_max_steps, r.allow_mcp, r.mcp_tools, r.tokens, \
- r.priority, r.depends_on, r.started_at, \
+ r.priority, r.depends_on, r.started_at, r.retry_of, \
  (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
  FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50";
 
 /// Zero-based column index of the step count in `RUN_LIST_SQL`.
-const RUN_LIST_STEPS_COLUMN: usize = 25;
+const RUN_LIST_STEPS_COLUMN: usize = 26;
 
 async fn list_runs(State(state): State<AppState>) -> Response {
     let conn = match db(&state) {
@@ -3582,6 +3597,116 @@ async fn resume_run(State(state): State<AppState>, Path(run_id): Path<String>) -
     Json(json!({ "ok": true, "status": status, "queuePosition": queue_position })).into_response()
 }
 
+/// Start a fresh run from a finished run's settings.
+///
+/// `resume` continues an existing step log; a retry is a clean run — same goal,
+/// profile, mode, flags and budgets, a new id and an empty log, linked back by
+/// `retry_of`. Two things are deliberately not copied: dependencies (the
+/// original's have already run, and inheriting them would make the retry wait on
+/// history instead of on work) and its recorded step log and tokens, so a
+/// retried run's cost and duration are its own.
+async fn retry_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let run = match load_run(&state, &run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if matches!(
+        run.status.as_str(),
+        RUNNING | AWAITING_APPROVAL | QUEUED | PAUSED
+    ) {
+        let reason = if run.status == PAUSED {
+            "This run is paused - resume it to continue where it stopped. A retry starts a \
+             separate run from scratch."
+        } else {
+            "This run has not finished yet. Cancel it first if you want a clean retry."
+        };
+        return error_response(StatusCode::BAD_REQUEST, reason);
+    }
+    if state.workspace.root().is_err() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Open a workspace folder first — agent runs only work inside an open workspace.",
+        );
+    }
+    // A retry may sharpen the goal but never silently change the run's scope:
+    // permissions, profile and budgets come from the record.
+    let goal = input
+        .get("goal")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|goal| !goal.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| run.goal.clone());
+    let priority = input
+        .get("priority")
+        .and_then(Value::as_i64)
+        .map(|value| value.clamp(-10, 10))
+        .unwrap_or(run.priority);
+    let id = uuid::Uuid::new_v4().to_string();
+    let stamp = now();
+    // The same task-scoped model the original resolved to, re-snapshotted now so
+    // the retry records the routing it will actually use.
+    let task_model = if run.model.trim().is_empty() {
+        None
+    } else {
+        Some(run.model.as_str())
+    };
+    let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
+    if let Err(error) = db(&state).and_then(|conn|
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,retry_of) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            params![
+                id, run.project_id, goal, QUEUED,
+                run.allow_writes, run.allow_commands, run.auto_approve, run.max_steps, stamp,
+                snapshot, base_model, run.profile, run.mode, run.crew, run.stage_policy,
+                run.stage_max_steps, run.allow_mcp, priority, run_id
+            ],
+        ).map_err(|e| e.to_string())
+    ) {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    // Said in the new run's own log, so "why is this run here" is answerable
+    // from the run itself rather than from the one it was copied from.
+    let _ = add_step(
+        &state,
+        &id,
+        "retry",
+        "Retried from a finished run",
+        &format!(
+            "A clean run of the same goal and settings as {run_id} (which ended {}). The step \
+             log starts empty; dependencies were not copied, because the original's have already run.",
+            run.status
+        ),
+    );
+    let _ = dispatch(&state).await;
+    let status = run_status(&state, &id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| QUEUED.to_string());
+    let queue_position = if status == QUEUED {
+        queued_position(&state, &id).unwrap_or(None)
+    } else {
+        None
+    };
+    notify(&state, Some(&id));
+    Json(json!({
+        "ok": true,
+        "run": {
+            "id": id,
+            "status": status,
+            "queuePosition": queue_position,
+            "retryOf": run_id
+        }
+    }))
+    .into_response()
+}
+
 async fn approve_run(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
@@ -3955,6 +4080,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            retry_of: String::new(),
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -4081,6 +4207,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            retry_of: String::new(),
         }
     }
 
@@ -4366,6 +4493,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            retry_of: String::new(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -4405,6 +4533,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             priority: 0,
             depends_on: String::new(),
             started_at: 0.0,
+            retry_of: String::new(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
@@ -5872,8 +6001,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         );
         // A different file is nobody's business but this run's.
         crate::filelock::claim_write(&fixture.state, &b, "src/lib.rs", Some("other")).unwrap();
-        crate::filelock::release(&a);
-        crate::filelock::release(&b);
+        crate::filelock::release(&fixture.state, &a);
+        crate::filelock::release(&fixture.state, &b);
     }
 
     #[tokio::test]
@@ -5888,8 +6017,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         set_status(&fixture.state, &a, SUCCEEDED);
         insert_run(&fixture.state, &b, RUNNING);
         crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("content")).unwrap();
-        crate::filelock::release(&a);
-        crate::filelock::release(&b);
+        crate::filelock::release(&fixture.state, &a);
+        crate::filelock::release(&fixture.state, &b);
     }
 
     #[tokio::test]
@@ -5905,7 +6034,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let b = format!("run-b-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &b, RUNNING);
         crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("v1")).unwrap();
-        crate::filelock::release(&b);
+        crate::filelock::release(&fixture.state, &b);
     }
 
     #[tokio::test]
@@ -5924,14 +6053,14 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         // even though it was parked when the change happened.
         let parked = format!("run-parked-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &parked, PAUSED);
-        crate::filelock::record_read(&parked, "notes.txt", Some("v1"));
+        crate::filelock::record_read(&fixture.state, &parked, "notes.txt", Some("v1"));
         set_status(&fixture.state, &parked, RUNNING);
         let error = crate::filelock::claim_write(&fixture.state, &parked, "notes.txt", Some("v2"))
             .unwrap_err();
         assert!(error.contains("changed on disk"), "{error}");
-        crate::filelock::release(&a);
-        crate::filelock::release(&b);
-        crate::filelock::release(&parked);
+        crate::filelock::release(&fixture.state, &a);
+        crate::filelock::release(&fixture.state, &b);
+        crate::filelock::release(&fixture.state, &parked);
     }
 
     #[tokio::test]
@@ -5941,12 +6070,232 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let a = format!("run-a-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &a, RUNNING);
         // The run looked, found nothing, and plans to create the file.
-        crate::filelock::record_read(&a, "new.txt", None);
+        crate::filelock::record_read(&fixture.state, &a, "new.txt", None);
         let error = crate::filelock::claim_write(&fixture.state, &a, "new.txt", Some("now here"))
             .unwrap_err();
         assert!(error.contains("changed on disk"), "{error}");
         // Still absent: exactly the state the run saw, so the write may land.
         crate::filelock::claim_write(&fixture.state, &a, "still-absent.txt", None).unwrap();
-        crate::filelock::release(&a);
+        crate::filelock::release(&fixture.state, &a);
+    }
+    async fn post_retry(app: &Router, id: &str, body: Value) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/retry"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let code = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (code, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn a_retry_starts_a_clean_run_with_the_same_settings() {
+        // The original fails; the retry is a new run of the same goal and
+        // settings with an empty step log, and it can succeed on its own.
+        let base = scripted_router(&[
+            "{\"action\":\"fail\",\"reason\":\"the first attempt could not proceed\"}",
+            "{\"action\":\"done\",\"summary\":\"the second attempt worked\"}",
+        ])
+        .await;
+        let fixture = run_fixture("retry-clean", &base);
+        let first = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write the report",
+                "allowWrites": true,
+                "autoApprove": true,
+                "maxSteps": 4,
+                "profile": "testing",
+                "priority": 3
+            }),
+        )
+        .await;
+        let (status, _) = wait_for_terminal(&fixture.state, &first).await;
+        assert_eq!(status, FAILED);
+
+        let (code, payload) = post_retry(&fixture.app, &first, json!({})).await;
+        assert_eq!(code, StatusCode::OK, "{payload}");
+        assert_eq!(payload["run"]["retryOf"], json!(first), "{payload}");
+        let second = payload["run"]["id"].as_str().unwrap().to_string();
+
+        // Same settings, fresh record: the retry is not a copy of the log.
+        let conn = db(&fixture.state).unwrap();
+        let (goal, profile, max_steps, priority, allow_writes, retry_of, error): (
+            String,
+            String,
+            i64,
+            i64,
+            i64,
+            String,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT goal, profile, max_steps, priority, allow_writes, retry_of, error \
+                 FROM agent_runs WHERE id=?1",
+                [&second],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(goal, "write the report");
+        assert_eq!(profile, "testing");
+        assert_eq!(max_steps, 4);
+        assert_eq!(priority, 3);
+        assert_eq!(allow_writes, 1);
+        assert_eq!(retry_of, first);
+        // A brand-new record starts with no error carried over.
+        assert!(error.is_empty(), "{error}");
+
+        let steps = step_actions(&fixture.state, &second);
+        assert_eq!(
+            steps.first().map(String::as_str),
+            Some("retry"),
+            "{steps:?}"
+        );
+        let (status, actions) = wait_for_terminal(&fixture.state, &second).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        // The original stays exactly as it ended: a retry never rewrites history.
+        let original_status: String = conn
+            .query_row("SELECT status FROM agent_runs WHERE id=?1", [&first], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(original_status, FAILED);
+    }
+
+    #[tokio::test]
+    async fn a_retry_can_restate_the_goal() {
+        let base = scripted_router(&["{\"action\":\"fail\",\"reason\":\"no\"}"]).await;
+        let fixture = run_fixture("retry-goal", &base);
+        let first = start_run(
+            &fixture.app,
+            json!({ "goal": "vague goal", "autoApprove": true, "maxSteps": 3 }),
+        )
+        .await;
+        wait_for_terminal(&fixture.state, &first).await;
+        let (code, payload) = post_retry(
+            &fixture.app,
+            &first,
+            json!({ "goal": "the specific goal", "priority": 1 }),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{payload}");
+        let second = payload["run"]["id"].as_str().unwrap();
+        let (goal, priority): (String, i64) = db(&fixture.state)
+            .unwrap()
+            .query_row(
+                "SELECT goal, priority FROM agent_runs WHERE id=?1",
+                [second],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(goal, "the specific goal");
+        assert_eq!(priority, 1);
+        wait_for_terminal(&fixture.state, second).await;
+    }
+
+    #[tokio::test]
+    async fn a_retry_does_not_inherit_dependencies() {
+        // The original's dependencies already ran; re-waiting on them would make
+        // the retry depend on history rather than on work.
+        let base = scripted_router(&[
+            "{\"action\":\"fail\",\"reason\":\"blocked\"}",
+            "{\"action\":\"done\",\"summary\":\"retry done\"}",
+        ])
+        .await;
+        let fixture = run_fixture("retry-deps", &base);
+        let gate = format!("gate-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &gate, SUCCEEDED);
+        let first = start_run(
+            &fixture.app,
+            json!({
+                "goal": "dependent work",
+                "autoApprove": true,
+                "maxSteps": 3,
+                "dependsOn": [gate]
+            }),
+        )
+        .await;
+        wait_for_terminal(&fixture.state, &first).await;
+        let (code, payload) = post_retry(&fixture.app, &first, json!({})).await;
+        assert_eq!(code, StatusCode::OK, "{payload}");
+        let second = payload["run"]["id"].as_str().unwrap();
+        let deps: String = db(&fixture.state)
+            .unwrap()
+            .query_row(
+                "SELECT depends_on FROM agent_runs WHERE id=?1",
+                [second],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            deps.is_empty(),
+            "a retry must not inherit dependencies: {deps}"
+        );
+        let (status, actions) = wait_for_terminal(&fixture.state, second).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+    }
+
+    #[tokio::test]
+    async fn a_retry_of_a_live_run_is_refused() {
+        let base = slow_scripted_router(
+            &[
+                "{\"action\":\"read\",\"path\":\"seed.txt\"}",
+                "{\"action\":\"done\",\"summary\":\"finished\"}",
+            ],
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+        let fixture = run_fixture("retry-live", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({ "goal": "still working", "autoApprove": true, "maxSteps": 4 }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, RUNNING).await;
+        let (code, payload) = post_retry(&fixture.app, &id, json!({})).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{payload}");
+        let message = payload["error"].as_str().unwrap_or_default();
+        assert!(message.contains("has not finished"), "{message}");
+        // No second row was created behind the refusal.
+        let total: i64 = db(&fixture.state)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM agent_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 1);
+        wait_for_terminal(&fixture.state, &id).await;
+    }
+
+    #[tokio::test]
+    async fn a_paused_run_is_told_to_resume_instead_of_retrying() {
+        // Both controls act on a paused run, and they mean different things:
+        // resume continues the log, retry would throw it away.
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("retry-paused", &base);
+        let id = format!("paused-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &id, PAUSED);
+        let (code, payload) = post_retry(&fixture.app, &id, json!({})).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{payload}");
+        let message = payload["error"].as_str().unwrap_or_default();
+        assert!(message.contains("resume it"), "{message}");
     }
 }

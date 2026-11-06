@@ -6411,7 +6411,10 @@ function renderRunCard(run) {
   // implying progress; a run that waited shows the work time, not the wait.
   const queueTag = run.status === "queued" && run.queuePosition ? ` · queue #${run.queuePosition}` : "";
   const depTag = Array.isArray(run.dependsOn) && run.dependsOn.length ? ` · waits on ${run.dependsOn.length} run${run.dependsOn.length === 1 ? "" : "s"}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}`;
+  // A retry links back to the run it was started from, so the card says where
+  // the goal and settings came from instead of looking like a duplicate.
+  const retryTag = run.retryOf ? ` · retry of ${String(run.retryOf).slice(0, 8)}` : "";
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${retryTag}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}`;
   head.appendChild(meta);
   head.addEventListener('click', () => toggleRun(run.id));
   card.appendChild(head);
@@ -6506,13 +6509,25 @@ function buildRunDetail(detail) {
     stop.addEventListener('click', () => cancelAgentRun(detail.id));
     controls.appendChild(stop);
   }
-  if (detail.status === "failed" || detail.status === "interrupted" || detail.status === "cancelled") {
+  if (["failed", "interrupted", "cancelled", "succeeded"].includes(detail.status)) {
+    // Two different things, named as such: resume continues this step log,
+    // retry starts a clean run of the same goal and settings.
     const again = document.createElement("button");
     again.type = "button";
-    again.className = "btn btn-accent btn-small";
-    again.textContent = "Run again (resume)";
+    again.className = "btn btn-quiet btn-small";
+    again.textContent = "Resume where it stopped";
+    again.title = "Continue from this run's recorded step log";
     again.addEventListener('click', () => resumeAgentRun(detail.id));
     controls.appendChild(again);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn btn-accent btn-small";
+    retry.textContent = "Retry from scratch";
+    retry.title = detail.retryOf
+      ? `Start another clean run — this one was itself a retry of ${detail.retryOf}`
+      : "Start a new run with the same goal and settings; its step log starts empty";
+    retry.addEventListener('click', () => retryAgentRun(detail.id));
+    controls.appendChild(retry);
   }
   const refresh = document.createElement("button");
   refresh.type = "button";
@@ -6719,6 +6734,25 @@ async function resumeAgentRun(runId) {
   }
   await loadRuns();
   if (runId === state.openRun) await loadRunDetail();
+}
+
+async function retryAgentRun(runId) {
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/retry`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not retry the run.");
+    return;
+  }
+  const created = result.data.run || {};
+  toast(created.status === "queued"
+    ? `Retry queued${created.queuePosition ? ` (position ${created.queuePosition})` : ""} — the new run has an empty step log.`
+    : "Retry started — the new run has an empty step log.");
+  state.openRun = created.id || null;
+  state.runDetail = null;
+  await loadRuns();
+  if (state.openRun) await loadRunDetail();
 }
 
 async function answerApproval(runId, approve) {

@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.55.0
+
+- Phase 5 lifecycle: **retry as its own control**, not a synonym for resume.
+  `POST /api/runs/:id/retry` (also on the host prefix) starts a clean run from a
+  finished run's settings — the same goal, profile, mode, crew, flags, step
+  ceiling and priority, a new id, an empty step log — and links it back through a
+  new `agent_runs.retry_of` column, so "same settings, fresh log" is a fact in the
+  record rather than a convention.
+- Two things are deliberately *not* copied. Dependencies are dropped: the
+  original's have already run, and re-waiting on them would make a retry depend on
+  history instead of on work. Tokens, duration and the error are not carried
+  either, so a retried run's cost and timing are its own.
+- The new run gets a `retry` step naming the original and the state it ended in,
+  so "why is this run here" is answerable from the run itself. It is inserted
+  `queued` and admitted by the same dispatcher as every other run, so a retry
+  waits behind a busy workspace rather than starting a second agent.
+- Refusals are specific: a run that has not finished is refused with "cancel it
+  first if you want a clean retry", and a *paused* run is told to resume instead,
+  because the two controls mean different things — resume continues this log,
+  retry throws it away. `goal` and `priority` may be restated in the request body;
+  permissions and budgets never can, they always come from the record.
+- The model scope is re-resolved for the retry (`run_record_snapshot` with the
+  original's task-scoped model), so the new run records the routing it will
+  actually use instead of inheriting a snapshot from an older configuration.
+- Runs panel: the detail controls now separate **Resume where it stopped** (quiet)
+  from **Retry from scratch** (accent), the latter offered for failed,
+  interrupted, cancelled *and* succeeded runs, and a card whose run was a retry
+  says `retry of <short id>`.
+- Tests: 331 pass, 1 ignored. New: a retry starting a clean run with the same
+  settings (goal, profile, ceiling, priority, write permission, `retry_of`, empty
+  error, `retry` as its first step, and the original left exactly as it ended), a
+  retry restating the goal and priority, a retry not inheriting dependencies, a
+  retry of a live run refused with no second row created, and a paused run told
+  to resume instead. Clippy `-D warnings` clean; `rustfmt` clean; `node --check
+  app/static/app.js` clean.
+- Verified live on :8915 against a mock router scripted to fail once and then
+  succeed: the first run ended `failed` with no `retryOf`, `POST /retry` answered
+  `{status: "running", retryOf: "6d27dbab-…"}`, the retried run ended `succeeded`
+  with steps `retry, done` and the same goal, and the original stayed `failed`. In
+  the browser the failed run's detail offered `Resume where it stopped` and
+  `Retry from scratch`; clicking retry opened the new run with card meta
+  `2 steps · 0s · just now · retry of 6d27dbab · mock`, steps `retry, done`, and
+  the toast “Retry started — the new run has an empty step log.”
+- One design defect found and fixed in the same slice: the file-lease ledger from
+  1.54.0 was keyed by path alone while liveness comes from a database, so a second
+  database in the same process (a test fixture, or a headless server beside a
+  desktop build) could decide this database's runs were dead and drop their
+  claims. The ledger is now keyed by database *and* path, and `release` is scoped
+  the same way — which is what made the suite deterministic.
+
 ## 1.54.0
 
 - Phase 5 item 4, first half: **file leases between live runs**. Concurrent runs

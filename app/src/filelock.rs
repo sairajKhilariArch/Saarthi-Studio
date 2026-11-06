@@ -14,6 +14,12 @@
 //! can re-read the file and rewrite from what is actually there. That is why
 //! `claim_write` returns a reason rather than panicking or failing the run.
 //!
+//! The ledger is keyed by the database it belongs to. Runs are records in a
+//! database, so liveness is only meaningful for the one that owns them: keying by
+//! both is what stops a second database in the same process — a test fixture, or
+//! a headless server next to a desktop build — from deciding that this database's
+//! runs are dead and dropping their claims.
+//!
 //! A lease is only as good as the record behind it, so claims held by runs that
 //! are no longer live are dropped on the next claim rather than blocking a file
 //! forever after a crash.
@@ -29,12 +35,15 @@ use crate::AppState;
 /// paths stop being recorded instead of the map growing without limit.
 const MAX_TRACKED_PATHS: usize = 256;
 
+type Scope = String;
+
 #[derive(Default)]
 struct Ledger {
-    /// Path → the live run that claimed it for writing, and what it saw then.
-    owners: HashMap<String, (String, u64)>,
-    /// Run → path → fingerprint of the content that run last read.
-    reads: HashMap<String, HashMap<String, u64>>,
+    /// (database, path) → the live run that claimed it for writing, and what it
+    /// saw then.
+    owners: HashMap<(Scope, String), (String, u64)>,
+    /// (database, run) → path → fingerprint of the content that run last read.
+    reads: HashMap<(Scope, String), HashMap<String, u64>>,
 }
 
 static LEDGER: LazyLock<Mutex<Ledger>> = LazyLock::new(|| Mutex::new(Ledger::default()));
@@ -46,6 +55,13 @@ pub(crate) fn fingerprint(content: Option<&str>) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     content.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Which database's runs this ledger entry belongs to. Two processes sharing one
+/// database still see separate ledgers; that limitation is the one a cross-process
+/// lock would remove.
+fn scope(state: &AppState) -> Scope {
+    state.database_path.to_string_lossy().to_string()
 }
 
 /// Runs that can still step: one working, or one stopped on a human question.
@@ -69,9 +85,12 @@ fn live_runs(state: &AppState) -> Vec<String> {
 
 /// Remember what a run just read, so a later write can tell whether the file
 /// moved underneath it.
-pub(crate) fn record_read(run_id: &str, path: &str, content: Option<&str>) {
+pub(crate) fn record_read(state: &AppState, run_id: &str, path: &str, content: Option<&str>) {
     let mut ledger = LEDGER.lock().unwrap();
-    let paths = ledger.reads.entry(run_id.to_string()).or_default();
+    let paths = ledger
+        .reads
+        .entry((scope(state), run_id.to_string()))
+        .or_default();
     if !paths.contains_key(path) && paths.len() >= MAX_TRACKED_PATHS {
         return;
     }
@@ -87,16 +106,18 @@ pub(crate) fn claim_write(
     path: &str,
     current: Option<&str>,
 ) -> Result<(), String> {
+    let db = scope(state);
     let live = live_runs(state);
-    let current = fingerprint(current);
+    let fingerprint_now = fingerprint(current);
     let mut ledger = LEDGER.lock().unwrap();
-    // Forget claims held by runs that will never step again: a cancelled or
-    // finished run must not keep a file locked, and its owner is why we cannot
-    // simply trust the map.
-    ledger
-        .owners
-        .retain(|_, (owner, _)| owner == run_id || live.iter().any(|id| id == owner));
-    if let Some((owner, _)) = ledger.owners.get(path) {
+    // Forget claims in this database held by runs that will never step again: a
+    // cancelled or finished run must not keep a file locked, and its record is
+    // why we cannot simply trust the map.
+    ledger.owners.retain(|(owner_db, _), (owner, _)| {
+        *owner_db != db || owner == run_id || live.iter().any(|id| id == owner)
+    });
+    let key = (db.clone(), path.to_string());
+    if let Some((owner, _)) = ledger.owners.get(&key) {
         if owner != run_id {
             return Err(format!(
                 "{path} is claimed by run {owner}, which is still live. Two agents writing \
@@ -105,13 +126,14 @@ pub(crate) fn claim_write(
             ));
         }
     }
+    let read_key = (db.clone(), run_id.to_string());
     if let Some(seen) = ledger
         .reads
-        .get(run_id)
+        .get(&read_key)
         .and_then(|paths| paths.get(path))
         .copied()
     {
-        if seen != current {
+        if seen != fingerprint_now {
             return Err(format!(
                 "{path} changed on disk since this run last read it — another run or another \
                  program wrote it. This write was refused so that change is not silently \
@@ -119,21 +141,24 @@ pub(crate) fn claim_write(
             ));
         }
     }
-    let reads = ledger.reads.entry(run_id.to_string()).or_default();
-    if reads.len() < MAX_TRACKED_PATHS || reads.contains_key(path) {
-        reads.insert(path.to_string(), current);
+    let paths = ledger.reads.entry(read_key).or_default();
+    if paths.len() < MAX_TRACKED_PATHS || paths.contains_key(path) {
+        paths.insert(path.to_string(), fingerprint_now);
     }
     ledger
         .owners
-        .insert(path.to_string(), (run_id.to_string(), current));
+        .insert(key, (run_id.to_string(), fingerprint_now));
     Ok(())
 }
 
 /// Drop everything a run holds. Called when it reaches a terminal state: its
 /// claim on a file is over, and its read fingerprints would only mislead a
 /// later run that happens to reuse the id.
-pub(crate) fn release(run_id: &str) {
+pub(crate) fn release(state: &AppState, run_id: &str) {
+    let db = scope(state);
     let mut ledger = LEDGER.lock().unwrap();
-    ledger.reads.remove(run_id);
-    ledger.owners.retain(|_, (owner, _)| owner != run_id);
+    ledger.reads.remove(&(db.clone(), run_id.to_string()));
+    ledger
+        .owners
+        .retain(|(owner_db, _), (owner, _)| !(*owner_db == db && owner == run_id));
 }

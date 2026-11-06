@@ -103,9 +103,9 @@ Remaining for Phase 1 sign-off:
    Executing → Verifying → Completed/Failed/Cancelled`) with persistence and
    resume, building on `agent_runs`/`agent_steps`.
 2. Task queue with priority, dependencies, retry, cancellation, checkpoints.
-   *Delivered 1.53.0: `queued` state, priority, dependencies and in-order
-   admission behind `max_concurrent_runs`; retry is `resume`, checkpoints and
-   cancellation already existed.*
+   *Delivered 1.53.0 for the queue (`queued` state, priority, dependencies and
+   in-order admission behind `max_concurrent_runs`) and 1.55.0 for retry as its
+   own control alongside resume; checkpoints and cancellation already existed.*
 3. Role-specialised agents with explicit tools/permissions/budgets.
 4. Parallel execution guarded by worktree isolation or file locks; conflict
    detection before write.

@@ -106,6 +106,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Hybrid cloud-plan / local-execute | Working | plan step, bounded escalation |
 | Multi-agent parity in VS Code | Working | `agent.ts` port |
 | Task queue, priority, dependencies | Working (1.53.0) | every run is created `queued` and admitted by one dispatcher pass ordered by `priority` (-10…10) then age; `dependsOn` is validated at creation (unknown/self/loop/empty/>8 all 400) and a dependency is only satisfied by `succeeded`, while a dependent of a failed/cancelled/interrupted run is failed with the dependency's name. A queued run survives a restart and is admitted at boot; pause names it as queued, cancel and the emergency stop include it |
+| Retry from scratch (`POST /api/runs/:id/retry`) | Working (1.55.0) | starts a clean run from a finished run's settings with `retry_of` linking back; the step log, tokens, duration, error and dependencies are not carried over, and a `retry` step names the original. Refused for a run that has not finished; a paused run is told to resume instead |
 | Concurrency limit (`max_concurrent_runs`) | Working (1.53.0) | clamped 1–4, default 1; a run waiting for approval still holds its slot, a paused or queued run does not. Above 1, writes to a claimed or changed file are refused per run (1.54.0) |
 | Conflict detection before a write | Working (1.54.0) | `app/src/filelock.rs`: a `write` is refused as a non-fatal `write-conflict` step when another live run has claimed the path or the file on disk is not what this run last read; the run re-reads and continues. Claims are dropped for any run no longer `running`/`awaiting_approval` and released by `finish` |
 | Parallel execution + worktree isolation / file locks | Partial (1.54.0) | leases guard the agent's own `write` only — a command step, an editor save or another program is caught after the fact by the fingerprint check; there is no `worktree` per run and the ledger is in-process, so `max_concurrent_runs` still defaults to 1 |
@@ -202,10 +203,11 @@ state, and the emergency stop reaches parked runs too.
 The queue is real as of 1.53.0: a run is created `queued`, takes a place in line
 (`queue #N` on the card, a Queued count on the board, a waiting note with Cancel
 only while it waits), can carry a `priority` and a `dependsOn` list, and starts
-itself when a slot frees and its dependencies succeeded. Retry is `resume` on a
-failed, interrupted, cancelled or paused run; there is no separate "retry from
-scratch" control, and there is no drag-to-reorder — priority is a number on the
-form.
+itself when a slot frees and its dependencies succeeded. Retry is a real control
+as of 1.55.0 too, and it is distinct from resume: `POST /api/runs/:id/retry`
+starts a clean run of the same goal and settings (linked by `retry_of`, logged as
+a `retry` step), while resume continues an existing step log. There is no
+drag-to-reorder — priority is a number on the form.
 
 ## Phase 13 — Workflow builder
 
