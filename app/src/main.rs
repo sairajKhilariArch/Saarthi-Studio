@@ -2979,6 +2979,9 @@ struct ChatPrep {
     /// Memory records recalled for this message, as "kind: title", so the reply
     /// can say what background it was given.
     memory_used: Vec<String>,
+    /// Code the index matched, as "path:line", so the reply can point at where
+    /// its context came from.
+    retrieved: Vec<String>,
 }
 
 /// Validate a chat payload, persist the user's message, and pack the context
@@ -3236,6 +3239,20 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         system.push_str("\n\n");
         system.push_str(&block);
     }
+    // Traceable retrieval: the index says where, the disk says what. Excerpts are
+    // read now, so the block can never quote a file that has since changed.
+    let snippets = match state.workspace.current_root() {
+        Some(root) => index::retrieve(&root, &state.database_path, &message),
+        None => Vec::new(),
+    };
+    let retrieved: Vec<String> = snippets
+        .iter()
+        .map(|snippet| format!("{}:{}", snippet.path, snippet.line))
+        .collect();
+    if let Some(block) = index::prompt_block(&snippets) {
+        system.push_str("\n\n");
+        system.push_str(&block);
+    }
     let packed = context::pack(
         &system,
         outline.as_deref(),
@@ -3269,6 +3286,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
         project_model: project_model(state, &active_project),
         auto_skills,
         memory_used,
+        retrieved,
     })
 }
 
@@ -3345,6 +3363,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         project_model,
         auto_skills,
         memory_used,
+        retrieved,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3412,6 +3431,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         }
         if !memory_used.is_empty() {
             meta["memory_used"] = json!(&memory_used);
+        }
+        if !retrieved.is_empty() {
+            meta["retrieved"] = json!(&retrieved);
         }
         return Json(json!({
             "ok": true,
@@ -3535,6 +3557,9 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
             }
             if !memory_used.is_empty() {
                 meta["memory_used"] = json!(&memory_used);
+            }
+            if !retrieved.is_empty() {
+                meta["retrieved"] = json!(&retrieved);
             }
             Json(json!({"ok": true, "answer": answer, "meta": meta})).into_response()
         }
@@ -3864,6 +3889,7 @@ async fn chat_stream(
         project_model,
         auto_skills,
         memory_used,
+        retrieved,
     } = match prepare_chat(&state, &input) {
         Ok(prep) => prep,
         Err(response) => return *response,
@@ -3919,6 +3945,9 @@ async fn chat_stream(
                 held["auto_skills"] = json!(&auto_skills);
                 if !memory_used.is_empty() {
                     held["memory_used"] = json!(&memory_used);
+                    if !retrieved.is_empty() {
+                        held["retrieved"] = json!(&retrieved);
+                    }
                 }
             }
             held["deepsearch"] = json!(true);
@@ -4080,6 +4109,9 @@ async fn chat_stream(
             held["auto_skills"] = json!(&auto_skills);
             if !memory_used.is_empty() {
                 held["memory_used"] = json!(&memory_used);
+                if !retrieved.is_empty() {
+                    held["retrieved"] = json!(&retrieved);
+                }
             }
         }
         held["thinking"] = thinking_json(thinking);

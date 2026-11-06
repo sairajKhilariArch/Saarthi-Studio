@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.60.0
+
+- Phase 8: **RAG over the project** — a chat turn now carries the code the index
+  matched to it. `index::retrieve` takes the ranked hits for the user's message,
+  keeps one per file, and reads the declaration plus its opening lines from disk
+  *now*, so the block can never quote a file that has since changed or been
+  deleted.
+- The block is labelled with `path:line — kind name` and tells the model to open
+  the path before relying on it, so every claim has somewhere to point. A hit
+  whose line no longer exists is dropped rather than guessed at.
+- Bounded like everything else it sits beside: at most 4 snippets and 700 tokens,
+  and the reply meta carries `retrieved` (`["src/auth.rs:3"]`) so the user can see
+  which files the turn was given; the reply row shows `N code hits` and its
+  tooltip names them.
+- Retrieval only reads what the index already knows, so it never triggers a walk:
+  the index is refreshed by its own route, and an unindexed project simply gets no
+  block instead of a slow turn.
+- Tests: 354 pass, 1 ignored. Two new: retrieval returning the matched
+  declaration with its line, label and block wording, and one snippet per file
+  with a deleted file producing nothing (the index's stale pointer is not
+  trusted).
+- Clippy `-D warnings` clean; `rustfmt` clean; `node --check app/static/app.js`
+  clean. Live smoke on `:8916` against a logging mock router: after indexing a
+  two-file folder (`added 2, symbols 3`), "where is login handled?" answered with
+  `retrieved: ["src/auth.rs:3"]` and the request carried `src/auth.rs:3 — fn
+  login` plus the real `pub fn login(user: &str)` lines; "what is the weather
+  today" attached no block at all; "explain auth and logout" retrieved
+  `src/auth.rs:7` for `logout`.
+
 ## 1.59.0
 
 - Phase 8: **project code index**, the item that was listed as missing — file

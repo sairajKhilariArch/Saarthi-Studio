@@ -1148,6 +1148,9 @@ function addMessage(role, content, options = {}) {
     if (Array.isArray(meta.memory_used) && meta.memory_used.length) {
       parts.push(`${meta.memory_used.length} memor${meta.memory_used.length === 1 ? "y" : "ies"}`);
     }
+    if (Array.isArray(meta.retrieved) && meta.retrieved.length) {
+      parts.push(`${meta.retrieved.length} code hit${meta.retrieved.length === 1 ? "" : "s"}`);
+    }
     if (meta.latency_ms != null) parts.push(`${meta.latency_ms} ms`);
     if (meta.total_tokens != null) parts.push(`${meta.total_tokens} tokens`);
     pushContextMeta(parts, meta);
@@ -1206,6 +1209,9 @@ function contextMetaTitle(meta) {
   }
   if (Array.isArray(meta.memory_used) && meta.memory_used.length) {
     bits.push(`memory given to the model: ${meta.memory_used.join("; ")}`);
+  }
+  if (Array.isArray(meta.retrieved) && meta.retrieved.length) {
+    bits.push(`code the index matched: ${meta.retrieved.join("; ")}`);
   }
   if (meta.context_tokens != null) bits.push(`${formatCount(meta.context_tokens)} tokens sent`);
   if (meta.context_budget) bits.push(`budget ${formatCount(meta.context_budget)}`);

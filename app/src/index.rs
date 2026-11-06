@@ -600,6 +600,111 @@ fn search(db: &FsPath, query: &str) -> Result<Vec<Value>, String> {
         .collect())
 }
 
+/// One matched declaration and the lines around it, read from disk at recall
+/// time so a stale index can never quote code that no longer exists.
+#[derive(Clone, Debug)]
+pub(crate) struct Snippet {
+    pub path: String,
+    pub line: usize,
+    pub kind: String,
+    pub name: String,
+    pub language: String,
+    pub excerpt: String,
+}
+
+const RETRIEVE_LIMIT: usize = 4;
+const RETRIEVE_TOKENS: usize = 700;
+/// How many lines a symbol hit brings with it: the declaration plus its opening
+/// body, enough to judge whether the file is the right one.
+const EXCERPT_LINES: usize = 6;
+
+/// Code the index matched to a message, one snippet per file, best score first.
+/// Every excerpt is read from disk now — an index is a pointer, not a copy.
+pub(crate) fn retrieve(root: &FsPath, db: &FsPath, message: &str) -> Vec<Snippet> {
+    let hits = match search(db, message) {
+        Ok(hits) => hits,
+        Err(_) => return Vec::new(),
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<Snippet> = Vec::new();
+    let mut tokens = 0usize;
+    for hit in hits {
+        let path = hit["path"].as_str().unwrap_or("").to_string();
+        if path.is_empty() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let line = hit["line"].as_i64().unwrap_or(0).max(0) as usize;
+        let kind = hit["kind"].as_str().unwrap_or("").to_string();
+        let name = hit["name"].as_str().unwrap_or("").to_string();
+        let language = hit["language"].as_str().unwrap_or("text").to_string();
+        let Ok(full) = crate::workspace::resolve_inside(root, &path) else {
+            continue;
+        };
+        let Ok(bytes) = fs::read(&full) else { continue };
+        if bytes.len() as u64 > MAX_FILE_BYTES || bytes.contains(&0) {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        // A file-level hit shows its head; a symbol hit shows its declaration.
+        let start = if line == 0 { 0 } else { line.saturating_sub(1) };
+        let end = (start + EXCERPT_LINES).min(lines.len());
+        if start >= lines.len() {
+            continue;
+        }
+        let excerpt = lines[start..end].join("\n");
+        let cost =
+            crate::context::estimate_tokens(&excerpt) + crate::context::estimate_tokens(&path);
+        if tokens + cost > RETRIEVE_TOKENS {
+            break;
+        }
+        tokens += cost;
+        out.push(Snippet {
+            path,
+            line,
+            kind,
+            name,
+            language,
+            excerpt,
+        });
+        if out.len() == RETRIEVE_LIMIT {
+            break;
+        }
+    }
+    out
+}
+
+/// The retrieval block: labelled with path and line so the model (and the user)
+/// can point at the exact place a claim came from.
+pub(crate) fn prompt_block(snippets: &[Snippet]) -> Option<String> {
+    if snippets.is_empty() {
+        return None;
+    }
+    let mut parts = vec![
+        "Project code the index matched to this message — open the path before relying on it:"
+            .to_string(),
+    ];
+    for snippet in snippets {
+        let label = if snippet.line == 0 {
+            format!("{} (head of file)", snippet.path)
+        } else {
+            format!("{}:{}", snippet.path, snippet.line)
+        };
+        let title = if snippet.name.is_empty() {
+            String::new()
+        } else {
+            format!(" — {} {}", snippet.kind, snippet.name)
+        };
+        parts.push(format!(
+            "{label}{title}\n```{}\n{}\n```",
+            snippet.language, snippet.excerpt
+        ));
+    }
+    Some(parts.join("\n\n"))
+}
+
 async fn get_status(State(state): State<AppState>) -> Json<Value> {
     Json(status_json(
         &state.database_path,
@@ -789,6 +894,50 @@ mod tests {
         assert_eq!(status["symbols"], json!(1));
         assert_eq!(status["languages"][0]["language"], json!("go"));
         assert!(status["indexed_at"].as_f64().is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn retrieval_returns_the_matched_lines() {
+        let dir = scratch("retrieve");
+        let db = database(&dir);
+        write(
+            &dir,
+            "src/auth.rs",
+            "use std::fmt;\n\npub fn login(user: &str) -> bool {\n    !user.is_empty()\n}\n\nfn logout() {}\n",
+        );
+        write(&dir, "src/other.rs", "fn unrelated() {}\n");
+        refresh(&db, &dir, &[]).unwrap();
+        let snippets = retrieve(&dir, &db, "where is login handled?");
+        assert_eq!(snippets.len(), 1, "{snippets:?}");
+        assert_eq!(snippets[0].path, "src/auth.rs");
+        assert_eq!(snippets[0].line, 3);
+        assert_eq!(snippets[0].kind, "fn");
+        assert_eq!(snippets[0].name, "login");
+        assert!(snippets[0].excerpt.contains("pub fn login(user: &str)"));
+        let block = prompt_block(&snippets).unwrap();
+        assert!(block.contains("src/auth.rs:3 — fn login"), "{block}");
+        assert!(block.contains("before relying on it"), "{block}");
+        assert!(prompt_block(&[]).is_none());
+        assert!(retrieve(&dir, &db, "what about the weather").is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retrieval_keeps_one_snippet_per_file_and_reads_from_disk() {
+        let dir = scratch("retrieve-dedupe");
+        let db = database(&dir);
+        write(
+            &dir,
+            "src/auth.rs",
+            "fn login() {}\nfn logout() {}\nfn authenticate() {}\n",
+        );
+        refresh(&db, &dir, &[]).unwrap();
+        let snippets = retrieve(&dir, &db, "auth login logout authenticate");
+        assert_eq!(snippets.len(), 1, "one snippet per file: {snippets:?}");
+        // The index still points at the old bytes; a deleted file must not be
+        // quoted from memory.
+        fs::remove_file(dir.join("src/auth.rs")).unwrap();
+        assert!(retrieve(&dir, &db, "auth login").is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 }

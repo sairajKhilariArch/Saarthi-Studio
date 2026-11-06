@@ -142,8 +142,10 @@ management UI.
 recall capped by count and tokens, usage history, and a sidebar pane to add and
 forget them. Delivered 1.59.0: the code index — bounded discovery with
 exclusions, language detection, line-based symbol extraction, incremental
-refresh by content digest, and ranked search returning a path and a line. RAG
-over the project, and the embeddings index behind it, remain open.*
+refresh by content digest, and ranked search returning a path and a line.
+Delivered 1.60.0: retrieval — a chat turn carries the matched declarations with
+their surrounding lines, each labelled with path and line. The embeddings index
+behind a semantic version of this remains open.*
 
 ## Phase 9 — Developer environment
 
