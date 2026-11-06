@@ -99,6 +99,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Real execution loop with tools | Working | `agent.rs`: think/list/read/write/command/done/fail |
 | Approval pauses, checkpoints, diffs, restore | Working | `awaiting_approval`, per-step checkpoint (200 kB cap) |
 | Cancellation, crash recovery (`interrupted`) | Working | `ACTIVE` map; startup sweep |
+| Pause / resume between steps | Working (1.52.0) | `POST /api/runs/:id/pause` parks a live run at the next step boundary (never mid-action), writes a `pause` step, sets `paused` and releases its control entry; `resume` continues from the same step log. A pause is durable across a restart and is only refused when there is nothing to stop (a run awaiting approval) |
 | Resume from the step log | Working | `POST /api/runs/:id/resume` + 2 tests |
 | Team (executor → reviewer → repair) | Working | `review` step with verdict/findings |
 | Crew pipeline + per-stage budgets/policies | Working | `crew` roster 1–6, `stage_max_steps`, fail/skip |
@@ -186,14 +187,20 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 
 ## Phase 12 — Live agent monitoring
 
-Working for monitoring (1.51.0), with two named gaps. `agent_runs`/`agent_steps`,
-SSE events and a runs panel with diffs, approve/reject, cancel and restore are
-real backend state; `GET /api/runs/overview` adds a cross-run dashboard (live,
-awaiting approval, failed, summed steps and tokens) built from the same rows as
-the panel, and every run reports `tokens`, `elapsedSeconds` and `idleSeconds`
-with a live run measured from its start. Still missing: **no pause** (a run is
-cancelled or waiting for approval, nothing in between) and **no queue view**,
-consistent with Phase 5 having no queue.
+Working for monitoring (1.51.0) and controls (1.52.0), with one named gap.
+`agent_runs`/`agent_steps`, SSE events and a runs panel with diffs,
+approve/reject, cancel, restore and pause/resume are real backend state;
+`GET /api/runs/overview` adds a cross-run dashboard (live, awaiting approval,
+paused, failed, summed steps and tokens) built from the same rows as the panel,
+and every run reports `tokens`, `elapsedSeconds` and `idleSeconds` with a live
+run measured from its start. Pause parks a run at the next step boundary and a
+paused run holds no live task, so start/pause/resume/cancel all act on real
+state, and the emergency stop reaches parked runs too.
+
+Still missing: **a queue view**, because Phase 5 has no task queue - runs
+execute immediately, so there is no queued state, priority or dependency to
+display. Retry is `resume` on a failed, interrupted, cancelled or paused run;
+there is no separate "retry from scratch" control.
 
 ## Phase 13 — Workflow builder
 

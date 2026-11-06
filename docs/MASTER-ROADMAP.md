@@ -149,6 +149,12 @@ with "estimate" labelling when usage is not reported.
 Backend-truth dashboard: agents, task, model, router, tokens, duration, tool,
 files touched, approvals, errors, with start/pause/resume/cancel/retry/logs.
 
+Delivered: the cross-run board and per-run timing/token facts (1.51.0), and
+pause/resume of a live run at a step boundary (1.52.0), which completes the
+control set against real state. Remaining: a queue view, which needs the Phase 5
+task queue first, and a live stepping view of the current step while a model
+call is in flight.
+
 ## Phase 13 — Workflow builder
 
 Validated node graph (task/agent/model/tool/conditional/approval), dependency

@@ -5,9 +5,10 @@
 //! executed against the open workspace (the same path-confined helpers the file
 //! editor uses). File writes and command execution only run when the run was
 //! started with those permissions, and when auto-approve is off the run pauses
-//! in `awaiting_approval` until the user answers. Every step is persisted to
-//! SQLite, so a crash leaves an honest `interrupted` record instead of a
-//! silently repeated half-completed run.
+//! in `awaiting_approval` until the user answers. A user can also park a live
+//! run in `paused` between steps and resume it from the same step log. Every
+//! step is persisted to SQLite, so a crash leaves an honest `interrupted`
+//! record instead of a silently repeated half-completed run.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -43,14 +44,27 @@ const MCP_PROMPT_TOOLS: usize = 30;
 
 const RUNNING: &str = "running";
 const AWAITING_APPROVAL: &str = "awaiting_approval";
+/// A run parked by the user between steps. Nothing is executing; the step log
+/// is intact and `resume` continues from it. It deliberately survives a restart
+/// (`mark_interrupted` leaves it alone), because a pause is a decision the user
+/// made, not a crash.
+const PAUSED: &str = "paused";
 const SUCCEEDED: &str = "succeeded";
 const FAILED: &str = "failed";
 const CANCELLED: &str = "cancelled";
 const INTERRUPTED: &str = "interrupted";
 
-/// Live runs, for cancellation. Flags live exactly as long as the spawned loop
-/// task.
-static ACTIVE: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+/// The control surface of one live loop: `cancel` ends the run, `pause` asks
+/// the loop to park at the next safe point between steps (a pause never stops a
+/// step that is already executing).
+#[derive(Default)]
+struct RunControl {
+    cancel: AtomicBool,
+    pause: AtomicBool,
+}
+
+/// Live runs. Entries live exactly as long as the spawned loop task.
+static ACTIVE: LazyLock<Mutex<HashMap<String, Arc<RunControl>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // ---------------------------------------------------------------------------
@@ -554,7 +568,9 @@ fn now() -> f64 {
 }
 
 /// Crash recovery: a run still marked live after a restart never resumed, so
-/// it becomes an honest `interrupted` record instead of a stale spinner.
+/// it becomes an honest `interrupted` record instead of a stale spinner. A
+/// `paused` run is not touched: the user asked it to stop, so it stays paused
+/// and can be resumed after the restart.
 pub(crate) fn mark_interrupted(state: &AppState) {
     if let Ok(conn) = crate::open_db(&state.database_path) {
         let _ = mark_interrupted_rows(&conn);
@@ -2207,7 +2223,7 @@ async fn refresh_mcp_tools(state: &AppState, run_id: &str, reason: &str) -> bool
     true
 }
 
-async fn run_loop(state: AppState, run_id: String) {
+async fn run_loop(state: AppState, run_id: String, control: Arc<RunControl>) {
     // The MCP catalogue comes first: the very first prompt is built from it.
     catalog_mcp_tools(&state, &run_id).await;
     // Hybrid phase 1: the cloud plans before the local model touches anything.
@@ -2216,18 +2232,46 @@ async fn run_loop(state: AppState, run_id: String) {
             if let Err(error) = plan_with_cloud(&state, &run).await {
                 let _ = add_step(&state, &run_id, "error", "The cloud plan failed:", &error);
                 let _ = finish(&state, &run_id, FAILED, &error);
-                ACTIVE.lock().unwrap().remove(&run_id);
+                release_control(&run_id, &control);
                 notify(&state, Some(&run_id));
                 return;
             }
         }
     }
+    // Only an exit through the `while` condition is the step ceiling. Every
+    // other exit closed the run on purpose (done, cancelled, parked), so the
+    // ceiling guard below must not fire for it - a resume can flip the record
+    // back to `running` while this loop is still in its tail.
+    let mut hit_ceiling = true;
     while step_count(&state, &run_id).unwrap_or(0) < HARD_MAX_STEPS {
         let run = match load_run(&state, &run_id) {
             Ok(Some(run)) if run.status == RUNNING => run,
-            Ok(_) => return, // cancelled, approved externally, or gone
-            Err(_) => return,
+            Ok(_) => {
+                hit_ceiling = false;
+                break; // cancelled, approved externally, parked or gone
+            }
+            Err(_) => {
+                hit_ceiling = false;
+                break;
+            }
         };
+        // The pause safe point: between steps, before anything new is planned or
+        // executed. A pause requested while a step was in flight lands here, so
+        // no action is ever cut in half. The flag is read from this loop's own
+        // control: a flag on a replacement control belongs to a newer loop.
+        if control.pause.load(Ordering::Relaxed) {
+            let _ = add_step(
+                &state,
+                &run_id,
+                "pause",
+                "Paused between steps.",
+                "The run parked at a safe point: nothing was executing when it stopped. Resume continues from this step log.",
+            );
+            let _ = set_run(&state, &run_id, PAUSED, None, Some(""));
+            notify(&state, Some(&run_id));
+            hit_ceiling = false;
+            break;
+        }
         // Crew stage budgets (Step 5): the count restarts at each handoff, so
         // a stage that burns its ceiling is reported honestly instead of
         // quietly eating the rest of the run.
@@ -2291,8 +2335,12 @@ async fn run_loop(state: AppState, run_id: String) {
         }
         match step_once(&state, &run).await {
             Ok(true) => notify(&state, Some(&run_id)),
-            Ok(false) => break,
+            Ok(false) => {
+                hit_ceiling = false;
+                break;
+            }
             Err(error) => {
+                hit_ceiling = false;
                 let database_ok =
                     add_step(&state, &run_id, "error", "The model call failed:", &error).is_ok();
                 if database_ok {
@@ -2302,29 +2350,60 @@ async fn run_loop(state: AppState, run_id: String) {
             }
         }
     }
-    // Bounded-loop guard: reached the ceiling without `done`.
-    if let Ok(final_status) = run_status(&state, &run_id) {
-        if final_status.as_deref() == Some(RUNNING) {
-            let _ = add_step(
-                &state,
-                &run_id,
-                "error",
-                "",
-                "Run stopped: the step ceiling was reached without completion.",
-            );
-            let _ = finish(&state, &run_id, FAILED, "Run exceeded the step ceiling.");
-        }
+    // Bounded-loop guard: this loop left through its step ceiling, so the run is
+    // still ours to fail. Any other exit already closed the record, and a resume
+    // can have reopened it, so the status is checked rather than assumed.
+    let still_ours = matches!(run_status(&state, &run_id), Ok(Some(status)) if status == RUNNING);
+    if hit_ceiling && still_ours {
+        let _ = add_step(
+            &state,
+            &run_id,
+            "error",
+            "",
+            "Run stopped: the step ceiling was reached without completion.",
+        );
+        let _ = finish(&state, &run_id, FAILED, "Run exceeded the step ceiling.");
     }
-    ACTIVE.lock().unwrap().remove(&run_id);
+    release_control(&run_id, &control);
     notify(&state, Some(&run_id));
 }
 
 /// Starts (or resumes) the loop for one run. Both a fresh run and an approval
 /// resume land here.
 fn spawn_run(state: AppState, run_id: String) {
-    let flag = Arc::new(AtomicBool::new(false));
-    ACTIVE.lock().unwrap().insert(run_id.clone(), flag.clone());
-    tokio::spawn(run_loop(state, run_id));
+    let control = Arc::new(RunControl::default());
+    ACTIVE
+        .lock()
+        .unwrap()
+        .insert(run_id.clone(), control.clone());
+    tokio::spawn(run_loop(state, run_id, control));
+}
+
+/// Release this loop's control entry, and only if it is still this loop's own.
+/// A parked loop can be resumed before its tail runs, and a blind `remove` by
+/// run id would then delete the control the *new* loop depends on - after which
+/// every pause request is accepted and silently never read.
+fn release_control(run_id: &str, control: &Arc<RunControl>) {
+    let mut map = ACTIVE.lock().unwrap();
+    if map
+        .get(run_id)
+        .is_some_and(|current| Arc::ptr_eq(current, control))
+    {
+        map.remove(run_id);
+    }
+}
+
+/// Ask a live loop to park at its next safe point. Returns `false` when no loop
+/// is running, so the caller parks the record itself instead of leaving a
+/// request nothing will ever read.
+fn request_pause(run_id: &str) -> bool {
+    match ACTIVE.lock().unwrap().get(run_id) {
+        Some(control) => {
+            control.pause.store(true, Ordering::Relaxed);
+            true
+        }
+        None => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2348,6 +2427,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(format!("{prefix}/:id").as_str(), get(get_run))
         .route(format!("{prefix}/:id/approve").as_str(), post(approve_run))
         .route(format!("{prefix}/:id/resume").as_str(), post(resume_run))
+        .route(format!("{prefix}/:id/pause").as_str(), post(pause_run))
         .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
@@ -2882,18 +2962,35 @@ async fn restore_step(
 /// overwrite a status the record no longer holds. Mirrors `cancel_run`,
 /// repeated over every live run, without re-loading each row.
 pub(crate) fn cancel_all_active(state: &AppState, reason: &str) -> Vec<String> {
-    let run_ids: Vec<String> = ACTIVE.lock().unwrap().keys().cloned().collect();
+    let mut run_ids: Vec<String> = ACTIVE.lock().unwrap().keys().cloned().collect();
+    // A paused run has already parked its loop, so it exists only in the record.
+    // Include it here or an emergency stop would leave a paused run armed to be
+    // resumed after the stop the user just asked for.
+    if let Ok(conn) = db(state) {
+        if let Ok(mut stmt) = conn.prepare("SELECT id FROM agent_runs WHERE status IN (?1, ?2, ?3)")
+        {
+            if let Ok(rows) = stmt.query_map(params![RUNNING, AWAITING_APPROVAL, PAUSED], |row| {
+                row.get::<_, String>(0)
+            }) {
+                for run_id in rows.flatten() {
+                    if !run_ids.contains(&run_id) {
+                        run_ids.push(run_id);
+                    }
+                }
+            }
+        }
+    }
     let mut stopped = Vec::new();
     for run_id in run_ids {
         let live = matches!(
             run_status(state, &run_id).ok().flatten().as_deref(),
-            Some(RUNNING) | Some(AWAITING_APPROVAL)
+            Some(RUNNING) | Some(AWAITING_APPROVAL) | Some(PAUSED)
         );
         if !live {
             continue;
         }
-        if let Some(flag) = ACTIVE.lock().unwrap().get(&run_id) {
-            flag.store(true, Ordering::Relaxed);
+        if let Some(control) = ACTIVE.lock().unwrap().get(&run_id) {
+            control.cancel.store(true, Ordering::Relaxed);
         }
         let _ = add_step(state, &run_id, "emergency-stop", "Emergency stop.", reason);
         let _ = finish(state, &run_id, CANCELLED, reason);
@@ -2903,19 +3000,77 @@ pub(crate) fn cancel_all_active(state: &AppState, reason: &str) -> Vec<String> {
     stopped
 }
 
+/// Park a live run between steps.
+///
+/// Pausing is cooperative on purpose: a step that is already executing (a model
+/// call, a command) is never cut in half, so a `running` answer means the
+/// request was accepted and the run parks at its next safe point. The response
+/// carries the status the record actually holds, so a run that finished while
+/// the request was in flight is reported as finished rather than as paused.
+///
+/// A run waiting for approval has no step to stop — it is already parked, with a
+/// human question outstanding — so it is refused and the two real choices are
+/// named.
+async fn pause_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
+    let run = match load_run(&state, &run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if run.status == PAUSED {
+        return Json(json!({ "ok": true, "status": PAUSED, "alreadyPaused": true }))
+            .into_response();
+    }
+    if run.status != RUNNING {
+        let reason = if run.status == AWAITING_APPROVAL {
+            "This run is waiting for your approval - approve or reject the action, or cancel the run."
+        } else {
+            "This run is not running."
+        };
+        return error_response(StatusCode::BAD_REQUEST, reason);
+    }
+    if !request_pause(&run_id) {
+        // No loop is running: park the record itself so the pause is a state,
+        // not a request nothing will read.
+        let _ = add_step(
+            &state,
+            &run_id,
+            "pause",
+            "Paused between steps.",
+            "The run was parked: no loop was executing. Resume continues from this step log.",
+        );
+        if let Err(error) = set_run(&state, &run_id, PAUSED, None, Some("")) {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+        }
+        notify(&state, Some(&run_id));
+        return Json(json!({ "ok": true, "status": PAUSED })).into_response();
+    }
+    notify(&state, Some(&run_id));
+    let status = run_status(&state, &run_id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Json(json!({
+        "ok": true,
+        "status": status,
+        "pauseRequested": status == RUNNING,
+    }))
+    .into_response()
+}
+
 async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
     let run = match load_run(&state, &run_id) {
         Ok(Some(run)) => run,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
-    if !matches!(run.status.as_str(), RUNNING | AWAITING_APPROVAL) {
+    if !matches!(run.status.as_str(), RUNNING | AWAITING_APPROVAL | PAUSED) {
         return error_response(StatusCode::BAD_REQUEST, "Run is not running.");
     }
     // 1) wake the cancel flag so a live loop exits, 2) persist the state, and
     // the loop's status check will never overwrite a terminal state.
-    if let Some(flag) = ACTIVE.lock().unwrap().get(&run_id) {
-        flag.store(true, Ordering::Relaxed);
+    if let Some(control) = ACTIVE.lock().unwrap().get(&run_id) {
+        control.cancel.store(true, Ordering::Relaxed);
     }
     let outcome = finish(&state, &run_id, CANCELLED, "Cancelled by user.");
     notify(&state, Some(&run_id));
@@ -2971,7 +3126,7 @@ async fn resume_run(State(state): State<AppState>, Path(run_id): Path<String>) -
             "Nothing to resume: this run has no steps. Start a new run instead.",
         );
     }
-    let stage_note = if run.mode == "crew" {
+    let mut stage_note = if run.mode == "crew" {
         let crew: Vec<String> = serde_json::from_str(&run.crew).unwrap_or_default();
         match crew.get(handoffs as usize) {
             Some(role) => format!(" Resuming the {} stage.", role),
@@ -2980,6 +3135,9 @@ async fn resume_run(State(state): State<AppState>, Path(run_id): Path<String>) -
     } else {
         " Resuming from the recorded step log.".to_string()
     };
+    if run.status == PAUSED {
+        stage_note = format!(" Resuming after a pause.{stage_note}");
+    }
     let _ = add_step(
         &state,
         &run_id,
@@ -3819,6 +3977,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             ("c", SUCCEEDED),
             ("d", FAILED),
             ("e", CANCELLED),
+            // A pause is a decision the user made, not a crash: it stays paused.
+            ("f", PAUSED),
         ] {
             conn.execute(
                 "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
@@ -3834,6 +3994,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             ("c", SUCCEEDED),
             ("d", FAILED),
             ("e", CANCELLED),
+            ("f", PAUSED),
         ] {
             let status: String = conn
                 .query_row("SELECT status FROM agent_runs WHERE id=?1", [id], |r| {
@@ -4533,6 +4694,270 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             error.contains("Could not start MCP server") || error.contains("ghost"),
             "{error}"
         );
+    }
+
+    /// The recorded actions of one run, oldest first.
+    fn step_actions(state: &AppState, id: &str) -> Vec<String> {
+        let conn = db(state).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT action FROM agent_steps WHERE run_id=?1 ORDER BY seq")
+            .unwrap();
+        stmt.query_map([id], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| row.expect("step row"))
+            .collect()
+    }
+
+    /// Like `scripted_router`, but every reply takes `delay`, so a test has a
+    /// window in which a step is genuinely in flight.
+    async fn slow_scripted_router(replies: &[&str], delay: std::time::Duration) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+            replies.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+        )));
+        let app = Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |body: axum::Json<Value>| async move {
+                let _ = body;
+                tokio::time::sleep(delay).await;
+                let reply = queue.lock().unwrap().pop_front().unwrap_or_else(|| {
+                    "{\"action\":\"fail\",\"reason\":\"mock out of replies\"}".to_string()
+                });
+                axum::Json(json!({
+                    "choices": [{ "message": { "role": "assistant", "content": reply } }]
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    async fn post_pause(app: &Router, id: &str) -> (StatusCode, String) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/pause"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    #[tokio::test]
+    async fn pause_parks_a_live_run_and_resume_finishes_it() {
+        // Every reply is delayed, so the pause request lands while a step is
+        // genuinely in flight: the pause must then take effect at the next step
+        // boundary, never inside the step.
+        let base = slow_scripted_router(
+            &[
+                "{\"action\":\"think\",\"summary\":\"look around\"}",
+                "{\"action\":\"think\",\"summary\":\"keep looking\"}",
+                "{\"action\":\"think\",\"summary\":\"still looking\"}",
+                "{\"action\":\"think\",\"summary\":\"nearly there\"}",
+                "{\"action\":\"think\",\"summary\":\"one more look\"}",
+                "{\"action\":\"done\",\"summary\":\"nothing to change\"}",
+            ],
+            std::time::Duration::from_millis(60),
+        )
+        .await;
+        let fixture = run_fixture("pause-e2e", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({ "goal": "think about the project", "autoApprove": true }),
+        )
+        .await;
+        let (code, body) = post_pause(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        wait_until_status(&fixture.state, &id, PAUSED).await;
+
+        // Parked means parked: the run recorded the pause and never reached
+        // `done`, and no loop is left holding a cancel flag for it.
+        let actions = step_actions(&fixture.state, &id);
+        assert!(actions.contains(&"pause".to_string()), "{actions:?}");
+        assert!(!actions.contains(&"done".to_string()), "{actions:?}");
+        assert!(!ACTIVE.lock().unwrap().contains_key(&id), "{actions:?}");
+
+        // Pausing an already-parked run is a no-op, not an error.
+        let (code, body) = post_pause(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        assert!(body.contains("alreadyPaused"), "{body}");
+
+        // Resume picks up from the same record and finishes the goal.
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "{actions:?}");
+        assert!(actions.contains(&"resume".to_string()), "{actions:?}");
+        assert!(actions.contains(&"done".to_string()), "{actions:?}");
+    }
+
+    #[tokio::test]
+    async fn a_second_pause_after_a_resume_is_still_honoured() {
+        // Regression: the parked loop's tail used to remove the control by run
+        // id, so a resume that registered a new loop first had its control
+        // deleted underneath it - every later pause answered 200 and was never
+        // read, and the run simply kept working.
+        let base = slow_scripted_router(
+            &[
+                "{\"action\":\"think\",\"summary\":\"one\"}",
+                "{\"action\":\"think\",\"summary\":\"two\"}",
+                "{\"action\":\"think\",\"summary\":\"three\"}",
+                "{\"action\":\"think\",\"summary\":\"four\"}",
+                "{\"action\":\"think\",\"summary\":\"five\"}",
+                "{\"action\":\"done\",\"summary\":\"nothing to change\"}",
+            ],
+            std::time::Duration::from_millis(40),
+        )
+        .await;
+        let fixture = run_fixture("pause-twice", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({ "goal": "park twice", "autoApprove": true }),
+        )
+        .await;
+        let (code, body) = post_pause(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        wait_until_status(&fixture.state, &id, PAUSED).await;
+
+        let (code, body) = post_resume(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        // Resume, then pause again at once: the parked loop's tail may still be
+        // running when the new loop is registered.
+        let (code, body) = post_pause(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        wait_until_status(&fixture.state, &id, PAUSED).await;
+
+        let actions = step_actions(&fixture.state, &id);
+        assert_eq!(
+            actions.iter().filter(|action| *action == "pause").count(),
+            2,
+            "{actions:?}"
+        );
+        assert!(!actions.contains(&"done".to_string()), "{actions:?}");
+    }
+
+    #[tokio::test]
+    async fn pause_refuses_an_approval_wait_and_cancel_stops_a_parked_run() {
+        let base =
+            scripted_router(&["{\"action\":\"write\",\"path\":\"a.txt\",\"content\":\"x\"}"]).await;
+        let fixture = run_fixture("pause-approval", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({ "goal": "write a.txt", "allowWrites": true, "autoApprove": false }),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
+        let (code, body) = post_pause(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("approval"), "{body}");
+
+        // A parked run has no loop, so cancel has to close the record itself.
+        let mut conn = db(&fixture.state).unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
+             VALUES('r-parked', 'p', 'a parked goal', 'paused', 0, 0, 0, 5, '', '', 1.0, 1.0)",
+            params![],
+        )
+        .unwrap();
+        insert_step(
+            &mut conn,
+            "r-parked",
+            "pause",
+            "Paused between steps.",
+            "",
+            "",
+        )
+        .unwrap();
+        let response = fixture
+            .app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/runs/r-parked/cancel")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM agent_runs WHERE id='r-parked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, CANCELLED);
+    }
+
+    #[tokio::test]
+    async fn a_pause_with_no_live_loop_parks_the_record() {
+        // The window before a loop is registered (or after one parked) must not
+        // swallow the request: with no loop to ask, the record is parked itself.
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("pause-no-loop", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({ "goal": "wait for a pause", "autoApprove": true }),
+        )
+        .await;
+        wait_for_terminal(&fixture.state, &id).await; // mock out of replies -> failed
+        let conn = db(&fixture.state).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status='running', error='', updated_at=2.0 WHERE id=?1",
+            [&id],
+        )
+        .unwrap();
+        ACTIVE.lock().unwrap().remove(&id);
+        let (code, body) = post_pause(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        assert!(!body.contains("pauseRequested"), "{body}");
+        let status: String = conn
+            .query_row("SELECT status FROM agent_runs WHERE id=?1", [&id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, PAUSED);
+        assert!(step_actions(&fixture.state, &id).contains(&"pause".to_string()));
+    }
+
+    #[tokio::test]
+    async fn emergency_stop_reaches_a_parked_run() {
+        // Paused runs have no live loop, so the stop must also read the record.
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("stop-parked", &base);
+        let conn = db(&fixture.state).unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
+             VALUES('r-still-parked', 'p', 'parked and armed', 'paused', 0, 0, 0, 5, '', '', 1.0, 1.0)",
+            params![],
+        )
+        .unwrap();
+        let stopped = cancel_all_active(&fixture.state, "Test emergency stop.");
+        assert!(
+            stopped.contains(&"r-still-parked".to_string()),
+            "{stopped:?}"
+        );
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM agent_runs WHERE id='r-still-parked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, CANCELLED);
     }
 
     #[tokio::test]

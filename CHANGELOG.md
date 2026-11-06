@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.52.0
+
+- Phase 12 close-out, part one: a run can now be **paused** instead of only
+  cancelled. `POST /api/runs/:id/pause` parks a live run at its next safe point —
+  the boundary between steps — so a model call or a command that is already
+  executing finishes and is recorded, and nothing new is planned or run after
+  it. The loop writes a `pause` step, sets the record to `paused` and releases
+  its control entry, so a parked run holds no live task.
+- Pausing is cooperative and says so: while a step is in flight the answer is
+  `{"pauseRequested": true, "status": "running"}`, and the request re-reads the
+  record before replying, so a run that finished or was cancelled in that window
+  is reported as what it actually is rather than as paused. Pausing an
+  already-parked run is a no-op (`alreadyPaused`), and a run waiting for approval
+  is refused with the two choices the user really has — it is already parked with
+  a question outstanding, so there is no step to stop.
+- `paused` is durable: the startup sweep still marks `running` and
+  `awaiting_approval` runs `interrupted`, and deliberately leaves a paused run
+  paused, because a pause is a decision the user made. `resume` on a parked run
+  continues from the same step log and records that it is resuming after a pause.
+- `cancel` accepts a parked run (there is no flag to wake, so the record is
+  closed directly), and the emergency stop now also reads the record for paused
+  runs: they have already released their loop, so an ACTIVE-only sweep would
+  have left a paused run armed after the stop the user asked for.
+- Runs panel: a **Pause** control while a run is working, **Resume** while it is
+  parked (alongside Cancel in both), a Paused count on the dashboard, and a
+  paused pill styled as deliberately parked rather than as live work or as a
+  run blocked on a human. The pause route is registered on the host API prefix
+  too, so VS Code and Android reach the same state machine.
+- Two defects found while making pause work end to end, both fixed here. First,
+  a parked loop released its control entry by run id, so a resume that registered
+  the next loop first had its control deleted underneath it: every later pause
+  answered `200` with `pauseRequested: true` and was never read, and the run just
+  kept working. Release is now identity-checked (`Arc::ptr_eq`), the loop reads
+  the pause flag from its own control, and the step-ceiling guard only fires when
+  the loop really left through the ceiling — a resume reopening a run while a
+  finished loop was still in its tail could previously fail the resumed run with
+  "Run exceeded the step ceiling". Second, the runs panel never refreshed on
+  agent events: the event handler gated on `state.view === "runs"`, but
+  `state.view` is the left rail (explorer/search/…), never `runs`, so the board
+  and cards only changed on a manual Refresh and an asynchronous pause could not
+  appear at all. An `agent-run-changed` event now re-reads the list and the open
+  run's step log (new `refreshRunsPanel`).
+- Tests: 313 pass, 1 ignored. New: a live pause against a delayed mock router
+  (parks without reaching `done`, releases its control entry, repeat pause is a
+  no-op, resume finishes the goal), a pause refused while awaiting approval plus
+  cancel closing a parked record, a pause with no live loop parking the record
+  itself, an emergency stop reaching a parked run, a second pause right after a
+  resume still being honoured (the control-lifetime regression), and the restart
+  sweep leaving a paused row paused. Clippy `-D warnings` clean; `rustfmt` clean
+  on `agent.rs`; `node --check app/static/app.js` clean.
+- Verified live, not just compiled: the headless binary on :8905 against a mock
+  router that holds each reply 400 ms — `POST /pause` answered
+  `pauseRequested: true`, the run parked as `paused` with steps `think, pause`
+  (the in-flight step finished first), a second pause answered `alreadyPaused`,
+  `/api/runs/overview` reported `{paused: 1}, live: 1`, `resume` returned
+  `running` and kept stepping, and `cancel` closed it as `cancelled`. In the
+  browser on :8906 the Run views showed the paused pill (class `run-pause`), the
+  `Resume`/`Cancel run` controls, then Pause → running → Pause → paused with the
+  step log advancing one boundary at a time and no manual refresh.
+
 ## 1.51.0
 
 - Phase 12: live agent monitoring. A cross-run dashboard now sits above the runs

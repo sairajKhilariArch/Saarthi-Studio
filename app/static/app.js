@@ -1275,7 +1275,10 @@ function setupMirroring() {
       return;
     }
     if (data && data.type === "agent-run-changed") {
-      if (state.view === "runs") void loadRuns();
+      // `state.view` is the left rail (explorer/search/...), never "runs", so a
+      // gate on it meant the panel only ever changed on a manual Refresh - and an
+      // async pause (the run parks at its next step boundary) never showed up.
+      void refreshRunsPanel(data.run_id);
       return;
     }
     if (data && (data.type === "local-pull" || data.type === "local-models-changed")) {
@@ -6277,6 +6280,7 @@ state.runDetail = null;
 const RUN_STATUS_CLASS = {
   running: "run-running",
   awaiting_approval: "run-await",
+  paused: "run-pause",
   succeeded: "run-ok",
   failed: "run-fail",
   cancelled: "run-done",
@@ -6304,6 +6308,16 @@ async function loadRuns() {
   renderRuns();
 }
 
+/* An agent event means the panel's numbers changed. The board, the cards and the
+   open run's step log all come from the server, so they are re-read instead of
+   patched locally: a run that parked, paused or failed must never keep reading as
+   still working. */
+async function refreshRunsPanel(runId) {
+  if (!$("runsList")) return;
+  await loadRuns();
+  if (state.openRun && (!runId || runId === state.openRun)) await loadRunDetail();
+}
+
 function formatDuration(seconds) {
   const total = Math.max(0, Math.round(seconds || 0));
   if (total < 60) return `${total}s`;
@@ -6321,8 +6335,9 @@ function renderRunBoard() {
   const counts = overview.counts || {};
   const totals = overview.totals || {};
   const facts = [
-    ["Live runs", totals.live || 0, "working or waiting for approval"],
+    ["Live runs", totals.live || 0, "working, waiting for approval, or paused"],
     ["Awaiting approval", counts.awaiting_approval || 0, "each blocks until answered"],
+    ["Paused", counts.paused || 0, "parked between steps; resume when ready"],
     ["Failed", counts.failed || 0, "recent runs that ended badly"],
     ["Tokens", Number(totals.tokens || 0).toLocaleString(), "reported by the run models"],
     ["Steps", Number(totals.steps || 0).toLocaleString(), "across the runs listed"],
@@ -6449,7 +6464,25 @@ function buildRunDetail(detail) {
 
   const controls = document.createElement("div");
   controls.className = "run-controls";
-  if (detail.status === "running" || detail.status === "awaiting_approval") {
+  if (detail.status === "running") {
+    const pause = document.createElement("button");
+    pause.type = "button";
+    pause.className = "btn btn-quiet btn-small";
+    pause.textContent = "Pause";
+    pause.title = "Park the run at the next step boundary; the step already running finishes first";
+    pause.addEventListener('click', () => pauseAgentRun(detail.id));
+    controls.appendChild(pause);
+  }
+  if (detail.status === "paused") {
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "btn btn-accent btn-small";
+    resume.textContent = "Resume";
+    resume.title = "Continue from the recorded step log";
+    resume.addEventListener('click', () => resumeAgentRun(detail.id));
+    controls.appendChild(resume);
+  }
+  if (detail.status === "running" || detail.status === "awaiting_approval" || detail.status === "paused") {
     const stop = document.createElement("button");
     stop.type = "button";
     stop.className = "btn btn-quiet btn-small";
@@ -6701,6 +6734,26 @@ async function emergencyStopAll() {
   termState.source = null;
   termState.id = null;
   await loadRuns();
+}
+
+async function pauseAgentRun(runId) {
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/pause`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not pause the run.");
+  } else if (result.data.status === "paused") {
+    toast("Run paused — resume continues from the step log.");
+  } else if (result.data.pauseRequested) {
+    toast("Pause requested — the run stops after the step it is executing.");
+  } else {
+    // The run finished or was cancelled while the request was in flight; say
+    // what the record actually holds instead of promising a pause.
+    toast(`The run is ${String(result.data.status || "no longer running").replace("_", " ")}.`);
+  }
+  await loadRuns();
+  if (runId === state.openRun) await loadRunDetail();
 }
 
 async function cancelAgentRun(runId) {

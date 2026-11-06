@@ -1446,6 +1446,9 @@ kbd {
 .run-status { flex-shrink: 0; }
 .run-status.run-running { color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); }
 .run-status.run-await { color: var(--warn, #f2c14e); border-color: rgba(242, 193, 78, .35); background: rgba(242, 193, 78, .08); }
+/* Paused reads as deliberately parked: not the accent of live work, not the
+   warning colour of a run blocked on a human answer. */
+.run-status.run-pause { color: var(--dim); border-color: var(--line-strong); background: var(--surface-2); }
 .run-status.run-ok { color: var(--ok-ink); border-color: var(--ok-border); background: var(--ok-soft); }
 .run-status.run-fail { color: var(--danger-ink); border-color: var(--danger-border); background: var(--danger-soft); }
 .run-status.run-done { color: var(--dim); }
