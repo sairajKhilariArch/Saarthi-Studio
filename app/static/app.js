@@ -3494,7 +3494,7 @@ async function loadSettings() {
   $("agentModel").value = result.data.agent_model || "";
   $("fallbackModels").value = (result.data.fallback_models || []).join(", ");
   $("dailyBudget").value = result.data.daily_budget_usd ? String(result.data.daily_budget_usd) : "";
-  $("maxConcurrentRuns").value = String(result.data.max_concurrent_runs || 1);
+  $("maxConcurrentRuns").value = String(result.data.max_concurrent_runs || 2);
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
@@ -4288,7 +4288,7 @@ async function saveSettings(event) {
     agent_model: $("agentModel").value.trim(),
     fallback_models: $("fallbackModels").value.split(",").map((s) => s.trim()).filter(Boolean),
     daily_budget_usd: Number($("dailyBudget").value) || 0,
-    max_concurrent_runs: Number($("maxConcurrentRuns").value) || 1,
+    max_concurrent_runs: Number($("maxConcurrentRuns").value) || 2,
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();

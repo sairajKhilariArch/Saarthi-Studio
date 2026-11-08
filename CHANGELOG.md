@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.1.0
+
+Completes the isolation stage: runs no longer share a file system view or a lease
+ledger by accident.
+
+- The lease ledger now lives in `studio.db` (`run_leases`, `run_reads`) instead of a
+  process variable, so a headless server and a desktop build pointed at one database
+  see each other's claims. Claims held by terminal runs are dropped on the next claim;
+  a paused run keeps its recorded reads but loses its claims.
+- A command step claims its whole checkout for as long as it runs: two runs may not
+  run commands in one working directory at once, because a command can write anywhere
+  inside it. A refusal is a non-fatal `command-conflict` step naming the blocker, the
+  same shape as a write conflict. Per-run worktrees mean the common case is two
+  separate checkouts, so this only applies where runs really share a folder.
+- `max_concurrent_runs` defaults to 2, but only a workspace that is itself the root of
+  a git repository may run more than one — each run gets its own checkout there. A
+  non-git folder stays at one whatever the setting says. The gate compares
+  `git rev-parse --show-toplevel` with the workspace: "inside some work tree" would
+  also be true for a temp folder nested in an unrelated repository.
+- `cargo test --locked`: **428 passed, 1 ignored**, run twice. A new test claims a
+  checkout for one live run, refuses a second run in the same checkout, allows a
+  different one, and releases. Three queue tests now drive a 2 s mock instead of
+  120–150 ms so their "still queued" assertions cannot race the first run finishing.
+- Still open: an editor save or another program still writes behind the lease (caught
+  by the fingerprint on the run's next write), each process still admits runs on its
+  own, and a worktree that is never applied stays on disk.
+
 ## 2.0.0
 
 The first release where a run works in its own checkout *and* can hand that work

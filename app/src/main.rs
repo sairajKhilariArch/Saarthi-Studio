@@ -174,7 +174,9 @@ struct Config {
 }
 
 fn default_max_concurrent_runs() -> i64 {
-    1
+    // Two runs at once is the default only where each run gets its own checkout;
+    // the dispatcher still clamps a non-git folder to one.
+    2
 }
 
 fn default_auto_skills() -> bool {

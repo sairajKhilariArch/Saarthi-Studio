@@ -923,7 +923,16 @@ fn promote(state: &AppState, run_id: &str) -> bool {
 async fn dispatch(state: &AppState) -> Vec<String> {
     static PASS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
     let _pass = PASS.lock().await;
-    let limit = crate::load_config(state).max_concurrent_runs.clamp(1, 4);
+    // Above one run, isolation is a real checkout per run: a folder that is not a
+    // git repository has nothing to isolate with, so it stays single-run whatever
+    // the setting says.
+    let configured = crate::load_config(state).max_concurrent_runs.clamp(1, 4);
+    let isolated = state
+        .workspace
+        .root()
+        .map(|root| crate::git::is_repository_root(&root))
+        .unwrap_or(false);
+    let limit = if isolated { configured } else { 1 };
     let mut started = Vec::new();
     while let Ok(active) = count_live_slots(state) {
         let mut slots = limit - active;
@@ -2495,7 +2504,7 @@ fn run_step_root(state: &AppState, run: &RunRow) -> Result<std::path::PathBuf, S
         .workspace
         .root()
         .map_err(|error| error.message().to_string())?;
-    if !(run.allow_writes || run.allow_commands) || !crate::git::is_git_worktree(&root) {
+    if !(run.allow_writes || run.allow_commands) || !crate::git::is_repository_root(&root) {
         return Ok(root);
     }
     Ok(crate::git::isolate_run_worktree(&root, &run.id).unwrap_or(root))
@@ -2666,12 +2675,28 @@ async fn execute_action_step(
         }
         _ => None,
     };
+    // A command can write anywhere inside its working directory, so it claims the
+    // whole checkout: two runs may not run commands there at the same time.
+    let command_root: Option<String> = match action {
+        Action::Command { .. } => Some(root.to_string_lossy().to_string()),
+        _ => None,
+    };
+    if let Some(claimed) = command_root.as_deref() {
+        if let Err(conflict) = crate::filelock::claim_command(state, claimed, &run.id) {
+            add_step(state, &run.id, "command-conflict", &summary, &conflict)?;
+            notify(state, Some(&run.id));
+            return Ok(true);
+        }
+    }
     let outcome: Result<String, String> = match &excluded_path {
         Some((_, path)) => Ok(format!(
             "[blocked by privacy policy: {path} is on the outbound exclusion list; contents were not sent and are not shown here.]"
         )),
         None => dispatch_step(state, &root, action).await,
     };
+    if let Some(claimed) = command_root.as_deref() {
+        crate::filelock::release_command(state, claimed, &run.id);
+    }
     let output = match outcome {
         Ok(output) => {
             // A read is the baseline a later write is checked against: what this
@@ -3582,16 +3607,16 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
     payload["stepList"] = json!(rows);
     // A finished writing run may still hold its own checkout; the detail view
     // offers Apply exactly when it does.
-    payload["worktree"] =
-        json!(state
-            .workspace
-            .root()
-            .ok()
-            .filter(|root| (run.allow_writes || run.allow_commands)
-                && crate::git::is_git_worktree(root))
-            .map(|root| crate::git::run_worktree_path(&root, &run_id))
-            .filter(|path| path.join(".git").exists())
-            .map(|path| path.to_string_lossy().to_string()));
+    payload["worktree"] = json!(state
+        .workspace
+        .root()
+        .ok()
+        .filter(
+            |root| (run.allow_writes || run.allow_commands) && crate::git::is_repository_root(root)
+        )
+        .map(|root| crate::git::run_worktree_path(&root, &run_id))
+        .filter(|path| path.join(".git").exists())
+        .map(|path| path.to_string_lossy().to_string()));
     // The detail view can show exactly what the model was handed.
     payload["contextBlock"] = json!(serde_json::from_str::<Value>(&run.context)
         .ok()
@@ -5709,6 +5734,25 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         )
     }
 
+    #[test]
+    fn a_command_claim_excludes_a_second_live_run_in_the_same_checkout() {
+        let fixture = run_fixture("cmd-lease", "http://127.0.0.1:1");
+        let a = format!("cmd-a-{}", uuid::Uuid::new_v4());
+        let b = format!("cmd-b-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, RUNNING);
+        insert_run(&fixture.state, &b, RUNNING);
+        crate::filelock::claim_command(&fixture.state, "checkout", &a).unwrap();
+        let error = crate::filelock::claim_command(&fixture.state, "checkout", &b).unwrap_err();
+        assert!(error.contains(&a), "{error}");
+        // The claim is per working directory: another checkout is free.
+        crate::filelock::claim_command(&fixture.state, "other", &b).unwrap();
+        crate::filelock::release_command(&fixture.state, "checkout", &a);
+        crate::filelock::claim_command(&fixture.state, "checkout", &b).unwrap();
+        crate::filelock::release(&fixture.state, &a);
+        crate::filelock::release(&fixture.state, &b);
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
     #[tokio::test]
     async fn applying_a_finished_run_merges_its_checkout_back() {
         let base = scripted_router(&[
@@ -6560,7 +6604,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 "{\"action\":\"done\",\"summary\":\"high priority\"}",
                 "{\"action\":\"done\",\"summary\":\"low priority\"}",
             ],
-            std::time::Duration::from_millis(150),
+            std::time::Duration::from_millis(2000),
         )
         .await;
         let fixture = run_fixture("queue-priority", &base);
@@ -6612,7 +6656,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 "{\"action\":\"done\",\"summary\":\"dependency done\"}",
                 "{\"action\":\"done\",\"summary\":\"dependent done\"}",
             ],
-            std::time::Duration::from_millis(120),
+            std::time::Duration::from_millis(2000),
         )
         .await;
         let fixture = run_fixture("queue-dependency", &base);
@@ -6693,7 +6737,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 "{\"action\":\"done\",\"summary\":\"the only run that executes\"}",
                 "{\"action\":\"done\",\"summary\":\"must never be called\"}",
             ],
-            std::time::Duration::from_millis(150),
+            std::time::Duration::from_millis(2000),
         )
         .await;
         let fixture = run_fixture("queue-cancel", &base);
@@ -7241,7 +7285,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 "{\"action\":\"read\",\"path\":\"seed.txt\"}",
                 "{\"action\":\"done\",\"summary\":\"finished\"}",
             ],
-            std::time::Duration::from_millis(150),
+            std::time::Duration::from_millis(2000),
         )
         .await;
         let fixture = run_fixture("retry-live", &base);
