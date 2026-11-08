@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.76.0
+
+- The Source Control pane's history work stopped at merge; **rebase** is the
+  other half, and git could only be driven from a terminal for it.
+  `app/src/git.rs` now runs a real rebase and a real abort.
+- `POST /api/workspace/git/rebase` (body `branch`) answers
+  `{branch, current, summary}` when git succeeds and **409**
+  `{conflicted, output, inProgress}` when it stops on conflicts, leaving the
+  tree for the person to finish or abort.
+- `POST /api/workspace/git/rebase/abort` puts the branch back where the rebase
+  started and refuses with a 409 when nothing is in progress — the one thing
+  that makes a history rewrite safe to attempt.
+- Refused over uncommitted **tracked** changes and when the named branch is the
+  one already checked out, so the action can never be a no-op that looks like
+  work. The branch name is narrowed before argv and both routes are gated on the
+  `git` action.
+- Merge's clean-tree check and ref validation moved into shared helpers
+  (`dirty_tracked`, `valid_ref`) rather than being copied for rebase.
+- UI: a `Rebase…` form in the Source Control pane, the conflicted files named in
+  the toast, and an `Abort rebase` control.
+- `cargo test --locked`: **411 passed, 1 ignored** (4 new, all against real
+  repositories: a rebase replaying a commit onto an advanced branch with the
+  resulting log order asserted; a conflict followed by an abort that restores
+  the original branch, file and clean tree with a second abort refused; a dirty
+  tracked file refused with the edit untouched; an unknown branch, an
+  option-like name and a self-rebase all refused). Clippy `-D warnings` clean,
+  no rustfmt diff in the touched files, `node --check` clean.
+- Live on a headless build at `:8955`: `rebase main` → 200 `{current: feature}`
+  with git's own `Rebasing (1/1)` summary and the log ordering proven
+  (`feature work`, `main work`, `base`); `-x` → 400; `nope` → 400; `feature` →
+  400 "already checked out"; a conflicting rebase → 409
+  `{conflicted: ["a.txt"], inProgress: true}`; abort → 200, then 409, with the
+  branch and file back; a dirty tracked file → 409; `git status --porcelain`
+  empty afterwards. The pane itself was not viewed in a browser.
+- Not built: an in-pane "continue rebase", line-level staging, and a worktree
+  per run.
+
 ## 1.75.0
 
 - Phase 9's remaining safety item: **a whole-tree checkpoint before a run can

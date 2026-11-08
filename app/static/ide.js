@@ -178,7 +178,8 @@
       '<div class="scm-commit-row"><button id="scmCommit" class="tiny-toggle primary" type="button">Commit</button>',
       '<button id="scmBranchBtn" class="tiny-toggle" type="button">Branch…</button>',
       '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button>',
-      '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button></div>',
+      '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button>',
+      '<button id="scmRebaseBtn" class="tiny-toggle" type="button">Rebase…</button></div>',
       '<div class="scm-branch-form hidden" id="scmBranchForm">',
       '<input id="scmBranchInput" type="text" placeholder="branch name" aria-label="Branch name" autocomplete="off">',
       '<button id="scmBranchCreate" class="tiny-toggle" type="button">Create</button>',
@@ -187,6 +188,10 @@
       '<input id="scmMergeInput" type="text" placeholder="branch to merge in" aria-label="Branch to merge" autocomplete="off">',
       '<button id="scmMergeGo" class="tiny-toggle primary" type="button">Merge</button>',
       '<button id="scmMergeAbort" class="tiny-toggle" type="button">Abort merge</button></div>',
+      '<div class="scm-branch-form hidden" id="scmRebaseForm">',
+      '<input id="scmRebaseInput" type="text" placeholder="branch to rebase onto" aria-label="Branch to rebase onto" autocomplete="off">',
+      '<button id="scmRebaseGo" class="tiny-toggle primary" type="button">Rebase</button>',
+      '<button id="scmRebaseAbort" class="tiny-toggle" type="button">Abort rebase</button></div>',
       '<p class="scm-hint" id="scmHint"></p>',
       "</div>",
     ].join("");
@@ -625,6 +630,41 @@
     });
     await refreshScm();
     toast(result.ok ? "Merge aborted." : (result.data.error || "Could not abort the merge."));
+  }
+
+  async function rebaseScm() {
+    const input = $("scmRebaseInput");
+    const branch = input ? input.value.trim() : "";
+    if (!branch) { toast("Name the branch to rebase onto."); return; }
+    if (!window.confirm(`Replay this branch's commits on top of "${branch}"?\n\nThis rewrites local history. The working tree must be clean, a conflict is left in place for you to resolve, and Abort rebase puts the branch back.`)) return;
+    const result = await api("/api/workspace/git/rebase", {
+      method: "POST",
+      body: JSON.stringify({ branch, approve: true }),
+      confirmApproval: true,
+    });
+    await refreshScm();
+    if (input) input.value = "";
+    if (!result.ok) {
+      const conflicted = Array.isArray(result.data && result.data.conflicted) ? result.data.conflicted : [];
+      toast(conflicted.length
+        ? `Rebase stopped: ${conflicted.length} conflicted file(s) — ${conflicted.slice(0, 3).join(", ")}${conflicted.length > 3 ? "…" : ""}`
+        : (result.data.error || "Rebase failed."));
+      return;
+    }
+    const data = result.data || {};
+    $("scmRebaseForm").classList.add("hidden");
+    toast(`Rebased ${data.current} onto ${data.branch}`);
+  }
+
+  async function abortRebaseScm() {
+    if (!window.confirm("Abort the rebase in progress and put the branch back where it started?")) return;
+    const result = await api("/api/workspace/git/rebase/abort", {
+      method: "POST",
+      body: JSON.stringify({ approve: true }),
+      confirmApproval: true,
+    });
+    await refreshScm();
+    toast(result.ok ? "Rebase aborted." : (result.data.error || "Could not abort the rebase."));
   }
 
   function scmDiffLineHtml(line) {
@@ -1100,6 +1140,16 @@
     $("scmMergeAbort").addEventListener("click", () => void abortMergeScm());
     $("scmMergeInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void mergeScm(); }
+    });
+    $("scmRebaseBtn").addEventListener("click", () => {
+      const form = $("scmRebaseForm");
+      form.classList.toggle("hidden");
+      if (!form.classList.contains("hidden")) $("scmRebaseInput").focus();
+    });
+    $("scmRebaseGo").addEventListener("click", () => void rebaseScm());
+    $("scmRebaseAbort").addEventListener("click", () => void abortRebaseScm());
+    $("scmRebaseInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void rebaseScm(); }
     });
     $("scmBranchInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void branchScm("switch"); }

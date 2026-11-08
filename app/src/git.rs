@@ -760,10 +760,17 @@ enum MergeOutcome {
 /// way a remote name is: no leading dash, no whitespace, no control characters,
 /// and nothing that could be read as a revision range.
 fn merge_target(raw: &str) -> Result<String, String> {
-    let name = raw.trim().to_string();
-    if name.is_empty() {
+    if raw.trim().is_empty() {
         return Err("Name the branch to merge in.".to_string());
     }
+    valid_ref(raw)
+}
+
+/// A ref name that reaches argv, narrowed the way a remote name is: no leading
+/// dash, no whitespace or control characters, and nothing that could be read as
+/// a revision range.
+fn valid_ref(raw: &str) -> Result<String, String> {
+    let name = raw.trim().to_string();
     if name.starts_with('-') {
         return Err("A branch name cannot start with a dash.".to_string());
     }
@@ -816,22 +823,12 @@ fn unmerged_paths(root: &Path) -> Vec<String> {
 /// and harder to undo; committing or stashing first is what git itself asks.
 fn merge_branch(root: &Path, raw: &str) -> Result<MergeOutcome, (StatusCode, String)> {
     let branch = merge_target(raw).map_err(|message| (StatusCode::BAD_REQUEST, message))?;
-    // Untracked files are deliberately ignored: git itself only objects when the
-    // merge would overwrite one, and a stray build log in the folder must not
-    // make merging impossible.
-    let dirty = git(root, &["status", "--porcelain", "--untracked-files=no"])
-        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?
-        .stdout;
-    let dirty: Vec<&str> = dirty
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    if !dirty.is_empty() {
+    let dirty = dirty_tracked(root)?;
+    if dirty > 0 {
         return Err((
             StatusCode::CONFLICT,
             format!(
-                "Commit or stash your {} changed file(s) before merging: a merge started over uncommitted work is hard to undo.",
-                dirty.len()
+                "Commit or stash your {dirty} changed file(s) before merging: a merge started over uncommitted work is hard to undo."
             ),
         ));
     }
@@ -1055,6 +1052,155 @@ fn abort_merge(root: &Path) -> Result<Value, (StatusCode, String)> {
         return Err((
             StatusCode::CONFLICT,
             git_error(&output, "git could not abort the merge"),
+        ));
+    }
+    Ok(json!({ "ok": true, "aborted": true }))
+}
+
+/// What a rebase attempt did. Like a merge, a conflict is an outcome with a tree
+/// the person has to finish or abort, not an opaque failure.
+enum RebaseOutcome {
+    Rebased {
+        branch: String,
+        current: String,
+        summary: String,
+    },
+    Conflict {
+        branch: String,
+        current: String,
+        paths: Vec<String>,
+        output: String,
+    },
+}
+
+fn rebase_target(raw: &str) -> Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("Name the branch to rebase onto.".to_string());
+    }
+    valid_ref(raw)
+}
+
+/// Tracked files with uncommitted changes. Untracked files are ignored: git
+/// itself only objects when an operation would overwrite one, and a stray build
+/// log in the folder must not make history work impossible.
+fn dirty_tracked(root: &Path) -> Result<usize, (StatusCode, String)> {
+    let output = git(root, &["status", "--porcelain", "--untracked-files=no"])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    Ok(output
+        .stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count())
+}
+
+/// Where git keeps a state directory. Worktrees and submodules move `.git`, so
+/// this is asked of git rather than assumed to be `.git/<name>`.
+fn git_state_path(root: &Path, name: &str) -> Option<PathBuf> {
+    let output = git(root, &["rev-parse", "--git-path", name]).ok()?;
+    let text = output.stdout.trim();
+    if !output.ok || text.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(text);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
+fn rebase_in_progress(root: &Path) -> bool {
+    ["rebase-merge", "rebase-apply"].iter().any(|name| {
+        git_state_path(root, name)
+            .map(|path| path.exists())
+            .unwrap_or(false)
+    })
+}
+
+/// Replay the current branch's own commits on top of another branch. History is
+/// rewritten on purpose — that is what a rebase is — so it refuses a dirty tree
+/// and a branch onto itself, and leaves a conflict for the person to finish or
+/// abort exactly like a merge.
+fn rebase_branch(root: &Path, raw: &str) -> Result<RebaseOutcome, (StatusCode, String)> {
+    let branch = rebase_target(raw).map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    let dirty = dirty_tracked(root)?;
+    if dirty > 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "Commit or stash your {dirty} changed file(s) before rebasing: a rebase rewrites commits and cannot be undone over uncommitted work."
+            ),
+        ));
+    }
+    let current = branch_at_head(root).unwrap_or_else(|| "HEAD".to_string());
+    if current == branch {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "`{branch}` is already checked out; rebasing a branch onto itself would do nothing."
+            ),
+        ));
+    }
+    let output = git(root, &["rebase", &branch])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if output.ok {
+        let summary = output
+            .stdout
+            .lines()
+            .chain(output.stderr.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(12)
+            .collect::<Vec<&str>>()
+            .join("\n");
+        return Ok(RebaseOutcome::Rebased {
+            branch,
+            current,
+            summary,
+        });
+    }
+    let paths = unmerged_paths(root);
+    if !paths.is_empty() || rebase_in_progress(root) {
+        let text = format!("{}\n{}", output.stdout.trim(), output.stderr.trim());
+        return Ok(RebaseOutcome::Conflict {
+            branch,
+            current,
+            paths,
+            output: text.trim().to_string(),
+        });
+    }
+    let text = format!("{}\n{}", output.stderr, output.stdout);
+    if text.contains("not something we can merge")
+        || text.contains("is not a commit")
+        || text.contains("unknown revision")
+        || text.contains("invalid upstream")
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("There is no branch or commit named `{branch}` in this repository."),
+        ));
+    }
+    Err((
+        StatusCode::CONFLICT,
+        git_error(&output, "git could not rebase"),
+    ))
+}
+
+/// `git rebase --abort` puts the branch back where the rebase started, which is
+/// the one thing that makes a conflicted rewrite safe to attempt.
+fn abort_rebase(root: &Path) -> Result<Value, (StatusCode, String)> {
+    if !rebase_in_progress(root) {
+        return Err((
+            StatusCode::CONFLICT,
+            "There is no rebase in progress, so there is nothing to abort.".to_string(),
+        ));
+    }
+    let output = git(root, &["rebase", "--abort"])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if !output.ok {
+        return Err((
+            StatusCode::CONFLICT,
+            git_error(&output, "git could not abort the rebase"),
         ));
     }
     Ok(json!({ "ok": true, "aborted": true }))
@@ -1490,6 +1636,81 @@ async fn abort_merge_route(State(state): State<AppState>, Json(input): Json<Valu
     }
 }
 
+async fn rebase_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let branch = input.get("branch").and_then(Value::as_str).unwrap_or("");
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &format!("rebase {}", branch.trim()),
+        "",
+        approve,
+        "rebase the current branch",
+    ) {
+        return response;
+    }
+    match rebase_branch(&root, branch) {
+        Ok(RebaseOutcome::Rebased {
+            branch,
+            current,
+            summary,
+        }) => Json(json!({
+            "ok": true,
+            "branch": branch,
+            "current": current,
+            "summary": summary,
+        }))
+        .into_response(),
+        Ok(RebaseOutcome::Conflict {
+            branch,
+            current,
+            paths,
+            output,
+        }) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "Rebasing onto `{branch}` stopped with {} conflicted file(s). Resolve them and continue, or abort the rebase.",
+                    paths.len()
+                ),
+                "branch": branch,
+                "current": current,
+                "conflicted": paths,
+                "output": output,
+                "inProgress": true,
+            })),
+        )
+            .into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
+async fn abort_rebase_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        "rebase --abort",
+        "",
+        approve,
+        "abort the rebase in progress",
+    ) {
+        return response;
+    }
+    match abort_rebase(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
 async fn create_branch_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -1702,6 +1923,8 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/branch", post(create_branch_route))
         .route("/api/workspace/git/merge", post(merge_route))
         .route("/api/workspace/git/merge/abort", post(abort_merge_route))
+        .route("/api/workspace/git/rebase", post(rebase_route))
+        .route("/api/workspace/git/rebase/abort", post(abort_rebase_route))
         .route("/api/workspace/git/checkout", post(checkout_route))
         .route("/api/workspace/git/fetch", post(fetch_route))
         .route("/api/workspace/git/pull", post(pull_route))
@@ -1960,6 +2183,129 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         assert!(snapshot_tree(&root).is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rebases_the_current_branch_onto_an_advanced_one() {
+        let Some(root) = branch_fixture("rebase-clean") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("b.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature work"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("c.txt"), "main\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "main work"]);
+        run_git(&root, &["checkout", "-q", "feature"]);
+        let before = run_git(&root, &["rev-parse", "HEAD"]);
+
+        match rebase_branch(&root, "main").expect("rebase runs") {
+            RebaseOutcome::Rebased {
+                branch, current, ..
+            } => {
+                assert_eq!(branch, "main");
+                assert_eq!(current, "feature");
+            }
+            RebaseOutcome::Conflict { paths, .. } => panic!("unexpected conflict: {paths:?}"),
+        }
+        assert_ne!(
+            run_git(&root, &["rev-parse", "HEAD"]),
+            before,
+            "the commit was replayed onto a new parent"
+        );
+        let subjects = run_git(&root, &["log", "--format=%s", "-3"]);
+        assert_eq!(
+            subjects.lines().collect::<Vec<_>>(),
+            vec!["feature work", "main work", "base"]
+        );
+        assert!(
+            root.join("c.txt").exists(),
+            "the new parent's file is present"
+        );
+        assert!(root.join("b.txt").exists());
+    }
+
+    #[test]
+    fn reports_rebase_conflicts_and_aborts_back_to_the_original_branch() {
+        let Some(root) = branch_fixture("rebase-conflict") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("a.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature"]);
+        let feature_head = run_git(&root, &["rev-parse", "HEAD"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "main\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "main"]);
+        run_git(&root, &["checkout", "-q", "feature"]);
+
+        match rebase_branch(&root, "main").expect("a conflict is an outcome") {
+            RebaseOutcome::Conflict { paths, .. } => assert_eq!(paths, vec!["a.txt".to_string()]),
+            RebaseOutcome::Rebased { .. } => panic!("both branches changed a.txt"),
+        }
+        abort_rebase(&root).expect("abort works");
+        assert_eq!(run_git(&root, &["rev-parse", "HEAD"]), feature_head);
+        assert_eq!(
+            run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "feature"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "feature\n"
+        );
+        assert!(run_git(&root, &["status", "--porcelain"]).trim().is_empty());
+        assert!(abort_rebase(&root).is_err(), "nothing is left to abort");
+    }
+
+    #[test]
+    fn refuses_to_rebase_over_uncommitted_work() {
+        let Some(root) = branch_fixture("rebase-dirty") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("b.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "edited\n").unwrap();
+        let (status, message) = match rebase_branch(&root, "feature") {
+            Ok(_) => panic!("a dirty tree must be refused"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("Commit or stash"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "edited\n",
+            "the uncommitted edit must be left alone"
+        );
+    }
+
+    #[test]
+    fn refuses_an_unknown_branch_an_option_like_name_and_a_branch_onto_itself() {
+        let Some(root) = branch_fixture("rebase-guards") else {
+            return;
+        };
+        let (status, message) = match rebase_branch(&root, "nope") {
+            Ok(_) => panic!("a missing branch must not rebase"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("no branch or commit named"), "{message}");
+        assert!(matches!(
+            rebase_branch(&root, "-x"),
+            Err((StatusCode::BAD_REQUEST, _))
+        ));
+        let (status, message) = match rebase_branch(&root, "main") {
+            Ok(_) => panic!("a branch cannot be rebased onto itself"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("already checked out"), "{message}");
     }
 
     fn git_available() -> bool {
