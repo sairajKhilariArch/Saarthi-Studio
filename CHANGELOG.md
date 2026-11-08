@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.79.0
+
+- Fetch, pull and push could only use a remote that already existed, and
+  creating one meant leaving the app for a terminal. The Source Control pane now
+  lists, adds and removes remotes.
+- `GET /api/workspace/git/remotes` reports each remote's name, fetch URL and push
+  URL — the push URL only differs when git actually reports one.
+  `POST /api/workspace/git/remotes/add` (body `name`, `url`) and
+  `/remotes/remove` (body `name`) are gated on the `git` action with the remote
+  name as the target, so the audit line names what was touched.
+- Both values are narrowed before they reach argv: a name cannot start with a
+  dash, is capped at 100 characters and only takes alphanumerics and `._-/`; a
+  URL is capped at 2048 characters and cannot start with a dash or contain
+  whitespace or control characters, which still leaves `https://`, scp-style
+  `git@host:path` and local paths working. A duplicate add surfaces git's own
+  sentence, and removing a remote that is not configured is refused by name
+  instead of silently succeeding.
+- UI: `Remotes…` toggles a name/URL form with `Add` and a row per configured
+  remote with `Remove`; a row whose push URL differs says so in its tooltip.
+  The "no remote" error from fetch, pull and push now points at the pane
+  instead of at a terminal command.
+- `cargo test --locked`: **419 passed, 1 ignored** (3 new, against real
+  repositories: an add/list/remove round trip that also asserts a duplicate and
+  a missing remote are refused; a remote whose push URL differs from its fetch
+  URL reported separately; and the name/URL narrowing). Clippy `-D warnings`
+  clean, no rustfmt diff in the touched files, `node --check` clean.
+- Live on a headless build at `:8958`: empty list `{ok: true, remotes: []}`;
+  add `origin` → 200 with the new row and `git remote` showing `origin`; the same
+  name again → 400 "error: remote origin already exists."; `-x` → 400 "A remote
+  name cannot start with a dash."; `a b` → 400 "That remote name is not valid.";
+  a URL with a space → 400 "A remote URL cannot contain spaces or control
+  characters."; remove `origin` → 200 with the remote gone from `git remote`;
+  removing it again → 400 "`origin` is not a remote of this repository." The
+  pane itself was not viewed in a browser.
+- Not built: editing an existing remote's URL in place (remove and re-add),
+  multiple fetch URLs per remote, a credentials UI, a worktree per run.
+
 ## 1.78.0
 
 - The last gap in the inline diff was that a hunk moved as a whole, so two

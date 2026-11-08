@@ -179,7 +179,8 @@
       '<button id="scmBranchBtn" class="tiny-toggle" type="button">Branch…</button>',
       '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button>',
       '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button>',
-      '<button id="scmRebaseBtn" class="tiny-toggle" type="button">Rebase…</button></div>',
+      '<button id="scmRebaseBtn" class="tiny-toggle" type="button">Rebase…</button>',
+      '<button id="scmRemotesBtn" class="tiny-toggle" type="button">Remotes…</button></div>',
       '<div class="scm-branch-form hidden" id="scmBranchForm">',
       '<input id="scmBranchInput" type="text" placeholder="branch name" aria-label="Branch name" autocomplete="off">',
       '<button id="scmBranchCreate" class="tiny-toggle" type="button">Create</button>',
@@ -193,6 +194,11 @@
       '<button id="scmRebaseGo" class="tiny-toggle primary" type="button">Rebase</button>',
       '<button id="scmRebaseContinue" class="tiny-toggle" type="button">Continue</button>',
       '<button id="scmRebaseAbort" class="tiny-toggle" type="button">Abort rebase</button></div>',
+      '<div class="scm-branch-form hidden" id="scmRemoteForm">',
+      '<input id="scmRemoteName" type="text" placeholder="remote name" aria-label="Remote name" autocomplete="off">',
+      '<input id="scmRemoteUrl" type="text" placeholder="remote URL" aria-label="Remote URL" autocomplete="off">',
+      '<button id="scmRemoteAdd" class="tiny-toggle primary" type="button">Add</button></div>',
+      '<div class="scm-remote-list hidden" id="scmRemoteList"></div>',
       '<p class="scm-hint" id="scmHint"></p>',
       "</div>",
     ].join("");
@@ -586,6 +592,93 @@
       row.appendChild(actions);
       box.appendChild(row);
     });
+  }
+
+  /* Remotes are repository configuration, not history: adding or removing one
+     never touches a file or a commit, so the confirm only says what goes away. */
+  async function showRemotes() {
+    const form = $("scmRemoteForm");
+    const list = $("scmRemoteList");
+    if (!form || !list) return;
+    form.classList.toggle("hidden");
+    list.classList.toggle("hidden");
+    if (form.classList.contains("hidden")) return;
+    $("scmRemoteName").focus();
+    await loadRemotes();
+  }
+
+  async function loadRemotes() {
+    const list = $("scmRemoteList");
+    if (!list) return;
+    if (!state.workspace) {
+      list.innerHTML = '<p class="empty-note">Open a folder first.</p>';
+      return;
+    }
+    list.innerHTML = '<p class="empty-note">Reading remotes…</p>';
+    const result = await api("/api/workspace/git/remotes");
+    if (!result.ok) {
+      list.innerHTML = `<p class="empty-note">${escapeHtml(result.data.error || "Could not read the remotes.")}</p>`;
+      return;
+    }
+    const remotes = Array.isArray(result.data.remotes) ? result.data.remotes : [];
+    if (!remotes.length) {
+      list.innerHTML = '<p class="empty-note">No remotes yet. Add one above.</p>';
+      return;
+    }
+    list.innerHTML = "";
+    remotes.forEach((remote) => {
+      const row = el("div", "scm-remote-row");
+      row.appendChild(el("span", "scm-remote-name", remote.name || ""));
+      const url = el("span", "scm-remote-url", remote.url || "");
+      if (remote.pushUrl && remote.pushUrl !== remote.url) {
+        url.title = `Fetches from ${remote.url}\nPushes to ${remote.pushUrl}`;
+      }
+      row.appendChild(url);
+      const remove = el("button", "tiny-toggle", "Remove");
+      remove.type = "button";
+      remove.title = `Remove the remote ${remote.name}`;
+      remove.addEventListener("click", () => void removeRemote(remote.name));
+      row.appendChild(remove);
+      list.appendChild(row);
+    });
+  }
+
+  async function addRemote() {
+    const name = ($("scmRemoteName").value || "").trim();
+    const url = ($("scmRemoteUrl").value || "").trim();
+    if (!name) { toast("Name the remote first."); return; }
+    if (!url) { toast("Paste the remote URL."); return; }
+    const result = await api("/api/workspace/git/remotes/add", {
+      method: "POST",
+      body: JSON.stringify({ name, url, approve: true }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      toast(result.data.error || "Could not add the remote.");
+      return;
+    }
+    $("scmRemoteName").value = "";
+    $("scmRemoteUrl").value = "";
+    toast(`Added ${name}`);
+    await loadRemotes();
+    await refreshScm();
+  }
+
+  async function removeRemote(name) {
+    if (!name) return;
+    if (!window.confirm(`Remove the remote "${name}"?\n\nNo file or commit is touched; only the saved URL goes away.`)) return;
+    const result = await api("/api/workspace/git/remotes/remove", {
+      method: "POST",
+      body: JSON.stringify({ name, approve: true }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      toast(result.data.error || "Could not remove the remote.");
+      return;
+    }
+    toast(`Removed ${name}`);
+    await loadRemotes();
+    await refreshScm();
   }
 
   async function scmMutate(path, body, successMessage) {
@@ -1213,6 +1306,11 @@
     $("scmRebaseGo").addEventListener("click", () => void rebaseScm());
     $("scmRebaseAbort").addEventListener("click", () => void abortRebaseScm());
     $("scmRebaseContinue").addEventListener("click", () => void continueRebaseScm());
+    $("scmRemotesBtn").addEventListener("click", () => void showRemotes());
+    $("scmRemoteAdd").addEventListener("click", () => void addRemote());
+    $("scmRemoteUrl").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void addRemote(); }
+    });
     $("scmRebaseInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void rebaseScm(); }
     });

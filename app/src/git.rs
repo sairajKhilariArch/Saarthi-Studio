@@ -473,9 +473,14 @@ fn requested_remote(input: &Value) -> Result<Option<String>, String> {
     };
     let name = value
         .as_str()
-        .ok_or("The remote must be a name, not a number or object.")?
-        .trim()
-        .to_string();
+        .ok_or("The remote must be a name, not a number or object.")?;
+    Ok(Some(valid_remote_name(name)?))
+}
+
+/// Narrow a remote name before it reaches argv: no leading dash, no whitespace,
+/// and only the punctuation git accepts in a remote name.
+fn valid_remote_name(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
     if name.is_empty() {
         return Err("Name the remote first.".to_string());
     }
@@ -489,7 +494,106 @@ fn requested_remote(input: &Value) -> Result<Option<String>, String> {
     {
         return Err("That remote name is not valid.".to_string());
     }
-    Ok(Some(name))
+    Ok(name.to_string())
+}
+
+const MAX_REMOTE_URL: usize = 2048;
+
+/// A remote URL from the request. It travels as its own argv entry, so only a
+/// leading dash, whitespace or a control character can make it mean something
+/// else; scp-style `git@host:path` and file paths are both left alone.
+fn remote_url(input: &Value) -> Result<String, String> {
+    let url = input
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or("Provide the remote URL.")?
+        .trim()
+        .to_string();
+    if url.is_empty() {
+        return Err("Provide the remote URL.".to_string());
+    }
+    if url.chars().count() > MAX_REMOTE_URL {
+        return Err("That remote URL is too long.".to_string());
+    }
+    if url.starts_with('-') {
+        return Err("A remote URL cannot start with a dash.".to_string());
+    }
+    if url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+        return Err("A remote URL cannot contain spaces or control characters.".to_string());
+    }
+    Ok(url)
+}
+
+/// Every configured remote with the URL git reports, which is what the pane
+/// lists. A remote that pushes somewhere else keeps both URLs.
+fn remote_list(root: &Path) -> Result<Vec<Value>, String> {
+    let output = git(root, &["remote", "-v"])?;
+    if !output.ok {
+        return Err(git_error(&output, "git remote failed"));
+    }
+    let mut remotes: Vec<Value> = Vec::new();
+    for line in output.stdout.lines() {
+        // "origin\thttps://example.com/repo.git (fetch)"
+        let Some((name, rest)) = line.split_once('\t') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let (url, kind) = match rest.rsplit_once(" (") {
+            Some((url, kind)) => (url.trim(), kind.trim_end_matches(')')),
+            None => (rest.trim(), ""),
+        };
+        if let Some(existing) = remotes
+            .iter_mut()
+            .find(|item| item["name"].as_str() == Some(name))
+        {
+            if kind == "push" {
+                existing["pushUrl"] = json!(url);
+            }
+            continue;
+        }
+        remotes.push(json!({ "name": name, "url": url, "pushUrl": "" }));
+    }
+    for item in remotes.iter_mut() {
+        if item["pushUrl"].as_str().unwrap_or("").is_empty() {
+            item["pushUrl"] = item["url"].clone();
+        }
+    }
+    Ok(remotes)
+}
+
+fn add_remote(root: &Path, name: &str, url: &str) -> Result<Value, String> {
+    let output = git(root, &["remote", "add", name, url])?;
+    if !output.ok {
+        return Err(git_error(&output, "git remote add failed"));
+    }
+    Ok(json!({
+        "ok": true,
+        "name": name,
+        "url": url,
+        "remotes": remote_list(root)?,
+    }))
+}
+
+fn remove_remote(root: &Path, name: &str) -> Result<Value, String> {
+    let existing = remote_list(root)?;
+    if !existing
+        .iter()
+        .any(|item| item["name"].as_str() == Some(name))
+    {
+        return Err(format!("`{name}` is not a remote of this repository."));
+    }
+    let output = git(root, &["remote", "remove", name])?;
+    if !output.ok {
+        return Err(git_error(&output, "git remote remove failed"));
+    }
+    Ok(json!({
+        "ok": true,
+        "removed": name,
+        "remotes": remote_list(root)?,
+    }))
 }
 
 /// The remote that actually exists: the requested one, else `origin`, else the
@@ -508,8 +612,7 @@ fn remote_target(root: &Path, requested: Option<&str>) -> Result<String, String>
         .collect();
     let Some(first) = remotes.first() else {
         return Err(
-            "This repository has no remote. Add one with `git remote add origin <url>` first."
-                .to_string(),
+            "This repository has no remote. Add one in the Source Control pane first.".to_string(),
         );
     };
     match requested {
@@ -2246,6 +2349,73 @@ async fn stage_hunk_route(State(state): State<AppState>, Json(input): Json<Value
     hunk_route(state, input, false).await
 }
 
+async fn remotes_route(State(state): State<AppState>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    match remote_list(&root) {
+        Ok(remotes) => Json(json!({ "ok": true, "remotes": remotes })).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn add_remote_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let name = match input.get("name").and_then(Value::as_str) {
+        Some(value) => match valid_remote_name(value) {
+            Ok(name) => name,
+            Err(message) => return bad(message),
+        },
+        None => return bad("Name the remote first."),
+    };
+    let url = match remote_url(&input) {
+        Ok(url) => url,
+        Err(message) => return bad(message),
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(&state, Action::Git, &name, "", approve, "add a git remote")
+    {
+        return response;
+    }
+    match add_remote(&root, &name, &url) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn remove_remote_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let name = match input.get("name").and_then(Value::as_str) {
+        Some(value) => match valid_remote_name(value) {
+            Ok(name) => name,
+            Err(message) => return bad(message),
+        },
+        None => return bad("Name the remote first."),
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &name,
+        "",
+        approve,
+        "remove a git remote",
+    ) {
+        return response;
+    }
+    match remove_remote(&root, &name) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
 async fn unstage_hunk_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     hunk_route(state, input, true).await
 }
@@ -2303,6 +2473,12 @@ pub(crate) fn router() -> Router<AppState> {
             post(continue_rebase_route),
         )
         .route("/api/workspace/git/checkout", post(checkout_route))
+        .route("/api/workspace/git/remotes", get(remotes_route))
+        .route("/api/workspace/git/remotes/add", post(add_remote_route))
+        .route(
+            "/api/workspace/git/remotes/remove",
+            post(remove_remote_route),
+        )
         .route("/api/workspace/git/fetch", post(fetch_route))
         .route("/api/workspace/git/pull", post(pull_route))
         .route("/api/workspace/git/push", post(push_route))
@@ -2815,6 +2991,82 @@ mod tests {
             "one\ntwo\nthree\n",
             "a refused selection must not stage anything"
         );
+    }
+
+    #[test]
+    fn adds_lists_and_removes_a_remote() {
+        let Some(root) = temp_repo("remote-crud") else {
+            return;
+        };
+        assert!(remote_list(&root).unwrap().is_empty());
+
+        let added = add_remote(&root, "origin", "https://example.com/repo.git").unwrap();
+        assert_eq!(added["name"], "origin");
+        let remotes = remote_list(&root).unwrap();
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0]["name"], "origin");
+        assert_eq!(remotes[0]["url"], "https://example.com/repo.git");
+        assert_eq!(remotes[0]["pushUrl"], "https://example.com/repo.git");
+
+        // git refuses a second remote of the same name; nothing is added.
+        assert!(add_remote(&root, "origin", "https://example.com/other.git").is_err());
+        assert_eq!(remote_list(&root).unwrap().len(), 1);
+
+        let removed = remove_remote(&root, "origin").unwrap();
+        assert_eq!(removed["removed"], "origin");
+        assert!(removed["remotes"].as_array().unwrap().is_empty());
+        assert!(remote_list(&root).unwrap().is_empty());
+        // Removing what is not there is refused rather than silently succeeding.
+        assert!(remove_remote(&root, "origin").is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reports_a_push_url_that_differs_from_the_fetch_url() {
+        let Some(root) = temp_repo("remote-push-url") else {
+            return;
+        };
+        add_remote(&root, "origin", "https://example.com/fetch.git").unwrap();
+        run_git(
+            &root,
+            &[
+                "remote",
+                "set-url",
+                "--push",
+                "origin",
+                "https://example.com/push.git",
+            ],
+        );
+        let remotes = remote_list(&root).unwrap();
+        assert_eq!(remotes.len(), 1);
+        assert_eq!(remotes[0]["url"], "https://example.com/fetch.git");
+        assert_eq!(remotes[0]["pushUrl"], "https://example.com/push.git");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_remote_names_and_urls_that_would_reach_argv_oddly() {
+        assert_eq!(valid_remote_name(" upstream ").unwrap(), "upstream");
+        assert!(valid_remote_name("-x").is_err());
+        assert!(valid_remote_name("a b").is_err());
+        assert!(valid_remote_name("  ").is_err());
+        assert!(valid_remote_name("a;b").is_err());
+        assert!(valid_remote_name(&"a".repeat(101)).is_err());
+
+        assert_eq!(
+            remote_url(&json!({ "url": " git@host:repo.git " })).unwrap(),
+            "git@host:repo.git"
+        );
+        assert!(remote_url(&json!({})).is_err());
+        assert!(remote_url(&json!({ "url": "" })).is_err());
+        assert!(remote_url(&json!({ "url": "-x" })).is_err());
+        assert!(remote_url(&json!({ "url": "https://exa mple.com" })).is_err());
+        assert!(remote_url(&json!({ "url": "https://example.com/\u{7}" })).is_err());
+        assert!(remote_url(
+            &json!({ "url": format!("https://example.com/{}", "a".repeat(MAX_REMOTE_URL)) })
+        )
+        .is_err());
     }
 
     fn git_available() -> bool {

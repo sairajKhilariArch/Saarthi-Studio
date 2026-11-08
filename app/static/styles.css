@@ -1523,3 +1523,9 @@ kbd {
    only the selected lines move when the hunk button is pressed. */
 .scm-hunk-body span.pickable { cursor: pointer; }
 .scm-hunk-body span.pickable.selected { outline: 1px dashed currentColor; }
+
+/* Remotes in the Source Control pane: one row per configured remote. */
+.scm-remote-list { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+.scm-remote-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.scm-remote-name { font-weight: 600; }
+.scm-remote-url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
