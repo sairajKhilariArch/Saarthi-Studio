@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.77.0
+
+- 1.76.0's documented gap: a conflicted rebase could only be finished in a
+  terminal. `POST /api/workspace/git/rebase/continue` now finishes it from the
+  pane once the conflicts are resolved **and staged**.
+- `continue_rebase` refuses with a 409 that names every unmerged path before git
+  is asked, because git's own "you must edit all merge conflicts" never says
+  which files. It then runs `git -c core.editor=true rebase --continue`, so a
+  process with no terminal can never wait on an editor it cannot answer.
+- A second conflict is reported with its own path list, and a rebase that has
+  already finished reports that it has nothing to continue instead of
+  pretending. Success answers `{continued: true, branch, summary}` with git's own
+  output, and the branch is back on its ref with a clean tree.
+- UI: a `Continue` control in the Rebase form beside `Abort rebase`.
+- `cargo test --locked`: **413 passed, 1 ignored** (2 new, against real
+  repositories: a conflict refused before staging with the file named, then
+  continued after staging with the replayed log order and a clean tree
+  asserted, then refused once finished; and a repository with no rebase in
+  progress refusing). Clippy `-D warnings` clean, no rustfmt diff, `node --check`
+  clean.
+- Live on a headless build at `:8956`: continue with nothing in progress → 409;
+  a conflicting rebase → 409 `{conflicted: ["a.txt"]}`; continue before
+  resolving → 409 "1 file(s) are still conflicted: a.txt"; after staging → 200
+  `{continued: true, branch: "left"}` with `Successfully rebased and updated
+  refs/heads/left.`; the log became `left, right, base`, the file held the
+  resolution, `git status --porcelain` was empty, and a further continue → 409.
+  The pane itself was not viewed in a browser.
+- Not built: `git rebase --skip`, an in-pane reflog undo, line-level staging, a
+  worktree per run.
+
 ## 1.76.0
 
 - The Source Control pane's history work stopped at merge; **rebase** is the

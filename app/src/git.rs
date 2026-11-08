@@ -1186,6 +1186,74 @@ fn rebase_branch(root: &Path, raw: &str) -> Result<RebaseOutcome, (StatusCode, S
     ))
 }
 
+/// Finish a rebase whose conflicts the person resolved and staged. `--continue`
+/// opens an editor to confirm each replayed message, so a no-op editor is named
+/// explicitly with `-c core.editor=true`; a process with no terminal must never
+/// wait on one. Conflicts are named before git is asked, because git's own
+/// refusal ("you must edit all merge conflicts") does not say which files.
+fn continue_rebase(root: &Path) -> Result<Value, (StatusCode, String)> {
+    if !rebase_in_progress(root) {
+        return Err((
+            StatusCode::CONFLICT,
+            "There is no rebase in progress, so there is nothing to continue.".to_string(),
+        ));
+    }
+    let unmerged = unmerged_paths(root);
+    if !unmerged.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "{} file(s) are still conflicted: {}. Resolve them and stage them before continuing.",
+                unmerged.len(),
+                unmerged.join(", ")
+            ),
+        ));
+    }
+    let output = git(root, &["-c", "core.editor=true", "rebase", "--continue"])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if output.ok {
+        let summary = output
+            .stdout
+            .lines()
+            .chain(output.stderr.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(12)
+            .collect::<Vec<&str>>()
+            .join("\n");
+        return Ok(json!({
+            "ok": true,
+            "continued": true,
+            "branch": branch_at_head(root).unwrap_or_else(|| "HEAD".to_string()),
+            "summary": summary,
+        }));
+    }
+    // A second conflict is the same outcome as the first: the tree is intact and
+    // the person can resolve again or abort.
+    let paths = unmerged_paths(root);
+    if !paths.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "The rebase stopped again with {} conflicted file(s): {}",
+                paths.len(),
+                paths.join(", ")
+            ),
+        ));
+    }
+    if rebase_in_progress(root) {
+        let text = format!("{}\n{}", output.stdout.trim(), output.stderr.trim());
+        return Err((
+            StatusCode::CONFLICT,
+            format!("The rebase is still in progress: {}", text.trim()),
+        ));
+    }
+    Err((
+        StatusCode::CONFLICT,
+        git_error(&output, "git could not continue the rebase"),
+    ))
+}
+
 /// `git rebase --abort` puts the branch back where the rebase started, which is
 /// the one thing that makes a conflicted rewrite safe to attempt.
 fn abort_rebase(root: &Path) -> Result<Value, (StatusCode, String)> {
@@ -1711,6 +1779,31 @@ async fn abort_rebase_route(State(state): State<AppState>, Json(input): Json<Val
     }
 }
 
+async fn continue_rebase_route(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        "rebase --continue",
+        "",
+        approve,
+        "continue the rebase in progress",
+    ) {
+        return response;
+    }
+    match continue_rebase(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
 async fn create_branch_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -1925,6 +2018,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/merge/abort", post(abort_merge_route))
         .route("/api/workspace/git/rebase", post(rebase_route))
         .route("/api/workspace/git/rebase/abort", post(abort_rebase_route))
+        .route(
+            "/api/workspace/git/rebase/continue",
+            post(continue_rebase_route),
+        )
         .route("/api/workspace/git/checkout", post(checkout_route))
         .route("/api/workspace/git/fetch", post(fetch_route))
         .route("/api/workspace/git/pull", post(pull_route))
@@ -2306,6 +2403,67 @@ mod tests {
         };
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(message.contains("already checked out"), "{message}");
+    }
+
+    #[test]
+    fn continues_a_rebase_after_the_conflict_is_resolved_and_staged() {
+        let Some(root) = branch_fixture("rebase-continue") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("a.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "main\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "main"]);
+        run_git(&root, &["checkout", "-q", "feature"]);
+        assert!(matches!(
+            rebase_branch(&root, "main"),
+            Ok(RebaseOutcome::Conflict { .. })
+        ));
+
+        // Continuing while the marker file is still there must refuse and name it.
+        let (status, message) = match continue_rebase(&root) {
+            Ok(_) => panic!("unresolved conflicts must not be continued"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("still conflicted"), "{message}");
+        assert!(message.contains("a.txt"), "{message}");
+
+        std::fs::write(root.join("a.txt"), "resolved\n").unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        let value = continue_rebase(&root).expect("the rebase continues");
+        assert_eq!(value["continued"], true, "{value}");
+        assert_eq!(value["branch"], "feature");
+        assert!(!rebase_in_progress(&root), "the rebase is finished");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "resolved\n"
+        );
+        let subjects = run_git(&root, &["log", "--format=%s", "-2"]);
+        assert_eq!(
+            subjects.lines().collect::<Vec<_>>(),
+            vec!["feature", "main"]
+        );
+        assert!(run_git(&root, &["status", "--porcelain"]).trim().is_empty());
+        // With the rebase finished, continue has nothing to do.
+        assert!(continue_rebase(&root).is_err());
+    }
+
+    #[test]
+    fn refuses_to_continue_with_no_rebase_in_progress() {
+        let Some(root) = branch_fixture("rebase-continue-idle") else {
+            return;
+        };
+        let (status, message) = match continue_rebase(&root) {
+            Ok(_) => panic!("there is nothing to continue"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("no rebase in progress"), "{message}");
     }
 
     fn git_available() -> bool {

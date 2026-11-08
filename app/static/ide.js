@@ -191,6 +191,7 @@
       '<div class="scm-branch-form hidden" id="scmRebaseForm">',
       '<input id="scmRebaseInput" type="text" placeholder="branch to rebase onto" aria-label="Branch to rebase onto" autocomplete="off">',
       '<button id="scmRebaseGo" class="tiny-toggle primary" type="button">Rebase</button>',
+      '<button id="scmRebaseContinue" class="tiny-toggle" type="button">Continue</button>',
       '<button id="scmRebaseAbort" class="tiny-toggle" type="button">Abort rebase</button></div>',
       '<p class="scm-hint" id="scmHint"></p>',
       "</div>",
@@ -665,6 +666,23 @@
     });
     await refreshScm();
     toast(result.ok ? "Rebase aborted." : (result.data.error || "Could not abort the rebase."));
+  }
+
+  async function continueRebaseScm() {
+    if (!window.confirm("Continue the rebase with the conflicts you resolved and staged?")) return;
+    const result = await api("/api/workspace/git/rebase/continue", {
+      method: "POST",
+      body: JSON.stringify({ approve: true }),
+      confirmApproval: true,
+    });
+    await refreshScm();
+    if (!result.ok) {
+      toast(result.data.error || "Could not continue the rebase.");
+      return;
+    }
+    const data = result.data || {};
+    $("scmRebaseForm").classList.add("hidden");
+    toast(`Rebase finished on ${data.branch}`);
   }
 
   function scmDiffLineHtml(line) {
@@ -1148,6 +1166,7 @@
     });
     $("scmRebaseGo").addEventListener("click", () => void rebaseScm());
     $("scmRebaseAbort").addEventListener("click", () => void abortRebaseScm());
+    $("scmRebaseContinue").addEventListener("click", () => void continueRebaseScm());
     $("scmRebaseInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void rebaseScm(); }
     });
