@@ -177,11 +177,16 @@
       '<textarea id="scmMessage" rows="2" placeholder="Commit message (Ctrl+Enter)" aria-label="Commit message"></textarea>',
       '<div class="scm-commit-row"><button id="scmCommit" class="tiny-toggle primary" type="button">Commit</button>',
       '<button id="scmBranchBtn" class="tiny-toggle" type="button">Branch…</button>',
-      '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button></div>',
+      '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button>',
+      '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button></div>',
       '<div class="scm-branch-form hidden" id="scmBranchForm">',
       '<input id="scmBranchInput" type="text" placeholder="branch name" aria-label="Branch name" autocomplete="off">',
       '<button id="scmBranchCreate" class="tiny-toggle" type="button">Create</button>',
       '<button id="scmBranchSwitch" class="tiny-toggle" type="button">Switch</button></div>',
+      '<div class="scm-branch-form hidden" id="scmMergeForm">',
+      '<input id="scmMergeInput" type="text" placeholder="branch to merge in" aria-label="Branch to merge" autocomplete="off">',
+      '<button id="scmMergeGo" class="tiny-toggle primary" type="button">Merge</button>',
+      '<button id="scmMergeAbort" class="tiny-toggle" type="button">Abort merge</button></div>',
       '<p class="scm-hint" id="scmHint"></p>',
       "</div>",
     ].join("");
@@ -585,6 +590,41 @@
     }
     toast(successMessage);
     await refreshScm();
+  }
+
+  async function mergeScm() {
+    const input = $("scmMergeInput");
+    const branch = input ? input.value.trim() : "";
+    if (!branch) { toast("Name the branch to merge in."); return; }
+    if (!window.confirm(`Merge "${branch}" into the current branch?\n\nThe working tree must be clean. A conflict is left in place for you to resolve, and Abort merge puts it back.`)) return;
+    const result = await api("/api/workspace/git/merge", {
+      method: "POST",
+      body: JSON.stringify({ branch, approve: true }),
+      confirmApproval: true,
+    });
+    await refreshScm();
+    if (input) input.value = "";
+    if (!result.ok) {
+      const conflicted = Array.isArray(result.data && result.data.conflicted) ? result.data.conflicted : [];
+      toast(conflicted.length
+        ? `Merge stopped: ${conflicted.length} conflicted file(s) — ${conflicted.slice(0, 3).join(", ")}${conflicted.length > 3 ? "…" : ""}`
+        : (result.data.error || "Merge failed."));
+      return;
+    }
+    const data = result.data || {};
+    $("scmMergeForm").classList.add("hidden");
+    toast(`Merged ${data.branch} into ${data.current}${data.fastForward ? " (fast-forward)" : ""}`);
+  }
+
+  async function abortMergeScm() {
+    if (!window.confirm("Abort the merge in progress and put the branch back as it was?")) return;
+    const result = await api("/api/workspace/git/merge/abort", {
+      method: "POST",
+      body: JSON.stringify({ approve: true }),
+      confirmApproval: true,
+    });
+    await refreshScm();
+    toast(result.ok ? "Merge aborted." : (result.data.error || "Could not abort the merge."));
   }
 
   function scmDiffLineHtml(line) {
@@ -1051,6 +1091,16 @@
     $("scmHistoryBtn").addEventListener("click", () => void toggleScmHistory());
     $("scmBranchCreate").addEventListener("click", () => void branchScm("create"));
     $("scmBranchSwitch").addEventListener("click", () => void branchScm("switch"));
+    $("scmMergeBtn").addEventListener("click", () => {
+      const form = $("scmMergeForm");
+      form.classList.toggle("hidden");
+      if (!form.classList.contains("hidden")) $("scmMergeInput").focus();
+    });
+    $("scmMergeGo").addEventListener("click", () => void mergeScm());
+    $("scmMergeAbort").addEventListener("click", () => void abortMergeScm());
+    $("scmMergeInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void mergeScm(); }
+    });
     $("scmBranchInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void branchScm("switch"); }
     });

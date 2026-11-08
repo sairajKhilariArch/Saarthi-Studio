@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.74.0
+
+- Phase 9 could stage, commit, fetch, pull and push, but it could not **merge**:
+  the Source Control pane named conflicted paths and left the rest to an
+  external terminal. `app/src/git.rs` now runs a real merge into the checked-out
+  branch, and a real abort.
+- `POST /api/workspace/git/merge` (body `branch`) answers
+  `{branch, current, fastForward, summary}` when git succeeds. When git stops on
+  conflicts it answers **409** with `{conflicted: [paths], output, inProgress}`
+  and leaves the markers in place — the conflict is an outcome the person acts
+  on, not an opaque failure.
+- `POST /api/workspace/git/merge/abort` runs `git merge --abort` and refuses
+  with a 409 when nothing is in progress, so the control can never pretend to
+  have worked.
+- The tree must have no uncommitted **tracked** changes. Untracked files are
+  deliberately ignored, as git ignores them: the first smoke run refused to
+  merge because the server's own log file sat in the folder, which is the wrong
+  rule, and that is now a test (a stray `notes.txt` does not block a merge).
+- The branch name is narrowed before argv (no leading dash, no `..`, ASCII ref
+  characters only), `--no-edit` is passed so a terminal-less git never waits on
+  an editor, and both routes are gated on the `git` action (deny 403, ask 409
+  until `approve: true`, audited).
+- UI: a `Merge…` form in the Source Control pane, the conflicted files named in
+  the toast, and an `Abort merge` control.
+- `cargo test --locked`: **404 passed, 1 ignored** (5 new, all against real
+  temporary repositories: a fast-forward with an untracked file present, a
+  three-way merge, a conflict followed by an abort that leaves a clean tree and
+  a second abort that refuses, a dirty tracked file refused with the edit left
+  untouched, and a missing branch named instead of git's argv noise). Clippy
+  `-D warnings` clean, no rustfmt diff in the touched files, `node --check`
+  clean.
+- Live on a headless build at `:8953`: `merge feature` → 200
+  `{current: main, fastForward: true}` with git's own summary; `-x` → 400;
+  `nope` → 400; merging `main` into `left` → 409
+  `{conflicted: ["a.txt"], inProgress: true}`; abort → 200, then 409; a dirty
+  tracked file → 409; `git status --porcelain` empty afterwards. The Source
+  Control pane itself was not viewed in a browser.
+- Not built: rebase, staging individual lines inside a hunk, and a worktree
+  checkpoint before an agent writes.
+
 ## 1.73.0
 
 - Phase 9's last reporting gap: **a test run now says what it found**. The

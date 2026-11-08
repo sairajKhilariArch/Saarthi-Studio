@@ -737,6 +737,175 @@ fn checkout_branch(root: &Path, raw: &str) -> Result<Value, String> {
     Ok(json!({ "ok": true, "branch": name }))
 }
 
+/// What a merge attempt actually did. A conflict is not an error in the same
+/// sense as a bad ref: git stops on purpose with markers in the files and
+/// `MERGE_HEAD` set, so the person can resolve it or abort. Reporting that as a
+/// plain failure would hide the one thing they need — which files to fix.
+enum MergeOutcome {
+    Merged {
+        branch: String,
+        current: String,
+        fast_forward: bool,
+        summary: String,
+    },
+    Conflict {
+        branch: String,
+        current: String,
+        paths: Vec<String>,
+        output: String,
+    },
+}
+
+/// A branch name from the request. It reaches argv, so it is narrowed the same
+/// way a remote name is: no leading dash, no whitespace, no control characters,
+/// and nothing that could be read as a revision range.
+fn merge_target(raw: &str) -> Result<String, String> {
+    let name = raw.trim().to_string();
+    if name.is_empty() {
+        return Err("Name the branch to merge in.".to_string());
+    }
+    if name.starts_with('-') {
+        return Err("A branch name cannot start with a dash.".to_string());
+    }
+    if name.chars().count() > 200
+        || name.contains("..")
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/'))
+    {
+        return Err("That branch name is not valid.".to_string());
+    }
+    Ok(name)
+}
+
+/// The branch checked out right now, or `None` on a detached HEAD. The result
+/// names it, so the person is told what they merged into.
+fn branch_at_head(root: &Path) -> Option<String> {
+    let output = git(root, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok()?;
+    let name = output.stdout.trim();
+    if output.ok && !name.is_empty() {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// Unmerged paths, exactly as `git status` reports them. `git merge` writes
+/// these and stops; they are the conflict list the pane shows.
+fn unmerged_paths(root: &Path) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    let Ok(output) = git(root, &["status", "--porcelain"]) else {
+        return paths;
+    };
+    for line in output.stdout.lines() {
+        let Some(code) = line.get(..2) else {
+            continue;
+        };
+        if matches!(code, "UU" | "AA" | "DD" | "AU" | "UA" | "DU" | "UD") {
+            let path = line.get(3..).unwrap_or("").trim();
+            if !path.is_empty() {
+                paths.push(path.to_string());
+            }
+        }
+    }
+    paths
+}
+
+/// Merge a branch into the checked-out one. Refused while the tree is dirty,
+/// because a merge that fails halfway over uncommitted work is hard to explain
+/// and harder to undo; committing or stashing first is what git itself asks.
+fn merge_branch(root: &Path, raw: &str) -> Result<MergeOutcome, (StatusCode, String)> {
+    let branch = merge_target(raw).map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    // Untracked files are deliberately ignored: git itself only objects when the
+    // merge would overwrite one, and a stray build log in the folder must not
+    // make merging impossible.
+    let dirty = git(root, &["status", "--porcelain", "--untracked-files=no"])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?
+        .stdout;
+    let dirty: Vec<&str> = dirty
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if !dirty.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "Commit or stash your {} changed file(s) before merging: a merge started over uncommitted work is hard to undo.",
+                dirty.len()
+            ),
+        ));
+    }
+    let current = branch_at_head(root).unwrap_or_else(|| "HEAD".to_string());
+    // `--no-edit` matters: without it git opens an editor for the merge commit,
+    // and a process with no terminal would hang until the request timed out.
+    let output = git(root, &["merge", "--no-edit", &branch])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if output.ok {
+        let fast_forward = output.stdout.contains("Fast-forward");
+        let summary = output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(12)
+            .collect::<Vec<&str>>()
+            .join("\n");
+        return Ok(MergeOutcome::Merged {
+            branch,
+            current,
+            fast_forward,
+            summary,
+        });
+    }
+    let paths = unmerged_paths(root);
+    if !paths.is_empty() {
+        let text = format!("{}\n{}", output.stdout.trim(), output.stderr.trim());
+        return Ok(MergeOutcome::Conflict {
+            branch,
+            current,
+            paths,
+            output: text.trim().to_string(),
+        });
+    }
+    let text = format!("{}\n{}", output.stderr, output.stdout);
+    if text.contains("not something we can merge")
+        || text.contains("is not a commit")
+        || text.contains("unknown revision")
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("There is no branch or commit named `{branch}` in this repository."),
+        ));
+    }
+    Err((
+        StatusCode::CONFLICT,
+        git_error(&output, "git could not merge"),
+    ))
+}
+
+/// `git merge --abort` puts the branch back as it was before a conflicted
+/// merge. Refused when nothing is in progress, so the button cannot pretend.
+fn abort_merge(root: &Path) -> Result<Value, (StatusCode, String)> {
+    let in_progress = git(root, &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"])
+        .map(|output| output.ok)
+        .unwrap_or(false);
+    if !in_progress {
+        return Err((
+            StatusCode::CONFLICT,
+            "There is no merge in progress, so there is nothing to abort.".to_string(),
+        ));
+    }
+    let output = git(root, &["merge", "--abort"])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if !output.ok {
+        return Err((
+            StatusCode::CONFLICT,
+            git_error(&output, "git could not abort the merge"),
+        ));
+    }
+    Ok(json!({ "ok": true, "aborted": true }))
+}
+
 /// Split a one-file diff into its preamble (`diff --git`, `index`, `---`,
 /// `+++`) and its hunks, each starting at `@@`. Git's own header is reused
 /// verbatim, so modes, rename lines and line counts are never re-derived.
@@ -1090,6 +1259,83 @@ async fn branches_route(State(state): State<AppState>) -> Response {
     }
 }
 
+async fn merge_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let branch = input.get("branch").and_then(Value::as_str).unwrap_or("");
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &format!("merge {}", branch.trim()),
+        "",
+        approve,
+        "merge a branch into the current one",
+    ) {
+        return response;
+    }
+    match merge_branch(&root, branch) {
+        Ok(MergeOutcome::Merged {
+            branch,
+            current,
+            fast_forward,
+            summary,
+        }) => Json(json!({
+            "ok": true,
+            "branch": branch,
+            "current": current,
+            "fastForward": fast_forward,
+            "summary": summary,
+        }))
+        .into_response(),
+        Ok(MergeOutcome::Conflict {
+            branch,
+            current,
+            paths,
+            output,
+        }) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "Merging `{branch}` stopped with {} conflicted file(s). Resolve them and commit, or abort the merge.",
+                    paths.len()
+                ),
+                "branch": branch,
+                "current": current,
+                "conflicted": paths,
+                "output": output,
+                "inProgress": true,
+            })),
+        )
+            .into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
+async fn abort_merge_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        "merge --abort",
+        "",
+        approve,
+        "abort the merge in progress",
+    ) {
+        return response;
+    }
+    match abort_merge(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
 async fn create_branch_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -1300,6 +1546,8 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/commit", post(commit_route))
         .route("/api/workspace/git/branches", get(branches_route))
         .route("/api/workspace/git/branch", post(create_branch_route))
+        .route("/api/workspace/git/merge", post(merge_route))
+        .route("/api/workspace/git/merge/abort", post(abort_merge_route))
         .route("/api/workspace/git/checkout", post(checkout_route))
         .route("/api/workspace/git/fetch", post(fetch_route))
         .route("/api/workspace/git/pull", post(pull_route))
@@ -1314,6 +1562,161 @@ pub(crate) fn router() -> Router<AppState> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A repository whose `main` holds `a.txt = "base"`, ready for a branch to
+    /// be built on top of it.
+    fn branch_fixture(name: &str) -> Option<PathBuf> {
+        let root = temp_repo(name)?;
+        run_git(&root, &["checkout", "-q", "-B", "main"]);
+        std::fs::write(root.join("a.txt"), "base\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "base"]);
+        Some(root)
+    }
+
+    #[test]
+    fn merges_a_branch_that_is_ahead_and_reports_fast_forward() {
+        let Some(root) = branch_fixture("merge-ff") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "two"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        // An untracked file is not a reason to refuse: git itself only objects
+        // when the merge would overwrite it.
+        std::fs::write(root.join("notes.txt"), "stray\n").unwrap();
+        match merge_branch(&root, "feature").expect("merge runs") {
+            MergeOutcome::Merged {
+                branch,
+                current,
+                fast_forward,
+                ..
+            } => {
+                assert_eq!(branch, "feature");
+                assert_eq!(current, "main");
+                assert!(fast_forward, "feature was ahead of main");
+            }
+            MergeOutcome::Conflict { paths, .. } => panic!("unexpected conflict: {paths:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.txt")).unwrap(),
+            "two\n"
+        );
+        assert!(root.join("a.txt").exists());
+        assert!(root.join("notes.txt").exists());
+    }
+
+    #[test]
+    fn merges_two_diverged_branches_without_conflicts() {
+        let Some(root) = branch_fixture("merge-three-way") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("b.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("c.txt"), "main\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "main"]);
+        match merge_branch(&root, "feature").expect("merge runs") {
+            MergeOutcome::Merged { fast_forward, .. } => {
+                assert!(
+                    !fast_forward,
+                    "main had its own commit, so this is a real merge"
+                );
+            }
+            MergeOutcome::Conflict { paths, .. } => panic!("unexpected conflict: {paths:?}"),
+        }
+        assert!(root.join("b.txt").exists());
+        assert!(root.join("c.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "base\n"
+        );
+    }
+
+    #[test]
+    fn reports_conflicted_paths_and_aborts_back_to_a_clean_tree() {
+        let Some(root) = branch_fixture("merge-conflict") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("a.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "main\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "main"]);
+        match merge_branch(&root, "feature").expect("a conflict is an outcome, not an error") {
+            MergeOutcome::Conflict { paths, .. } => assert_eq!(paths, vec!["a.txt".to_string()]),
+            MergeOutcome::Merged { .. } => {
+                panic!("both branches changed a.txt; this must conflict")
+            }
+        }
+        assert!(std::fs::read_to_string(root.join("a.txt"))
+            .unwrap()
+            .contains("<<<<<<<"));
+        abort_merge(&root).expect("abort works");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "main\n"
+        );
+        let status = run_git(&root, &["status", "--porcelain"]);
+        assert!(
+            status.trim().is_empty(),
+            "the tree should be clean after abort: {status}"
+        );
+        assert!(
+            abort_merge(&root).is_err(),
+            "with nothing in progress, abort must refuse"
+        );
+    }
+
+    #[test]
+    fn refuses_to_merge_over_uncommitted_work() {
+        let Some(root) = branch_fixture("merge-dirty") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "two"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "edited\n").unwrap();
+        let (status, message) = match merge_branch(&root, "feature") {
+            Ok(_) => panic!("a dirty tree must be refused"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("Commit or stash"), "{message}");
+        assert!(!root.join("b.txt").exists(), "nothing may be merged yet");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "edited\n",
+            "the uncommitted edit must be left alone"
+        );
+    }
+
+    #[test]
+    fn names_a_missing_branch_and_refuses_an_option_like_name() {
+        let Some(root) = branch_fixture("merge-missing") else {
+            return;
+        };
+        let (status, message) = match merge_branch(&root, "no-such-branch") {
+            Ok(_) => panic!("a missing branch must not merge"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(message.contains("no branch or commit named"), "{message}");
+        assert!(matches!(
+            merge_branch(&root, "-x"),
+            Err((StatusCode::BAD_REQUEST, _))
+        ));
+    }
 
     fn git_available() -> bool {
         Command::new("git")
