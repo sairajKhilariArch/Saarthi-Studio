@@ -602,7 +602,7 @@
     if (!form || !list) return;
     form.classList.toggle("hidden");
     list.classList.toggle("hidden");
-    if (form.classList.contains("hidden")) return;
+    if (form.classList.contains("hidden")) { setRemoteEditing(""); return; }
     $("scmRemoteName").focus();
     await loadRemotes();
   }
@@ -634,6 +634,16 @@
         url.title = `Fetches from ${remote.url}\nPushes to ${remote.pushUrl}`;
       }
       row.appendChild(url);
+      const edit = el("button", "tiny-toggle", "Edit");
+      edit.type = "button";
+      edit.title = `Change the URL of ${remote.name}`;
+      edit.addEventListener("click", () => {
+        $("scmRemoteName").value = remote.name || "";
+        $("scmRemoteUrl").value = remote.url || "";
+        setRemoteEditing(remote.name || "");
+        $("scmRemoteUrl").focus();
+      });
+      row.appendChild(edit);
       const remove = el("button", "tiny-toggle", "Remove");
       remove.type = "button";
       remove.title = `Remove the remote ${remote.name}`;
@@ -643,23 +653,38 @@
     });
   }
 
+  /* Editing fills the same two fields, so one button covers both: while a row's
+     name still matches the edited remote the form saves its URL instead. */
+  function setRemoteEditing(name) {
+    IDE.remoteEditing = name || "";
+    const button = $("scmRemoteAdd");
+    if (!button) return;
+    button.textContent = IDE.remoteEditing ? "Save URL" : "Add";
+    button.title = IDE.remoteEditing ? `Save the new URL for ${IDE.remoteEditing}` : "Add this remote";
+  }
+
   async function addRemote() {
     const name = ($("scmRemoteName").value || "").trim();
     const url = ($("scmRemoteUrl").value || "").trim();
     if (!name) { toast("Name the remote first."); return; }
     if (!url) { toast("Paste the remote URL."); return; }
-    const result = await api("/api/workspace/git/remotes/add", {
-      method: "POST",
-      body: JSON.stringify({ name, url, approve: true }),
-      confirmApproval: true,
-    });
+    const editing = Boolean(IDE.remoteEditing) && IDE.remoteEditing === name;
+    const result = await api(
+      editing ? "/api/workspace/git/remotes/set-url" : "/api/workspace/git/remotes/add",
+      {
+        method: "POST",
+        body: JSON.stringify({ name, url, approve: true }),
+        confirmApproval: true,
+      },
+    );
     if (!result.ok) {
-      toast(result.data.error || "Could not add the remote.");
+      toast(result.data.error || (editing ? "Could not change the remote URL." : "Could not add the remote."));
       return;
     }
     $("scmRemoteName").value = "";
     $("scmRemoteUrl").value = "";
-    toast(`Added ${name}`);
+    setRemoteEditing("");
+    toast(editing ? `Changed ${name} to ${url}` : `Added ${name}`);
     await loadRemotes();
     await refreshScm();
   }
@@ -675,6 +700,11 @@
     if (!result.ok) {
       toast(result.data.error || "Could not remove the remote.");
       return;
+    }
+    if (IDE.remoteEditing === name) {
+      $("scmRemoteName").value = "";
+      $("scmRemoteUrl").value = "";
+      setRemoteEditing("");
     }
     toast(`Removed ${name}`);
     await loadRemotes();

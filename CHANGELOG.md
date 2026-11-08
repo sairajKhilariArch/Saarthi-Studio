@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.80.0
+
+- 1.79.0 could add and remove a remote but not correct one, so a mistyped URL
+  meant removing the remote and adding it back.
+  `POST /api/workspace/git/remotes/set-url` now changes it in place, with the
+  same `name`/`url` body and the same `git` permission gate as the other remote
+  routes.
+- The remote must already exist: an unknown name is refused by name, so a typo
+  cannot quietly create a second remote. The URL is narrowed exactly as when
+  adding (capped at 2048 characters, no leading dash, no whitespace or control
+  characters), which still allows https, scp-style `git@host:path` and local
+  paths. The route answers `{ok, name, url, remotes}` with the refreshed list.
+- UI: each remote row has `Edit`, which fills the form with that remote's name
+  and URL and turns `Add` into `Save URL`; it returns to `Add` when the form is
+  closed or the edited remote is removed.
+- `cargo test --locked`: **420 passed, 1 ignored** (1 new: an added remote
+  changed in place, with the list still holding exactly one remote and the old
+  URL gone, plus an unknown name refused). Clippy `-D warnings` clean, no
+  rustfmt diff in the touched files, `node --check` clean.
+- Live on a headless build at `:8959`: add `origin` → 200; `set-url` to
+  `https://example.com/new.git` → 200 `{name: origin}` with
+  `git remote get-url origin` returning the new URL while `git remote` still
+  listed one remote; an unknown `upstream` → 400 "`upstream` is not a remote of
+  this repository."; a URL with a space → 400; an scp-style
+  `git@host:repo.git` → 200 and stored verbatim. The pane itself was not viewed
+  in a browser.
+- Not built: multiple fetch URLs per remote, a credentials UI, a worktree per
+  run.
+
 ## 1.79.0
 
 - Fetch, pull and push could only use a remote that already existed, and
@@ -2278,7 +2307,8 @@
 
 - Fix the release pipeline: version reads now strip a trailing carriage
   return, and the tracked manifests are back to LF, so artifacts are named
-  `free-ai-suite_1.26.2_*` instead of carrying an embedded `` that made
+  `free-ai-suite_1.26.2_*` instead of carrying an embedded `
+` that made
   `upload-artifact` reject them (v1.26.0 and v1.26.1 built and tested fine
   but never attached a single asset).
 
