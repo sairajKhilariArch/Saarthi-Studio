@@ -6856,6 +6856,15 @@ function buildRunDetail(detail) {
     snapshot.title = "Put every tracked file back to the whole-tree snapshot taken before this run started; untracked files are left alone";
     snapshot.addEventListener('click', () => restoreSnapshot(detail.id));
     controls.appendChild(snapshot);
+    if (detail.worktree) {
+      const apply = document.createElement("button");
+      apply.type = "button";
+      apply.className = "btn btn-accent btn-small";
+      apply.textContent = "Apply to workspace";
+      apply.title = `Commit this run's checkout (${detail.worktree}), fast-forward the workspace onto its branch, and remove the checkout`;
+      apply.addEventListener('click', () => applyRun(detail.id));
+      controls.appendChild(apply);
+    }
   }
   const refresh = document.createElement("button");
   refresh.type = "button";
@@ -6998,6 +7007,25 @@ async function restoreSnapshot(runId) {
   const data = result.data || {};
   const skipped = (data.skipped || []).length;
   toast(`Restored ${data.count} file${data.count === 1 ? "" : "s"} from the run's snapshot${skipped ? `, ${skipped} skipped` : ""}.`);
+  await loadRunDetail();
+}
+
+async function applyRun(runId) {
+  const warning = "Commit this run's own checkout, fast-forward the workspace onto its branch, and remove the checkout?"
+    + " Uncommitted changes or newer commits in the workspace block the merge; nothing is forced.";
+  if (!confirm(warning)) return;
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/apply`, {
+    method: "POST",
+    body: JSON.stringify({ approve: true }),
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not apply the run's checkout.");
+    return;
+  }
+  const data = result.data || {};
+  const count = (data.applied || []).length;
+  toast(`Applied ${count} file${count === 1 ? "" : "s"} from ${data.branch}${data.removed ? " and removed the checkout" : ""}.`);
   await loadRunDetail();
 }
 

@@ -3091,6 +3091,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(format!("{prefix}/:id/pause").as_str(), post(pause_run))
         .route(format!("{prefix}/:id/retry").as_str(), post(retry_run))
         .route(format!("{prefix}/:id/restore").as_str(), post(restore_run))
+        .route(format!("{prefix}/:id/apply").as_str(), post(apply_run))
         .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
@@ -3579,6 +3580,18 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
     };
     let mut payload = run_json(&run, rows.len() as i64);
     payload["stepList"] = json!(rows);
+    // A finished writing run may still hold its own checkout; the detail view
+    // offers Apply exactly when it does.
+    payload["worktree"] =
+        json!(state
+            .workspace
+            .root()
+            .ok()
+            .filter(|root| (run.allow_writes || run.allow_commands)
+                && crate::git::is_git_worktree(root))
+            .map(|root| crate::git::run_worktree_path(&root, &run_id))
+            .filter(|path| path.join(".git").exists())
+            .map(|path| path.to_string_lossy().to_string()));
     // The detail view can show exactly what the model was handed.
     payload["contextBlock"] = json!(serde_json::from_str::<Value>(&run.context)
         .ok()
@@ -3800,6 +3813,70 @@ async fn restore_run(
 /// it started. The per-file restore only knows about the agent's own writes;
 /// this also undoes what a `command` step did, which is why it is a separate,
 /// explicitly confirmed action rather than part of the other one.
+/// Apply a finished run's own checkout back to the shared folder: commit its
+/// branch, fast-forward the shared checkout onto it, and remove the worktree.
+/// A live run is refused — its work is not finished — and so is a checkout that
+/// cannot fast-forward, with git's own reason.
+async fn apply_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let run = match load_run(&state, &run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if matches!(
+        run.status.as_str(),
+        RUNNING | AWAITING_APPROVAL | QUEUED | PAUSED
+    ) {
+        return error_response(
+            StatusCode::CONFLICT,
+            "This run is still live. Apply its work once it has finished.",
+        );
+    }
+    if !(run.allow_writes || run.allow_commands) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "This run could not write or run commands, so it has nothing to apply.",
+        );
+    }
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.message()),
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::Git,
+        &run_id,
+        "",
+        approve,
+        "apply a run's checkout",
+    ) {
+        return response;
+    }
+    let given = input
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let message = if given.is_empty() {
+        format!("{}: {}", &run.id[..8.min(run.id.len())], run.goal.trim())
+    } else {
+        given
+    };
+    match crate::git::apply_run_worktree(&root, &run_id, &message) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => error_response(StatusCode::CONFLICT, message),
+    }
+}
+
 async fn restore_checkpoint(
     State(state): State<crate::AppState>,
     Path(run_id): Path<String>,
@@ -5605,6 +5682,119 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(
             String::from_utf8_lossy(&branch.stdout).trim(),
             format!("run/{short}")
+        );
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    async fn post_apply(app: &Router, id: &str) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/runs/{id}/apply"))
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"approve":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn applying_a_finished_run_merges_its_checkout_back() {
+        let base = scripted_router(&[
+            r#"{"action":"write","path":"note.txt","content":"hello"}"#,
+            r#"{"action":"done","summary":"note written"}"#,
+            "APPROVE: note.txt exists with the requested content.",
+        ])
+        .await;
+        let fixture = run_fixture("apply-back", &base);
+        let repo = fixture.root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q", "-b", "main"]).status.success());
+        let _ = git(&["config", "user.email", "a@b.c"]);
+        let _ = git(&["config", "user.name", "t"]);
+        let _ = git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(
+            repo.join("seed.txt"),
+            "seed
+",
+        )
+        .unwrap();
+        let _ = git(&["add", "-A"]);
+        let _ = git(&["commit", "-q", "-m", "base"]);
+        fixture
+            .state
+            .workspace
+            .open(repo.to_str().unwrap())
+            .expect("open the repository");
+        let id = start_run(
+            &fixture.app,
+            json!({"goal": "write note.txt", "allowWrites": true, "autoApprove": true}),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        let checkout = crate::git::run_worktree_path(&repo, &id);
+        assert!(checkout.join(".git").exists());
+
+        let (code, payload) = post_apply(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{payload}");
+        assert_eq!(payload["applied"], json!(["note.txt"]));
+        assert_eq!(
+            std::fs::read_to_string(repo.join("note.txt")).unwrap(),
+            "hello"
+        );
+        assert!(!checkout.exists(), "the checkout is removed once applied");
+        let short: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(8)
+            .collect();
+        let branch = git(&["rev-parse", "--verify", &format!("refs/heads/run/{short}")]);
+        assert!(branch.status.success(), "the run's branch is kept");
+
+        // A second apply has nothing left to apply.
+        let (again, message) = post_apply(&fixture.app, &id).await;
+        assert_eq!(again, StatusCode::CONFLICT, "{message}");
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn applying_a_live_run_is_refused() {
+        let base = scripted_router(&[r#"{"action":"write","path":"a.txt","content":"x"}"#]).await;
+        let fixture = run_fixture("apply-live", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({"goal": "write a.txt", "allowWrites": true, "autoApprove": false}),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
+        let (code, payload) = post_apply(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::CONFLICT, "{payload}");
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("still live"),
+            "{payload}"
         );
         let _ = std::fs::remove_dir_all(&fixture.root);
     }

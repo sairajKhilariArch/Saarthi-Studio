@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.0.0
+
+The first release where a run works in its own checkout *and* can hand that work
+back, which is what makes parallel runs a usable loop rather than a dead end.
+
+- `POST /api/runs/:id/apply` commits what a finished run changed on its
+  `run/<id>` branch, fast-forwards the shared checkout onto that branch, and removes
+  the worktree. Nothing is forced: a shared checkout with uncommitted changes, or one
+  with commits the run never saw, refuses the merge and git's own sentence is returned
+  as a 409. The branch is kept, so the work is still reachable in history.
+- The run detail offers **Apply to workspace** exactly when the run still holds a
+  checkout (`worktree` in the detail payload), and a live run is refused — its work is
+  not finished yet.
+- `cargo test --locked`: **427 passed, 1 ignored**. Two new end-to-end tests: a
+  finished writing run applies into the repository (the file is in the shared checkout,
+  the checkout is gone, the branch remains, a second apply is a 409), and a run still
+  waiting for approval is refused with "still live".
+- Packages are at 2.0.0: `app/Cargo.toml`, `app/Cargo.lock`, `app/tauri.conf.json`,
+  `vscode-extension/package.json` and its lock. The extension's `engines.vscode` and
+  `@types/vscode` stay on the VS Code API line (`^1.92.0`), not the app version.
+- Still open, and named as such in `docs/PROGRESS.md`: the lease covers only the
+  agent's own writes (a command step may write anywhere), the ledger is in-process, so
+  `max_concurrent_runs` still defaults to 1; a worktree is removed only when applied.
+
 ## 1.92.0
 
 - A run that may write or run commands now works in its own git worktree, on a

@@ -113,7 +113,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Verification step before `succeeded` | Working (1.56.0) | a run that wrote, ran a command or called a tool goes to the verifier, which must answer `APPROVE`; ISSUES hands the findings back for one repair round and a second ISSUES ends the run `failed` with the findings kept. Read-only runs and `team` mode are not verified twice. No human sign-off step: the verifier is a model on the same router |
 | Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
 
-| Isolation between live runs: a writing run executes in its own worktree on a `run/<id>` branch (1.92.0) | Working (1.92.0) | Not applied back, not cleaned up, and the lease still covers only the agent's own writes |
+| Isolation between live runs: a writing run executes in its own worktree on a `run/<id>` branch, and a finished one can be applied back and cleaned up (2.0.0) | Working (2.0.0) | Nothing is applied automatically, the lease still covers only the agent's own writes, and the ledger is in-process |
 
 ## Phase 6 — Skills
 

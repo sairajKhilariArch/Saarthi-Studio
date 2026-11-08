@@ -4,7 +4,7 @@ A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The ba
 
 ## Install a release (downloaded artifacts)
 
-Pushing a `v*` tag (e.g. `v1.20.0`) to GitHub Actions attaches every release file to that tag's release page:
+Pushing a `v*` tag (e.g. `v2.0.0`) to GitHub Actions attaches every release file to that tag's release page:
 
 | Platform | Artifact | Install & run |
 | --- | --- | --- |

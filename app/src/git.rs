@@ -559,6 +559,71 @@ fn worktree_list(root: &Path) -> Result<Vec<Value>, String> {
     Ok(list)
 }
 
+/// The paths a run's checkout has changed, as git reports them.
+pub(crate) fn run_changes(worktree: &Path) -> Result<Vec<String>, String> {
+    let output = git(worktree, &["status", "--porcelain"])?;
+    if !output.ok {
+        return Err(git_error(&output, "git status failed"));
+    }
+    let mut paths = Vec::new();
+    for line in output.stdout.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let raw = &line[3..];
+        // A rename reads `old -> new`; the path that matters is the new one.
+        let path = raw.rsplit(" -> ").next().unwrap_or(raw).trim();
+        let path = path.trim_matches('"').to_string();
+        if !path.is_empty() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+/// Close the loop on a run's own checkout: commit what it changed on its branch,
+/// fast-forward the shared checkout onto that branch, and remove the worktree.
+/// Nothing is forced — a shared checkout with uncommitted changes or its own new
+/// commits refuses the merge, and git's own sentence is returned.
+pub(crate) fn apply_run_worktree(
+    root: &Path,
+    run_id: &str,
+    message: &str,
+) -> Result<Value, String> {
+    let worktree = run_worktree_path(root, run_id);
+    if !worktree.join(".git").exists() {
+        return Err(
+            "This run has no checkout of its own: the workspace was not a git repository when it              started, so its work already landed in the shared folder."
+                .to_string(),
+        );
+    }
+    let short: String = run_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    let branch = format!("run/{short}");
+    let changes = run_changes(&worktree)?;
+    if !changes.is_empty() {
+        let added = git(&worktree, &["add", "-A"])?;
+        if !added.ok {
+            return Err(git_error(&added, "git add failed"));
+        }
+        let committed = git(&worktree, &["commit", "-q", "-m", message])?;
+        if !committed.ok {
+            return Err(git_error(&committed, "git commit failed"));
+        }
+    }
+    let merged = git(root, &["merge", "--ff-only", &branch])?;
+    if !merged.ok {
+        return Err(git_error(&merged, "git merge --ff-only failed"));
+    }
+    let removed = git(root, &["worktree", "remove", &plain_path(&worktree)])
+        .map(|output| output.ok)
+        .unwrap_or(false);
+    Ok(json!({ "ok": true, "branch": branch, "applied": changes, "removed": removed }))
+}
+
 /// Is this folder inside a git work tree? Run isolation depends on it: without
 /// a repository there is no worktree to give a run.
 pub(crate) fn is_git_worktree(root: &Path) -> bool {
