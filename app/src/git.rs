@@ -773,6 +773,35 @@ fn staged_conflict_markers(root: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Staged blobs that mix CRLF and LF. Each file is read through the index, NULs
+/// skip binaries, and a blob counts as mixed when it holds a CRLF and more LFs
+/// than CRLFs, which is what a half-finished conversion leaves behind.
+fn staged_mixed_line_endings(root: &Path) -> Result<Vec<String>, String> {
+    let listing = git(root, &["diff", "--cached", "--name-only", "-z"])?;
+    if !listing.ok {
+        return Ok(Vec::new());
+    }
+    let mut mixed = Vec::new();
+    for path in listing.stdout.split("\0").filter(|path| !path.is_empty()) {
+        let blob = git(root, &["show", &format!(":{path}")])?;
+        if !blob.ok || blob.stdout.contains("\0") {
+            continue;
+        }
+        let crlf = blob.stdout.matches("\r\n").count();
+        if crlf == 0 {
+            continue;
+        }
+        let lf = blob.stdout.matches('\n').count();
+        if lf > crlf {
+            mixed.push(path.to_string());
+            if mixed.len() == 6 {
+                break;
+            }
+        }
+    }
+    Ok(mixed)
+}
+
 fn commit(root: &Path, message: &str, paths: &[String]) -> Result<Value, String> {
     // A merge that left markers behind must not be recorded as history: the
     // conflict is in the content, not in the message.
@@ -781,6 +810,13 @@ fn commit(root: &Path, message: &str, paths: &[String]) -> Result<Value, String>
         return Err(format!(
             "Refusing to commit: staged files still contain conflict markers ({}). Resolve them first.",
             conflicts.join("; ")
+        ));
+    }
+    let mixed = staged_mixed_line_endings(root)?;
+    if !mixed.is_empty() {
+        return Err(format!(
+            "Refusing to commit: staged files mix CRLF and LF line endings ({}). Normalise them first.",
+            mixed.join(", ")
         ));
     }
     let mut args: Vec<&str> = vec!["commit", "-m", message];
@@ -3409,6 +3445,28 @@ two
 ").unwrap();
         run_git(&root, &["add", "a.txt"]);
         assert!(commit(&root, "resolved", &[]).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_to_commit_mixed_line_endings() {
+        let Some(root) = temp_repo("mixed-eol") else {
+            return;
+        };
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        run_git(&root, &["commit", "-q", "-m", "base"]);
+        // Two CRLFs and one lone LF: a conversion that ran half way.
+        std::fs::write(root.join("a.txt"), "one\r\ntwo\nthree\r\n").unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        let error = commit(&root, "mixed", &[]).unwrap_err();
+        assert!(error.contains("CRLF"), "{error}");
+        assert!(error.contains("a.txt"), "{error}");
+        assert_eq!(run_git(&root, &["rev-list", "--count", "HEAD"]).trim(), "1");
+        // One consistent ending, and the same commit goes through.
+        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        assert!(commit(&root, "uniform", &[]).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 

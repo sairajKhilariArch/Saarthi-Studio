@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.87.0
+
+- A commit now also refuses staged files that mix CRLF and LF. Each staged blob is
+  read through the index (`git show :path`), NUL bytes skip binaries, and a blob
+  counts as mixed when it holds at least one CRLF and more LFs than CRLFs — the
+  signature of a conversion that stopped half way, which is how the line-ending
+  churn in this repository arrived.
+- The guards run in order, markers first: a conflicted file is reported by line, a
+  line-ending problem by file name, and either way nothing is recorded.
+- `cargo test --locked`: **422 passed, 1 ignored** — one new test stages a file
+  with two CRLFs and one lone LF, expects the refusal with history unchanged, then
+  normalises the file and expects the same commit to succeed.
+- Not built: the guard cannot see commits made outside the app, and a file that is
+  wholly CRLF is allowed because only a mix is refused.
+
 ## 1.86.0
 
 - A commit can no longer record unresolved conflict markers. Before writing, the
