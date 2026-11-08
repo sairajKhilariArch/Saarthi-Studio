@@ -1539,3 +1539,6 @@ kbd {
 /* Selection bar above a file's hunks: one count and one action for the file. */
 .scm-select-bar { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 11px; }
 .scm-select-summary { opacity: 0.75; }
+
+/* The pane-wide selection bar sits above the hint and spans files. */
+#scmSelectionBar { flex-wrap: wrap; }

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.85.0
+
+- The selection now spans files. Each entry remembers its own direction and path,
+  so it survives switching between diffs, and a bar above the file list reports
+  "4 lines selected in 2 files" with `Move selected` and `Clear all`.
+- `Move selected` applies each file's hunks in turn, later hunks first within a
+  file, and names the first hunk that fails by file and index instead of stopping
+  silently. It knows which entries are staged and which are not, so a mixed batch
+  moves each the right way.
+- `cargo test --locked`: **420 passed, 1 ignored** (unchanged — the work is in
+  `app/static/ide.js`, which has no test harness); `node --check` clean.
+- Driven in the real pane in a browser at `:8964` with `a.txt` changed at lines 2
+  and 18 and `b.txt` at line 2: `All` in one hunk of each gave "4 lines selected
+  in 2 files", `Move selected` answered "4 lines staged in 2 files", the pane
+  listed both files under STAGED with no unstaged entry, and `git diff` was empty
+  with the index matching the worktree.
+- Not built: selections live in memory, so a reload forgets them, and unstaging a
+  replacement pair still moves the old text back as one unit.
+
 ## 1.84.0
 
 - A selection no longer stops at one hunk. It is kept per file, so it survives

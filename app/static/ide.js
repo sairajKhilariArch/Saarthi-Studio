@@ -199,6 +199,10 @@
       '<input id="scmRemoteUrl" type="text" placeholder="remote URL" aria-label="Remote URL" autocomplete="off">',
       '<button id="scmRemoteAdd" class="tiny-toggle primary" type="button">Add</button></div>',
       '<div class="scm-remote-list hidden" id="scmRemoteList"></div>',
+      '<div class="scm-select-bar hidden" id="scmSelectionBar">',
+      '<span class="scm-select-summary" id="scmSelectionSummary" aria-live="polite">Nothing selected</span>',
+      '<button id="scmApplyAll" class="tiny-toggle primary" type="button">Move selected</button>',
+      '<button id="scmClearAll" class="tiny-toggle" type="button">Clear all</button></div>',
       '<p class="scm-hint" id="scmHint"></p>',
       "</div>",
     ].join("");
@@ -494,6 +498,9 @@
     setBranchStatus(result.data.branch);
     const changes = result.data.changes || [];
     if (!changes.length) {
+      // Nothing is left to move, so any remembered selection is stale.
+      IDE.scmSelection = new Map();
+      refreshScmSelectionBar();
       box.innerHTML = '<p class="empty-note">Working tree clean.</p>';
       setScmHint("");
       return;
@@ -508,6 +515,7 @@
     appendScmGroup(box, "Changes", unstaged, "work");
     appendScmGroup(box, "Untracked", untracked, "work");
     setScmHint(staged.length ? `${staged.length} staged · commit when ready` : "");
+    refreshScmSelectionBar();
   }
 
   function setScmHint(text) {
@@ -828,57 +836,135 @@
     });
   }
 
-  /* A staging selection can span the hunks of one file. It lives in a per-path
-     map rather than in the DOM so switching diffs and re-rendering keep it. */
-  function scmSelected(path, hunk) {
-    const byHunk = IDE.scmSelection ? IDE.scmSelection.get(path) : null;
-    return (byHunk && byHunk.get(hunk)) || new Set();
+  /* A staging selection spans the hunks of any number of files. It lives in a
+     map keyed by direction and path rather than in the DOM, so switching diffs and
+     re-rendering keep it, and each entry knows which way it will move. */
+  function scmKey(path, staged) {
+    return `${staged ? "staged:" : "work:"}${path}`;
   }
 
-  function scmRemember(path, hunk, lines) {
+  function scmEntryIfAny(path, staged) {
+    return IDE.scmSelection ? IDE.scmSelection.get(scmKey(path, staged)) || null : null;
+  }
+
+  function scmEntry(path, staged) {
+    const key = scmKey(path, staged);
+    let entry = IDE.scmSelection.get(key);
+    if (!entry) { entry = { path, staged, hunks: new Map() }; IDE.scmSelection.set(key, entry); }
+    return entry;
+  }
+
+  function scmSelected(path, staged, hunk) {
+    const entry = scmEntryIfAny(path, staged);
+    return (entry && entry.hunks.get(hunk)) || new Set();
+  }
+
+  function scmRemember(path, staged, hunk, lines) {
     if (!IDE.scmSelection) IDE.scmSelection = new Map();
-    let byHunk = IDE.scmSelection.get(path);
-    if (!byHunk) { byHunk = new Map(); IDE.scmSelection.set(path, byHunk); }
-    if (lines.size) byHunk.set(hunk, lines); else byHunk.delete(hunk);
-    if (!byHunk.size) IDE.scmSelection.delete(path);
+    const key = scmKey(path, staged);
+    if (!lines.size && !IDE.scmSelection.has(key)) return;
+    const entry = scmEntry(path, staged);
+    if (lines.size) entry.hunks.set(hunk, lines); else entry.hunks.delete(hunk);
+    if (!entry.hunks.size) IDE.scmSelection.delete(key);
   }
 
-  function scmSelectionCount(path) {
-    const byHunk = IDE.scmSelection ? IDE.scmSelection.get(path) : null;
-    if (!byHunk) return 0;
+  function scmFileCount(path, staged) {
+    const entry = scmEntryIfAny(path, staged);
+    if (!entry) return 0;
     let total = 0;
-    byHunk.forEach((lines) => { total += lines.size; });
+    entry.hunks.forEach((lines) => { total += lines.size; });
     return total;
   }
 
-  /* Apply one file's stored selection hunk by hunk, later hunks first: staging
-     hunk N takes it out of the diff, which leaves the indexes of earlier hunks
-     alone, so the list built before the first request stays valid. */
-  async function scmApplyFileSelection(change) {
-    const byHunk = IDE.scmSelection ? IDE.scmSelection.get(change.path) : null;
-    if (!byHunk || !byHunk.size) { toast("Select changed lines first."); return; }
-    const hunks = Array.from(byHunk.keys()).sort((a, b) => b - a);
-    const endpoint = change.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
+  function scmTotals() {
+    const totals = { lines: 0, files: 0 };
+    if (!IDE.scmSelection) return totals;
+    IDE.scmSelection.forEach((entry) => {
+      let count = 0;
+      entry.hunks.forEach((lines) => { count += lines.size; });
+      if (!count) return;
+      totals.lines += count;
+      totals.files += 1;
+    });
+    return totals;
+  }
+
+  function refreshScmSelectionBar() {
+    const bar = $("scmSelectionBar");
+    const summary = $("scmSelectionSummary");
+    if (!bar || !summary) return;
+    const totals = scmTotals();
+    summary.textContent = totals.lines
+      ? `${totals.lines} line${totals.lines === 1 ? "" : "s"} selected in ${totals.files} file${totals.files === 1 ? "" : "s"}`
+      : "Nothing selected";
+    bar.classList.toggle("hidden", !totals.lines);
+  }
+
+  /* Apply stored selections hunk by hunk, later hunks first within a file:
+     staging hunk N takes it out of the diff, which leaves the indexes of earlier
+     hunks alone, so the list built before the first request stays valid. Each
+     entry carries its own direction, so a mixed batch is still correct. */
+  async function scmApplyEntries(entries) {
     let moved = 0;
-    for (const hunk of hunks) {
-      const lines = Array.from(byHunk.get(hunk) || []).sort((a, b) => a - b);
-      if (!lines.length) continue;
-      const result = await api(endpoint, {
-        method: "POST",
-        body: JSON.stringify({ path: change.path, hunk, lines, approve: true }),
-        confirmApproval: true,
-      });
-      if (!result.ok) {
-        toast(`Hunk ${hunk + 1}: ${result.data.error || "could not move those lines"}`);
-        break;
+    let failure = "";
+    const directions = { staged: 0, work: 0 };
+    for (const entry of entries) {
+      if (!entry.hunks.size) continue;
+      directions[entry.staged ? "staged" : "work"] += 1;
+      const hunks = Array.from(entry.hunks.keys()).sort((a, b) => b - a);
+      const endpoint = entry.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
+      for (const hunk of hunks) {
+        const lines = Array.from(entry.hunks.get(hunk) || []).sort((a, b) => a - b);
+        if (!lines.length) continue;
+        const result = await api(endpoint, {
+          method: "POST",
+          body: JSON.stringify({ path: entry.path, hunk, lines, approve: true }),
+          confirmApproval: true,
+        });
+        if (!result.ok) {
+          failure = `${entry.path} hunk ${hunk + 1}: ${result.data.error || "could not move those lines"}`;
+          break;
+        }
+        moved += result.data.lines || lines.length;
       }
-      moved += result.data.lines || lines.length;
+      IDE.scmSelection.delete(scmKey(entry.path, entry.staged));
+      if (failure) break;
     }
-    IDE.scmSelection.delete(change.path);
-    toast(moved
-      ? `${moved} line${moved === 1 ? "" : "s"} ${change.staged ? "unstaged" : "staged"} in ${change.path}`
-      : "Nothing moved.");
+    refreshScmSelectionBar();
+    if (failure) {
+      toast(failure);
+    } else {
+      const verb = directions.staged && directions.work ? "moved" : directions.staged ? "unstaged" : "staged";
+      const where = entries.length > 1 ? `${entries.length} files` : entries[0].path;
+      toast(moved
+        ? `${moved} line${moved === 1 ? "" : "s"} ${verb} in ${where}`
+        : "Nothing moved.");
+    }
     await refreshScm();
+  }
+
+  async function scmApplyFileSelection(change) {
+    const entry = scmEntryIfAny(change.path, change.staged);
+    if (!entry || !entry.hunks.size) { toast("Select changed lines first."); return; }
+    await scmApplyEntries([entry]);
+  }
+
+  async function scmApplyEverything() {
+    if (!IDE.scmSelection || !IDE.scmSelection.size) { toast("Select changed lines first."); return; }
+    await scmApplyEntries(Array.from(IDE.scmSelection.values()));
+  }
+
+  function scmClearEverything() {
+    IDE.scmSelection = new Map();
+    document.querySelectorAll(".scm-hunk-body span.pickable.selected").forEach((span) => {
+      span.classList.remove("selected");
+      span.setAttribute("aria-pressed", "false");
+    });
+    document.querySelectorAll(".scm-hunk-count").forEach((node) => {
+      node.textContent = `0 of ${node.dataset.total || 0} selected`;
+    });
+    document.querySelectorAll(".scm-select-summary").forEach((node) => { node.textContent = "Nothing selected"; });
+    refreshScmSelectionBar();
   }
 
   async function scmHunkLines(change, index, lines) {
@@ -893,7 +979,7 @@
       return;
     }
     // The stored change indexes of the hunk just moved are stale.
-    scmRemember(change.path, index, new Set());
+    scmRemember(change.path, change.staged, index, new Set());
     const moved = result.data.lines || lines.length;
     toast(`${moved} line${moved === 1 ? "" : "s"} ${change.staged ? "unstaged" : "staged"} in ${change.path}`);
     await refreshScm();
@@ -949,14 +1035,15 @@
     const clearAll = el("button", "tiny-toggle", "Clear selection");
     clearAll.type = "button";
     const refreshBar = () => {
-      const total = scmSelectionCount(change.path);
+      const total = scmFileCount(change.path, change.staged);
       summary.textContent = total ? `${total} line${total === 1 ? "" : "s"} selected` : "Nothing selected";
       applyAll.disabled = !total;
       clearAll.disabled = !total;
+      refreshScmSelectionBar();
     };
     applyAll.addEventListener("click", () => void scmApplyFileSelection(change));
     clearAll.addEventListener("click", () => {
-      if (IDE.scmSelection) IDE.scmSelection.delete(change.path);
+      if (IDE.scmSelection) IDE.scmSelection.delete(scmKey(change.path, change.staged));
       box.querySelectorAll(".scm-hunk-body span.pickable.selected").forEach((span) => {
         span.classList.remove("selected");
         span.setAttribute("aria-pressed", "false");
@@ -997,6 +1084,7 @@
       // A polite live region: the count is the only thing that says how much of
       // the hunk is picked, and the outline alone cannot be heard.
       const count = el("span", "scm-hunk-count", `0 of ${picks.length} selected`);
+      count.dataset.total = String(picks.length);
       count.setAttribute("aria-live", "polite");
       const refreshCount = () => {
         const picked = picks.filter((span) => span.classList.contains("selected")).length;
@@ -1004,7 +1092,7 @@
       };
       // Re-apply what this file already had selected, so leaving a diff and
       // coming back does not lose the work.
-      const stored = scmSelected(change.path, index);
+      const stored = scmSelected(change.path, change.staged, index);
       picks.forEach((span) => {
         if (stored.has(Number(span.dataset.change))) {
           span.classList.add("selected");
@@ -1012,11 +1100,12 @@
         }
       });
       const syncSelection = () => {
-        scmRemember(change.path, index, new Set(
+        scmRemember(change.path, change.staged, index, new Set(
           picks.filter((span) => span.classList.contains("selected")).map((span) => Number(span.dataset.change)),
         ));
         refreshCount();
         refreshBar();
+        refreshScmSelectionBar();
       };
       refreshers.push(refreshCount);
       refreshCount();
@@ -1123,7 +1212,7 @@
       return;
     }
     // The stored line indexes for this file are stale once a whole hunk moved.
-    if (IDE.scmSelection) IDE.scmSelection.delete(change.path);
+    if (IDE.scmSelection) IDE.scmSelection.delete(scmKey(change.path, change.staged));
     toast(`${change.staged ? "Unstaged" : "Staged"} hunk ${index + 1} of ${change.path}`);
     await refreshScm();
   }
@@ -1515,6 +1604,8 @@
     $("scmRebaseAbort").addEventListener("click", () => void abortRebaseScm());
     $("scmRebaseContinue").addEventListener("click", () => void continueRebaseScm());
     $("scmRemotesBtn").addEventListener("click", () => void showRemotes());
+    $("scmApplyAll").addEventListener("click", () => void scmApplyEverything());
+    $("scmClearAll").addEventListener("click", () => scmClearEverything());
     $("scmRemoteAdd").addEventListener("click", () => void addRemote());
     $("scmRemoteUrl").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void addRemote(); }
