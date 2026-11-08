@@ -1,86 +1,99 @@
 //! Leases between live agent runs over the files in the shared workspace.
 //!
-//! Two runs work in one folder and nothing in the filesystem stops both of them
+//! Two runs can work at once, and nothing in the filesystem stops both of them
 //! writing the same file: whichever writes last wins, silently. A lease is not a
-//! lock on the file — nothing outside this process can see it — but it answers
-//! one question before every write: *would this write clobber work this run has
-//! not seen?* There are two ways the answer is yes, and both refuse the write
-//! with a reason instead of letting it land:
+//! lock on the file — nothing outside this app can see it — but it answers three
+//! questions before a step runs:
 //!
-//! * another live run has already claimed the path, and
-//! * the content on disk is not what this run last read of that path.
+//! * would this write clobber work another live run claimed,
+//! * would it overwrite a change this run has not seen,
+//! * and would this command run while another run is already running commands in
+//!   the same checkout, where it can write anywhere?
 //!
-//! A refusal is not fatal to the run: the model sees the message as a step and
-//! can re-read the file and rewrite from what is actually there. That is why
-//! `claim_write` returns a reason rather than panicking or failing the run.
+//! A refusal is not fatal: the model sees the message as a step and can re-read
+//! the file or work elsewhere.
 //!
-//! The ledger is keyed by the database it belongs to. Runs are records in a
-//! database, so liveness is only meaningful for the one that owns them: keying by
-//! both is what stops a second database in the same process — a test fixture, or
-//! a headless server next to a desktop build — from deciding that this database's
-//! runs are dead and dropping their claims.
-//!
-//! A lease is only as good as the record behind it, so claims held by runs that
-//! are no longer live are dropped on the next claim rather than blocking a file
-//! forever after a crash.
+//! The ledger lives in the studio database, not in a process variable, so a
+//! headless server and a desktop build pointed at the same database see each
+//! other's claims. Each row is keyed by the database file, the checkout a run is
+//! working in (its own worktree, or the shared folder), and the path. A claim
+//! whose run has reached a terminal state is dropped on the next claim, which is
+//! what keeps a crash from blocking a file forever; a paused run keeps its reads
+//! but loses its claims, because it is not going to step again until resumed.
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::sync::{LazyLock, Mutex};
+use rusqlite::{params, Connection};
 
 use crate::AppState;
 
 /// How many paths one run's read fingerprints are remembered for. Past this a
 /// run has touched more files than a shared folder can usefully guard, so new
-/// paths stop being recorded instead of the map growing without limit.
+/// paths stop being recorded instead of the table growing without limit.
 const MAX_TRACKED_PATHS: usize = 256;
 
-type Scope = String;
+/// The path a command claim is stored under: one per checkout, not per file,
+/// because a command can write anywhere inside it.
+const COMMAND_SCOPE: &str = "*command*";
 
-#[derive(Default)]
-struct Ledger {
-    /// (database, path) → the live run that claimed it for writing, and what it
-    /// saw then.
-    owners: HashMap<(Scope, String), (String, u64)>,
-    /// (database, run) → path → fingerprint of the content that run last read.
-    reads: HashMap<(Scope, String), HashMap<String, u64>>,
-}
-
-static LEDGER: LazyLock<Mutex<Ledger>> = LazyLock::new(|| Mutex::new(Ledger::default()));
+const TERMINAL: &str = "'succeeded','failed','cancelled','interrupted'";
 
 /// A stable fingerprint of file content. `None` (a file that does not exist, or
 /// one that cannot be read as text) hashes differently from any content, so
 /// "created since I looked" and "deleted since I looked" are both changes.
 pub(crate) fn fingerprint(content: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     content.hash(&mut hasher);
     hasher.finish()
 }
 
-/// Which database's runs this ledger entry belongs to. Two processes sharing one
-/// database still see separate ledgers; that limitation is the one a cross-process
-/// lock would remove.
-fn scope(state: &AppState) -> Scope {
+fn scope(state: &AppState) -> String {
     state.database_path.to_string_lossy().to_string()
 }
 
-/// Runs that can still step: one working, or one stopped on a human question.
-/// A paused run has released its loop, so its claim is not worth waiting for —
-/// and its recorded reads are kept, so a resumed run still notices a file that
-/// changed while it was parked.
-fn live_runs(state: &AppState) -> Vec<String> {
-    let Ok(conn) = crate::open_db(&state.database_path) else {
-        return Vec::new();
-    };
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT id FROM agent_runs WHERE status IN ('running','awaiting_approval') ORDER BY created_at",
-    ) else {
-        return Vec::new();
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
-        return Vec::new();
-    };
-    rows.flatten().collect()
+fn connect(state: &AppState) -> Result<Connection, String> {
+    let conn = crate::open_db(&state.database_path).map_err(|e| e.to_string())?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS run_leases (
+             scope TEXT NOT NULL,
+             checkout TEXT NOT NULL,
+             path TEXT NOT NULL,
+             run_id TEXT NOT NULL,
+             fingerprint INTEGER NOT NULL,
+             PRIMARY KEY (scope, checkout, path)
+         );
+         CREATE TABLE IF NOT EXISTS run_reads (
+             scope TEXT NOT NULL,
+             checkout TEXT NOT NULL,
+             path TEXT NOT NULL,
+             run_id TEXT NOT NULL,
+             fingerprint INTEGER NOT NULL,
+             PRIMARY KEY (scope, checkout, path, run_id)
+         );",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn)
+}
+
+/// Forget claims held by runs that will never step again, in this database.
+fn purge(conn: &Connection, scope: &str) -> Result<(), String> {
+    conn.execute(
+        &format!("DELETE FROM run_leases WHERE scope=?1 AND run_id IN (SELECT id FROM agent_runs WHERE status IN ({TERMINAL}))"),
+        [scope],
+    )
+    .map_err(|e| e.to_string())?;
+    // A paused run holds no claim (it will not step), but its recorded reads are
+    // kept so a resumed run still notices a file that changed while it was parked.
+    conn.execute(
+        "DELETE FROM run_leases WHERE scope=?1 AND run_id IN (SELECT id FROM agent_runs WHERE status='paused')",
+        [scope],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        &format!("DELETE FROM run_reads WHERE scope=?1 AND run_id IN (SELECT id FROM agent_runs WHERE status IN ({TERMINAL}))"),
+        [scope],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Remember what a run just read, so a later write can tell whether the file
@@ -92,23 +105,36 @@ pub(crate) fn record_read(
     path: &str,
     content: Option<&str>,
 ) {
-    // Two runs in their own worktrees can legitimately touch the same relative
-    // path; the claim is over a file, so the checkout is part of the key.
-    let path = &format!("{root}|{path}");
-    let mut ledger = LEDGER.lock().unwrap();
-    let paths = ledger
-        .reads
-        .entry((scope(state), run_id.to_string()))
-        .or_default();
-    if !paths.contains_key(path) && paths.len() >= MAX_TRACKED_PATHS {
+    let Ok(conn) = connect(state) else {
+        return;
+    };
+    let db = scope(state);
+    let Ok(count) = conn.query_row(
+        "SELECT COUNT(*) FROM run_reads WHERE scope=?1 AND checkout=?2 AND run_id=?3",
+        params![db, root, run_id],
+        |row| row.get::<_, i64>(0),
+    ) else {
+        return;
+    };
+    let known: bool = conn
+        .query_row(
+            "SELECT 1 FROM run_reads WHERE scope=?1 AND checkout=?2 AND path=?3 AND run_id=?4",
+            params![db, root, path, run_id],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !known && count as usize >= MAX_TRACKED_PATHS {
         return;
     }
-    paths.insert(path.to_string(), fingerprint(content));
+    let _ = conn.execute(
+        "INSERT INTO run_reads(scope, checkout, path, run_id, fingerprint) VALUES(?1,?2,?3,?4,?5) \
+         ON CONFLICT(scope, checkout, path, run_id) DO UPDATE SET fingerprint=excluded.fingerprint",
+        params![db, root, path, run_id, fingerprint(content) as i64],
+    );
 }
 
-/// Ask to write `path`. `current` is the content on disk right now, as the
-/// caller has just read it for its checkpoint — the caller's view must not be
-/// trusted, the file is what matters.
+/// Ask to write `path`. `current` is the content on disk right now; the file is
+/// what matters, never the caller's view of it.
 pub(crate) fn claim_write(
     state: &AppState,
     root: &str,
@@ -116,61 +142,114 @@ pub(crate) fn claim_write(
     path: &str,
     current: Option<&str>,
 ) -> Result<(), String> {
-    let shown = path;
-    let path = &format!("{root}|{path}");
+    let conn = connect(state)?;
     let db = scope(state);
-    let live = live_runs(state);
-    let fingerprint_now = fingerprint(current);
-    let mut ledger = LEDGER.lock().unwrap();
-    // Forget claims in this database held by runs that will never step again: a
-    // cancelled or finished run must not keep a file locked, and its record is
-    // why we cannot simply trust the map.
-    ledger.owners.retain(|(owner_db, _), (owner, _)| {
-        *owner_db != db || owner == run_id || live.iter().any(|id| id == owner)
-    });
-    let key = (db.clone(), path.to_string());
-    if let Some((owner, _)) = ledger.owners.get(&key) {
+    purge(&conn, &db)?;
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT run_id FROM run_leases WHERE scope=?1 AND checkout=?2 AND path=?3",
+            params![db, root, path],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(owner) = owner {
         if owner != run_id {
             return Err(format!(
-                "{shown} is claimed by run {owner}, which is still live. Two agents writing \
+                "{path} is claimed by run {owner}, which is still live. Two agents writing \
                  one file would overwrite each other, so this write was refused and nothing \
                  was changed. Work on a different file, or wait for that run to finish."
             ));
         }
     }
-    let read_key = (db.clone(), run_id.to_string());
-    if let Some(seen) = ledger
-        .reads
-        .get(&read_key)
-        .and_then(|paths| paths.get(path))
-        .copied()
-    {
-        if seen != fingerprint_now {
+    let now = fingerprint(current) as i64;
+    let seen: Option<i64> = conn
+        .query_row(
+            "SELECT fingerprint FROM run_reads WHERE scope=?1 AND checkout=?2 AND path=?3 AND run_id=?4",
+            params![db, root, path, run_id],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(seen) = seen {
+        if seen != now {
             return Err(format!(
-                "{shown} changed on disk since this run last read it — another run or another \
+                "{path} changed on disk since this run last read it — another run or another \
                  program wrote it. This write was refused so that change is not silently \
-                 overwritten. Read {shown} again and rewrite from what is there now."
+                 overwritten. Read {path} again and rewrite from what is there now."
             ));
         }
     }
-    let paths = ledger.reads.entry(read_key).or_default();
-    if paths.len() < MAX_TRACKED_PATHS || paths.contains_key(path) {
-        paths.insert(path.to_string(), fingerprint_now);
-    }
-    ledger
-        .owners
-        .insert(key, (run_id.to_string(), fingerprint_now));
+    conn.execute(
+        "INSERT INTO run_reads(scope, checkout, path, run_id, fingerprint) VALUES(?1,?2,?3,?4,?5) \
+         ON CONFLICT(scope, checkout, path, run_id) DO UPDATE SET fingerprint=excluded.fingerprint",
+        params![db, root, path, run_id, now],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO run_leases(scope, checkout, path, run_id, fingerprint) VALUES(?1,?2,?3,?4,?5) \
+         ON CONFLICT(scope, checkout, path) DO UPDATE SET run_id=excluded.run_id, fingerprint=excluded.fingerprint",
+        params![db, root, path, run_id, now],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Drop everything a run holds. Called when it reaches a terminal state: its
-/// claim on a file is over, and its read fingerprints would only mislead a
-/// later run that happens to reuse the id.
-pub(crate) fn release(state: &AppState, run_id: &str) {
+/// Claim the whole checkout for one command. A command can write anywhere inside
+/// its working directory, so per-file leases cannot express it; two runs may not
+/// run commands in the same checkout at the same time.
+pub(crate) fn claim_command(state: &AppState, root: &str, run_id: &str) -> Result<(), String> {
+    let conn = connect(state)?;
     let db = scope(state);
-    let mut ledger = LEDGER.lock().unwrap();
-    ledger.reads.remove(&(db.clone(), run_id.to_string()));
-    ledger
-        .owners
-        .retain(|(owner_db, _), (owner, _)| !(*owner_db == db && owner == run_id));
+    purge(&conn, &db)?;
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT run_id FROM run_leases WHERE scope=?1 AND checkout=?2 AND path=?3",
+            params![db, root, COMMAND_SCOPE],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(owner) = owner {
+        if owner != run_id {
+            return Err(format!(
+                "Another live run ({owner}) is running a command in this folder right now. A \
+                 command can write anywhere inside it, so this one was refused rather than \
+                 interleaved with that work. Try again when it finishes."
+            ));
+        }
+    }
+    conn.execute(
+        "INSERT INTO run_leases(scope, checkout, path, run_id, fingerprint) VALUES(?1,?2,?3,?4,0) \
+         ON CONFLICT(scope, checkout, path) DO UPDATE SET run_id=excluded.run_id",
+        params![db, root, COMMAND_SCOPE, run_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The command finished (or failed): the checkout is free again.
+pub(crate) fn release_command(state: &AppState, root: &str, run_id: &str) {
+    let Ok(conn) = connect(state) else {
+        return;
+    };
+    let _ = conn.execute(
+        "DELETE FROM run_leases WHERE scope=?1 AND checkout=?2 AND path=?3 AND run_id=?4",
+        params![scope(state), root, COMMAND_SCOPE, run_id],
+    );
+}
+
+/// Drop everything a run holds. Called when it reaches a terminal state: its
+/// claims are over, and its read fingerprints would only mislead a later run
+/// that happens to reuse the id.
+pub(crate) fn release(state: &AppState, run_id: &str) {
+    let Ok(conn) = connect(state) else {
+        return;
+    };
+    let db = scope(state);
+    let _ = conn.execute(
+        "DELETE FROM run_leases WHERE scope=?1 AND run_id=?2",
+        params![db, run_id],
+    );
+    let _ = conn.execute(
+        "DELETE FROM run_reads WHERE scope=?1 AND run_id=?2",
+        params![db, run_id],
+    );
 }

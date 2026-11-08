@@ -624,12 +624,14 @@ pub(crate) fn apply_run_worktree(
     Ok(json!({ "ok": true, "branch": branch, "applied": changes, "removed": removed }))
 }
 
-/// Is this folder inside a git work tree? Run isolation depends on it: without
-/// a repository there is no worktree to give a run.
-pub(crate) fn is_git_worktree(root: &Path) -> bool {
-    git(root, &["rev-parse", "--is-inside-work-tree"])
-        .map(|output| output.ok && output.stdout.trim() == "true")
-        .unwrap_or(false)
+/// Is this folder the root of a git repository? Isolation needs exactly that: a
+/// worktree is created for the repository the user opened, not for whatever
+/// enclosing repository a subfolder happens to sit inside.
+pub(crate) fn is_repository_root(root: &Path) -> bool {
+    let Ok(output) = git(root, &["rev-parse", "--show-toplevel"]) else {
+        return false;
+    };
+    output.ok && same_worktree_path(output.stdout.trim(), &plain_path(root))
 }
 
 /// Where a run's own checkout lives: next to the repository, named for it, so a
