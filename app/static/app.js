@@ -6847,6 +6847,15 @@ function buildRunDetail(detail) {
       undo.addEventListener('click', () => restoreRun(detail.id));
       controls.appendChild(undo);
     }
+    // The whole-tree snapshot is the only thing that can undo a command step,
+    // so it is offered even when the run logged no per-file checkpoints.
+    const snapshot = document.createElement("button");
+    snapshot.type = "button";
+    snapshot.className = "btn btn-quiet btn-small run-restore";
+    snapshot.textContent = "Restore snapshot";
+    snapshot.title = "Put every tracked file back to the whole-tree snapshot taken before this run started; untracked files are left alone";
+    snapshot.addEventListener('click', () => restoreSnapshot(detail.id));
+    controls.appendChild(snapshot);
   }
   const refresh = document.createElement("button");
   refresh.type = "button";
@@ -6972,6 +6981,23 @@ async function restoreRunStep(runId, seq) {
     return;
   }
   toast(result.data.path ? `Restored ${result.data.path} to its pre-write content.` : "File restored.");
+  await loadRunDetail();
+}
+
+async function restoreSnapshot(runId) {
+  if (!confirm("Put every tracked file back to the snapshot this run took before it started?\n\nAnything changed since then — your own edits included — is discarded for those files. Files that were never committed are left alone.")) return;
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/checkpoint/restore`, {
+    method: "POST",
+    body: JSON.stringify({}),
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not restore the checkpoint.");
+    return;
+  }
+  const data = result.data || {};
+  const skipped = (data.skipped || []).length;
+  toast(`Restored ${data.count} file${data.count === 1 ? "" : "s"} from the run's snapshot${skipped ? `, ${skipped} skipped` : ""}.`);
   await loadRunDetail();
 }
 

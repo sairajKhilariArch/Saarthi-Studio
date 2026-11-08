@@ -442,6 +442,12 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
             checkpoint TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL,
             FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS run_checkpoints (
+            run_id TEXT PRIMARY KEY,
+            commit_sha TEXT NOT NULL,
+            paths INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
         );",
     )?;
     // Databases created before checkpoints predate the column.
@@ -634,6 +640,29 @@ fn add_step(
     output: &str,
 ) -> Result<(), String> {
     add_step_with_checkpoint(state, run_id, action, summary, output, "")
+}
+
+/// A whole-tree checkpoint for a run that can change files. The per-step
+/// checkpoints only cover the agent's own `write`; a `command` step can change
+/// any file, so this commit is the only thing that makes those undoable.
+///
+/// `INSERT OR IGNORE`: a resumed run keeps the snapshot it took when it first
+/// started, which is the state the person actually wants to go back to.
+fn record_tree_checkpoint(state: &AppState, run_id: &str) {
+    let Ok(root) = state.workspace.root() else {
+        return;
+    };
+    let Ok(snapshot) = crate::git::snapshot_tree(&root) else {
+        return;
+    };
+    let _ = db(state).and_then(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO run_checkpoints(run_id,commit_sha,paths,created_at) \
+             VALUES(?1,?2,?3,?4)",
+            params![run_id, snapshot.commit, snapshot.paths as i64, now()],
+        )
+        .map_err(|error| error.to_string())
+    });
 }
 
 /// Same as `add_step`, plus the pre-write snapshot that makes the change
@@ -2833,6 +2862,14 @@ async fn run_loop(state: AppState, run_id: String, control: Arc<RunControl>) {
             }
         }
     }
+    // Before this run can change a byte: one whole-tree checkpoint, once. A run
+    // with writes and commands both off cannot change anything, so it takes
+    // none — there would be nothing to go back to.
+    if let Ok(Some(run)) = load_run(&state, &run_id) {
+        if run.status == RUNNING && (run.allow_writes || run.allow_commands) {
+            record_tree_checkpoint(&state, &run_id);
+        }
+    }
     // Only an exit through the `while` condition is the step ceiling. Every
     // other exit closed the run on purpose (done, cancelled, parked), so the
     // ceiling guard below must not fire for it - a resume can flip the record
@@ -3032,6 +3069,10 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
             post(restore_step),
+        )
+        .route(
+            format!("{prefix}/:id/checkpoint/restore").as_str(),
+            post(restore_checkpoint),
         )
 }
 
@@ -3727,6 +3768,119 @@ async fn restore_run(
         }
     }
     Json(restore_run_files(&state, &root, &run_id, &files, force)).into_response()
+}
+
+/// Put every tracked file back to the whole-tree checkpoint the run took before
+/// it started. The per-file restore only knows about the agent's own writes;
+/// this also undoes what a `command` step did, which is why it is a separate,
+/// explicitly confirmed action rather than part of the other one.
+async fn restore_checkpoint(
+    State(state): State<crate::AppState>,
+    Path(run_id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let run = match load_run(&state, &run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if !matches!(
+        run.status.as_str(),
+        SUCCEEDED | FAILED | CANCELLED | INTERRUPTED
+    ) {
+        return error_response(
+            StatusCode::CONFLICT,
+            format!(
+                "This run is still {}; a checkpoint is restored once it has finished.",
+                run.status
+            ),
+        );
+    }
+    let commit = match db(&state).and_then(|conn| {
+        conn.query_row(
+            "SELECT commit_sha FROM run_checkpoints WHERE run_id=?1",
+            [&run_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(Some(commit)) => commit,
+        Ok(None) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "This run took no whole-tree checkpoint: writes and commands were both off, or the folder is not a Git repository.",
+            )
+        }
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.message()),
+    };
+    let changes = match crate::git::snapshot_changes(&root, &commit) {
+        Ok(changes) => changes,
+        Err(message) => return error_response(StatusCode::CONFLICT, message),
+    };
+    if changes.len() > 500 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "{} files differ from the checkpoint; restoring more than 500 at once is not offered.",
+                changes.len()
+            ),
+        );
+    }
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // Every path consults `fs_write` before the first byte changes, so a saved
+    // deny stops the whole restore instead of half-applying it.
+    for change in &changes {
+        if let Some(response) = crate::permissions::guard_user(
+            &state,
+            crate::permissions::Action::FsWrite,
+            &change.path,
+            &run.project_id,
+            approve,
+            "restore a run checkpoint",
+        ) {
+            return response;
+        }
+    }
+    let mut restored: Vec<String> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    for change in &changes {
+        match crate::git::restore_path(&root, &commit, &change.path, change.delete) {
+            Ok(()) => restored.push(change.path.clone()),
+            Err(message) => skipped.push(json!({ "path": change.path, "error": message })),
+        }
+    }
+    let _ = add_step(
+        &state,
+        &run_id,
+        "restored",
+        &format!("restore checkpoint ({} files)", restored.len()),
+        &format!(
+            "Put {} tracked file(s) back to the snapshot taken before this run started ({}){}. Untracked files were left alone.",
+            restored.len(),
+            commit.chars().take(8).collect::<String>(),
+            if skipped.is_empty() {
+                "".to_string()
+            } else {
+                format!("; {} could not be restored", skipped.len())
+            }
+        ),
+    );
+    notify(&state, Some(&run_id));
+    Json(json!({
+        "ok": true,
+        "count": restored.len(),
+        "restored": restored,
+        "skipped": skipped,
+    }))
+    .into_response()
 }
 
 /// Restore a written file to the content snapshotted before an agent wrote to

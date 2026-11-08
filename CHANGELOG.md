@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.75.0
+
+- Phase 9's remaining safety item: **a whole-tree checkpoint before a run can
+  change anything**. The per-file checkpoints only cover the agent's own
+  `write`, so a `command` step could change any file with nothing to go back to.
+  Any run started with writes or commands now snapshots the tree before its
+  first step and remembers it.
+- `app/src/git.rs`: `snapshot_tree` builds that commit from a throwaway index
+  (`GIT_INDEX_FILE`), so `git add -A`, `write-tree` and `commit-tree` never touch
+  the user's staging area, worktree or history — a staged file stays staged.
+  Untracked files are included, because a run can create them.
+- `POST /api/runs/:id/checkpoint/restore` puts every tracked path that differs
+  back to the snapshot and deletes files the snapshot never had; `git restore
+  --source` does the writing, so binary files, modes and symlinks come back the
+  way git recorded them. Untracked files are deliberately left alone (removing
+  never-committed work would be guessing), a live run is refused with a 409, the
+  restore is capped at 500 paths, and every path consults the `fs_write` rule
+  before the first byte changes.
+- The snapshot is kept in a small `run_checkpoints` table rather than on the run
+  row, so the run record and its SQL mapping stay as they were. `INSERT OR
+  IGNORE` means a resumed run keeps the snapshot it took when it first started.
+- UI: a `Restore snapshot` button on a finished run beside `Restore all files`,
+  with a confirmation that says later edits are discarded for those files.
+- `cargo test --locked`: **407 passed, 1 ignored** (3 new, all against real
+  repositories: a snapshot records edits and untracked files while the real
+  index keeps its staged file; a restore puts modified and deleted files back,
+  removes one the snapshot never had, and leaves nothing differing; a folder
+  that is not a repository yields no checkpoint). Clippy `-D warnings` clean, no
+  rustfmt diff in the touched files, `node --check app/static/app.js` clean.
+- Live on a headless build at `:8954`: a run with writes enabled (and no router
+  key, so it failed at its first model call) took the checkpoint; after `a.txt`
+  was rewritten as a command step would, `checkpoint/restore` answered
+  `{count: 1, restored: ["a.txt"]}` and the file held the snapshot text again; a
+  second restore answered `{count: 0}`. In the smoke repository (host default
+  `core.autocrlf`) the restored file came back with CRLF, so `git status` still
+  showed it modified — the unit tests pin `core.autocrlf=false` and assert a
+  fully clean tree.
+- Not built: a worktree per run, line-level staging, rebase; the runs panel's
+  new button was not viewed in a browser.
+
 ## 1.74.0
 
 - Phase 9 could stage, commit, fetch, pull and push, but it could not **merge**:

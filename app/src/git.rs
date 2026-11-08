@@ -883,6 +883,160 @@ fn merge_branch(root: &Path, raw: &str) -> Result<MergeOutcome, (StatusCode, Str
     ))
 }
 
+/// A whole-tree checkpoint: a commit object nothing points at, built from a
+/// throwaway index.
+pub(crate) struct TreeSnapshot {
+    pub commit: String,
+    pub paths: usize,
+}
+
+/// One path a snapshot restore would touch. `delete` means the checkpoint did
+/// not contain the file, so putting the tree back means removing it.
+pub(crate) struct SnapshotChange {
+    pub path: String,
+    pub delete: bool,
+}
+
+fn temp_index_path() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "saarthi-checkpoint-{}-{nanos}.index",
+        std::process::id()
+    ))
+}
+
+/// Snapshot the working tree — tracked edits and untracked files alike — into a
+/// commit that no ref points at. `GIT_INDEX_FILE` is what keeps this read-only
+/// from the user's point of view: `git add -A` writes into a throwaway index,
+/// `write-tree` turns it into a tree, and `commit-tree` records it. The worktree
+/// and the real index are never touched, so a staged change stays staged.
+///
+/// A folder that is not a repository is not a failure worth reporting: the
+/// caller gets `Err` and carries on without a checkpoint.
+pub(crate) fn snapshot_tree(root: &Path) -> Result<TreeSnapshot, String> {
+    let index = temp_index_path();
+    let with_index = |args: &[&str]| -> Result<GitOutput, String> {
+        match Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .output()
+        {
+            Ok(output) => Ok(GitOutput {
+                ok: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            }),
+            Err(_) => Err("Git is not installed, or not on PATH.".to_string()),
+        }
+    };
+    let result = with_index(&["add", "-A", "--", "."]).and_then(|output| {
+        if !output.ok {
+            return Err(git_error(&output, "a checkpoint needs a Git repository"));
+        }
+        let tree = with_index(&["write-tree"])?;
+        if !tree.ok {
+            return Err(git_error(&tree, "git could not write the checkpoint tree"));
+        }
+        let tree = tree.stdout.trim().to_string();
+        let mut args: Vec<String> = vec![
+            "-c".to_string(),
+            "user.name=Saarthi Studio".to_string(),
+            "-c".to_string(),
+            "user.email=checkpoint@localhost".to_string(),
+            "commit-tree".to_string(),
+            tree.clone(),
+        ];
+        // A repository with no first commit still gets a checkpoint; it just
+        // has no parent to record.
+        if let Ok(head) = git(root, &["rev-parse", "--verify", "HEAD"]) {
+            let sha = head.stdout.trim().to_string();
+            if head.ok && !sha.is_empty() {
+                args.push("-p".to_string());
+                args.push(sha);
+            }
+        }
+        args.push("-m".to_string());
+        args.push("Saarthi Studio: checkpoint before an agent run".to_string());
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let commit = git(root, &borrowed)?;
+        if !commit.ok {
+            return Err(git_error(&commit, "git could not record the checkpoint"));
+        }
+        let listing = git(root, &["ls-tree", "-r", "--name-only", &tree])?;
+        let paths = listing
+            .stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        Ok(TreeSnapshot {
+            commit: commit.stdout.trim().to_string(),
+            paths,
+        })
+    });
+    let _ = std::fs::remove_file(&index);
+    result
+}
+
+/// Tracked paths that differ from the checkpoint. Untracked files are not
+/// listed: a file nobody ever committed has no snapshot content to go back to,
+/// and deleting it would be guessing about the person's work.
+pub(crate) fn snapshot_changes(root: &Path, commit: &str) -> Result<Vec<SnapshotChange>, String> {
+    let diff = git(
+        root,
+        &["diff", "--name-status", "--no-renames", commit, "--", "."],
+    )?;
+    if !diff.ok {
+        return Err(git_error(&diff, "git could not compare the checkpoint"));
+    }
+    let mut changes: Vec<SnapshotChange> = Vec::new();
+    for line in diff.stdout.lines() {
+        let Some((status, path)) = line.split_once('\t') else {
+            continue;
+        };
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            continue;
+        }
+        changes.push(SnapshotChange {
+            path,
+            delete: status.starts_with('A'),
+        });
+    }
+    Ok(changes)
+}
+
+/// Put one path back to the checkpoint, or remove it when the checkpoint never
+/// had it. `git restore --source` is used rather than rejoining bytes, so binary
+/// files, modes and symlinks come back the way git recorded them.
+pub(crate) fn restore_path(
+    root: &Path,
+    commit: &str,
+    path: &str,
+    delete: bool,
+) -> Result<(), String> {
+    if delete {
+        let full = crate::workspace::resolve_inside(root, path)
+            .map_err(|error| error.message().to_string())?;
+        if let Err(error) = std::fs::remove_file(&full) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.to_string());
+            }
+        }
+        return Ok(());
+    }
+    let source = format!("--source={commit}");
+    let output = git(root, &["restore", &source, "--worktree", "--", path])?;
+    if !output.ok {
+        return Err(git_error(&output, "git could not restore that file"));
+    }
+    Ok(())
+}
+
 /// `git merge --abort` puts the branch back as it was before a conflicted
 /// merge. Refused when nothing is in progress, so the button cannot pretend.
 fn abort_merge(root: &Path) -> Result<Value, (StatusCode, String)> {
@@ -1716,6 +1870,96 @@ mod tests {
             merge_branch(&root, "-x"),
             Err((StatusCode::BAD_REQUEST, _))
         ));
+    }
+
+    #[test]
+    fn a_snapshot_records_edits_and_untracked_files_without_touching_the_index() {
+        let Some(root) = branch_fixture("snapshot-index") else {
+            return;
+        };
+        std::fs::write(root.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "new\n").unwrap();
+        std::fs::write(root.join("staged.txt"), "staged\n").unwrap();
+        run_git(&root, &["add", "staged.txt"]);
+
+        let snapshot = snapshot_tree(&root).expect("snapshot runs");
+        assert_eq!(snapshot.paths, 3, "a.txt, staged.txt and notes.txt");
+        assert!(!snapshot.commit.is_empty());
+
+        // The real index is untouched: the staged file is still staged, and the
+        // snapshot's commit object holds files git never tracked.
+        let status = run_git(&root, &["status", "--porcelain"]);
+        assert!(
+            status.contains("A  staged.txt"),
+            "the staged file must stay staged: {status}"
+        );
+        assert!(
+            status.contains("M a.txt") || status.contains(" M a.txt"),
+            "{status}"
+        );
+        let listing = run_git(&root, &["ls-tree", "-r", "--name-only", &snapshot.commit]);
+        assert!(listing.contains("notes.txt"), "{listing}");
+        assert!(listing.contains("staged.txt"), "{listing}");
+    }
+
+    #[test]
+    fn a_snapshot_restore_puts_tracked_files_back_and_removes_new_ones() {
+        let Some(root) = branch_fixture("snapshot-restore") else {
+            return;
+        };
+        std::fs::write(root.join("gone.txt"), "keep me\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "more"]);
+        let snapshot = snapshot_tree(&root).expect("snapshot runs");
+
+        // What a command step could do next: change one file, delete another,
+        // and add a third.
+        std::fs::write(root.join("a.txt"), "changed after\n").unwrap();
+        std::fs::remove_file(root.join("gone.txt")).unwrap();
+        std::fs::write(root.join("added.txt"), "after\n").unwrap();
+        run_git(&root, &["add", "added.txt"]);
+
+        let changes = snapshot_changes(&root, &snapshot.commit).expect("diff runs");
+        assert!(changes.iter().any(|c| c.path == "a.txt" && !c.delete));
+        assert!(changes.iter().any(|c| c.path == "gone.txt" && !c.delete));
+        assert!(changes.iter().any(|c| c.path == "added.txt" && c.delete));
+        for change in &changes {
+            restore_path(&root, &snapshot.commit, &change.path, change.delete)
+                .expect("restore works");
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("gone.txt")).unwrap(),
+            "keep me\n"
+        );
+        assert!(
+            !root.join("added.txt").exists(),
+            "a file the snapshot never had is removed"
+        );
+        assert!(
+            snapshot_changes(&root, &snapshot.commit)
+                .unwrap()
+                .is_empty(),
+            "nothing should differ from the checkpoint afterwards"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_refuses_a_folder_that_is_not_a_repository() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("saarthi-not-a-repo-{}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(snapshot_tree(&root).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn git_available() -> bool {
