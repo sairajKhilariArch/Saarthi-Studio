@@ -250,9 +250,20 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 ## Phase 17 — Observability and diagnostics
 
-Partial. `request_log`, SSE events and per-step run records exist. Structured
-logs with correlation IDs, support-bundle export with redaction, and a health
-dashboard do not.
+Partial, with the read model and the export shipped in 1.72.0. `app/src/diagnostics.rs`
+is a read-only projection over the records the app already writes — it adds no
+table and no second log pipeline, so it cannot disagree with the panels:
+
+| Item | Status | Notes |
+|---|---|---|
+| One timeline with a correlation id per row | Working (1.72.0) | `GET /api/diagnostics?limit=&area=` merges `request_log`, `permission_audit`, `agent_runs` and failing `agent_steps` (`fail`, `mcp-error`, `write-conflict`), newest last, with a level (`info`/`warn`/`error`) and the run id, project or conversation as the correlation key. Limit defaults to 100 and is clamped to 500; an unknown area is a 400. Loopback `Host`/`Origin` guarded |
+| Counts per area | Working (1.72.0) | From the same rows: provider requests/errors over 24 h, permission decisions by the decision names stored in the table, agent runs by status, live runs |
+| Support bundle with redaction | Working (1.72.0) | `GET /api/diagnostics/bundle`: version, OS/arch, non-secret settings, credential booleans, summary and timeline. Run goals are excluded; every string is redacted (`sk-`/`ghp_`/`xoxb-`, `Bearer`, sensitive `name=value`, long opaque runs) and clipped to 400 chars |
+| Diagnostics UI | Working (1.72.0) | Settings → Diagnostics: timeline with area/level colour and the short correlation id, server-side area filter, row count, 24-hour summary line, and a bundle download the browser saves without composing it |
+| Structured log file / console ring buffer | **Missing** | nothing is appended to a log file; the timeline is read from SQLite |
+| Request id for non-run operations | **Missing** | provider rows carry the conversation id, permission rows the project; a terminal command or a Git call has no id of its own |
+| Router installs and MCP connections in the timeline | **Missing** | installs live in `router-installs.json` and MCP sessions in memory; neither is projected |
+| Health/readiness dashboard | Partial | `/api/health` (liveness) and the provider health card exist; there is no single readiness view |
 
 ## Phase 18 — Installation and updates
 

@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.72.0
+
+- Phase 17's first slice: **one diagnostics timeline over what the app already
+  recorded**. `app/src/diagnostics.rs` merges `request_log`, `permission_audit`,
+  `agent_runs` and the failing `agent_steps` into a single time-ordered list,
+  with a level per row and the id that ties related rows together (the run id,
+  the project, the conversation). It is a read-only projection: no new table, no
+  second logging pipeline, and nothing a panel shows can disagree with it.
+- `GET /api/diagnostics?limit=&area=` returns the newest rows (default 100,
+  capped at 500 and clamped server-side) plus counts from the same rows: provider
+  requests and errors over 24 h, permission decisions by their own names, agent
+  runs by status and how many are live. An unknown `area` is a 400 naming the
+  three it accepts; both routes keep the loopback `Host`/`Origin` guard.
+- `GET /api/diagnostics/bundle` produces the support bundle a bug report needs:
+  app version, OS and architecture, the non-secret settings, credential
+  **booleans**, the summary and the timeline. Run goals are deliberately left
+  out, and every string is redacted and clipped before it leaves the process.
+- Redaction is a value scan, not a schema: `sk-`/`ghp_`/`xoxb-`-prefixed tokens,
+  anything after `Bearer`, `name=value` pairs whose name says key/token/secret/
+  password/authorization/cookie, and long unbroken credential-shaped runs all
+  become `[redacted]`. A public digest is redacted too, which costs nothing.
+- UI: Settings → Diagnostics — the timeline with area/level colouring and the
+  correlation id, a server-side area filter, a row count, the 24-hour summary
+  line, and **Download support bundle**. The browser saves the server's JSON; it
+  never assembles the payload itself.
+- `cargo test --locked`: **396 passed, 1 ignored** (5 new: redaction of a key, a
+  bearer token, a query parameter and a digest while prose survives; the merged
+  timeline's order, levels, correlation and limit; a provider error redacted on
+  the way into a row; counts read from the rows' own status/decision names; a
+  bundle carrying credential booleans and no key, URL secret or run goal).
+  Clippy `-D warnings` clean, `rustfmt --check` reports no diff in the two
+  touched Rust files (five untouched modules keep their pre-existing
+  formatting), `node --check` clean.
+- Live on a headless build at `:8951` with a sandboxed `FREE_AI_STUDIO_HOME`: a
+  chat against an unreachable router wrote a provider row, a granted rule wrote a
+  permission row, and a real agent run wrote agent rows. The timeline reported
+  areas `provider,permission,agent`, the summary read `1/1 requests failed ·
+  deny 1 · failed 1`, the run's goal carrying `sk-live-smoke-secret` appeared as
+  `smoke run with [redacted] inside`, `area=agent` returned only agent rows,
+  `area=nope` answered 400, and the bundle carried `version 1.72.0`,
+  `router_key_saved: true`, `base_url: [redacted]` and none of the three seeded
+  secrets or the goal.
+- Not built: a persistent log file and a console ring buffer, a request id for
+  operations that are not agent runs, router-install and MCP rows in the
+  timeline, and any preview of the bundle before it is saved. The panel itself
+  was not viewed in a browser.
+
 ## 1.71.0
 
 - Run restore no longer overwrites an edit made after the agent finished. Every

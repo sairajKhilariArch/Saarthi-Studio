@@ -1177,6 +1177,8 @@ kbd {
 .perm-audit li { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 6px 0; font-size: 12px; }
 .perm-audit time { color: var(--mute); flex: none; }
 .perm-audit .perm-audit-detail { color: var(--dim); }
+.perm-audit .diag-error { color: var(--danger); }
+.perm-audit .diag-warn { color: var(--warn); }
 /* MCP: one card per discovered tool, then the raw call result. */
 .mcp-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .mcp-tool { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 8px; cursor: pointer; }

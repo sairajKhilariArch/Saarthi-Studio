@@ -48,6 +48,7 @@ function setSettingsSection(name) {
   // the panel re-reads both endpoints on every visit instead of caching.
   if (name === "permissions") void loadPermissions();
   if (name === "mcp") void loadMcp();
+  if (name === "diagnostics") void loadDiagnostics();
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
 
@@ -115,6 +116,9 @@ function setupSettingsNav() {
   $("mcpRefresh").addEventListener("click", () => void loadMcp());
   $("mcpCall").addEventListener("click", () => void callMcpTool());
   $("mcpHealth").addEventListener("click", () => void checkMcpHealth());
+  $("diagRefresh").addEventListener("click", () => void loadDiagnostics());
+  $("diagBundle").addEventListener("click", () => void downloadDiagnosticsBundle());
+  $("diagArea").addEventListener("change", () => void loadDiagnostics());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
   // The theme buttons reflect the live theme without a re-render: listening on
@@ -3662,6 +3666,81 @@ async function loadPermissions() {
   renderPermissionActions();
   renderPermissionRules();
   void loadPermissionAudit();
+}
+
+/* ---- Diagnostics: the app's own records, projected ---------------- */
+
+/* Phase 17: one timeline over the tables the app already writes. The server
+   does the projection and the redaction; this only formats what it returns, so
+   the panel cannot show a fact the backend did not record. */
+async function loadDiagnostics() {
+  const host = $("diagEvents");
+  if (!host) return;
+  const limitInput = $("diagLimit");
+  const limit = Math.max(10, Math.min(500, Number(limitInput && limitInput.value) || 100));
+  if (limitInput) limitInput.value = String(limit);
+  const area = $("diagArea") ? $("diagArea").value : "";
+  const query = `?limit=${limit}${area ? `&area=${encodeURIComponent(area)}` : ""}`;
+  const result = await api(`/api/diagnostics${query}`);
+  host.replaceChildren();
+  const summaryLine = $("diagSummary");
+  if (!result.ok) {
+    const message = result.data.error || "Could not read the diagnostics timeline.";
+    if (summaryLine) summaryLine.textContent = "";
+    host.appendChild(pageNote(message));
+    return;
+  }
+  const summary = result.data.summary || {};
+  if (summaryLine) {
+    const provider = summary.provider || {};
+    const decisions = summary.permission_decisions || {};
+    const agent = summary.agent || {};
+    summaryLine.textContent = [
+      `${provider.errors || 0} of ${provider.requests || 0} provider requests failed in 24 h`,
+      `${decisions.deny || 0} denied · ${decisions.ask || 0} asked`,
+      `${agent.live || 0} live run${agent.live === 1 ? "" : "s"}`,
+    ].join(" · ");
+  }
+  const events = Array.isArray(result.data.events) ? result.data.events : [];
+  if (!events.length) {
+    host.appendChild(pageNote("Nothing recorded in this area yet. The timeline fills as you chat, run agents and touch privileged actions."));
+    return;
+  }
+  events.forEach((entry) => {
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = entry.at ? new Date(entry.at * 1000).toLocaleTimeString() : "";
+    const what = document.createElement("span");
+    what.className = `diag-row diag-${entry.level || "info"}`;
+    what.textContent = `${entry.area} · ${entry.event}`;
+    const detail = document.createElement("span");
+    detail.className = "perm-audit-detail";
+    const short = entry.correlation ? String(entry.correlation).slice(0, 8) : "";
+    detail.textContent = [short ? `#${short}` : "", entry.detail].filter(Boolean).join(" · ");
+    item.append(time, what, detail);
+    host.appendChild(item);
+  });
+}
+
+/* The bundle is generated server-side: the browser never assembles a payload
+   that could then be blamed for what it contains. */
+async function downloadDiagnosticsBundle() {
+  const result = await api("/api/diagnostics/bundle");
+  if (!result.ok) {
+    toast(result.data.error || "Could not build a support bundle.");
+    return;
+  }
+  const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: "application/json" });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `saarthi-studio-support-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast("Support bundle saved. It holds no prompts, file bodies or key values.");
 }
 
 /* ---- MCP: servers, discovery and approved tool calls --------------- */

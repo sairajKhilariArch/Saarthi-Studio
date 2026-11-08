@@ -236,8 +236,18 @@ install smokes in CI.
 
 ## Phase 17 — Observability
 
-Structured logs with correlation IDs per task/request, exportable support
-bundle with secret redaction, health/readiness endpoints, error surfaces in UI.
+Delivered in 1.72.0: one read-only timeline over `request_log`,
+`permission_audit`, `agent_runs` and failing `agent_steps` with a level and a
+correlation key per row (`GET /api/diagnostics`, area and limit filtered), counts
+from the same rows, and `GET /api/diagnostics/bundle` — version, platform,
+non-secret settings, credential booleans and the timeline, with run goals omitted
+and every secret-shaped value redacted. Settings → Diagnostics shows it and saves
+the bundle.
+
+Remaining: a persistent structured log file and console ring buffer, a request id
+for operations that are not agent runs, router-install and MCP rows in the
+timeline, and a readiness dashboard beyond `/api/health` and the provider health
+card.
 
 ## Phase 18 — Installers and updates
 

@@ -33,6 +33,7 @@ mod capabilities;
 mod context;
 mod cost;
 mod deepsearch;
+mod diagnostics;
 mod embeddings;
 mod events;
 mod filelock;
@@ -4321,6 +4322,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(media::router(port))
         .merge(local::read_routes())
         .merge(openai::read_routes())
+        .merge(diagnostics::router(port))
         .merge(permissions::router(port))
         .merge(mcp::router(port))
         .merge(local::mutate_routes(port))

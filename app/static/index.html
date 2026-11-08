@@ -640,6 +640,7 @@
           <button type="button" data-settings-section="openai" aria-selected="false">OpenAI Platform</button>
           <button type="button" data-settings-section="permissions" aria-selected="false">Permissions</button>
           <button type="button" data-settings-section="mcp" aria-selected="false">MCP</button>
+          <button type="button" data-settings-section="diagnostics" aria-selected="false">Diagnostics</button>
           <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
@@ -745,6 +746,34 @@
             <button type="submit" class="btn btn-accent">Save all settings</button>
             <button type="button" id="testOpenAI" class="btn btn-quiet">Test platform key</button>
           </div>
+          </section>
+
+          <section id="settings-diagnostics" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">Diagnostics</h2>
+          <p>What Studio actually did, newest last: provider requests, permission decisions and agent runs in one timeline. Each row carries the run, project or conversation it belongs to. Prompts, file bodies and key values are never stored here, and the support bundle redacts what a provider returned before it leaves this machine.</p>
+          <div class="form-row">
+            <label class="field">
+              <span>Show</span>
+              <select id="diagArea">
+                <option value="">Everything</option>
+                <option value="provider">Provider requests</option>
+                <option value="permission">Permission decisions</option>
+                <option value="agent">Agent runs</option>
+              </select>
+              <small>Filtered on the server, over the same rows the panels read.</small>
+            </label>
+            <label class="field">
+              <span>Rows</span>
+              <input id="diagLimit" type="number" min="10" max="500" step="10" value="100" autocomplete="off">
+              <small>At most 500. The newest rows win.</small>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="diagRefresh" class="btn btn-quiet">Refresh</button>
+            <button type="button" id="diagBundle" class="btn btn-accent">Download support bundle</button>
+          </div>
+          <p id="diagSummary" class="muted"></p>
+          <ul id="diagEvents" class="perm-audit"></ul>
           </section>
 
           <section id="settings-permissions" class="settings-section card form-card-inner hidden">
