@@ -813,7 +813,12 @@
   function scmHunkLineHtml(line, changeIndex) {
     const cls = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "";
     if (!cls) return scmDiffLineHtml(line);
-    return `<span class="${cls} pickable" data-change="${changeIndex}" title="Click to select this line">${escapeHtml(line)}</span>`;
+    return `<span class="${cls} pickable" data-change="${changeIndex}" title="Click, or focus and press Space, to select this line">${escapeHtml(line)}</span>`;
+  }
+
+  function toggleScmLine(span) {
+    const selected = span.classList.toggle("selected");
+    span.setAttribute("aria-pressed", String(selected));
   }
 
   async function scmHunkLines(change, index, lines) {
@@ -892,9 +897,43 @@
         }
         return scmDiffLineHtml(line);
       }).join("\n");
+      // Changed lines are focus targets: the hunk is one tab stop, arrows move
+      // between the lines, and Space or Enter toggles the one under the caret.
+      const picks = Array.from(body.querySelectorAll("span.pickable"));
+      picks.forEach((span, index) => {
+        span.tabIndex = index === 0 ? 0 : -1;
+        span.setAttribute("role", "button");
+        span.setAttribute("aria-pressed", "false");
+      });
+      const focusPick = (index) => {
+        if (!picks.length) return;
+        const at = Math.max(0, Math.min(picks.length - 1, index));
+        picks.forEach((span, i) => { span.tabIndex = i === at ? 0 : -1; });
+        picks[at].focus();
+      };
       body.addEventListener("click", (event) => {
         const line = event.target.closest("span.pickable");
-        if (line) line.classList.toggle("selected");
+        if (!line) return;
+        toggleScmLine(line);
+        focusPick(picks.indexOf(line));
+      });
+      body.addEventListener("keydown", (event) => {
+        const line = event.target.closest("span.pickable");
+        if (!line) return;
+        if (event.key === " " || event.key === "Enter") {
+          event.preventDefault();
+          toggleScmLine(line);
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          focusPick(picks.indexOf(line) + (event.key === "ArrowDown" ? 1 : -1));
+          return;
+        }
+        if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          focusPick(event.key === "Home" ? 0 : picks.length - 1);
+        }
       });
       hunk.appendChild(body);
       const picked = el("button", "tiny-toggle", change.staged ? "Unstage selected" : "Stage selected");

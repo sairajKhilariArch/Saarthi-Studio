@@ -1529,3 +1529,6 @@ kbd {
 .scm-remote-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .scm-remote-name { font-weight: 600; }
 .scm-remote-url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
+
+/* Keyboard focus on a hunk line, separate from the selected outline. */
+.scm-hunk-body span.pickable:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }

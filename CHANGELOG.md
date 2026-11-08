@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.81.0
+
+- Line-level staging could only be done with the mouse: a keyboard user could
+  reach nothing inside a hunk. Each hunk's changed lines are now focus targets.
+- A hunk is a single tab stop — the focused line takes `tabindex=0` and the rest
+  `-1` — so Tab lands once per hunk instead of on every line. Arrow keys move
+  between the changed lines, Home and End jump to the first and last, and Space
+  or Enter toggles the focused line, which is exactly what clicking it does.
+  Every line carries `role="button"` and `aria-pressed`, kept in step with its
+  selection, so the state is announced and not only drawn.
+- Clicking still works and also moves the tab stop to the clicked line, so mouse
+  and keyboard never disagree about where focus is. A `:focus-visible` outline is
+  drawn separately from the dashed selected outline.
+- `cargo test --locked`: **420 passed, 1 ignored** (unchanged — this is entirely
+  in `app/static/ide.js`, which has no test harness); `node --check` clean, no
+  rustfmt diff.
+- Driven in the real pane in a browser against a headless build at `:8960`, with
+  `a.txt` at `one/two/three` changed to `ONE/two/THREE`: the hunk rendered four
+  focusable lines with tab indexes `[0,-1,-1,-1]` and `aria-pressed` all false; a
+  real Space press on the focused `+ONE` selected it (`aria-pressed` true); an
+  ArrowUp moved focus to `-one`; a second Space selected that too; `Stage
+  selected` answered "2 lines staged in a.txt"; `git show :a.txt` then returned
+  `ONE/two/three` with only `-one`/`+ONE` in `git diff --cached`, and the
+  worktree still held `ONE/two/THREE`.
+- Not built: selecting every line from the hunk or group header with one key, a
+  spoken selection count, and a worktree per run.
+
 ## 1.80.0
 
 - 1.79.0 could add and remove a remote but not correct one, so a mistyped URL
