@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.73.0
+
+- Phase 9's last reporting gap: **a test run now says what it found**. The
+  Problems panel could already show `exit 101` and compiler diagnostics, but a
+  failing suite had no counts. `app/src/runner.rs` parses the summary the tool
+  itself prints and the pane header reads `· 1 passed · 1 failed`, with the
+  failing test names in its tooltip.
+- `parse_test_summary` sums libtest's per-binary `test result:` lines (the
+  count/label pair is searched for, because libtest prefixes the segment with
+  `FAILED.`), reads Jest's `Tests: a failed, b passed, c total`, Vitest's
+  `Tests  a failed | b passed (c)` and node's TAP `# pass` / `# fail` /
+  `# tests`, and collects libtest's indented `failures:` names and node's
+  `not ok … - name` lines, capped at 20. The run response carries
+  `tests: {framework, total, passed, failed, ignored, failures[]}`.
+- Counts are never invented: a build run is not searched at all (`tests` is
+  `null`), and a test run whose output has no summary line reports `null` too, so
+  the panel stays silent instead of showing zeroes for tests that never ran.
+- `cargo test --locked`: **399 passed, 1 ignored** (3 new: libtest counts summed
+  across two binaries with its failure names, the Jest/Vitest/node summaries,
+  and a build or compiler error reporting nothing). Clippy `-D warnings` clean,
+  no rustfmt diff in the touched files, `node --check` clean.
+- Live on a headless build at `:8952` over a scratch crate with one passing and
+  one failing test: presets `cargo-build,cargo-test`; `cargo-test` answered
+  `success false`, exit `101`, `tests {framework: cargo, total: 2, passed: 1,
+  failed: 1, failures: ["tests::fails_on_purpose"]}`; `cargo-build` answered
+  `success true` with `tests: null`, which is the point — a build never reports
+  test counts. The server was stopped afterwards and the port verified closed.
+- Not built: per-test timings, skipped-test names, a tests tree in the pane, and
+  parsers for other runners (pytest, Go, JUnit XML). The pane header itself was
+  not viewed in a browser.
+
 ## 1.72.0
 
 - Phase 17's first slice: **one diagnostics timeline over what the app already

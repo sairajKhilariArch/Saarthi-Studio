@@ -46,6 +46,8 @@ const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 const MAX_DISPLAY_CHARS: usize = 200_000;
 /// Problems carried in one response.
 const MAX_PROBLEMS: usize = 200;
+/// Failing test names carried in one response.
+const MAX_FAILURES: usize = 20;
 
 /// One build/test command for the detected project.
 #[derive(Clone, Debug, PartialEq)]
@@ -504,6 +506,179 @@ fn push_problem(
 }
 
 // ---------------------------------------------------------------------------
+// Test results
+
+/// Count what a test run actually reported.
+///
+/// Four shapes are recognised, because those are the four a detected preset can
+/// produce: libtest (`cargo test`), Jest, Vitest, and node's own `--test`
+/// reporter. Nothing is inferred — with no summary line the answer is `None`,
+/// and the UI says it has no counts rather than showing zeros.
+/// The `count label` pair inside one summary segment. libtest puts its verdict
+/// first (`FAILED. 1 passed; 2 failed; …`), so the pair is searched for rather
+/// than assumed to start the segment.
+fn count_pair(part: &str) -> Option<(i64, &str)> {
+    let words: Vec<&str> = part.split_whitespace().collect();
+    words.windows(2).find_map(|pair| {
+        let count = pair[0].parse::<i64>().ok()?;
+        Some((count, pair[1]))
+    })
+}
+
+pub(crate) fn parse_test_summary(output: &str) -> Option<Value> {
+    let mut passed: i64 = 0;
+    let mut failed: i64 = 0;
+    let mut ignored: i64 = 0;
+    let mut total: i64 = 0;
+    let mut failures: Vec<String> = Vec::new();
+    let mut framework = "";
+    let mut saw_counts = false;
+    let mut in_failures = false;
+
+    for raw in output.lines() {
+        let line = raw.trim_end();
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            in_failures = false;
+            continue;
+        }
+
+        // libtest prints one result line per test binary, so they are summed.
+        if let Some(rest) = trimmed.strip_prefix("test result:") {
+            framework = "cargo";
+            for part in rest.split(';') {
+                let Some((count, label)) = count_pair(part) else {
+                    continue;
+                };
+                match label {
+                    "passed" => passed += count,
+                    "failed" => failed += count,
+                    "ignored" => ignored += count,
+                    _ => {}
+                }
+            }
+            saw_counts = true;
+            continue;
+        }
+
+        // libtest's failure list: the second `failures:` header is followed by
+        // indented test names.
+        if trimmed == "failures:" {
+            in_failures = true;
+            continue;
+        }
+        if in_failures && line.starts_with("    ") && !trimmed.starts_with("----") {
+            if failures.len() < MAX_FAILURES {
+                failures.push(trimmed.to_string());
+            }
+            continue;
+        }
+
+        // Jest: `Tests:       1 failed, 2 passed, 3 total`.
+        if let Some(rest) = trimmed.strip_prefix("Tests:") {
+            framework = "jest";
+            for part in rest.split(',') {
+                let Some((count, label)) = count_pair(part) else {
+                    continue;
+                };
+                match label {
+                    "passed" => passed += count,
+                    "failed" => failed += count,
+                    "total" => total += count,
+                    "skipped" | "pending" | "todo" => ignored += count,
+                    _ => {}
+                }
+            }
+            saw_counts = true;
+            continue;
+        }
+
+        // Vitest: `Tests  1 failed | 2 passed (3)`.
+        if let Some(rest) = trimmed.strip_prefix("Tests") {
+            let rest = rest.trim();
+            if rest.starts_with(|ch: char| ch.is_ascii_digit()) && rest.contains('|') {
+                framework = "vitest";
+                let (body, tail_total) = match rest.rsplit_once('(') {
+                    Some((body, total_part)) => (
+                        body,
+                        total_part.trim_end_matches(')').trim().parse::<i64>().ok(),
+                    ),
+                    None => (rest, None),
+                };
+                for part in body.split('|') {
+                    let mut words = part.split_whitespace();
+                    let (Some(count), Some(label)) = (words.next(), words.next()) else {
+                        continue;
+                    };
+                    let Ok(count) = count.parse::<i64>() else {
+                        continue;
+                    };
+                    match label {
+                        "passed" => passed += count,
+                        "failed" => failed += count,
+                        "skipped" | "todo" => ignored += count,
+                        _ => {}
+                    }
+                }
+                if let Some(total_part) = tail_total {
+                    total += total_part;
+                }
+                saw_counts = true;
+                continue;
+            }
+        }
+
+        // node --test's TAP summary.
+        if let Some(rest) = trimmed.strip_prefix("# pass ") {
+            framework = "node";
+            passed += rest.trim().parse::<i64>().unwrap_or(0);
+            saw_counts = true;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# fail ") {
+            framework = "node";
+            failed += rest.trim().parse::<i64>().unwrap_or(0);
+            saw_counts = true;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# skip ") {
+            framework = "node";
+            ignored += rest.trim().parse::<i64>().unwrap_or(0);
+            saw_counts = true;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# tests ") {
+            framework = "node";
+            total += rest.trim().parse::<i64>().unwrap_or(0);
+            saw_counts = true;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("not ok ") {
+            if let Some((_, name)) = rest.split_once(" - ") {
+                if failures.len() < MAX_FAILURES {
+                    failures.push(name.trim().to_string());
+                }
+            }
+        }
+    }
+
+    if !saw_counts {
+        return None;
+    }
+    if total == 0 {
+        total = passed + failed + ignored;
+    }
+    Some(json!({
+        "framework": framework,
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "ignored": ignored,
+        "failures": failures,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Running
 
 fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
@@ -559,6 +734,13 @@ fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
         combined.push_str(&err.text);
     }
     let problems = parse_problems(&combined, root);
+    // Only a test preset reports tests: a build's output is not searched for
+    // counts it cannot have.
+    let tests = if preset.kind == "test" {
+        parse_test_summary(&combined)
+    } else {
+        None
+    };
     let exit_code = status.and_then(|status| status.code()).unwrap_or(-1);
     let success = !timed_out && exit_code == 0;
 
@@ -574,6 +756,7 @@ fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
         "outputTruncated": out.truncated || err.truncated || combined.chars().count() > MAX_DISPLAY_CHARS,
         "problems": problems,
         "problemCount": problems.len(),
+        "tests": tests,
     }))
 }
 
@@ -813,5 +996,60 @@ mod tests {
         assert_eq!(cut.chars().count(), MAX_DISPLAY_CHARS);
         assert!(cut.is_char_boundary(0));
         assert_eq!(tail("short", MAX_DISPLAY_CHARS), "short");
+    }
+
+    #[test]
+    fn sums_libtest_counts_across_binaries_and_lists_its_failures() {
+        let output = "running 2 tests\n\
+                      test demo::ok ... ok\n\
+                      test demo::fails ... FAILED\n\n\
+                      failures:\n\n\
+                      ---- demo::fails stdout ----\n\
+                      thread panicked at src/lib.rs:3\n\n\
+                      failures:\n\
+                      \x20   demo::fails\n\
+                      \x20   demo::other\n\n\
+                      test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\
+                      running 3 tests\n\
+                      test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s\n";
+        let summary = parse_test_summary(output).expect("a summary");
+        assert_eq!(summary["framework"], "cargo");
+        assert_eq!(summary["passed"], 4);
+        assert_eq!(summary["failed"], 2);
+        assert_eq!(summary["ignored"], 1);
+        assert_eq!(summary["total"], 7);
+        assert_eq!(summary["failures"], json!(["demo::fails", "demo::other"]));
+    }
+
+    #[test]
+    fn reads_jest_vitest_and_node_summaries() {
+        let jest = "PASS src/a.test.js\nTests:       1 failed, 2 passed, 3 total\n";
+        let summary = parse_test_summary(jest).expect("jest summary");
+        assert_eq!(summary["framework"], "jest");
+        assert_eq!(summary["total"], 3);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["passed"], 2);
+
+        let vitest = "Tests  1 failed | 2 passed (3)\n";
+        let summary = parse_test_summary(vitest).expect("vitest summary");
+        assert_eq!(summary["framework"], "vitest");
+        assert_eq!(summary["total"], 3);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["passed"], 2);
+
+        let node = "ok 1 - adds\nnot ok 2 - subtracts\n# tests 2\n# pass 1\n# fail 1\n";
+        let summary = parse_test_summary(node).expect("node summary");
+        assert_eq!(summary["framework"], "node");
+        assert_eq!(summary["total"], 2);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["failures"], json!(["subtracts"]));
+    }
+
+    #[test]
+    fn a_run_with_no_summary_line_reports_no_counts() {
+        // A plain build prints no test result, and neither does a compiler
+        // error: reporting zeroes would claim tests ran when none did.
+        assert!(parse_test_summary("   Compiling demo v0.1.0\n    Finished dev\n").is_none());
+        assert!(parse_test_summary("error[E0308]: mismatched types\n").is_none());
     }
 }

@@ -271,6 +271,7 @@
     body.appendChild(terminalPane);
     const problemsPane = makePane("problemsPane", "problemsBody",
       '<span id="runnerStatus">No build run yet</span>' +
+      '<span id="runnerTests" class="muted"></span>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runBuild">Build</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runTest">Test</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
@@ -902,6 +903,23 @@
       const seconds = ((data.durationMs || Math.round(performance.now() - started)) / 1000).toFixed(1);
       const count = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
       setRunnerStatus(`${data.command} · exit ${data.exitCode}${data.timedOut ? " (timed out)" : ""} · ${count} · ${seconds}s`);
+      // Test counts come from the runner's own parse of the tool's summary. No
+      // summary line means nothing is shown, never zeroes.
+      const tests = data.tests || null;
+      const testsBox = $("runnerTests");
+      if (testsBox) {
+        if (tests && (tests.total || tests.failed)) {
+          const facts = [`${tests.passed} passed`, `${tests.failed} failed`];
+          if (tests.ignored) facts.push(`${tests.ignored} ignored`);
+          testsBox.textContent = ` · ${facts.join(" · ")}`;
+          testsBox.title = tests.failures && tests.failures.length
+            ? `Failed: ${tests.failures.join(", ")}`
+            : `${tests.framework || "test"} summary`;
+        } else {
+          testsBox.textContent = "";
+          testsBox.title = "";
+        }
+      }
       toast(data.success ? `${data.command} passed` : `${data.command} failed`);
     } finally {
       IDE.runner.running = false;
