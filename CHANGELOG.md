@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.78.0
+
+- The last gap in the inline diff was that a hunk moved as a whole, so two
+  unrelated edits sitting close together could not be staged apart.
+  `stage-hunk` and `unstage-hunk` now take an optional `lines` array of
+  changed-line indexes.
+- `hunk_lines_patch` rebuilds the hunk from git's own diff by pairing each
+  removal with its addition. An unselected line has to look the same in the
+  patch's pre-image and post-image, and which text that is depends on the side
+  the index holds: the old text when staging, the new text when unstaging. A
+  line the current side does not contain is dropped, and the `@@` counts are
+  recomputed because git refuses a patch whose counts are wrong. The patch still
+  travels on stdin, never in argv, and `--unidiff-zero` lets a hunk that is all
+  change lines — no context for git to anchor on — apply at all.
+- An empty `lines` array, an index past the hunk's changed lines, a `lines`
+  field that is not an array, and more than 500 picks are 400s that leave the
+  index untouched.
+- UI: every `+`/`-` line in a hunk is clickable, and `Stage selected` /
+  `Unstage selected` moves exactly the clicked lines.
+- `cargo test --locked`: **416 passed, 1 ignored** (3 new, against real
+  repositories: selecting one replacement pair of a two-block hunk stages that
+  pair and leaves the other change in the worktree; the same selection unstages
+  back out of the index; and an empty or out-of-range selection refuses and
+  stages nothing). Clippy `-D warnings` clean, no rustfmt diff in the touched
+  files, `node --check` clean.
+- Live on a headless build at `:8957`: `lines: [0, 1]` → 200 `{lines: 2}` with
+  the index holding `ONE`/`two`/`three` and only `-one`/`+ONE` in
+  `git diff --cached`, the worktree still `ONE`/`two`/`THREE`; the same indexes
+  unstage → 200 and the index returns to `one`/`two`/`three`; `lines: []` → 400
+  "Select at least one changed line"; `lines: [99]` → 400 "Line 99 is not a
+  changed line in this hunk; it has 4", with nothing staged. The pane itself was
+  not viewed in a browser.
+- Not built: keyboard line selection, adding or removing remotes from the pane,
+  `git rebase --skip`, an in-pane reflog undo, a worktree per run.
+
 ## 1.77.0
 
 - 1.76.0's documented gap: a conflicted rebase could only be finished in a

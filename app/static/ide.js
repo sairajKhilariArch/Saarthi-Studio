@@ -685,6 +685,30 @@
     toast(`Rebase finished on ${data.branch}`);
   }
 
+  /// A changed line inside a hunk is clickable: selecting it builds the index
+  /// list the server turns into a patch of just those lines.
+  function scmHunkLineHtml(line, changeIndex) {
+    const cls = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "";
+    if (!cls) return scmDiffLineHtml(line);
+    return `<span class="${cls} pickable" data-change="${changeIndex}" title="Click to select this line">${escapeHtml(line)}</span>`;
+  }
+
+  async function scmHunkLines(change, index, lines) {
+    const endpoint = change.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
+    const result = await api(endpoint, {
+      method: "POST",
+      body: JSON.stringify({ path: change.path, hunk: index, lines }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      toast(result.data.error || "Could not move those lines.");
+      return;
+    }
+    const moved = result.data.lines || lines.length;
+    toast(`${moved} line${moved === 1 ? "" : "s"} ${change.staged ? "unstaged" : "staged"} in ${change.path}`);
+    await refreshScm();
+  }
+
   function scmDiffLineHtml(line) {
     const cls = line.startsWith("@@") ? "hunk"
       : line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("new file") ? "meta"
@@ -736,8 +760,30 @@
       head.appendChild(action);
       hunk.appendChild(head);
       const body = el("pre", "scm-hunk-body");
-      body.innerHTML = lines.map(scmDiffLineHtml).join("\n");
+      let changeIndex = 0;
+      body.innerHTML = lines.map((line) => {
+        if (line.startsWith("+") || line.startsWith("-")) {
+          const html = scmHunkLineHtml(line, changeIndex);
+          changeIndex += 1;
+          return html;
+        }
+        return scmDiffLineHtml(line);
+      }).join("\n");
+      body.addEventListener("click", (event) => {
+        const line = event.target.closest("span.pickable");
+        if (line) line.classList.toggle("selected");
+      });
       hunk.appendChild(body);
+      const picked = el("button", "tiny-toggle", change.staged ? "Unstage selected" : "Stage selected");
+      picked.type = "button";
+      picked.title = `Move only the lines you selected out of this hunk of ${change.path}`;
+      picked.addEventListener("click", () => {
+        const selected = Array.from(body.querySelectorAll("span.pickable.selected"))
+          .map((span) => Number(span.dataset.change));
+        if (!selected.length) { toast("Click the changed lines you want to move first."); return; }
+        void scmHunkLines(change, index, selected);
+      });
+      head.appendChild(picked);
       box.appendChild(hunk);
     });
     if (truncated) box.insertAdjacentHTML("beforeend", '<p class="scm-hint">… diff truncated; only the hunks above are shown …</p>');

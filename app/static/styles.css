@@ -1518,3 +1518,8 @@ kbd {
 .local-hardware dd { margin: 0; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .local-recommendation { margin: 12px 0 0; }
 .run-restore { margin-top: 8px; }
+
+/* Line-level staging: a changed line in a hunk can be clicked to select it, and
+   only the selected lines move when the hunk button is pressed. */
+.scm-hunk-body span.pickable { cursor: pointer; }
+.scm-hunk-body span.pickable.selected { outline: 1px dashed currentColor; }

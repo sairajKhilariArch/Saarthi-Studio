@@ -1318,10 +1318,250 @@ fn hunk_patch(diff: &str, index: usize) -> Result<String, String> {
     Ok(format!("{preamble}{hunk}"))
 }
 
+/// The two start lines of a `@@ -a,b +c,d @@` header.
+fn parse_hunk_start(header: &str) -> Result<(usize, usize), String> {
+    let body = header
+        .trim_start_matches("@@ ")
+        .split(" @@")
+        .next()
+        .unwrap_or("");
+    let mut parts = body.split_whitespace();
+    let first = |spec: &str| -> Option<usize> {
+        spec.split(',')
+            .next()
+            .and_then(|value| value.parse::<usize>().ok())
+    };
+    let old = parts
+        .next()
+        .and_then(|part| part.strip_prefix('-'))
+        .and_then(first);
+    let new = parts
+        .next()
+        .and_then(|part| part.strip_prefix('+'))
+        .and_then(first);
+    match (old, new) {
+        (Some(old), Some(new)) => Ok((old, new)),
+        _ => Err("The hunk header could not be read.".to_string()),
+    }
+}
+
+/// Rewrite one hunk change block with the selected lines only.
+///
+/// git checks the `@@` counts, so an unselected line has to look the same in the
+/// patch's pre-image and post-image. Which text that is depends on the side the
+/// index holds: the old text when staging, because the patch runs forward onto
+/// the index, and the new text when unstaging, because it runs in reverse. A line
+/// that the current side does not contain is dropped instead.
+#[allow(clippy::too_many_arguments)]
+fn flush_block(
+    body: &mut String,
+    removals: &mut Vec<(usize, String)>,
+    additions: &mut Vec<(usize, String)>,
+    picked: &std::collections::HashSet<usize>,
+    reversed: bool,
+    old_count: &mut usize,
+    new_count: &mut usize,
+    chosen: &mut usize,
+) {
+    for i in 0..removals.len().max(additions.len()) {
+        let removal = removals.get(i);
+        let addition = additions.get(i);
+        let take_removal = removal.is_some_and(|(index, _)| picked.contains(index));
+        let take_addition = addition.is_some_and(|(index, _)| picked.contains(index));
+        match (removal, addition) {
+            (Some((_, old)), Some((_, new))) => {
+                // The index holds the new text when unstaging, so a replacement
+                // pair is one line there: moving either half puts the old text
+                // back, which is what clicking the line asks for.
+                let move_pair = if reversed {
+                    take_removal || take_addition
+                } else {
+                    take_removal && take_addition
+                };
+                if move_pair {
+                    emit(body, '-', old, old_count, new_count, chosen);
+                    emit(body, '+', new, old_count, new_count, chosen);
+                } else if take_removal {
+                    emit(body, '-', old, old_count, new_count, chosen);
+                } else if take_addition {
+                    emit(body, ' ', old, old_count, new_count, chosen);
+                    emit(body, '+', new, old_count, new_count, chosen);
+                } else {
+                    let kept = if reversed { new } else { old };
+                    emit(body, ' ', kept, old_count, new_count, chosen);
+                }
+            }
+            (Some((_, old)), None) => {
+                if take_removal {
+                    emit(body, '-', old, old_count, new_count, chosen);
+                } else if !reversed {
+                    emit(body, ' ', old, old_count, new_count, chosen);
+                }
+            }
+            (None, Some((_, new))) => {
+                if take_addition {
+                    emit(body, '+', new, old_count, new_count, chosen);
+                } else if reversed {
+                    emit(body, ' ', new, old_count, new_count, chosen);
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    removals.clear();
+    additions.clear();
+}
+
+/// Emit a hunk line with a given marker and keep the header counts in step.
+fn emit(
+    body: &mut String,
+    marker: char,
+    raw: &str,
+    old_count: &mut usize,
+    new_count: &mut usize,
+    chosen: &mut usize,
+) {
+    body.push(marker);
+    body.push_str(raw.get(1..).unwrap_or(""));
+    match marker {
+        '-' => *old_count += 1,
+        '+' => *new_count += 1,
+        _ => {
+            *old_count += 1;
+            *new_count += 1;
+        }
+    }
+    if marker != ' ' {
+        *chosen += 1;
+    }
+}
+
+/// A patch that moves only the selected change lines of one hunk.
+///
+/// git's `apply` checks the `@@` counts, so an unselected addition or removal is
+/// rewritten as a context line and both counts are recomputed from the lines
+/// actually in the patch. `selected` holds indexes into the hunk's changed
+/// lines in the order git printed them, which is exactly what the pane shows.
+/// `reversed` builds the patch for unstaging, where the index holds the new side.
+fn hunk_lines_patch(
+    diff: &str,
+    index: usize,
+    selected: &[usize],
+    reversed: bool,
+) -> Result<String, String> {
+    let (preamble, hunks) = split_hunks(diff);
+    if preamble.trim().is_empty() || hunks.is_empty() {
+        return Err(
+            "This file has no hunks to move. Stage or unstage the whole file instead.".to_string(),
+        );
+    }
+    let Some(hunk) = hunks.get(index) else {
+        return Err(format!(
+            "Hunk {} does not exist; this diff has {}.",
+            index + 1,
+            hunks.len()
+        ));
+    };
+    let mut lines = hunk.split_inclusive('\n');
+    let header = lines
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\n')
+        .to_string();
+    let (old_start, new_start) = parse_hunk_start(&header)?;
+    let change_count = hunk
+        .lines()
+        .skip(1)
+        .filter(|line| line.starts_with('+') || line.starts_with('-'))
+        .count();
+    if selected.is_empty() {
+        return Err("Select at least one changed line to move.".to_string());
+    }
+    if let Some(bad) = selected.iter().find(|line| **line >= change_count) {
+        return Err(format!(
+            "Line {bad} is not a changed line in this hunk; it has {change_count}."
+        ));
+    }
+    let picked: std::collections::HashSet<usize> = selected.iter().copied().collect();
+    let mut body = String::new();
+    let mut old_count = 0usize;
+    let mut new_count = 0usize;
+    let mut change_index = 0usize;
+    let mut chosen = 0usize;
+    // A change block is git's removals followed by its additions; pairing them
+    // positionally is what keeps the unselected middle of a replacement from
+    // being emitted twice.
+    let mut removals: Vec<(usize, String)> = Vec::new();
+    let mut additions: Vec<(usize, String)> = Vec::new();
+    for raw in lines {
+        let marker = raw.chars().next().unwrap_or(' ');
+        if marker == '\\' {
+            flush_block(
+                &mut body,
+                &mut removals,
+                &mut additions,
+                &picked,
+                reversed,
+                &mut old_count,
+                &mut new_count,
+                &mut chosen,
+            );
+            // "\\ No newline at end of file" belongs to the line before it.
+            body.push_str(raw);
+            continue;
+        }
+        if marker == '+' {
+            additions.push((change_index, raw.to_string()));
+            change_index += 1;
+            continue;
+        }
+        if marker == '-' {
+            removals.push((change_index, raw.to_string()));
+            change_index += 1;
+            continue;
+        }
+        flush_block(
+            &mut body,
+            &mut removals,
+            &mut additions,
+            &picked,
+            reversed,
+            &mut old_count,
+            &mut new_count,
+            &mut chosen,
+        );
+        body.push_str(raw);
+        old_count += 1;
+        new_count += 1;
+    }
+    flush_block(
+        &mut body,
+        &mut removals,
+        &mut additions,
+        &picked,
+        reversed,
+        &mut old_count,
+        &mut new_count,
+        &mut chosen,
+    );
+    if chosen == 0 {
+        return Err("Select at least one changed line to move.".to_string());
+    }
+    Ok(format!(
+        "{preamble}@@ -{old_start},{old_count} +{new_start},{new_count} @@\n{body}"
+    ))
+}
+
 /// Apply one hunk to the index. Staging takes the worktree-vs-index diff and
 /// applies it forward; unstaging takes the index-vs-HEAD diff and reverses it.
 /// The patch travels on stdin, never in argv.
-fn apply_hunk(root: &Path, path: &str, index: usize, reverse: bool) -> Result<Value, String> {
+fn apply_hunk(
+    root: &Path,
+    path: &str,
+    index: usize,
+    reverse: bool,
+    selected: Option<&[usize]>,
+) -> Result<Value, String> {
     let mut diff_args: Vec<&str> = vec!["diff", "--no-color", "--no-ext-diff", "-U3"];
     if reverse {
         diff_args.push("--cached");
@@ -1332,12 +1572,17 @@ fn apply_hunk(root: &Path, path: &str, index: usize, reverse: bool) -> Result<Va
     if !diff.ok {
         return Err(git_error(&diff, "git diff failed"));
     }
-    let patch = hunk_patch(&diff.stdout, index)?;
+    let patch = match selected {
+        Some(lines) => hunk_lines_patch(&diff.stdout, index, lines, reverse)?,
+        None => hunk_patch(&diff.stdout, index)?,
+    };
     let mut command = Command::new("git");
     command
         .arg("-C")
         .arg(root)
-        .args(["apply", "--cached", "--whitespace=nowarn"]);
+        // --unidiff-zero: a hunk that is all change lines has no context for
+        // git to anchor on, and it refuses those without this flag.
+        .args(["apply", "--cached", "--whitespace=nowarn", "--unidiff-zero"]);
     if reverse {
         command.arg("--reverse");
     }
@@ -1364,7 +1609,13 @@ fn apply_hunk(root: &Path, path: &str, index: usize, reverse: bool) -> Result<Va
     if !result.ok {
         return Err(git_error(&result, "git could not apply that hunk"));
     }
-    Ok(json!({ "ok": true, "path": path, "hunk": index, "reverse": reverse }))
+    Ok(json!({
+        "ok": true,
+        "path": path,
+        "hunk": index,
+        "reverse": reverse,
+        "lines": selected.map(|lines| lines.len()).unwrap_or(0),
+    }))
 }
 
 fn valid_commit_hash(raw: &str) -> Result<String, String> {
@@ -1941,6 +2192,31 @@ async fn hunk_route(state: AppState, input: Value, reverse: bool) -> Response {
         Some(value) if value < 10_000 => value as usize,
         _ => return bad("Name the hunk by its index, starting at 0."),
     };
+    // Optional selection inside the hunk: indexes of the changed lines in the
+    // order the pane shows them. Absent means the whole hunk, which is what the
+    // hunk button has always done.
+    let selected = match input.get("lines") {
+        None => None,
+        Some(Value::Array(items)) => {
+            if items.is_empty() {
+                return bad("Select at least one changed line, or move the whole hunk.");
+            }
+            if items.len() > 500 {
+                return bad("Select at most 500 lines at a time.");
+            }
+            let mut lines: Vec<usize> = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_u64() {
+                    Some(value) if value < 10_000 => lines.push(value as usize),
+                    _ => {
+                        return bad("Line indexes must be numbers, counted from 0 inside the hunk.")
+                    }
+                }
+            }
+            Some(lines)
+        }
+        Some(_) => return bad("The lines field must be an array of changed-line indexes."),
+    };
     let approve = approval(&input);
     if let Some(response) = guard_user(
         &state,
@@ -1948,15 +2224,19 @@ async fn hunk_route(state: AppState, input: Value, reverse: bool) -> Response {
         &path,
         "",
         approve,
-        if reverse {
+        if reverse && selected.is_some() {
+            "unstage selected lines in a hunk"
+        } else if reverse {
             "unstage a hunk"
+        } else if selected.is_some() {
+            "stage selected lines in a hunk"
         } else {
             "stage a hunk"
         },
     ) {
         return response;
     }
-    match apply_hunk(&root, &path, index, reverse) {
+    match apply_hunk(&root, &path, index, reverse, selected.as_deref()) {
         Ok(value) => Json(value).into_response(),
         Err(message) => git_failure(message),
     }
@@ -2466,6 +2746,77 @@ mod tests {
         assert!(message.contains("no rebase in progress"), "{message}");
     }
 
+    /// A file whose three lines all change, so one `-U3` diff holds a single
+    /// hunk with three removals followed by three additions.
+    fn changed_lines_fixture(name: &str) -> Option<PathBuf> {
+        let root = branch_fixture(name)?;
+        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "lines"]);
+        std::fs::write(root.join("a.txt"), "ONE\ntwo\nTHREE\n").unwrap();
+        Some(root)
+    }
+
+    #[test]
+    fn stages_only_the_selected_change_lines_of_a_hunk() {
+        let Some(root) = changed_lines_fixture("lines-stage") else {
+            return;
+        };
+        // Change lines: 0 = -one, 1 = +ONE, 2 = -three, 3 = +THREE.
+        apply_hunk(&root, "a.txt", 0, false, Some(&[0, 1])).expect("selected lines stage");
+        assert_eq!(
+            run_git(&root, &["show", ":a.txt"]),
+            "ONE\ntwo\nthree\n",
+            "the index holds only the first change"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "ONE\ntwo\nTHREE\n",
+            "the worktree is untouched"
+        );
+        let cached = run_git(&root, &["diff", "--cached", "--", "a.txt"]);
+        assert!(cached.contains("-one"), "{cached}");
+        assert!(cached.contains("+ONE"), "{cached}");
+        assert!(
+            !cached.contains("THREE"),
+            "the third line must still be unstaged: {cached}"
+        );
+        let remaining = run_git(&root, &["diff", "--", "a.txt"]);
+        assert!(remaining.contains("THREE"), "{remaining}");
+    }
+
+    #[test]
+    fn unstages_only_the_selected_change_lines_of_a_hunk() {
+        let Some(root) = changed_lines_fixture("lines-unstage") else {
+            return;
+        };
+        run_git(&root, &["add", "a.txt"]);
+        apply_hunk(&root, "a.txt", 0, true, Some(&[0, 1])).expect("selected lines unstage");
+        assert_eq!(
+            run_git(&root, &["show", ":a.txt"]),
+            "one\ntwo\nTHREE\n",
+            "only the first change left the index"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "ONE\ntwo\nTHREE\n"
+        );
+    }
+
+    #[test]
+    fn refuses_a_line_selection_that_picks_nothing_or_does_not_exist() {
+        let Some(root) = changed_lines_fixture("lines-guard") else {
+            return;
+        };
+        assert!(apply_hunk(&root, "a.txt", 0, false, Some(&[])).is_err());
+        assert!(apply_hunk(&root, "a.txt", 0, false, Some(&[99])).is_err());
+        assert_eq!(
+            run_git(&root, &["show", ":a.txt"]),
+            "one\ntwo\nthree\n",
+            "a refused selection must not stage anything"
+        );
+    }
+
     fn git_available() -> bool {
         Command::new("git")
             .arg("--version")
@@ -2885,7 +3236,7 @@ mod tests {
         let (_, hunks) = split_hunks(&diff.stdout);
         assert_eq!(hunks.len(), 2, "{}", diff.stdout);
 
-        apply_hunk(&root, "a.txt", 0, false).unwrap();
+        apply_hunk(&root, "a.txt", 0, false, None).unwrap();
         let staged = git(&root, &["diff", "--cached", "--", "a.txt"]).unwrap();
         assert!(staged.stdout.contains("line 2 changed"));
         assert!(!staged.stdout.contains("line 18 changed"));
@@ -2893,7 +3244,7 @@ mod tests {
         assert!(!work.stdout.contains("line 2 changed"));
         assert!(work.stdout.contains("line 18 changed"));
 
-        apply_hunk(&root, "a.txt", 0, true).unwrap();
+        apply_hunk(&root, "a.txt", 0, true, None).unwrap();
         let after = git(&root, &["diff", "--cached", "--", "a.txt"]).unwrap();
         assert!(after.stdout.trim().is_empty());
 
