@@ -577,6 +577,28 @@ fn add_remote(root: &Path, name: &str, url: &str) -> Result<Value, String> {
     }))
 }
 
+/// Change the URL of a remote that already exists. Refused by name otherwise,
+/// so a typo cannot quietly create a second remote.
+fn set_remote_url(root: &Path, name: &str, url: &str) -> Result<Value, String> {
+    let existing = remote_list(root)?;
+    if !existing
+        .iter()
+        .any(|item| item["name"].as_str() == Some(name))
+    {
+        return Err(format!("`{name}` is not a remote of this repository."));
+    }
+    let output = git(root, &["remote", "set-url", name, url])?;
+    if !output.ok {
+        return Err(git_error(&output, "git remote set-url failed"));
+    }
+    Ok(json!({
+        "ok": true,
+        "name": name,
+        "url": url,
+        "remotes": remote_list(root)?,
+    }))
+}
+
 fn remove_remote(root: &Path, name: &str) -> Result<Value, String> {
     let existing = remote_list(root)?;
     if !existing
@@ -2387,6 +2409,39 @@ async fn add_remote_route(State(state): State<AppState>, Json(input): Json<Value
     }
 }
 
+async fn set_remote_url_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let name = match input.get("name").and_then(Value::as_str) {
+        Some(value) => match valid_remote_name(value) {
+            Ok(name) => name,
+            Err(message) => return bad(message),
+        },
+        None => return bad("Name the remote first."),
+    };
+    let url = match remote_url(&input) {
+        Ok(url) => url,
+        Err(message) => return bad(message),
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &name,
+        "",
+        approve,
+        "change a git remote URL",
+    ) {
+        return response;
+    }
+    match set_remote_url(&root, &name, &url) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
 async fn remove_remote_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -2478,6 +2533,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route(
             "/api/workspace/git/remotes/remove",
             post(remove_remote_route),
+        )
+        .route(
+            "/api/workspace/git/remotes/set-url",
+            post(set_remote_url_route),
         )
         .route("/api/workspace/git/fetch", post(fetch_route))
         .route("/api/workspace/git/pull", post(pull_route))
@@ -3067,6 +3126,24 @@ mod tests {
             &json!({ "url": format!("https://example.com/{}", "a".repeat(MAX_REMOTE_URL)) })
         )
         .is_err());
+    }
+
+    #[test]
+    fn changes_an_existing_remote_url_in_place() {
+        let Some(root) = temp_repo("remote-set-url") else {
+            return;
+        };
+        add_remote(&root, "origin", "https://example.com/old.git").unwrap();
+        let changed = set_remote_url(&root, "origin", "https://example.com/new.git").unwrap();
+        assert_eq!(changed["url"], "https://example.com/new.git");
+        let remotes = remote_list(&root).unwrap();
+        assert_eq!(remotes.len(), 1, "set-url must not add a second remote");
+        assert_eq!(remotes[0]["url"], "https://example.com/new.git");
+        assert_eq!(remotes[0]["pushUrl"], "https://example.com/new.git");
+        // A remote that is not configured is refused by name.
+        assert!(set_remote_url(&root, "upstream", "https://example.com/new.git").is_err());
+        assert_eq!(remote_list(&root).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn git_available() -> bool {
