@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.84.0
+
+- A selection no longer stops at one hunk. It is kept per file, so it survives
+  closing and reopening the diff, and a bar above the hunks counts it and offers
+  `Stage all selected` (or `Unstage all selected`) for the whole file.
+- The batch is applied hunk by hunk from the last hunk backwards: staging a later
+  hunk removes it from the diff and leaves the indexes of earlier hunks alone, so
+  the list captured before the first request stays valid. A failed hunk stops the
+  batch and names the hunk it failed on rather than moving the rest silently.
+- The browser run caught a real bug before the commit: the stale-index cleanup was
+  inserted into the batch function instead of the per-hunk one, so
+  `scmApplyFileSelection` threw `ReferenceError: index is not defined` after the
+  requests had already gone through — the lines were staged, the pane stayed
+  stale. Moved into `scmHunkLines`, where `index` exists.
+- `cargo test --locked`: **420 passed, 1 ignored** (unchanged — the work is in
+  `app/static/ide.js`, which has no test harness); `node --check` clean.
+- Driven in the real pane in a browser at `:8963` on a 20-line file changed at
+  line 2 and line 18: two hunks, `All` in each read "4 lines selected", the
+  selection survived a close/reopen, `Stage all selected` answered "4 lines
+  staged in a.txt", the pane moved the file to STAGED with no unstaged entry, the
+  index matched the worktree, and the console stayed clean.
+- Not built: a selection that spans files, and unstaging a replacement pair as one
+  unit.
+
 ## 1.83.0
 
 - The hunk selection was only visible: a keyboard or screen-reader user could

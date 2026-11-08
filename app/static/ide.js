@@ -828,6 +828,59 @@
     });
   }
 
+  /* A staging selection can span the hunks of one file. It lives in a per-path
+     map rather than in the DOM so switching diffs and re-rendering keep it. */
+  function scmSelected(path, hunk) {
+    const byHunk = IDE.scmSelection ? IDE.scmSelection.get(path) : null;
+    return (byHunk && byHunk.get(hunk)) || new Set();
+  }
+
+  function scmRemember(path, hunk, lines) {
+    if (!IDE.scmSelection) IDE.scmSelection = new Map();
+    let byHunk = IDE.scmSelection.get(path);
+    if (!byHunk) { byHunk = new Map(); IDE.scmSelection.set(path, byHunk); }
+    if (lines.size) byHunk.set(hunk, lines); else byHunk.delete(hunk);
+    if (!byHunk.size) IDE.scmSelection.delete(path);
+  }
+
+  function scmSelectionCount(path) {
+    const byHunk = IDE.scmSelection ? IDE.scmSelection.get(path) : null;
+    if (!byHunk) return 0;
+    let total = 0;
+    byHunk.forEach((lines) => { total += lines.size; });
+    return total;
+  }
+
+  /* Apply one file's stored selection hunk by hunk, later hunks first: staging
+     hunk N takes it out of the diff, which leaves the indexes of earlier hunks
+     alone, so the list built before the first request stays valid. */
+  async function scmApplyFileSelection(change) {
+    const byHunk = IDE.scmSelection ? IDE.scmSelection.get(change.path) : null;
+    if (!byHunk || !byHunk.size) { toast("Select changed lines first."); return; }
+    const hunks = Array.from(byHunk.keys()).sort((a, b) => b - a);
+    const endpoint = change.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
+    let moved = 0;
+    for (const hunk of hunks) {
+      const lines = Array.from(byHunk.get(hunk) || []).sort((a, b) => a - b);
+      if (!lines.length) continue;
+      const result = await api(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ path: change.path, hunk, lines, approve: true }),
+        confirmApproval: true,
+      });
+      if (!result.ok) {
+        toast(`Hunk ${hunk + 1}: ${result.data.error || "could not move those lines"}`);
+        break;
+      }
+      moved += result.data.lines || lines.length;
+    }
+    IDE.scmSelection.delete(change.path);
+    toast(moved
+      ? `${moved} line${moved === 1 ? "" : "s"} ${change.staged ? "unstaged" : "staged"} in ${change.path}`
+      : "Nothing moved.");
+    await refreshScm();
+  }
+
   async function scmHunkLines(change, index, lines) {
     const endpoint = change.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
     const result = await api(endpoint, {
@@ -839,6 +892,8 @@
       toast(result.data.error || "Could not move those lines.");
       return;
     }
+    // The stored change indexes of the hunk just moved are stale.
+    scmRemember(change.path, index, new Set());
     const moved = result.data.lines || lines.length;
     toast(`${moved} line${moved === 1 ? "" : "s"} ${change.staged ? "unstaged" : "staged"} in ${change.path}`);
     await refreshScm();
@@ -884,6 +939,33 @@
       head.innerHTML = preamble.filter((line) => line !== "").map(scmDiffLineHtml).join("\n");
       box.appendChild(head);
     }
+    const refreshers = [];
+    const selectBar = el("div", "scm-select-bar");
+    const summary = el("span", "scm-select-summary", "Nothing selected");
+    summary.setAttribute("aria-live", "polite");
+    const applyAll = el("button", "tiny-toggle primary", change.staged ? "Unstage all selected" : "Stage all selected");
+    applyAll.type = "button";
+    applyAll.title = `Move every selected line of ${change.path}, hunk by hunk`;
+    const clearAll = el("button", "tiny-toggle", "Clear selection");
+    clearAll.type = "button";
+    const refreshBar = () => {
+      const total = scmSelectionCount(change.path);
+      summary.textContent = total ? `${total} line${total === 1 ? "" : "s"} selected` : "Nothing selected";
+      applyAll.disabled = !total;
+      clearAll.disabled = !total;
+    };
+    applyAll.addEventListener("click", () => void scmApplyFileSelection(change));
+    clearAll.addEventListener("click", () => {
+      if (IDE.scmSelection) IDE.scmSelection.delete(change.path);
+      box.querySelectorAll(".scm-hunk-body span.pickable.selected").forEach((span) => {
+        span.classList.remove("selected");
+        span.setAttribute("aria-pressed", "false");
+      });
+      refreshers.forEach((refresh) => refresh());
+      refreshBar();
+    });
+    selectBar.append(summary, applyAll, clearAll);
+    box.appendChild(selectBar);
     hunks.forEach((lines, index) => {
       const hunk = el("div", "scm-hunk");
       const head = el("div", "scm-hunk-head");
@@ -920,6 +1002,24 @@
         const picked = picks.filter((span) => span.classList.contains("selected")).length;
         count.textContent = `${picked} of ${picks.length} selected`;
       };
+      // Re-apply what this file already had selected, so leaving a diff and
+      // coming back does not lose the work.
+      const stored = scmSelected(change.path, index);
+      picks.forEach((span) => {
+        if (stored.has(Number(span.dataset.change))) {
+          span.classList.add("selected");
+          span.setAttribute("aria-pressed", "true");
+        }
+      });
+      const syncSelection = () => {
+        scmRemember(change.path, index, new Set(
+          picks.filter((span) => span.classList.contains("selected")).map((span) => Number(span.dataset.change)),
+        ));
+        refreshCount();
+        refreshBar();
+      };
+      refreshers.push(refreshCount);
+      refreshCount();
       const focusPick = (index) => {
         if (!picks.length) return;
         const at = Math.max(0, Math.min(picks.length - 1, index));
@@ -930,7 +1030,7 @@
         const line = event.target.closest("span.pickable");
         if (!line) return;
         toggleScmLine(line);
-        refreshCount();
+        syncSelection();
         focusPick(picks.indexOf(line));
       });
       body.addEventListener("keydown", (event) => {
@@ -939,7 +1039,7 @@
         if (event.key === " " || event.key === "Enter") {
           event.preventDefault();
           toggleScmLine(line);
-          refreshCount();
+          syncSelection();
           return;
         }
         // A selects every changed line of this hunk, Escape clears it, so a
@@ -947,7 +1047,7 @@
         if (event.key === "a" || event.key === "A" || event.key === "Escape") {
           event.preventDefault();
           setScmHunkSelection(picks, event.key !== "Escape");
-          refreshCount();
+          syncSelection();
           return;
         }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -974,16 +1074,17 @@
       const all = el("button", "tiny-toggle", "All");
       all.type = "button";
       all.title = "Select every changed line in this hunk (or press A)";
-      all.addEventListener("click", () => { setScmHunkSelection(picks, true); refreshCount(); });
+      all.addEventListener("click", () => { setScmHunkSelection(picks, true); syncSelection(); });
       head.appendChild(all);
       const none = el("button", "tiny-toggle", "Clear");
       none.type = "button";
       none.title = "Clear this hunk's selection (or press Escape)";
-      none.addEventListener("click", () => { setScmHunkSelection(picks, false); refreshCount(); });
+      none.addEventListener("click", () => { setScmHunkSelection(picks, false); syncSelection(); });
       head.appendChild(none);
       head.appendChild(count);
       box.appendChild(hunk);
     });
+    refreshBar();
     if (truncated) box.insertAdjacentHTML("beforeend", '<p class="scm-hint">… diff truncated; only the hunks above are shown …</p>');
   }
 
@@ -1021,6 +1122,8 @@
       toast(result.data.error || "Could not move that hunk.");
       return;
     }
+    // The stored line indexes for this file are stale once a whole hunk moved.
+    if (IDE.scmSelection) IDE.scmSelection.delete(change.path);
     toast(`${change.staged ? "Unstaged" : "Staged"} hunk ${index + 1} of ${change.path}`);
     await refreshScm();
   }
