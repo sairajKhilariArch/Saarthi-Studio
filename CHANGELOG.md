@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.83.0
+
+- The hunk selection was only visible: a keyboard or screen-reader user could
+  toggle lines but not learn how much of the hunk was picked. Each hunk head now
+  carries a polite `aria-live` count, "2 of 4 selected", updated by every path —
+  click, Space/Enter, A, Escape, All and Clear.
+- The count is read back from the DOM after each change instead of being tracked
+  separately, so it cannot disagree with the outlines or `aria-pressed`.
+- `cargo test --locked`: **420 passed, 1 ignored** (unchanged — the work is in
+  `app/static/ide.js`, which has no test harness); `node --check` clean.
+- Driven in the real pane in a browser at `:8962`: the count started at
+  "0 of 4 selected" with `aria-live="polite"`; A made it "4 of 4 selected";
+  Escape "0 of 4"; All "4 of 4"; `Stage selected` answered "4 lines staged in
+  a.txt" and `git show :a.txt` returned `ONE/two/THREE` with the worktree
+  unchanged.
+- Not built: a count that spans hunks or files, and a worktree per run.
+
 ## 1.82.0
 
 - Selecting a whole hunk still meant clicking every changed line. Pressing `A`

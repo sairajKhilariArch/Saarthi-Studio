@@ -1532,3 +1532,6 @@ kbd {
 
 /* Keyboard focus on a hunk line, separate from the selected outline. */
 .scm-hunk-body span.pickable:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+
+/* The hunk selection count sits at the end of the hunk head. */
+.scm-hunk-count { margin-left: auto; font-size: 11px; opacity: 0.7; }

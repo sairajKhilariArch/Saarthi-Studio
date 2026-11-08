@@ -912,6 +912,14 @@
         span.setAttribute("role", "button");
         span.setAttribute("aria-pressed", "false");
       });
+      // A polite live region: the count is the only thing that says how much of
+      // the hunk is picked, and the outline alone cannot be heard.
+      const count = el("span", "scm-hunk-count", `0 of ${picks.length} selected`);
+      count.setAttribute("aria-live", "polite");
+      const refreshCount = () => {
+        const picked = picks.filter((span) => span.classList.contains("selected")).length;
+        count.textContent = `${picked} of ${picks.length} selected`;
+      };
       const focusPick = (index) => {
         if (!picks.length) return;
         const at = Math.max(0, Math.min(picks.length - 1, index));
@@ -922,6 +930,7 @@
         const line = event.target.closest("span.pickable");
         if (!line) return;
         toggleScmLine(line);
+        refreshCount();
         focusPick(picks.indexOf(line));
       });
       body.addEventListener("keydown", (event) => {
@@ -930,6 +939,7 @@
         if (event.key === " " || event.key === "Enter") {
           event.preventDefault();
           toggleScmLine(line);
+          refreshCount();
           return;
         }
         // A selects every changed line of this hunk, Escape clears it, so a
@@ -937,6 +947,7 @@
         if (event.key === "a" || event.key === "A" || event.key === "Escape") {
           event.preventDefault();
           setScmHunkSelection(picks, event.key !== "Escape");
+          refreshCount();
           return;
         }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -963,13 +974,14 @@
       const all = el("button", "tiny-toggle", "All");
       all.type = "button";
       all.title = "Select every changed line in this hunk (or press A)";
-      all.addEventListener("click", () => setScmHunkSelection(picks, true));
+      all.addEventListener("click", () => { setScmHunkSelection(picks, true); refreshCount(); });
       head.appendChild(all);
       const none = el("button", "tiny-toggle", "Clear");
       none.type = "button";
       none.title = "Clear this hunk's selection (or press Escape)";
-      none.addEventListener("click", () => setScmHunkSelection(picks, false));
+      none.addEventListener("click", () => { setScmHunkSelection(picks, false); refreshCount(); });
       head.appendChild(none);
+      head.appendChild(count);
       box.appendChild(hunk);
     });
     if (truncated) box.insertAdjacentHTML("beforeend", '<p class="scm-hint">… diff truncated; only the hunks above are shown …</p>');
