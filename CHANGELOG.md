@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.92.0
+
+- A run that may write or run commands now works in its own git worktree, on a
+  `run/<id>` branch, in a folder next to the repository (`<repo>-run-<id>`), instead
+  of the folder the user is working in: two runs can no longer touch the same path.
+  A read-only run still reads the shared folder, and a workspace that is not a git
+  repository keeps the old behaviour rather than failing.
+- File leases are keyed by the checkout as well as the path, so two runs editing the
+  same relative path in their own worktrees no longer look like a conflict.
+- `cargo test --locked`: **425 passed, 1 ignored** — one new end-to-end test starts a
+  real writing run against a real repository and asserts the shared folder gained no
+  file, the run's checkout holds it beside the seeded file, and that checkout is on
+  `run/<id>`; clippy `-D warnings` clean; build ok.
+- Not built: nothing applies a run's branch back to the user's checkout, a worktree is
+  not removed when the run ends, the lease still covers only the agent's own writes (a
+  command step may write anywhere), the ledger is in-process, and `max_concurrent_runs`
+  therefore still defaults to 1.
+
 ## 1.91.0
 
 - Source Control pane: `Worktrees…` lists every worktree of the repository with its

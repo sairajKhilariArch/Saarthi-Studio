@@ -559,6 +559,69 @@ fn worktree_list(root: &Path) -> Result<Vec<Value>, String> {
     Ok(list)
 }
 
+/// Is this folder inside a git work tree? Run isolation depends on it: without
+/// a repository there is no worktree to give a run.
+pub(crate) fn is_git_worktree(root: &Path) -> bool {
+    git(root, &["rev-parse", "--is-inside-work-tree"])
+        .map(|output| output.ok && output.stdout.trim() == "true")
+        .unwrap_or(false)
+}
+
+/// Where a run's own checkout lives: next to the repository, named for it, so a
+/// run never writes into the folder the user is working in.
+pub(crate) fn run_worktree_path(root: &Path, run_id: &str) -> PathBuf {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+    let short: String = run_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    root.parent()
+        .unwrap_or(root)
+        .join(format!("{name}-run-{short}"))
+}
+
+/// A checkout of `root` for one run, on its own branch, created once and reused:
+/// every step of that run reads, writes and runs commands there, so two runs can
+/// never touch the same path. Idempotent, because a resumed run asks again.
+pub(crate) fn isolate_run_worktree(root: &Path, run_id: &str) -> Result<PathBuf, String> {
+    let dest = run_worktree_path(root, run_id);
+    if dest.join(".git").exists() {
+        return Ok(dest);
+    }
+    let short: String = run_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    let branch = format!("run/{short}");
+    let dest_arg = plain_path(&dest);
+    let exists = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .ok()
+    .filter(|output| output.ok)
+    .is_some();
+    let output = if exists {
+        git(root, &["worktree", "add", &dest_arg, &branch])?
+    } else {
+        git(root, &["worktree", "add", "-b", &branch, &dest_arg])?
+    };
+    if !output.ok {
+        return Err(git_error(&output, "git worktree add failed"));
+    }
+    Ok(dest)
+}
+
 /// Where a worktree for `branch` goes: next to the repository, never inside it.
 fn worktree_path(root: &Path, branch: &str) -> PathBuf {
     let name = root

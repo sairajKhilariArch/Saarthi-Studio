@@ -2485,6 +2485,22 @@ fn is_repeat_of_last_step(state: &AppState, run_id: &str, action: &Action) -> Re
     }
 }
 
+/// The folder a run's steps act in. A run that may write or run commands gets its
+/// own checkout of the repository on a `run/<id>` branch, so two runs can never
+/// touch the same path; a read-only run reads the shared folder, where the content
+/// it is asked about actually lives. A workspace that is not a git repository has
+/// nothing to isolate with, so the shared folder stays the fallback.
+fn run_step_root(state: &AppState, run: &RunRow) -> Result<std::path::PathBuf, String> {
+    let root = state
+        .workspace
+        .root()
+        .map_err(|error| error.message().to_string())?;
+    if !(run.allow_writes || run.allow_commands) || !crate::git::is_git_worktree(&root) {
+        return Ok(root);
+    }
+    Ok(crate::git::isolate_run_worktree(&root, &run.id).unwrap_or(root))
+}
+
 /// Performs one tool step: permission gate, approval gate, execute, log.
 /// Returns false when the run reached a terminal state; every gate keeps the
 /// execution log honest.
@@ -2616,10 +2632,8 @@ async fn execute_action_step(
         GateDecision::Allowed => {}
     }
 
-    let root = state
-        .workspace
-        .root()
-        .map_err(|error| error.message().to_string())?;
+    let root = run_step_root(state, run)?;
+    let root_key = root.to_string_lossy().to_string();
     let summary = pending_summary(action);
     // Snapshot before writing: the change is then previewable as a diff and
     // reversible from the run log.
@@ -2634,7 +2648,7 @@ async fn execute_action_step(
     // the conflict and can re-read the file and try again.
     if let Action::Write { path, .. } = action {
         if let Err(conflict) =
-            crate::filelock::claim_write(state, &run.id, path, old_content.as_deref())
+            crate::filelock::claim_write(state, &root_key, &run.id, path, old_content.as_deref())
         {
             add_step(state, &run.id, "write-conflict", &summary, &conflict)?;
             notify(state, Some(&run.id));
@@ -2669,13 +2683,25 @@ async fn execute_action_step(
                         let content = crate::workspace::read_text_file(&root, path)
                             .ok()
                             .map(|file| file.content);
-                        crate::filelock::record_read(state, &run.id, path, content.as_deref());
+                        crate::filelock::record_read(
+                            state,
+                            &root_key,
+                            &run.id,
+                            path,
+                            content.as_deref(),
+                        );
                     }
                     // This run wrote the file, so what it has seen is now the
                     // content it wrote — otherwise its own edit would look like
                     // somebody else's change on the next write.
                     Action::Write { path, content } => {
-                        crate::filelock::record_read(state, &run.id, path, Some(content));
+                        crate::filelock::record_read(
+                            state,
+                            &root_key,
+                            &run.id,
+                            path,
+                            Some(content),
+                        );
                     }
                     _ => {}
                 }
@@ -4342,10 +4368,9 @@ async fn approve_run(
         return Json(json!({ "ok": true, "status": FAILED })).into_response();
     }
 
-    let root = match state.workspace.root() {
+    let root = match run_step_root(&state, &run) {
         Ok(root) => root,
-        Err(error) => {
-            let message = error.message().to_string();
+        Err(message) => {
             let _ = finish(
                 &state,
                 &run_id,
@@ -5505,6 +5530,86 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     }
 
     #[tokio::test]
+    async fn a_writing_run_works_in_its_own_checkout() {
+        let base = scripted_router(&[
+            r#"{"action":"write","path":"note.txt","content":"hello"}"#,
+            r#"{"action":"done","summary":"note written"}"#,
+            "APPROVE: note.txt exists with the requested content.",
+        ])
+        .await;
+        let fixture = run_fixture("worktree-run", &base);
+        let repo = fixture.root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q", "-b", "main"]).status.success());
+        let _ = git(&["config", "user.email", "a@b.c"]);
+        let _ = git(&["config", "user.name", "t"]);
+        let _ = git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(
+            repo.join("seed.txt"),
+            "seed
+",
+        )
+        .unwrap();
+        let _ = git(&["add", "-A"]);
+        let _ = git(&["commit", "-q", "-m", "base"]);
+        fixture
+            .state
+            .workspace
+            .open(repo.to_str().unwrap())
+            .expect("open the repository");
+        let id = start_run(
+            &fixture.app,
+            json!({
+                "goal": "write note.txt",
+                "allowWrites": true,
+                "autoApprove": true
+            }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        // The folder the user is working in is untouched: a writing run works in
+        // its own checkout, on its own branch.
+        assert!(
+            !repo.join("note.txt").exists(),
+            "the run wrote into the shared folder"
+        );
+        let checkout = crate::git::run_worktree_path(&repo, &id);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("note.txt")).unwrap(),
+            "hello"
+        );
+        assert!(
+            checkout.join("seed.txt").exists(),
+            "the checkout holds the repository"
+        );
+        let short: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(8)
+            .collect();
+        let branch = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&checkout)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&branch.stdout).trim(),
+            format!("run/{short}")
+        );
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
     async fn crew_stage_budget_skip_records_the_incomplete_stage() {
         let base = scripted_router(&[
             // The coding stage never finishes: it only thinks.
@@ -6659,15 +6764,18 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         insert_run(&fixture.state, &a, RUNNING);
         insert_run(&fixture.state, &b, RUNNING);
 
-        crate::filelock::claim_write(&fixture.state, &a, "src/main.rs", Some("same")).unwrap();
-        let error = crate::filelock::claim_write(&fixture.state, &b, "src/main.rs", Some("same"))
-            .unwrap_err();
+        crate::filelock::claim_write(&fixture.state, "shared", &a, "src/main.rs", Some("same"))
+            .unwrap();
+        let error =
+            crate::filelock::claim_write(&fixture.state, "shared", &b, "src/main.rs", Some("same"))
+                .unwrap_err();
         assert!(
             error.contains(&a),
             "the refusal must name the run holding the file: {error}"
         );
         // A different file is nobody's business but this run's.
-        crate::filelock::claim_write(&fixture.state, &b, "src/lib.rs", Some("other")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &b, "src/lib.rs", Some("other"))
+            .unwrap();
         crate::filelock::release(&fixture.state, &a);
         crate::filelock::release(&fixture.state, &b);
     }
@@ -6679,11 +6787,13 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let a = format!("run-a-{}", uuid::Uuid::new_v4());
         let b = format!("run-b-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &a, RUNNING);
-        crate::filelock::claim_write(&fixture.state, &a, "shared.txt", Some("content")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &a, "shared.txt", Some("content"))
+            .unwrap();
         // Finished without releasing: the claim must not keep the file locked.
         set_status(&fixture.state, &a, SUCCEEDED);
         insert_run(&fixture.state, &b, RUNNING);
-        crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("content")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &b, "shared.txt", Some("content"))
+            .unwrap();
         crate::filelock::release(&fixture.state, &a);
         crate::filelock::release(&fixture.state, &b);
     }
@@ -6696,11 +6806,13 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let fixture = run_fixture("lease-cancel", &base);
         let a = format!("run-a-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &a, RUNNING);
-        crate::filelock::claim_write(&fixture.state, &a, "shared.txt", Some("v1")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &a, "shared.txt", Some("v1"))
+            .unwrap();
         finish(&fixture.state, &a, CANCELLED, "test cancel").unwrap();
         let b = format!("run-b-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &b, RUNNING);
-        crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("v1")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &b, "shared.txt", Some("v1"))
+            .unwrap();
         crate::filelock::release(&fixture.state, &b);
     }
 
@@ -6712,18 +6824,26 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let b = format!("run-b-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &a, PAUSED);
         insert_run(&fixture.state, &b, RUNNING);
-        crate::filelock::claim_write(&fixture.state, &a, "shared.txt", Some("v1")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &a, "shared.txt", Some("v1"))
+            .unwrap();
         // Parked: the loop is gone, so a live run may take the file.
-        crate::filelock::claim_write(&fixture.state, &b, "shared.txt", Some("v1")).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &b, "shared.txt", Some("v1"))
+            .unwrap();
 
         // A resumed run still notices that the file it read is not what it was,
         // even though it was parked when the change happened.
         let parked = format!("run-parked-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &parked, PAUSED);
-        crate::filelock::record_read(&fixture.state, &parked, "notes.txt", Some("v1"));
+        crate::filelock::record_read(&fixture.state, "shared", &parked, "notes.txt", Some("v1"));
         set_status(&fixture.state, &parked, RUNNING);
-        let error = crate::filelock::claim_write(&fixture.state, &parked, "notes.txt", Some("v2"))
-            .unwrap_err();
+        let error = crate::filelock::claim_write(
+            &fixture.state,
+            "shared",
+            &parked,
+            "notes.txt",
+            Some("v2"),
+        )
+        .unwrap_err();
         assert!(error.contains("changed on disk"), "{error}");
         crate::filelock::release(&fixture.state, &a);
         crate::filelock::release(&fixture.state, &b);
@@ -6737,12 +6857,14 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let a = format!("run-a-{}", uuid::Uuid::new_v4());
         insert_run(&fixture.state, &a, RUNNING);
         // The run looked, found nothing, and plans to create the file.
-        crate::filelock::record_read(&fixture.state, &a, "new.txt", None);
-        let error = crate::filelock::claim_write(&fixture.state, &a, "new.txt", Some("now here"))
-            .unwrap_err();
+        crate::filelock::record_read(&fixture.state, "shared", &a, "new.txt", None);
+        let error =
+            crate::filelock::claim_write(&fixture.state, "shared", &a, "new.txt", Some("now here"))
+                .unwrap_err();
         assert!(error.contains("changed on disk"), "{error}");
         // Still absent: exactly the state the run saw, so the write may land.
-        crate::filelock::claim_write(&fixture.state, &a, "still-absent.txt", None).unwrap();
+        crate::filelock::claim_write(&fixture.state, "shared", &a, "still-absent.txt", None)
+            .unwrap();
         crate::filelock::release(&fixture.state, &a);
     }
     async fn post_retry(app: &Router, id: &str, body: Value) -> (StatusCode, Value) {

@@ -85,7 +85,16 @@ fn live_runs(state: &AppState) -> Vec<String> {
 
 /// Remember what a run just read, so a later write can tell whether the file
 /// moved underneath it.
-pub(crate) fn record_read(state: &AppState, run_id: &str, path: &str, content: Option<&str>) {
+pub(crate) fn record_read(
+    state: &AppState,
+    root: &str,
+    run_id: &str,
+    path: &str,
+    content: Option<&str>,
+) {
+    // Two runs in their own worktrees can legitimately touch the same relative
+    // path; the claim is over a file, so the checkout is part of the key.
+    let path = &format!("{root}|{path}");
     let mut ledger = LEDGER.lock().unwrap();
     let paths = ledger
         .reads
@@ -102,10 +111,13 @@ pub(crate) fn record_read(state: &AppState, run_id: &str, path: &str, content: O
 /// trusted, the file is what matters.
 pub(crate) fn claim_write(
     state: &AppState,
+    root: &str,
     run_id: &str,
     path: &str,
     current: Option<&str>,
 ) -> Result<(), String> {
+    let shown = path;
+    let path = &format!("{root}|{path}");
     let db = scope(state);
     let live = live_runs(state);
     let fingerprint_now = fingerprint(current);
@@ -120,7 +132,7 @@ pub(crate) fn claim_write(
     if let Some((owner, _)) = ledger.owners.get(&key) {
         if owner != run_id {
             return Err(format!(
-                "{path} is claimed by run {owner}, which is still live. Two agents writing \
+                "{shown} is claimed by run {owner}, which is still live. Two agents writing \
                  one file would overwrite each other, so this write was refused and nothing \
                  was changed. Work on a different file, or wait for that run to finish."
             ));
@@ -135,9 +147,9 @@ pub(crate) fn claim_write(
     {
         if seen != fingerprint_now {
             return Err(format!(
-                "{path} changed on disk since this run last read it — another run or another \
+                "{shown} changed on disk since this run last read it — another run or another \
                  program wrote it. This write was refused so that change is not silently \
-                 overwritten. Read {path} again and rewrite from what is there now."
+                 overwritten. Read {shown} again and rewrite from what is there now."
             ));
         }
     }
