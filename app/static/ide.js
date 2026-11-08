@@ -458,6 +458,7 @@
   async function refreshScm() {
     const box = $("scmBody");
     if (!box) return;
+    ensureScmSelectionLoaded();
     const commitBox = $("scmCommitBox");
     const branchBar = $("scmBranchBar");
     const syncBar = $("scmSync");
@@ -500,6 +501,7 @@
     if (!changes.length) {
       // Nothing is left to move, so any remembered selection is stale.
       IDE.scmSelection = new Map();
+      scmSaveSelection();
       refreshScmSelectionBar();
       box.innerHTML = '<p class="empty-note">Working tree clean.</p>';
       setScmHint("");
@@ -866,6 +868,7 @@
     const entry = scmEntry(path, staged);
     if (lines.size) entry.hunks.set(hunk, lines); else entry.hunks.delete(hunk);
     if (!entry.hunks.size) IDE.scmSelection.delete(key);
+    scmSaveSelection();
   }
 
   function scmFileCount(path, staged) {
@@ -887,6 +890,66 @@
       totals.files += 1;
     });
     return totals;
+  }
+
+  /* The selection survives a reload: it is per workspace, so two folders open in
+     turn do not inherit each other's picks. Storage failures (private mode) are
+     silent, because losing the picks is survivable and blocking the UI is not. */
+  function scmStorageKey() {
+    const workspace = state.workspace && (state.workspace.path || state.workspace.root || state.workspace.name);
+    return workspace ? `freeai-scm-selection:${workspace}` : "";
+  }
+
+  function scmSaveSelection() {
+    const key = scmStorageKey();
+    if (!key) return;
+    const entries = [];
+    if (IDE.scmSelection) {
+      IDE.scmSelection.forEach((entry) => {
+        if (!entry.hunks.size) return;
+        entries.push({
+          path: entry.path,
+          staged: Boolean(entry.staged),
+          hunks: Array.from(entry.hunks.entries()).map(([hunk, lines]) => [hunk, Array.from(lines)]),
+        });
+      });
+    }
+    try {
+      if (!entries.length) localStorage.removeItem(key);
+      else localStorage.setItem(key, JSON.stringify(entries));
+    } catch { /* private mode */ }
+  }
+
+  function scmLoadSelection() {
+    const key = scmStorageKey();
+    IDE.scmSelection = new Map();
+    if (!key) return;
+    let stored = null;
+    try { stored = localStorage.getItem(key); } catch { stored = null; }
+    if (!stored) return;
+    let entries = [];
+    try { entries = JSON.parse(stored); } catch { entries = []; }
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+      if (!entry || typeof entry.path !== "string" || !Array.isArray(entry.hunks)) return;
+      const staged = Boolean(entry.staged);
+      const hunks = new Map();
+      entry.hunks.forEach((pair) => {
+        if (!Array.isArray(pair) || pair.length !== 2) return;
+        const hunk = Number(pair[0]);
+        const lines = Array.isArray(pair[1])
+          ? pair[1].map(Number).filter((line) => Number.isInteger(line) && line >= 0)
+          : [];
+        if (Number.isInteger(hunk) && hunk >= 0 && lines.length) hunks.set(hunk, new Set(lines));
+      });
+      if (hunks.size) IDE.scmSelection.set(scmKey(entry.path, staged), { path: entry.path, staged, hunks });
+    });
+  }
+
+  function ensureScmSelectionLoaded() {
+    const key = scmStorageKey();
+    if (IDE.scmLoadedKey === key) return;
+    IDE.scmLoadedKey = key;
+    scmLoadSelection();
   }
 
   function refreshScmSelectionBar() {
@@ -928,6 +991,7 @@
         moved += result.data.lines || lines.length;
       }
       IDE.scmSelection.delete(scmKey(entry.path, entry.staged));
+      scmSaveSelection();
       if (failure) break;
     }
     refreshScmSelectionBar();
@@ -956,6 +1020,7 @@
 
   function scmClearEverything() {
     IDE.scmSelection = new Map();
+    scmSaveSelection();
     document.querySelectorAll(".scm-hunk-body span.pickable.selected").forEach((span) => {
       span.classList.remove("selected");
       span.setAttribute("aria-pressed", "false");
@@ -1044,6 +1109,7 @@
     applyAll.addEventListener("click", () => void scmApplyFileSelection(change));
     clearAll.addEventListener("click", () => {
       if (IDE.scmSelection) IDE.scmSelection.delete(scmKey(change.path, change.staged));
+      scmSaveSelection();
       box.querySelectorAll(".scm-hunk-body span.pickable.selected").forEach((span) => {
         span.classList.remove("selected");
         span.setAttribute("aria-pressed", "false");

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.88.0
+
+- The staging selection now survives a reload. It is written to `localStorage`
+  under a key built from the workspace path, so reloading the tab, closing the app
+  or switching folders and coming back keeps the lines you picked.
+- Loading happens the first time the pane renders a workspace, not on every
+  refresh, and the stored copy is removed as soon as the tree is clean or a batch
+  is applied — a stale entry cannot outlive the change it described.
+- Storage failures (private windows, storage disabled) stay silent: the selection
+  still works for the session.
+- `cargo test --locked`: **422 passed, 1 ignored** (unchanged — the work is in
+  `app/static/ide.js`, which has no test harness); `node --check` clean.
+- Driven in a browser at `:8966` against a 20-line file changed at lines 2 and 18:
+  selecting both hunks gave "4 lines selected in 1 file" and wrote
+  `[{"path":"a.txt","staged":false,"hunks":[[0,[0,1]],[1,[0,1]]]}]` under
+  `freeai-scm-selection:<workspace>`; after a fresh page load the bar and the four
+  outlined lines came back, and `Stage all selected` moved them.
+- Not built: selections are not shared between machines, and clearing site data
+  forgets them.
+
 ## 1.87.0
 
 - A commit now also refuses staged files that mix CRLF and LF. Each staged blob is
