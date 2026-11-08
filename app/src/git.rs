@@ -753,7 +753,36 @@ fn push_branch(root: &Path) -> Result<Value, String> {
     }))
 }
 
+/// Conflict markers left in a staged file. `git grep --cached` reads the index,
+/// so this answers for exactly the content a commit would record.
+fn staged_conflict_markers(root: &Path) -> Result<Vec<String>, String> {
+    let output = git(
+        root,
+        &["grep", "--cached", "-n", "-E", "^(<<<<<<< |>>>>>>> )"],
+    )?;
+    // `git grep` exits 1 when there is no match, which is the good outcome.
+    if !output.ok {
+        return Ok(Vec::new());
+    }
+    Ok(output
+        .stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(6)
+        .map(|line| line.trim().to_string())
+        .collect())
+}
+
 fn commit(root: &Path, message: &str, paths: &[String]) -> Result<Value, String> {
+    // A merge that left markers behind must not be recorded as history: the
+    // conflict is in the content, not in the message.
+    let conflicts = staged_conflict_markers(root)?;
+    if !conflicts.is_empty() {
+        return Err(format!(
+            "Refusing to commit: staged files still contain conflict markers ({}). Resolve them first.",
+            conflicts.join("; ")
+        ));
+    }
     let mut args: Vec<&str> = vec!["commit", "-m", message];
     if !paths.is_empty() {
         args.push("--");
@@ -3346,6 +3375,40 @@ mod tests {
         assert!(!error.is_empty());
         let response = git_failure(error);
         assert_eq!(response.status(), StatusCode::CONFLICT);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refuses_to_commit_staged_conflict_markers() {
+        let Some(root) = temp_repo("markers") else {
+            return;
+        };
+        std::fs::write(root.join("a.txt"), "one
+").unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        run_git(&root, &["commit", "-q", "-m", "base"]);
+        std::fs::write(
+            root.join("a.txt"),
+            "<<<<<<< HEAD
+one
+=======
+two
+>>>>>>> other
+",
+        )
+        .unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        let error = commit(&root, "bad merge", &[]).unwrap_err();
+        assert!(error.contains("conflict markers"), "{error}");
+        assert!(error.contains("a.txt"), "{error}");
+        // The refusal really refused: history still holds only the base commit.
+        assert_eq!(run_git(&root, &["rev-list", "--count", "HEAD"]).trim(), "1");
+        // Resolving the markers lets the same commit through.
+        std::fs::write(root.join("a.txt"), "one
+two
+").unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        assert!(commit(&root, "resolved", &[]).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 

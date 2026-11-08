@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.86.0
+
+- A commit can no longer record unresolved conflict markers. Before writing, the
+  commit route greps the index for `<<<<<<< ` and `>>>>>>> ` lines and refuses
+  with the offending `file:line` entries, so a merge that left markers behind
+  fails loudly instead of becoming history.
+- The check is `git grep --cached`, so it judges exactly the content the commit
+  would record rather than whatever the working tree happens to hold. Only
+  `<<<<<<<` and `>>>>>>>` count: `=======` is legitimate under Markdown headings.
+- `cargo test --locked`: **421 passed, 1 ignored** — one new test stages a file
+  with markers, expects the refusal with history unchanged, then resolves the
+  file and expects the same commit to succeed.
+- Driven against a running server at `:8965`: the route rejected a staged
+  conflicted file by naming its location and left `HEAD` where it was; after the
+  file was resolved the same request committed.
+- Not built: mixed line endings are not refused, and the check does not look at
+  commits made outside the app.
+
 ## 1.85.0
 
 - The selection now spans files. Each entry remembers its own direction and path,
