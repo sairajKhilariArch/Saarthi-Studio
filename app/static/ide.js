@@ -821,6 +821,13 @@
     span.setAttribute("aria-pressed", String(selected));
   }
 
+  function setScmHunkSelection(picks, selected) {
+    picks.forEach((span) => {
+      span.classList.toggle("selected", selected);
+      span.setAttribute("aria-pressed", String(selected));
+    });
+  }
+
   async function scmHunkLines(change, index, lines) {
     const endpoint = change.staged ? "/api/workspace/git/unstage-hunk" : "/api/workspace/git/stage-hunk";
     const result = await api(endpoint, {
@@ -925,6 +932,13 @@
           toggleScmLine(line);
           return;
         }
+        // A selects every changed line of this hunk, Escape clears it, so a
+        // whole hunk moves without clicking each line.
+        if (event.key === "a" || event.key === "A" || event.key === "Escape") {
+          event.preventDefault();
+          setScmHunkSelection(picks, event.key !== "Escape");
+          return;
+        }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
           focusPick(picks.indexOf(line) + (event.key === "ArrowDown" ? 1 : -1));
@@ -946,6 +960,16 @@
         void scmHunkLines(change, index, selected);
       });
       head.appendChild(picked);
+      const all = el("button", "tiny-toggle", "All");
+      all.type = "button";
+      all.title = "Select every changed line in this hunk (or press A)";
+      all.addEventListener("click", () => setScmHunkSelection(picks, true));
+      head.appendChild(all);
+      const none = el("button", "tiny-toggle", "Clear");
+      none.type = "button";
+      none.title = "Clear this hunk's selection (or press Escape)";
+      none.addEventListener("click", () => setScmHunkSelection(picks, false));
+      head.appendChild(none);
       box.appendChild(hunk);
     });
     if (truncated) box.insertAdjacentHTML("beforeend", '<p class="scm-hint">… diff truncated; only the hunks above are shown …</p>');

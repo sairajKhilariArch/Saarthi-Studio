@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.82.0
+
+- Selecting a whole hunk still meant clicking every changed line. Pressing `A`
+  on a focused line now selects all of them, and Escape clears the hunk again;
+  each hunk head also carries `All` and `Clear` buttons for the mouse.
+- The selection is set through one helper, so the dashed outline and
+  `aria-pressed` stay in step for every line either way. Like the per-line
+  toggle, this works inside one hunk only, which is the unit the hunk routes move.
+- `cargo test --locked`: **420 passed, 1 ignored** (unchanged — the change is in
+  `app/static/ide.js`, which has no test harness); `node --check` clean.
+- Driven in the real pane in a browser at `:8961` against `one/two/three` →
+  `ONE/two/THREE`: `A` on the focused `-one` selected all four lines with
+  `aria-pressed` true, Escape cleared them all, `All` selected them again, and
+  `Stage selected` answered "4 lines staged in a.txt"; `git show :a.txt` then
+  returned `ONE/two/THREE` with the worktree unchanged.
+- Not built: a selection spanning hunks or files, a spoken selection count, and a
+  worktree per run.
+
 ## 1.81.0
 
 - Line-level staging could only be done with the mouse: a keyboard user could
