@@ -505,7 +505,8 @@
       scmSaveSelection();
       refreshScmSelectionBar();
       box.innerHTML = '<p class="empty-note">Working tree clean.</p>';
-      setScmHint("");
+      setScmHint(IDE.scmSanityText || "");
+      autoCheckRepoSanity();
       return;
     }
     box.innerHTML = "";
@@ -517,8 +518,9 @@
     appendScmGroup(box, "Staged", staged, "staged");
     appendScmGroup(box, "Changes", unstaged, "work");
     appendScmGroup(box, "Untracked", untracked, "work");
-    setScmHint(staged.length ? `${staged.length} staged · commit when ready` : "");
+    setScmHint(staged.length ? `${staged.length} staged · commit when ready` : IDE.scmSanityText || "");
     refreshScmSelectionBar();
+    autoCheckRepoSanity();
   }
 
   function setScmHint(text) {
@@ -1287,7 +1289,7 @@
   /* The working tree can be damaged in ways git status still calls clean: a
      merge that wrote markers, or a conversion that only half ran. This asks the
      server to look, and names what it found instead of saying "failed". */
-  async function checkRepoSanity() {
+  async function checkRepoSanity(announce = true) {
     const result = await api("/api/workspace/git/sanity");
     if (!result.ok) {
       toast(result.data.error || "Could not check the repository.");
@@ -1295,16 +1297,32 @@
     }
     const markers = Array.isArray(result.data.markers) ? result.data.markers : [];
     const mixed = Array.isArray(result.data.mixed) ? result.data.mixed : [];
-    const total = markers.length + mixed.length;
+    // A conflicted file reports one line per marker; count files, not markers.
+    const markerFiles = Array.from(new Set(markers.map((entry) => String(entry).split(":")[0])));
+    const total = markerFiles.length + mixed.length;
     if (!total) {
+      IDE.scmSanityText = "";
       setScmHint("No conflict markers or mixed line endings in tracked files.");
-      toast("Repository looks clean.");
+      if (announce) toast("Repository looks clean.");
       return;
     }
     const shown = markers.slice(0, 3).concat(mixed.slice(0, 3).map((path) => `${path} (mixed endings)`));
     const extra = total > shown.length ? ` and ${total - shown.length} more` : "";
-    setScmHint(`Needs attention: ${shown.join("; ")}${extra}.`);
-    toast(`${total} file${total === 1 ? "" : "s"} need attention.`);
+    // Kept as pane state so a later refresh cannot wipe the finding.
+    IDE.scmSanityText = `Needs attention: ${shown.join("; ")}${extra}.`;
+    setScmHint(IDE.scmSanityText);
+    if (announce) toast(`${total} file${total === 1 ? "" : "s"} need attention.`);
+  }
+
+  /* The first render of a workspace checks it quietly: damage is worth reporting
+     the moment the folder opens, but not worth a toast every time the pane
+     refreshes. */
+  function autoCheckRepoSanity() {
+    const key = scmStorageKey();
+    if (!key || IDE.scmSanityKey === key) return;
+    IDE.scmSanityKey = key;
+    IDE.scmSanityText = "";
+    void checkRepoSanity(false);
   }
 
   async function commitScm() {

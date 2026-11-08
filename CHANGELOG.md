@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.90.0
+
+- The sanity check now runs by itself. The first time a workspace renders in the
+  Source Control pane, the app looks for conflict markers and mixed line endings
+  and writes the result into the hint — no click needed. It stays quiet when the
+  tree is healthy, and the `Check` button still reports on demand with a toast.
+- The automatic pass runs once per workspace rather than on every refresh, so a
+  folder switch re-checks and a refresh does not repeat the walk.
+- Two defects found while testing it in a browser are fixed here: the toast counted
+  a conflicted file once per marker line ("3 files" for two files), and a later
+  refresh wiped the finding from the hint. Files are now counted by distinct path,
+  and the finding is kept as pane state so refreshes keep showing it.
+- `cargo test --locked`: **423 passed, 1 ignored** (unchanged — the work is in
+  `app/static/ide.js`, which has no test harness); `node --check` clean.
+- Driven in a browser at `:8970` against a repo holding a conflicted file and a
+  mixed-ending file: the hint reported both without a click, and `Check` answered
+  "2 files need attention."
+- Not built: the check still only reads tracked files and repairs nothing.
+
 ## 1.89.0
 
 - `git status` can call a tree clean while a bad merge has left markers in files or
