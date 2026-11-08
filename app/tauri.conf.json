@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Free AI Studio",
@@ -17,3 +18,24 @@
     "icon": ["icons/icon.png", "icons/icon.ico"]
   }
 }
+=======
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Free AI Studio",
+  "version": "1.80.0",
+  "identifier": "com.saarthi.freeaistudio",
+  "build": {
+    "frontendDist": "static"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.png", "icons/icon.ico"]
+  }
+}
+>>>>>>> d511b913d7bda525e18b5de988f5315c7ec3a468

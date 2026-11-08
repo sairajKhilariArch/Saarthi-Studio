@@ -1535,3 +1535,7 @@ kbd {
 
 /* The hunk selection count sits at the end of the hunk head. */
 .scm-hunk-count { margin-left: auto; font-size: 11px; opacity: 0.7; }
+
+/* Selection bar above a file's hunks: one count and one action for the file. */
+.scm-select-bar { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 11px; }
+.scm-select-summary { opacity: 0.75; }
