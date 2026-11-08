@@ -802,6 +802,56 @@ fn staged_mixed_line_endings(root: &Path) -> Result<Vec<String>, String> {
     Ok(mixed)
 }
 
+/// What an editor would trip over in the working tree: unresolved conflict
+/// markers, and tracked files whose line endings are mixed. This reads the
+/// worktree rather than the index, because a half-finished merge shows up there
+/// long before anything is staged.
+fn repo_sanity(root: &Path) -> Result<Value, String> {
+    let mut markers = Vec::new();
+    let marker_output = git(root, &["grep", "-n", "-E", "^(<<<<<<< |>>>>>>> )"])?;
+    if marker_output.ok {
+        markers = marker_output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(20)
+            .map(str::to_string)
+            .collect();
+    }
+    let mut mixed = Vec::new();
+    let eol_output = git(root, &["ls-files", "--eol", "-z"])?;
+    if eol_output.ok {
+        let raw = eol_output.stdout;
+        let records: Vec<&str> = if raw.contains('\0') {
+            raw.split('\0').collect()
+        } else {
+            raw.lines().collect()
+        };
+        for entry in records {
+            // `<index eol> <worktree eol> <attr>` columns, then the path after a tab.
+            let Some((meta, path)) = entry.split_once('\t') else {
+                continue;
+            };
+            if meta.split_whitespace().nth(1) != Some("w/mixed") {
+                continue;
+            }
+            let path = path.trim();
+            if path.is_empty() {
+                continue;
+            }
+            mixed.push(path.to_string());
+            if mixed.len() == 20 {
+                break;
+            }
+        }
+    }
+    Ok(json!({
+        "markers": markers,
+        "mixed": mixed,
+    }))
+}
+
 fn commit(root: &Path, message: &str, paths: &[String]) -> Result<Value, String> {
     // A merge that left markers behind must not be recorded as history: the
     // conflict is in the content, not in the message.
@@ -2025,6 +2075,17 @@ async fn discard(State(state): State<AppState>, Json(input): Json<Value>) -> Res
     }
 }
 
+async fn sanity_route(State(state): State<AppState>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    match repo_sanity(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
 async fn commit_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -2582,6 +2643,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/unstage", post(unstage))
         .route("/api/workspace/git/discard", post(discard))
         .route("/api/workspace/git/commit", post(commit_route))
+        .route("/api/workspace/git/sanity", get(sanity_route))
         .route("/api/workspace/git/branches", get(branches_route))
         .route("/api/workspace/git/branch", post(create_branch_route))
         .route("/api/workspace/git/merge", post(merge_route))
@@ -3467,6 +3529,35 @@ two
         std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
         run_git(&root, &["add", "a.txt"]);
         assert!(commit(&root, "uniform", &[]).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reports_markers_and_mixed_endings_in_the_worktree() {
+        let Some(root) = temp_repo("sanity") else {
+            return;
+        };
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        std::fs::write(root.join("b.txt"), "one\n").unwrap();
+        run_git(&root, &["add", "a.txt", "b.txt"]);
+        run_git(&root, &["commit", "-q", "-m", "base"]);
+        let clean = repo_sanity(&root).unwrap();
+        assert_eq!(clean["markers"].as_array().unwrap().len(), 0);
+        assert_eq!(clean["mixed"].as_array().unwrap().len(), 0);
+        std::fs::write(
+            root.join("a.txt"),
+            "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>> other\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("b.txt"), "one\r\ntwo\n").unwrap();
+        let dirty = repo_sanity(&root).unwrap();
+        let markers = dirty["markers"].as_array().unwrap();
+        assert!(markers
+            .iter()
+            .any(|entry| entry.as_str().unwrap_or("").starts_with("a.txt:")));
+        let mixed = dirty["mixed"].as_array().unwrap();
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(mixed[0], "b.txt");
         let _ = std::fs::remove_dir_all(&root);
     }
 

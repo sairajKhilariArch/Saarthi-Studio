@@ -178,6 +178,7 @@
       '<div class="scm-commit-row"><button id="scmCommit" class="tiny-toggle primary" type="button">Commit</button>',
       '<button id="scmBranchBtn" class="tiny-toggle" type="button">Branch…</button>',
       '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button>',
+      '<button id="scmSanityBtn" class="tiny-toggle" type="button">Check</button>',
       '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button>',
       '<button id="scmRebaseBtn" class="tiny-toggle" type="button">Rebase…</button>',
       '<button id="scmRemotesBtn" class="tiny-toggle" type="button">Remotes…</button></div>',
@@ -1283,6 +1284,29 @@
     await refreshScm();
   }
 
+  /* The working tree can be damaged in ways git status still calls clean: a
+     merge that wrote markers, or a conversion that only half ran. This asks the
+     server to look, and names what it found instead of saying "failed". */
+  async function checkRepoSanity() {
+    const result = await api("/api/workspace/git/sanity");
+    if (!result.ok) {
+      toast(result.data.error || "Could not check the repository.");
+      return;
+    }
+    const markers = Array.isArray(result.data.markers) ? result.data.markers : [];
+    const mixed = Array.isArray(result.data.mixed) ? result.data.mixed : [];
+    const total = markers.length + mixed.length;
+    if (!total) {
+      setScmHint("No conflict markers or mixed line endings in tracked files.");
+      toast("Repository looks clean.");
+      return;
+    }
+    const shown = markers.slice(0, 3).concat(mixed.slice(0, 3).map((path) => `${path} (mixed endings)`));
+    const extra = total > shown.length ? ` and ${total - shown.length} more` : "";
+    setScmHint(`Needs attention: ${shown.join("; ")}${extra}.`);
+    toast(`${total} file${total === 1 ? "" : "s"} need attention.`);
+  }
+
   async function commitScm() {
     const message = $("scmMessage").value.trim();
     if (!message) { setScmHint("Write a commit message first."); $("scmMessage").focus(); return; }
@@ -1649,6 +1673,7 @@
       if (!form.classList.contains("hidden")) $("scmBranchInput").focus();
     });
     $("scmHistoryBtn").addEventListener("click", () => void toggleScmHistory());
+    $("scmSanityBtn").addEventListener("click", () => void checkRepoSanity());
     $("scmBranchCreate").addEventListener("click", () => void branchScm("create"));
     $("scmBranchSwitch").addEventListener("click", () => void branchScm("switch"));
     $("scmMergeBtn").addEventListener("click", () => {

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.89.0
+
+- `git status` can call a tree clean while a bad merge has left markers in files or
+  a conversion has half rewritten their line endings. A `Check` button in the
+  Source Control pane now asks the server to look: unresolved markers by
+  `file:line` and tracked files whose working-tree endings are mixed.
+- The endpoint reads the worktree, not the index, because the damage appears there
+  first. It reports up to 20 entries of each kind, and the pane names the first few
+  in its hint instead of only saying that something failed.
+- `cargo test --locked`: **423 passed, 1 ignored** — one new test builds a clean
+  repo, asserts an empty report, then writes a conflicted file and a mixed-ending
+  file and asserts both are named.
+- Driven against a running server at `:8967` with a deliberately damaged repo; the
+  route returned both files and the pane reported them. A clean repo answers with
+  empty lists and "Repository looks clean."
+- Not built: the check does not repair anything, and it only looks at tracked files.
+
 ## 1.88.0
 
 - The staging selection now survives a reload. It is written to `localStorage`
