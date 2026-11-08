@@ -526,6 +526,139 @@ fn remote_url(input: &Value) -> Result<String, String> {
 
 /// Every configured remote with the URL git reports, which is what the pane
 /// lists. A remote that pushes somewhere else keeps both URLs.
+/// Worktrees of this repository, parsed from git's porcelain output.
+fn worktree_list(root: &Path) -> Result<Vec<Value>, String> {
+    let output = git(root, &["worktree", "list", "--porcelain"])?;
+    if !output.ok {
+        return Err(git_error(&output, "git worktree list failed"));
+    }
+    let mut list: Vec<Value> = Vec::new();
+    let mut current: Option<Value> = None;
+    for line in output.stdout.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(entry) = current.take() {
+                list.push(entry);
+            }
+            current = Some(json!({ "path": path.trim(), "head": "", "branch": "", "bare": false }));
+            continue;
+        }
+        let Some(entry) = current.as_mut() else {
+            continue;
+        };
+        if let Some(value) = line.strip_prefix("HEAD ") {
+            entry["head"] = json!(value.trim());
+        } else if let Some(value) = line.strip_prefix("branch ") {
+            entry["branch"] = json!(value.trim().trim_start_matches("refs/heads/"));
+        } else if line.trim() == "bare" {
+            entry["bare"] = json!(true);
+        }
+    }
+    if let Some(entry) = current.take() {
+        list.push(entry);
+    }
+    Ok(list)
+}
+
+/// Where a worktree for `branch` goes: next to the repository, never inside it.
+fn worktree_path(root: &Path, branch: &str) -> PathBuf {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".to_string());
+    let slug: String = branch
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    root.parent().unwrap_or(root).join(format!("{name}-{slug}"))
+}
+
+/// The workspace root can arrive as a Windows verbatim path (`//?/C:/...`), which
+/// git rejects when it creates a directory, so hand it the plain form.
+fn plain_path(path: &Path) -> String {
+    let text = path
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    if let Some(rest) = text.strip_prefix("//?/") {
+        return rest.to_string();
+    }
+    text
+}
+
+fn add_worktree(root: &Path, branch: &str) -> Result<Value, String> {
+    let branch = branch.trim();
+    if branch.is_empty() || branch.len() > 100 {
+        return Err("Name the branch the new worktree should check out.".to_string());
+    }
+    let check = git(root, &["check-ref-format", "--branch", branch])?;
+    if !check.ok {
+        return Err(format!("`{branch}` is not a valid branch name."));
+    }
+    let dest = worktree_path(root, branch);
+    if dest.exists() {
+        return Err(format!("{} already exists.", dest.display()));
+    }
+    let dest_arg = plain_path(&dest);
+    let exists = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .ok()
+    .filter(|output| output.ok)
+    .is_some();
+    let output = if exists {
+        git(root, &["worktree", "add", &dest_arg, branch])?
+    } else {
+        git(root, &["worktree", "add", "-b", branch, &dest_arg])?
+    };
+    if !output.ok {
+        return Err(git_error(&output, "git worktree add failed"));
+    }
+    Ok(json!({ "ok": true, "path": dest_arg, "branch": branch }))
+}
+
+/// git reports worktree paths with forward slashes while the app builds them with
+/// the platform separator, so compare the two forms instead of raw strings.
+fn same_worktree_path(left: &str, right: &str) -> bool {
+    let norm = |value: &str| value.trim().replace('\\', "/");
+    let (left, right) = (norm(left), norm(right));
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(&right)
+    } else {
+        left == right
+    }
+}
+
+fn remove_worktree(root: &Path, path: &str) -> Result<Value, String> {
+    let target = path.trim();
+    if target.is_empty() {
+        return Err("Which worktree should be removed?".to_string());
+    }
+    let known = worktree_list(root)?.iter().any(|entry| {
+        entry["path"]
+            .as_str()
+            .is_some_and(|known| same_worktree_path(known, target))
+    });
+    if !known {
+        return Err(format!("{target} is not a worktree of this repository."));
+    }
+    let output = git(root, &["worktree", "remove", target])?;
+    if !output.ok {
+        return Err(git_error(&output, "git worktree remove failed"));
+    }
+    Ok(json!({ "ok": true, "removed": target }))
+}
+
 fn remote_list(root: &Path) -> Result<Vec<Value>, String> {
     let output = git(root, &["remote", "-v"])?;
     if !output.ok {
@@ -2497,6 +2630,80 @@ async fn stage_hunk_route(State(state): State<AppState>, Json(input): Json<Value
     hunk_route(state, input, false).await
 }
 
+async fn worktrees_route(State(state): State<AppState>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    match worktree_list(&root) {
+        Ok(worktrees) => Json(json!({ "ok": true, "worktrees": worktrees })).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn add_worktree_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let branch = input
+        .get("branch")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if branch.is_empty() {
+        return bad("Name the branch the new worktree should check out.".to_string());
+    }
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &branch,
+        "",
+        approval(&input),
+        "create a git worktree",
+    ) {
+        return response;
+    }
+    match add_worktree(&root, &branch) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn remove_worktree_route(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let path = input
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if path.is_empty() {
+        return bad("Which worktree should be removed?".to_string());
+    }
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &path,
+        "",
+        approval(&input),
+        "remove a git worktree",
+    ) {
+        return response;
+    }
+    match remove_worktree(&root, &path) {
+        Ok(value) => Json(value).into_response(),
+        Err(message) => git_failure(message),
+    }
+}
+
 async fn remotes_route(State(state): State<AppState>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -2644,6 +2851,12 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/discard", post(discard))
         .route("/api/workspace/git/commit", post(commit_route))
         .route("/api/workspace/git/sanity", get(sanity_route))
+        .route("/api/workspace/git/worktrees", get(worktrees_route))
+        .route("/api/workspace/git/worktrees/add", post(add_worktree_route))
+        .route(
+            "/api/workspace/git/worktrees/remove",
+            post(remove_worktree_route),
+        )
         .route("/api/workspace/git/branches", get(branches_route))
         .route("/api/workspace/git/branch", post(create_branch_route))
         .route("/api/workspace/git/merge", post(merge_route))
@@ -3481,8 +3694,12 @@ mod tests {
         let Some(root) = temp_repo("markers") else {
             return;
         };
-        std::fs::write(root.join("a.txt"), "one
-").unwrap();
+        std::fs::write(
+            root.join("a.txt"),
+            "one
+",
+        )
+        .unwrap();
         run_git(&root, &["add", "a.txt"]);
         run_git(&root, &["commit", "-q", "-m", "base"]);
         std::fs::write(
@@ -3502,9 +3719,13 @@ two
         // The refusal really refused: history still holds only the base commit.
         assert_eq!(run_git(&root, &["rev-list", "--count", "HEAD"]).trim(), "1");
         // Resolving the markers lets the same commit through.
-        std::fs::write(root.join("a.txt"), "one
+        std::fs::write(
+            root.join("a.txt"),
+            "one
 two
-").unwrap();
+",
+        )
+        .unwrap();
         run_git(&root, &["add", "a.txt"]);
         assert!(commit(&root, "resolved", &[]).is_ok());
         let _ = std::fs::remove_dir_all(&root);
@@ -3558,6 +3779,37 @@ two
         let mixed = dirty["mixed"].as_array().unwrap();
         assert_eq!(mixed.len(), 1);
         assert_eq!(mixed[0], "b.txt");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn creates_lists_and_removes_a_worktree() {
+        let Some(root) = temp_repo("worktree") else {
+            return;
+        };
+        std::fs::write(
+            root.join("a.txt"),
+            "one
+",
+        )
+        .unwrap();
+        run_git(&root, &["add", "a.txt"]);
+        run_git(&root, &["commit", "-q", "-m", "base"]);
+        let added = add_worktree(&root, "side-work").unwrap();
+        let path = added["path"].as_str().unwrap().to_string();
+        assert!(std::path::Path::new(&path).join("a.txt").exists());
+        let list = worktree_list(&root).unwrap();
+        assert!(list.len() >= 2);
+        assert!(list.iter().any(|entry| entry["branch"] == "side-work"));
+        remove_worktree(&root, &path).unwrap();
+        assert!(!std::path::Path::new(&path).exists());
+        assert!(worktree_list(&root)
+            .unwrap()
+            .iter()
+            .all(|e| e["branch"] != "side-work"));
+        assert!(add_worktree(&root, "  ").is_err());
+        assert!(add_worktree(&root, "bad name..").is_err());
+        assert!(remove_worktree(&root, &path).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 

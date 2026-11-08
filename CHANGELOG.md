@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.91.0
+
+- Source Control pane: `Worktrees…` lists every worktree of the repository with its
+  branch and path, creates a new one on a named branch, and removes one again. A new
+  worktree lands next to the repository, never inside it, so the folder does not gain
+  an untracked directory from its own tooling; an existing branch keeps its commits
+  and a fresh name starts at HEAD.
+- Three routes: `GET /api/workspace/git/worktrees`, `POST …/worktrees/add` and
+  `POST …/worktrees/remove`. Both writes sit behind the `git` permission action, and
+  removal refuses a path that is not a worktree of this repository.
+- Verification found two Windows bugs. git prints worktree paths with forward
+  slashes while the app built them with the platform separator, so removal rejected
+  its own worktree (`same_worktree_path` normalises both). The workspace root also
+  arrives as a verbatim `\?\` path, which git refuses when it creates the
+  directory (`plain_path` strips it).
+- `cargo test --locked`: **424 passed, 1 ignored**; clippy `-D warnings` clean;
+  `cargo build` ok. Live on a scratch repo at `:8971`: add returned
+  `…/wt-repo-side-work` on branch `side-work` with `a.txt` present, the list showed
+  both worktrees, remove returned ok and the folder was gone.
+- Not built: agent runs still execute in the shared folder. Pointing a run at a
+  worktree and applying its branch back is the next piece, and the cross-process
+  ledger is still open.
+
 ## 1.90.0
 
 - The sanity check now runs by itself. The first time a workspace renders in the

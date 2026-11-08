@@ -181,7 +181,8 @@
       '<button id="scmSanityBtn" class="tiny-toggle" type="button">Check</button>',
       '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button>',
       '<button id="scmRebaseBtn" class="tiny-toggle" type="button">Rebase…</button>',
-      '<button id="scmRemotesBtn" class="tiny-toggle" type="button">Remotes…</button></div>',
+      '<button id="scmRemotesBtn" class="tiny-toggle" type="button">Remotes…</button>',
+      '<button id="scmWorktreesBtn" class="tiny-toggle" type="button">Worktrees…</button></div>',
       '<div class="scm-branch-form hidden" id="scmBranchForm">',
       '<input id="scmBranchInput" type="text" placeholder="branch name" aria-label="Branch name" autocomplete="off">',
       '<button id="scmBranchCreate" class="tiny-toggle" type="button">Create</button>',
@@ -200,6 +201,10 @@
       '<input id="scmRemoteUrl" type="text" placeholder="remote URL" aria-label="Remote URL" autocomplete="off">',
       '<button id="scmRemoteAdd" class="tiny-toggle primary" type="button">Add</button></div>',
       '<div class="scm-remote-list hidden" id="scmRemoteList"></div>',
+      '<div class="scm-branch-form hidden" id="scmWorktreeForm">',
+      '<input id="scmWorktreeBranch" type="text" placeholder="new branch for the worktree" aria-label="Worktree branch" autocomplete="off">',
+      '<button id="scmWorktreeAdd" class="tiny-toggle primary" type="button">Create</button></div>',
+      '<div class="scm-remote-list hidden" id="scmWorktreeList"></div>',
       '<div class="scm-select-bar hidden" id="scmSelectionBar">',
       '<span class="scm-select-summary" id="scmSelectionSummary" aria-live="polite">Nothing selected</span>',
       '<button id="scmApplyAll" class="tiny-toggle primary" type="button">Move selected</button>',
@@ -618,6 +623,77 @@
     if (form.classList.contains("hidden")) { setRemoteEditing(""); return; }
     $("scmRemoteName").focus();
     await loadRemotes();
+  }
+
+  /* A worktree is a second checkout of the same repository on its own branch, in
+     its own folder, so two pieces of work can proceed without touching the same
+     files. A new one lands next to the repository, never inside it. */
+  function setWorktreesOpen(open) {
+    $("scmWorktreeForm").classList.toggle("hidden", !open);
+    $("scmWorktreeList").classList.toggle("hidden", !open);
+    if (open) void loadWorktrees();
+  }
+
+  async function loadWorktrees() {
+    const list = $("scmWorktreeList");
+    if (!list) return;
+    if (!state.workspace) {
+      list.innerHTML = '<p class="empty-note">Open a folder first.</p>';
+      return;
+    }
+    list.innerHTML = '<p class="empty-note">Reading worktrees…</p>';
+    const result = await api("/api/workspace/git/worktrees");
+    if (!result.ok) {
+      list.innerHTML = `<p class="empty-note">${escapeHtml(result.data.error || "Could not read the worktrees.")}</p>`;
+      return;
+    }
+    const worktrees = Array.isArray(result.data.worktrees) ? result.data.worktrees : [];
+    if (!worktrees.length) {
+      list.innerHTML = '<p class="empty-note">No worktrees. Name a branch above to create one.</p>';
+      return;
+    }
+    list.innerHTML = "";
+    worktrees.forEach((tree, index) => {
+      const row = el("div", "scm-remote-row");
+      row.appendChild(el("span", "scm-remote-name", tree.branch || (tree.bare ? "(bare)" : "(detached)")));
+      const path = el("span", "scm-remote-url", tree.path || "");
+      path.title = tree.path || "";
+      row.appendChild(path);
+      if (index > 0 && tree.path) {
+        const remove = el("button", "tiny-toggle", "Remove");
+        remove.type = "button";
+        remove.title = `Remove the worktree at ${tree.path}`;
+        remove.addEventListener("click", () => void removeWorktree(tree.path));
+        row.appendChild(remove);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  async function createWorktree() {
+    const input = $("scmWorktreeBranch");
+    const branch = (input.value || "").trim();
+    if (!branch) { toast("Name the branch first."); input.focus(); return; }
+    const result = await api("/api/workspace/git/worktrees/add", {
+      method: "POST",
+      body: JSON.stringify({ branch, approve: true }),
+      confirmApproval: true,
+    });
+    if (!result.ok) { toast(result.data.error || "Could not create the worktree."); return; }
+    input.value = "";
+    toast(`Worktree on ${branch} at ${result.data.path}`);
+    await loadWorktrees();
+  }
+
+  async function removeWorktree(path) {
+    const result = await api("/api/workspace/git/worktrees/remove", {
+      method: "POST",
+      body: JSON.stringify({ path, approve: true }),
+      confirmApproval: true,
+    });
+    if (!result.ok) { toast(result.data.error || "Could not remove the worktree."); return; }
+    toast(`Removed ${path}`);
+    await loadWorktrees();
   }
 
   async function loadRemotes() {

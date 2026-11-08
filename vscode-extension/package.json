@@ -2,11 +2,11 @@
   "name": "free-ai-studio",
   "displayName": "Saarthi Studio",
   "description": "Chat with your FreeLLMAPI router from VS Code. Uses the desktop app when it is running and starts a built-in local server when it is not.",
-  "version": "1.90.0",
+  "version": "1.91.0",
   "publisher": "saarthi",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.91.0"
   },
   "categories": ["AI", "Machine Learning", "Other"],
   "keywords": ["ai", "chat", "llm", "freellmapi", "router", "local"],
@@ -64,7 +64,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "^1.91.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.2"
