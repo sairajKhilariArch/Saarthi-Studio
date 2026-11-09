@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.14.0
+
+The workflow canvas now has tests, at the layer a browser-free harness can
+honestly check.
+
+- `app/static/tests/harness.js` gains `createElementNS`, so the canvas code can
+  build SVG nodes in the inert DOM the tests already use.
+- Six new cases in `app.test.js`: layout places dependents one column to the
+  right and siblings together, a cyclic graph still terminates, renaming a node
+  rewrites the dependencies that point at it, deleting one removes those edges,
+  adding a node yields a unique id plus the kind's defaults, and a dependency
+  keeps `when: "failed"` through an edit until it is removed.
+- Checks: `bash scripts/ci/test-frontend.sh` **18 passed**; `node --check` clean;
+  `cargo test --locked` 459 passed, 1 ignored (the backend is unchanged).
+- Still not tested: rendering. No assertion inspects positions, edges or the
+  inspector as drawn — that needs a browser, and claiming it here would be a lie.
+
 ## 2.13.0
 
 Workflows can leave the machine: a graph exports to a portable JSON document and

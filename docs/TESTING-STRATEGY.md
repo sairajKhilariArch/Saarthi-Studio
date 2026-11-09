@@ -5,7 +5,7 @@
 | Suite | Location | Run with | Size |
 |---|---|---|---|
 | Rust unit/integration | `app/src/*.rs` `#[test]` / `#[tokio::test]` | `cd app && cargo test --locked` | 459 passed (1 ignored) at the 2.13.0 run; includes MCP argument validation against the validator the route and agent loop share, workflow graph validation, dependency scheduling, schedule due-time anchoring and the resume boundary |
-| Frontend helpers | `app/static/tests/` | `bash scripts/ci/test-frontend.sh` (Node `--test`) | 12 cases over the real `app.js`, loaded in a browser-free `node:vm` harness |
+| Frontend helpers | `app/static/tests/` | `bash scripts/ci/test-frontend.sh` (Node `--test`) | 18 cases over the real `app.js`, loaded in a browser-free `node:vm` harness |
 | VS Code extension logic | `vscode-extension/test/` | `cd vscode-extension && npm test` (Node `node --test`) | agent, lib, extension suites |
 | Android JVM | `android/app/src/test/` | `cd android && gradle testDebugUnitTest` | policy/migration tests |
 | Android instrumentation | `android/app/src/androidTest/` | emulator script `android/scripts/ci/run-android-instrumentation.sh` | launch, DB migration, paging, backup |
@@ -29,9 +29,9 @@ smoke layer below, not here.
 ## Gaps to close (ordered)
 
 1. ~~**Frontend unit tests.**~~ Done in 2.5.0: `scripts/ci/test-frontend.sh`
-   runs the real `app.js` in a browser-free harness (12 cases, wired into
+   runs the real `app.js` in a browser-free harness (18 cases, wired into
    `desktop-ci.yml`). Still open: a browser smoke for render-critical paths, and
-   the same treatment for `ide.js`; the workflow canvas (2.12.0) has no harness case either.
+   the same treatment for `ide.js`; the workflow canvas is covered at helper level (layout, add/rename/delete, edges), not rendering.
 2. **End-to-end.** Shipped in 2.6.0 for launch → chat → restart → verify
    persistence, and extended in 2.8.0 through a real agent run: a folder opens,
    the run stops at its write approval gate, the write is approved, the run is

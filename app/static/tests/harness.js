@@ -137,6 +137,11 @@ function stubGlobals() {
     createElement(tag) {
       return stubElement(tag);
     },
+    // The workflow canvas draws its edges with SVG nodes. Recorded like every
+    // other element: the tests assert the graph model, never the drawing.
+    createElementNS(namespace, tag) {
+      return stubElement(tag);
+    },
     createTextNode(text) {
       return { textContent: text };
     },

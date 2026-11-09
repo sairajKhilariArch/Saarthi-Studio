@@ -137,6 +137,80 @@ test("contextMetaTitle says what was actually attached, and counts correctly", (
   assert.equal(call("contextMetaTitle({})"), "");
 });
 
+test("the workflow canvas lays nodes out by dependency depth", () => {
+  const graph = `[
+    { id: "a", kind: "task" },
+    { id: "b", kind: "task", dependsOn: ["a"] },
+    { id: "c", kind: "task", dependsOn: [{ id: "b", when: "failed" }] },
+    { id: "d", kind: "task" }
+  ]`;
+  assert.equal(call(`(() => { const p = graphLayout(${graph}); return p.get("a").x === p.get("d").x; })()`), true);
+  assert.equal(call(`(() => { const p = graphLayout(${graph}); return p.get("b").x > p.get("a").x; })()`), true);
+  assert.equal(call(`(() => { const p = graphLayout(${graph}); return p.get("c").x > p.get("b").x; })()`), true);
+  assert.equal(call(`graphLayout(${graph}).get("a").y`), 24);
+});
+
+test("a cyclic graph still lays out and terminates", () => {
+  const size = call(`(() => {
+    const layout = graphLayout([
+      { id: "a", kind: "task", dependsOn: ["b"] },
+      { id: "b", kind: "task", dependsOn: ["a"] }
+    ]);
+    return layout.size;
+  })()`);
+  assert.equal(size, 2);
+});
+
+test("renaming a node rewrites the dependencies that point at it", () => {
+  call(`workflowGraph = [
+    { id: "plan", kind: "task" },
+    { id: "ship", kind: "task", dependsOn: [{ id: "plan", when: "failed" }] }
+  ]`);
+  call(`renameWorkflowNode("plan", "draft")`);
+  const graph = JSON.parse(call("JSON.stringify(workflowGraph)"));
+  assert.equal(graph[0].id, "draft");
+  assert.deepEqual(graph[1].dependsOn, [{ id: "draft", when: "failed" }]);
+});
+
+test("deleting a node removes the edges that pointed at it", () => {
+  call(`workflowGraph = [
+    { id: "a", kind: "task" },
+    { id: "b", kind: "task", dependsOn: ["a"] }
+  ]`);
+  call(`selectedWorkflowNode = "a"`);
+  call("deleteWorkflowNode()");
+  const graph = JSON.parse(call("JSON.stringify(workflowGraph)"));
+  assert.equal(graph.length, 1);
+  assert.deepEqual(graph[0].dependsOn, []);
+});
+
+test("adding a node gives it a unique id and the kind's defaults", () => {
+  call(`workflowGraph = [{ id: "task-2", kind: "task" }]`);
+  call(`addWorkflowNode("task")`);
+  const graph = JSON.parse(call("JSON.stringify(workflowGraph)"));
+  assert.equal(graph.length, 2);
+  assert.notEqual(graph[0].id, graph[1].id);
+  assert.equal(graph[1].kind, "task");
+  assert.equal(graph[1].note, "");
+  call(`addWorkflowNode("agent")`);
+  const agent = JSON.parse(call("JSON.stringify(workflowGraph[2])"));
+  assert.equal(agent.prompt, "");
+  assert.equal(agent.retries, 1);
+});
+
+test("a dependency keeps its failure condition when it is edited", () => {
+  call(`workflowGraph = [
+    { id: "a", kind: "task" },
+    { id: "b", kind: "task", dependsOn: ["a"] }
+  ]`);
+  call(`setWorkflowDependency("b", "a", true, "failed")`);
+  let graph = JSON.parse(call("JSON.stringify(workflowGraph)"));
+  assert.deepEqual(graph[1].dependsOn, [{ id: "a", when: "failed" }]);
+  call(`setWorkflowDependency("b", "a", false)`);
+  graph = JSON.parse(call("JSON.stringify(workflowGraph)"));
+  assert.deepEqual(graph[1].dependsOn, []);
+});
+
 test("icon falls back to the raw name rather than rendering an undefined id", () => {
   const known = call(`icon("check")`);
   assert.ok(known.includes("href=\"#"), known);
