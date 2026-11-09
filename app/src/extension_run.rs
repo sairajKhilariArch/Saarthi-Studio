@@ -10,8 +10,16 @@
 //! ```text
 //! env.read(path_ptr, path_len, out_ptr, out_cap) -> i32   bytes written, or < 0
 //! env.write(path_ptr, path_len, data_ptr, data_len) -> i32  0, or < 0
+//! env.data_read(name_ptr, name_len, out_ptr, out_cap) -> i32
+//! env.data_write(name_ptr, name_len, data_ptr, data_len) -> i32
 //! env.last_error(ptr, cap) -> i32                         message bytes written
 //! ```
+//!
+//! `read`/`write` work inside the open folder; `data_read`/`data_write` work
+//! inside the extension's own `<extensions>/<id>/data` folder, which is the only
+//! place it may persist anything. Both pairs need the manifest's
+//! `workspace.read`/`workspace.write`, and both apply the same path containment
+//! and saved-rule checks.
 //!
 //! Error codes: `-1` refused, `-2` invalid path, `-3` missing, `-4` too large,
 //! `-5` not UTF-8 text, `-6` I/O failure. A host function is linked only when
@@ -62,12 +70,14 @@ pub(crate) struct HostCall {
     pub detail: String,
 }
 
-/// What an extension was granted for this run: the open folder, the project the
-/// rules are resolved against, the rules themselves, and which of the two
-/// workspace capabilities its manifest declared.
+/// What an extension was granted for this run: the open folder, its own data
+/// folder, the project the rules are resolved against, the rules themselves, and
+/// which of the two workspace capabilities its manifest declared.
 #[derive(Debug, Clone)]
 pub(crate) struct HostGrant {
     pub root: PathBuf,
+    /// `<extensions>/<id>/data`, the only place an extension may persist.
+    pub data_root: Option<PathBuf>,
     pub project: String,
     pub rules: Vec<Rule>,
     pub read: bool,
@@ -132,9 +142,8 @@ impl HostState {
     fn cap_reached(&mut self) -> bool {
         self.calls += 1;
         if self.calls > MAX_HOST_CALLS {
-            self.last_error = format!(
-                "The {MAX_HOST_CALLS}-call budget for workspace access is spent."
-            );
+            self.last_error =
+                format!("The {MAX_HOST_CALLS}-call budget for host access is spent.");
             return true;
         }
         false
@@ -202,8 +211,12 @@ fn run_bytes(bytes: &[u8], grant: Option<HostGrant>) -> Result<Outcome, String> 
     for import in module.imports() {
         let name = import.name();
         let allowed = match (import.module(), name) {
-            ("env", "read") => grant.as_ref().map(|grant| grant.read).unwrap_or(false),
-            ("env", "write") => grant.as_ref().map(|grant| grant.write).unwrap_or(false),
+            ("env", "read") | ("env", "data_read") => {
+                grant.as_ref().map(|grant| grant.read).unwrap_or(false)
+            }
+            ("env", "write") | ("env", "data_write") => {
+                grant.as_ref().map(|grant| grant.write).unwrap_or(false)
+            }
             ("env", "last_error") => true,
             _ => false,
         };
@@ -239,6 +252,16 @@ fn run_bytes(bytes: &[u8], grant: Option<HostGrant>) -> Result<Outcome, String> 
     linker
         .func_wrap("env", "write", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, data_ptr: i32, data_len: i32| -> i32 {
             host_write(&mut caller, path_ptr, path_len, data_ptr, data_len)
+        })
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap("env", "data_read", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, out_ptr: i32, out_cap: i32| -> i32 {
+            host_data_read(&mut caller, path_ptr, path_len, out_ptr, out_cap)
+        })
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap("env", "data_write", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, data_ptr: i32, data_len: i32| -> i32 {
+            host_data_write(&mut caller, path_ptr, path_len, data_ptr, data_len)
         })
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
@@ -305,38 +328,22 @@ fn guest_path(caller: &wasmi::Caller<'_, HostState>, ptr: i32, len: i32) -> Opti
     String::from_utf8(bytes).ok()
 }
 
-/// Read inside the open folder, with the agent's own path rules and the saved
-/// permission rules applied before a single byte leaves the disk.
-fn host_read(
+/// Read inside a granted folder: the agent's own path rules, then the saved
+/// permission rules, before a single byte leaves the disk. The workspace and the
+/// extension's own data folder share this, so one containment rule covers both.
+fn read_inside(
     caller: &mut wasmi::Caller<'_, HostState>,
-    path_ptr: i32,
-    path_len: i32,
+    root: &Path,
+    label: &str,
+    capability: &'static str,
+    relative: &str,
     out_ptr: i32,
     out_cap: i32,
 ) -> i32 {
-    if caller.data_mut().cap_reached() {
-        return -1;
-    }
-    let Some(relative) = guest_path(caller, path_ptr, path_len) else {
-        return caller
-            .data_mut()
-            .fail(-2, "The path argument is not valid UTF-8.");
-    };
-    let (root, label) = match workspace_root(caller) {
-        Some(root) => root,
-        None => {
-            return caller
-                .data_mut()
-                .fail(-2, "No folder is open, so there is no workspace to read.");
-        }
-    };
-    if let Err(code) = caller
-        .data_mut()
-        .decide(Action::FsRead, &relative, "workspace.read")
-    {
+    if let Err(code) = caller.data_mut().decide(Action::FsRead, relative, capability) {
         return code;
     }
-    let path = match crate::workspace::resolve_inside(&root, &relative) {
+    let path = match crate::workspace::resolve_inside(root, relative) {
         Ok(path) => path,
         Err(error) => {
             let message = format!("{}: {}", label, error.message());
@@ -379,9 +386,91 @@ fn host_read(
     bytes.len() as i32
 }
 
-/// Write inside the open folder. The default policy for a write is `ask`, which
+fn host_read(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    path_ptr: i32,
+    path_len: i32,
+    out_ptr: i32,
+    out_cap: i32,
+) -> i32 {
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let Some(relative) = guest_path(caller, path_ptr, path_len) else {
+        return caller
+            .data_mut()
+            .fail(-2, "The path argument is not valid UTF-8.");
+    };
+    let Some((root, label)) = workspace_root(caller) else {
+        return caller
+            .data_mut()
+            .fail(-2, "No folder is open, so there is no workspace to read.");
+    };
+    read_inside(caller, &root, &label, "workspace.read", &relative, out_ptr, out_cap)
+}
+
+/// The extension's own data folder. Nothing else in the extensions directory is
+/// reachable through it, and its code folder stays read-only to the module.
+fn host_data_read(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    path_ptr: i32,
+    path_len: i32,
+    out_ptr: i32,
+    out_cap: i32,
+) -> i32 {
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let Some(relative) = guest_path(caller, path_ptr, path_len) else {
+        return caller
+            .data_mut()
+            .fail(-2, "The path argument is not valid UTF-8.");
+    };
+    let Some((root, label)) = data_root(caller) else {
+        return caller
+            .data_mut()
+            .fail(-2, "This extension has no data folder for this run.");
+    };
+    read_inside(caller, &root, &label, "data.read", &relative, out_ptr, out_cap)
+}
+
+/// Write inside a granted folder. The default policy for a write is `ask`, which
 /// an extension cannot answer, so this needs a saved allow rule — and a saved
 /// deny still wins over it.
+fn write_inside(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    root: &Path,
+    label: &str,
+    capability: &'static str,
+    relative: &str,
+    content: &str,
+    create_root: bool,
+) -> i32 {
+    if let Err(code) = caller.data_mut().decide(Action::FsWrite, relative, capability) {
+        return code;
+    }
+    // The data folder is created on first write, after the policy said yes: an
+    // extension cannot make folders in the extensions directory by asking to.
+    if create_root && fs::create_dir_all(root).is_err() {
+        return caller
+            .data_mut()
+            .fail(-6, format!("{label}: the data folder could not be created."));
+    }
+    match crate::workspace::write_text_file(root, relative, content) {
+        Ok(_) => 0,
+        Err(error) => {
+            let message = format!("{label}: {}", error.message());
+            let code = match error.status() {
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE => -4,
+                axum::http::StatusCode::NOT_FOUND => -3,
+                axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::FORBIDDEN => -2,
+                _ => -6,
+            };
+            caller.data_mut().fail(code, message)
+        }
+    }
+}
+
 fn host_write(
     caller: &mut wasmi::Caller<'_, HostState>,
     path_ptr: i32,
@@ -397,41 +486,79 @@ fn host_write(
             .data_mut()
             .fail(-2, "The path argument is not valid UTF-8.");
     };
-    let Some(data) = guest_bytes(caller, data_ptr, data_len, MAX_HOST_BYTES) else {
+    let Some(content) = guest_content(caller, data_ptr, data_len) else {
+        return -1;
+    };
+    let Some((root, label)) = workspace_root(caller) else {
         return caller
             .data_mut()
-            .fail(-4, format!("The content must be at most {MAX_HOST_BYTES} bytes."));
+            .fail(-2, "No folder is open, so there is no workspace to write.");
     };
-    let Ok(content) = String::from_utf8(data) else {
-        return caller
-            .data_mut()
-            .fail(-5, "The content is not UTF-8 text.");
-    };
-    let (root, label) = match workspace_root(caller) {
-        Some(root) => root,
-        None => {
-            return caller
-                .data_mut()
-                .fail(-2, "No folder is open, so there is no workspace to write.");
-        }
-    };
-    if let Err(code) = caller
-        .data_mut()
-        .decide(Action::FsWrite, &relative, "workspace.write")
-    {
-        return code;
+    write_inside(
+        caller,
+        &root,
+        &label,
+        "workspace.write",
+        &relative,
+        &content,
+        false,
+    )
+}
+
+fn host_data_write(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    path_ptr: i32,
+    path_len: i32,
+    data_ptr: i32,
+    data_len: i32,
+) -> i32 {
+    if caller.data_mut().cap_reached() {
+        return -1;
     }
-    match crate::workspace::write_text_file(&root, &relative, &content) {
-        Ok(_) => 0,
-        Err(error) => {
-            let message = format!("{label}: {}", error.message());
-            let code = match error.status() {
-                axum::http::StatusCode::PAYLOAD_TOO_LARGE => -4,
-                axum::http::StatusCode::NOT_FOUND => -3,
-                axum::http::StatusCode::BAD_REQUEST | axum::http::StatusCode::FORBIDDEN => -2,
-                _ => -6,
-            };
-            caller.data_mut().fail(code, message)
+    let Some(relative) = guest_path(caller, path_ptr, path_len) else {
+        return caller
+            .data_mut()
+            .fail(-2, "The path argument is not valid UTF-8.");
+    };
+    let Some(content) = guest_content(caller, data_ptr, data_len) else {
+        return -1;
+    };
+    let Some((root, label)) = data_root(caller) else {
+        return caller
+            .data_mut()
+            .fail(-2, "This extension has no data folder for this run.");
+    };
+    write_inside(
+        caller,
+        &root,
+        &label,
+        "data.write",
+        &relative,
+        &content,
+        true,
+    )
+}
+
+/// Fetch a write's payload, leaving the reason in `last_error` on failure.
+fn guest_content(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    ptr: i32,
+    len: i32,
+) -> Option<String> {
+    let Some(data) = guest_bytes(caller, ptr, len, MAX_HOST_BYTES) else {
+        caller.data_mut().fail(
+            -4,
+            format!("The content must be at most {MAX_HOST_BYTES} bytes."),
+        );
+        return None;
+    };
+    match String::from_utf8(data) {
+        Ok(content) => Some(content),
+        Err(_) => {
+            caller
+                .data_mut()
+                .fail(-5, "The content is not UTF-8 text.");
+            None
         }
     }
 }
@@ -472,6 +599,12 @@ fn workspace_root(caller: &wasmi::Caller<'_, HostState>) -> Option<(PathBuf, Str
     Some((grant.root.clone(), label))
 }
 
+fn data_root(caller: &wasmi::Caller<'_, HostState>) -> Option<(PathBuf, String)> {
+    let grant = caller.data().grant.as_ref()?;
+    let root = grant.data_root.as_ref()?;
+    Some((root.clone(), "extension data".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +634,7 @@ mod tests {
     fn grant(root: &Path, read: bool, write: bool) -> HostGrant {
         HostGrant {
             root: root.to_path_buf(),
+            data_root: None,
             project: String::new(),
             rules: Vec::new(),
             read,
@@ -695,6 +829,68 @@ mod tests {
         );
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_extension_persists_only_in_its_own_data_folder() {
+        let root = workspace("data-workspace");
+        let data = workspace("data-folder");
+        let _ = fs::remove_dir_all(&data); // created on first write, not before
+        let path = module_file(
+            "data",
+            r#"(module
+                 (import "env" "data_write" (func $write (param i32 i32 i32 i32) (result i32)))
+                 (import "env" "data_read" (func $read (param i32 i32 i32 i32) (result i32)))
+                 (memory (export "memory") 1)
+                 (data (i32.const 0) "notes.txt")
+                 (data (i32.const 16) "kept")
+                 (func (export "run") (result i32)
+                   (drop (call $write (i32.const 0) (i32.const 9) (i32.const 16) (i32.const 4)))
+                   (call $read (i32.const 0) (i32.const 9) (i32.const 64) (i32.const 100))))"#,
+        );
+        let mut host = grant(&root, true, true);
+        host.data_root = Some(data.clone());
+        host.rules = vec![rule(Action::FsWrite, "", Decision::Allow)];
+        let outcome = run_file(&path, Some(host)).expect("run");
+        assert_eq!(outcome.exit_code, 4, "the four bytes it wrote came back");
+        assert_eq!(
+            fs::read_to_string(data.join("notes.txt")).expect("stored file"),
+            "kept"
+        );
+        assert_eq!(
+            outcome
+                .audit
+                .iter()
+                .map(|call| call.capability)
+                .collect::<Vec<_>>(),
+            vec!["data.write", "data.read"]
+        );
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn a_data_name_cannot_leave_the_data_folder() {
+        let root = workspace("data-escape-workspace");
+        let data = workspace("data-escape");
+        fs::write(data.join("own.txt"), "mine").expect("data file");
+        let path = module_file(
+            "data-escape",
+            r#"(module
+                 (import "env" "data_read" (func $read (param i32 i32 i32 i32) (result i32)))
+                 (memory (export "memory") 1)
+                 (data (i32.const 0) "../tool.wasm")
+                 (func (export "run") (result i32)
+                   (call $read (i32.const 0) (i32.const 12) (i32.const 64) (i32.const 100))))"#,
+        );
+        let mut host = grant(&root, true, false);
+        host.data_root = Some(data.clone());
+        let outcome = run_file(&path, Some(host)).expect("run");
+        assert_eq!(outcome.exit_code, -2, "the data folder is a boundary too");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&data);
     }
 
     #[test]

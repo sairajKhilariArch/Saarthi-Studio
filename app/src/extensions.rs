@@ -565,6 +565,9 @@ pub(crate) async fn run(
     let project = crate::active_project_id(&state);
     let grant = crate::extension_run::HostGrant {
         root: state.workspace.root().unwrap_or_default(),
+        // Its own folder is the only place an extension can persist anything;
+        // the code beside it stays read-only to the module.
+        data_root: Some(dir.join(&id).join("data")),
         project: project.clone(),
         rules: crate::permissions::rules(&state),
         read: declared.iter().any(|permission| permission == "workspace.read"),

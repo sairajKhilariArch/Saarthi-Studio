@@ -358,11 +358,15 @@ prompt — reads default to allow and writes need a saved allow rule. Every call
 is audited with the extension id (process log, plus the permission audit table
 for refusals), and I/O is capped at 64 calls and 1 MiB per call.
 
-Remaining: the extension-private data directory, an extension run history and a
-wall-clock backstop, custom tools, provider adapters, UI extensions, and
-dependency/compatibility metadata. Installing still grants no capability by
-itself, and nothing but the two workspace functions is reachable from inside
-the sandbox.
+Per-extension data (2.22.0): `env.data_read`/`env.data_write` are rooted at
+`<extensions>/<id>/data`, created on the first approved write, contained like
+workspace paths and gated by the same declared permissions. The module's code
+folder and every other extension stay unreachable.
+
+Remaining: an extension run history and a wall-clock backstop, custom tools,
+provider adapters, UI extensions, and dependency/compatibility metadata.
+Installing still grants no capability by itself, and the only reachable surface
+is the two workspace pairs plus `last_error`.
 
 ## Phase 16 — Testing
 

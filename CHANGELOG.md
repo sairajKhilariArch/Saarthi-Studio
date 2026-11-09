@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.22.0
+
+Extensions can persist state now — in their own folder and nowhere else.
+
+- `env.data_read(name, len, out, cap)` and `env.data_write(name, len, data,
+  len)` work inside `<extensions>/<id>/data`, which is created on the first
+  approved write. The code folder beside it stays unreachable, as does every
+  other extension's folder.
+- Names are resolved and contained exactly like workspace paths, so `..`, an
+  absolute name and a symlink escape are refused before any byte moves. The
+  same saved `fs_read`/`fs_write` rules apply, which means a write still needs
+  an allow rule; a read defaults to allow.
+- Both functions are linked only when the manifest declares
+  `workspace.read`/`workspace.write`, the same gates as the workspace pair — the
+  permission vocabulary did not grow.
+- Both calls are audited as `data.read`/`data.write` with the extension id and
+  counted in the run's `hostCalls`.
+- Checks: `cargo test --locked` **480 passed, 1 ignored** (two new: write then
+  read its own data with the folder created lazily, and a name that tries to
+  leave the data folder); clippy `-D warnings` clean; `node --check` clean;
+  frontend 18; version 20; e2e 19. Live: an installed module wrote `notes.txt`
+  into its data folder and read the 4 bytes back (`hostCalls: 2`), with both
+  calls in the log as `data.write` and `data.read`.
+- Still missing: a wall-clock backstop behind fuel, a run history beyond the
+  log, and UI cancellation.
+
 ## 2.21.0
 
 The sandbox can now touch the workspace — through two host functions, scoped to

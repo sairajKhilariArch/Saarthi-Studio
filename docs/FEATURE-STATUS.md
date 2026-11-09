@@ -40,7 +40,7 @@ capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs on a
 schedule, resumes an interrupted one, edits them on a canvas and moves them
 between installs; what remains is free positioning and browser verification of
-the canvas, and Phase 15 runs workspace-scoped wasm extensions but has no extension data directory, custom tools, provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
+the canvas, and Phase 15 runs wasm extensions with workspace and own-data access but has no custom tools, provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
 the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 has no installer or update path.
 Phase 17 closed in 2.4.0.
 
@@ -297,16 +297,17 @@ persisted execution of it.
 
 Manifests are discovered and validated as of 2.15.0, listed in Settings as of
 2.16.0, installed/removed as of 2.17.0, and executed as of 2.20.0 inside a
-wasmi sandbox (ADR 0001). Since 2.21.0 that sandbox provides workspace 
+wasmi sandbox (ADR 0001). Since 2.21.0 that sandbox provides workspace
 read/write host functions, scoped to the open folder and checked per call
-against saved rules; network, terminal and MCP capabilities remain unprovided.
+against saved rules, and since 2.22.0 a per-extension data folder through
+data_read/data_write; network, terminal and MCP capabilities remain unprovided.
 
 | Item | Status | Notes |
 |---|---|---|
 | Manifest (id, name, version, description, author, entry, permissions) | Working (2.15.0) | `GET /api/extensions` scans `<data>/extensions/*/manifest.json`; the id must equal the folder, the version must be `1.2.3`, `entry` must stay inside the folder and exist, and permissions are a closed list |
 | Management UI | Working (2.16.0) | Settings → Extensions shows the directory, each folder's validity, description or error, and a Refresh action |
 | Install / uninstall | Working (2.17.0) | install copies a folder through staging with validation and rollback, symlink refusal and a 500-file/16 MiB cap; uninstall moves the folder to `.removed/` after a canonical containment check |
-| Execution and sandboxing | Working, workspace only (2.21.0) | ADR 0001: no in-process execution. `app/src/extension_run.rs` runs a module in a wasmi 0.31.2 interpreter with no WASI: `run() -> i32`, 50,000,000 fuel, 64 MiB memory, 100,000 table elements, 8 MiB module cap. The whole host surface is `env.read`/`env.write`/`env.last_error`, linked only when the manifest declares the matching permission; paths use `workspace::resolve_inside` and writes `write_text_file`, saved rules apply per call (`ask` refuses because nothing can answer), and every call is audited. No network, terminal, MCP or config access exists |
+| Execution and sandboxing | Working, workspace + own data (2.22.0) | ADR 0001: no in-process execution. `app/src/extension_run.rs` runs a module in a wasmi 0.31.2 interpreter with no WASI: `run() -> i32`, 50,000,000 fuel, 64 MiB memory, 100,000 table elements, 8 MiB module cap. The whole host surface is `env.read`/`env.write` (open folder), `env.data_read`/`env.data_write` (`<extensions>/<id>/data`) and `env.last_error`, linked only when the manifest declares `workspace.read`/`workspace.write`. Paths use `workspace::resolve_inside` and writes `write_text_file`; saved rules apply per call (`ask` refuses because nothing can answer) and every call is audited. No network, terminal, MCP or config access exists |
 | Runtime gating | Working (2.19.0, host functions 2.21.0) | `runtime: "wasm"` requires a `.wasm` entry; discovery exposes `runnable`/`blockedReason`; `POST /api/extensions/:id/run` refuses a capability with no host function behind it and otherwise runs the module, answering `{exitCode, fuelUsed, elapsedMs, hostCalls}` |
 | Custom tools | Missing | — |
 | Provider adapters | Missing | — |
@@ -316,7 +317,7 @@ against saved rules; network, terminal and MCP capabilities remain unprovided.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 478 passed, 1 ignored at the 2.21.0 run; the count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 480 passed, 1 ignored at the 2.22.0 run; the count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |

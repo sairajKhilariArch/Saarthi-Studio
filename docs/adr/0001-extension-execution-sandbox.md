@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0 (see the implementation notes below)
+- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0 (see the implementation notes below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -177,6 +177,35 @@ without an AppState.
 
 Gate 3 (path-scoping tests) and the audit half of gate 5 are now covered by
 unit tests for escape, deny, ungranted import and write-requires-allow.
+
+## Implementation note (2.22.0) — the per-extension data folder
+
+Point 7 is implemented as a second pair of host functions rather than a wider
+workspace root:
+
+```text
+env.data_read(name_ptr, name_len, out_ptr, out_cap) -> i32
+env.data_write(name_ptr, name_len, data_ptr, data_len) -> i32
+```
+
+They are rooted at `<data>/extensions/<id>/data`, so the module's code folder
+(the parent) and every other extension are outside the resolvable tree. The
+folder is created on the first **approved** write, not at install: a manifest
+cannot make the host create directories by merely asking to write. Reads of a
+missing folder return `-3` like a missing file.
+
+Names are resolved with the same `resolve_inside` containment, so `..`, an
+absolute name and a symlink escape are refused exactly as for workspace paths;
+writes reuse `write_text_file`. There is no directory listing and no delete:
+the folder holds small state, not a filesystem.
+
+**Gating.** No new permission name was invented — the closed vocabulary stays
+five entries. `data_read` needs `workspace.read` and `data_write` needs
+`workspace.write`, the same declaration that makes the workspace pair available,
+and the same saved `fs_read`/`fs_write` rules apply to the name. A write still
+defaults to `ask`, so it needs a saved allow rule; that is deliberate
+unattended-write policy, not a gap. Calls are audited as `data.read` and
+`data.write`, and count against the same 64-call, 1 MiB-per-call budget.
 
 ## Consequences
 
