@@ -25,7 +25,7 @@
 //! is a real run.
 
 use axum::extract::{Path as AxumPath, Query as AxumQuery, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use rusqlite::{params, Connection};
@@ -39,6 +39,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::AppState;
 
 const MAX_NODES: usize = 50;
+const EXPORT_VERSION: i64 = 1;
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_NOTE_CHARS: usize = 1_000;
 const MAX_ERROR_CHARS: usize = 400;
@@ -1080,6 +1081,170 @@ fn workflow_json(state: &AppState, workflow: &Workflow) -> Value {
     value
 }
 
+/// A file name that survives every platform: lowercase ascii, single dashes,
+/// never empty.
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            out.push(character.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "workflow".to_string()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+/// Importing twice must not overwrite the first copy: names are the handle a
+/// person sees, ids are internal.
+fn unique_name(base: &str, workflows: &[Workflow]) -> String {
+    let base = if base.trim().is_empty() {
+        "Imported workflow"
+    } else {
+        base.trim()
+    };
+    if !workflows
+        .iter()
+        .any(|workflow| workflow.name.eq_ignore_ascii_case(base))
+    {
+        return base.to_string();
+    }
+    for suffix in 2..1000 {
+        let candidate = format!("{base} ({suffix})");
+        if !workflows
+            .iter()
+            .any(|workflow| workflow.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    format!("{base} ({})", uuid::Uuid::new_v4().simple())
+}
+
+struct ImportedGraph {
+    name: String,
+    prompt: String,
+    skill: String,
+    every_minutes: i64,
+    nodes: Vec<Value>,
+}
+
+/// Validate a document before it can touch `workflows.json`. The same rules as
+/// the save route apply, so an imported graph cannot be a way around them.
+fn parse_import(document: &Value) -> Result<ImportedGraph, String> {
+    if !document.is_object() {
+        return Err("An imported workflow must be a JSON object.".to_string());
+    }
+    let name = clipped(document.get("name").and_then(Value::as_str), 64)
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return Err("An imported workflow needs a name.".to_string());
+    }
+    let prompt = clipped(
+        document.get("prompt").and_then(Value::as_str),
+        MAX_PROMPT_CHARS,
+    );
+    let skill = clipped(document.get("skill").and_then(Value::as_str), 160);
+    let every_minutes = parse_interval(
+        document.get("everyMinutes").and_then(Value::as_i64).unwrap_or(0),
+    )?;
+    let raw = document.get("nodes").cloned().unwrap_or_else(|| json!([]));
+    let nodes = if matches!(raw, Value::Null) {
+        Vec::new()
+    } else {
+        validate_nodes(&raw)?
+            .iter()
+            .map(ValidNode::to_json)
+            .collect::<Vec<_>>()
+    };
+    if prompt.trim().is_empty() && nodes.is_empty() {
+        return Err("An imported workflow needs a prompt or at least one node.".to_string());
+    }
+    if every_minutes > 0 && nodes.is_empty() {
+        return Err("A scheduled workflow needs at least one node.".to_string());
+    }
+    Ok(ImportedGraph {
+        name,
+        prompt,
+        skill,
+        every_minutes,
+        nodes,
+    })
+}
+
+fn export_document(workflow: &Workflow) -> Value {
+    json!({
+        "format": "saarthi.workflow",
+        "version": EXPORT_VERSION,
+        "name": workflow.name,
+        "prompt": workflow.prompt,
+        "skill": workflow.skill,
+        "everyMinutes": workflow.every_minutes,
+        "nodes": workflow.nodes.clone(),
+    })
+}
+
+pub(crate) async fn export(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let Some(workflow) = load(&state)
+        .into_iter()
+        .find(|workflow| workflow.id == id)
+    else {
+        return not_found("No such workflow.");
+    };
+    let body = match serde_json::to_string_pretty(&export_document(&workflow)) {
+        Ok(body) => body,
+        Err(error) => return server_error(error),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}.json\"", slug(&workflow.name)),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+pub(crate) async fn import_graph(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response {
+    let document = input.get("workflow").cloned().unwrap_or(input);
+    let parsed = match parse_import(&document) {
+        Ok(parsed) => parsed,
+        Err(error) => return bad(error),
+    };
+    let mut workflows = load(&state);
+    let workflow = Workflow {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: unique_name(&parsed.name, &workflows),
+        prompt: parsed.prompt,
+        skill: parsed.skill,
+        nodes: Value::Array(parsed.nodes),
+        every_minutes: parsed.every_minutes,
+        // A fresh window, so importing a nightly workflow does not start it at once.
+        schedule_since: if parsed.every_minutes > 0 { now() } else { 0.0 },
+    };
+    workflows.push(workflow.clone());
+    workflows.sort_by_key(|workflow| workflow.name.to_lowercase());
+    if let Err(error) = store(&state, &workflows) {
+        return server_error(error);
+    }
+    ok(json!({ "ok": true, "workflow": workflow_json(&state, &workflow) }))
+}
+
 fn clipped(value: Option<&str>, max: usize) -> String {
     value.unwrap_or("").chars().take(max).collect::<String>()
 }
@@ -1625,6 +1790,45 @@ mod tests {
         states.insert("repair".to_string(), "succeeded".to_string());
         let (ok, _) = outcome(&nodes, &states);
         assert!(ok, "a successful repair branch handles the failure");
+    }
+
+    #[test]
+    fn an_import_document_is_validated_and_normalised() {
+        let parsed = parse_import(&json!({
+            "format": "saarthi.workflow",
+            "version": 1,
+            "name": "  Nightly  ",
+            "nodes": [{ "id": "tidy", "kind": "task", "note": "x" }]
+        }))
+        .unwrap();
+        assert_eq!(parsed.name, "Nightly");
+        assert_eq!(parsed.nodes.len(), 1);
+        assert_eq!(parsed.every_minutes, 0);
+        assert!(parse_import(&json!({
+            "name": "x",
+            "nodes": [{ "id": "a", "kind": "nope" }]
+        }))
+        .is_err());
+        assert!(parse_import(&json!({ "name": "x", "everyMinutes": 5, "nodes": [] })).is_err());
+        assert!(parse_import(&json!({ "prompt": "x" })).is_err());
+        assert!(parse_import(&json!([1, 2, 3])).is_err());
+    }
+
+    #[test]
+    fn exported_files_get_a_safe_unique_name() {
+        assert_eq!(slug("Nightly Review!"), "nightly-review");
+        assert_eq!(slug("***"), "workflow");
+        let existing = vec![Workflow {
+            id: "1".to_string(),
+            name: "Review".to_string(),
+            prompt: String::new(),
+            skill: String::new(),
+            nodes: json!([]),
+            every_minutes: 0,
+            schedule_since: 0.0,
+        }];
+        assert_eq!(unique_name("Review", &existing), "Review (2)");
+        assert_eq!(unique_name("Fresh", &existing), "Fresh");
     }
 
     #[test]

@@ -297,9 +297,13 @@ a `failed` edge), add/rename/delete with dependency rewriting, an inspector for
 every node field, and the JSON field kept as a synced advanced view. Layout is
 automatic, not free positioning.
 
-Remaining: graph import/export. Cancelling a run stops the graph but does not
-forcibly stop a child agent run in flight; scheduling is per process. The canvas
-has no frontend-harness case and has not been browser-verified.
+Export/import shipped in 2.13.0: a versioned `saarthi.workflow` document, the
+same validation on import, a new id and unique name, and a fresh schedule
+window.
+
+Remaining: free positioning on the canvas and browser verification of it.
+Cancelling a run stops the graph but does not forcibly stop a child agent run in
+flight; scheduling is per process.
 
 ## Phase 14 — Cross-platform
 

@@ -4875,6 +4875,7 @@ function renderWorkflows(workflows) {
     actions.appendChild(rowButton(nodes.length ? "Load prompt" : "Run", () => runWorkflow(workflow)));
     if (workflow.skill) actions.appendChild(rowButton("Detach skill", () => editWorkflow(workflow, { skill: "" })));
     actions.appendChild(rowButton("Edit", () => editWorkflow(workflow)));
+    actions.appendChild(rowButton("Export", () => exportWorkflow(workflow)));
     actions.appendChild(rowButton("Delete", () => deleteWorkflow(workflow), "danger"));
     row.appendChild(actions);
     host.appendChild(row);
@@ -4903,6 +4904,48 @@ async function startWorkflow(workflow) {
   const run = result.data.run || {};
   toast(`Workflow started${run.id ? ` as run ${String(run.id).slice(0, 8)}` : ""}.`);
   loadWorkflowRuns();
+}
+
+async function exportWorkflow(workflow) {
+  const result = await api(`/api/workflows/${encodeURIComponent(workflow.id)}/export`);
+  if (!result.ok) {
+    toast(result.data.error || "Could not export that workflow.");
+    return;
+  }
+  const bundle = new Blob([JSON.stringify(result.data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(bundle);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${String(workflow.name || "workflow")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "workflow"}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importWorkflowFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    let document;
+    try {
+      document = JSON.parse(String(reader.result));
+    } catch (_error) {
+      toast("That file is not valid JSON.");
+      return;
+    }
+    const result = await api("/api/workflows/import", { method: "POST", body: JSON.stringify(document) });
+    if (!result.ok) {
+      toast(result.data.error || "Could not import that workflow.");
+      return;
+    }
+    toast(`Imported "${result.data.workflow.name || "workflow"}".`);
+    loadWorkflows();
+  };
+  reader.readAsText(file);
 }
 
 function renderWorkflowRuns(runs) {
@@ -6784,11 +6827,21 @@ function bindEvents() {
     selectedWorkflowNode = "";
     $("workflowForm").classList.remove("hidden");
     renderWorkflowCanvas();
-    $("workflowForm").classList.remove("hidden");
     $("workflowName").focus();
   });
   $("workflowCancel").addEventListener("click", () => $("workflowForm").classList.add("hidden"));
   if ($("workflowRunsRefresh")) $("workflowRunsRefresh").addEventListener("click", loadWorkflowRuns);
+  if ($("workflowImport")) {
+    $("workflowImport").addEventListener("click", () => {
+      if ($("workflowImportFile")) $("workflowImportFile").click();
+    });
+  }
+  if ($("workflowImportFile")) {
+    $("workflowImportFile").addEventListener("change", () => {
+      importWorkflowFile($("workflowImportFile").files[0]);
+      $("workflowImportFile").value = "";
+    });
+  }
   document.querySelectorAll("[data-add-node]").forEach((button) => {
     button.addEventListener("click", () => addWorkflowNode(button.dataset.addNode));
   });

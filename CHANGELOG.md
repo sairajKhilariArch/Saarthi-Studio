@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.13.0
+
+Workflows can leave the machine: a graph exports to a portable JSON document and
+imports back as a new workflow.
+
+- `GET /api/workflows/:id/export` returns `{format: "saarthi.workflow", version:
+  1, name, prompt, skill, everyMinutes, nodes}` as a download named after the
+  workflow (lowercase ascii, single dashes).
+- `POST /api/workflows/import` accepts that document (or `{workflow: …}`) and
+  validates it with the same rules as save — ids, kinds, dependencies, cycles,
+  the node cap and the schedule rule — refusing an invalid graph without writing
+  anything.
+- Imports always get a new id and a unique name (`Review (2)`), so importing
+  twice never overwrites the first copy. A scheduled import starts a fresh
+  window instead of firing immediately.
+- The Automation list gains Export per workflow and an Import from file button;
+  both report failures as a toast.
+- Checks: `cargo test --locked` **459 passed, 1 ignored** (two new: import
+  validation/normalisation and safe unique export names); clippy `-D warnings`
+  clean; `node --check` clean. Live headless: a saved graph exported with its
+  format, version and nodes intact, then imported as a second workflow with the
+  same graph and a distinct name; an unknown node kind was refused with 400.
+
 ## 2.12.0
 
 Phase 13 gains a canvas: the workflow graph can be built and edited visually
