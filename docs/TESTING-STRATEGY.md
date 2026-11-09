@@ -10,10 +10,11 @@
 | Android JVM | `android/app/src/test/` | `cd android && gradle testDebugUnitTest` | policy/migration tests |
 | Android instrumentation | `android/app/src/androidTest/` | emulator script `android/scripts/ci/run-android-instrumentation.sh` | launch, DB migration, paging, backup |
 | Release-pipeline regressions | `scripts/ci/test-version.sh` | `bash scripts/ci/test-version.sh` | version parsing + artifact-name rules |
+| End-to-end (process level) | `scripts/ci/test-e2e.sh` | `bash scripts/ci/test-e2e.sh` | 11 checks: real binary boots headless against a scratch `FREE_AI_STUDIO_HOME`, mock provider answers a chat turn, the turn is stored, the process log and readiness payload are read, the process is killed, restarted, and the conversation re-read from disk — ~3 s |
 | Artifact gate | `scripts/ci/verify-artifacts.sh` | `bash scripts/ci/verify-artifacts.sh dist` | names, presence, checksums |
 
 CI gates: `desktop-ci.yml` (clippy `-D warnings`, tests, layout checks, version
-regressions, frontend tests, ubuntu + macOS), `rust-host-api-ci.yml` (rustfmt on
+regressions, frontend tests, end-to-end smoke, ubuntu + macOS), `rust-host-api-ci.yml` (rustfmt on
 host modules, tests, clippy), `android-ci.yml` (unit, lint, assemble, emulator
 instrumentation, hard validation gate), `desktop-release.yml` (real artifacts).
 
@@ -31,10 +32,10 @@ smoke layer below, not here.
    runs the real `app.js` in a browser-free harness (12 cases, wired into
    `desktop-ci.yml`). Still open: a browser smoke for render-critical paths, and
    the same treatment for `ide.js`.
-2. **End-to-end.** Launch the binary headless on a scratch port, drive the API
-   for a full flow (open folder → chat via mock router → agent run with
-   approval → restart → verify persistence). `scripts/mock-router.py` already
-   exists for the provider side.
+2. **End-to-end.** Shipped in 2.6.0 for launch → chat → restart → verify
+   persistence (`scripts/ci/test-e2e.sh`, wired into `desktop-ci.yml`). Still
+   open in the same flow: an agent run with an approval decision, opening a
+   folder, and a second provider failure case inside the same run.
 3. **Failure injection.** Offline provider, 401/429, timeout, disk full,
    locked DB, corrupted config, killed agent mid-step.
 4. **Installation smokes in CI.** After packaging: `dpkg -i` in a container,
@@ -59,6 +60,8 @@ smoke layer below, not here.
 cd app && cargo build --release --locked && cargo test --locked && cargo clippy --locked --all-targets -- -D warnings
 # frontend helpers (Node 18+)
 bash scripts/ci/test-frontend.sh
+# end-to-end (boots the real binary; needs curl + python3, ~3 s)
+bash scripts/ci/test-e2e.sh
 # pipeline logic
 bash scripts/ci/test-version.sh
 # packaging gate

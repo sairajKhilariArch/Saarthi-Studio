@@ -83,6 +83,11 @@ jobs:
         working-directory: app
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      # Process-level: the real binary, a scratch home, the mock provider, and a
+      # restart. Reuses the debug binary built above.
+      - name: Run end-to-end smoke
+        run: bash scripts/ci/test-e2e.sh
+
   macos:
     # Keep macOS compiling: the release pipeline merges a universal binary,
     # and an Intel-only or macOS-only source break fails there rather than

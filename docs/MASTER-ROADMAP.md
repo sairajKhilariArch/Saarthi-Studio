@@ -287,8 +287,14 @@ Delivered in 2.5.0: the frontend unit layer — `app/static/tests/` loads the re
 `app.js` in a browser-free `node:vm` harness, 12 cases over pure helpers, run by
 `scripts/ci/test-frontend.sh` and gated in `desktop-ci.yml`.
 
-Remaining: a render smoke and a harness for `ide.js`, the end-to-end flow, the
-failure-injection matrix, install smokes in CI, and a Windows Rust job.
+Delivered in 2.6.0: the end-to-end flow up to the agent step —
+`scripts/ci/test-e2e.sh` launches the real binary against a scratch home and the
+mock provider, runs a chat turn, reads the stored conversation, then restarts the
+process and confirms the state came from disk (11 checks, ~3 s, gated in CI).
+
+Remaining: an agent run with an approval decision inside that flow, a render
+smoke and a harness for `ide.js`, the failure-injection matrix, install smokes in
+CI, and a Windows Rust job.
 
 ## Phase 17 — Observability
 

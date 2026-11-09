@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.6.0
+
+Phase 16 lands a process-level end-to-end run: not another in-process test, but
+the actual binary, a real config file, a real SQLite database and a restart.
+
+- `scripts/ci/test-e2e.sh` — builds (or reuses) the debug binary, picks two free
+  ports, starts `scripts/mock-router.py` as the provider and launches the studio
+  headless with `FREE_AI_STUDIO_HOME` pointed at a scratch directory, so the run
+  can never read or write the developer's own settings. 11 checks: the mock
+  answers; the studio reports ready on the port it was given; the readiness
+  payload is well formed; a conversation is created; a chat turn is answered by
+  the provider and its text is the stored reply; the turn is stored as two
+  messages; the process log recorded the boot; the process is killed and
+  restarted on the same home; the conversation is still there, read from disk;
+  the database sits at the documented path.
+- Failing honestly where it matters: readiness is polled rather than assumed from
+  a listening port, the restart waits for the old process to release the port,
+  and on Windows the listener's own PID is killed because a shell `kill` can
+  leave the native process behind.
+- Wired into `desktop-ci.yml` after clippy, and `docs/TESTING-STRATEGY.md`
+  documents the command and the ~3 s runtime.
+- Still open and stated as such: the agent-approval half of the flow, opening a
+  folder, and a provider-failure case inside the same run.
+
 ## 2.5.0
 
 Starts Phase 16 with the layer the repo never had: automated tests for the static
