@@ -327,10 +327,14 @@ Delivered in 2.15.0:
   64 KiB size cap all fail validation with a stated reason; one bad folder does
   not hide the valid ones.
 - Settings → Extensions lists the directory and every folder's status, with a
-  Refresh action (2.16.0). Read-only: no install, uninstall or run.
+  Refresh action (2.16.0).
+- Install and uninstall (2.17.0): a folder is copied through staging with the
+  manifest validated first, symlinks refused and a 500-file/16 MiB cap; removal
+  checks canonical containment and moves the folder to `.removed/`.
 
 Remaining: execution under a sandbox, custom tools, provider adapters, UI
-extensions, and dependency/compatibility metadata.
+extensions, and dependency/compatibility metadata. Nothing is executed yet, so
+the install path grants no capability by itself.
 
 ## Phase 16 — Testing
 

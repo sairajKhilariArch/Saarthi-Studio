@@ -106,6 +106,7 @@ function setupSettingsNav() {
   $("permAdd").addEventListener("click", () => void addPermissionRule());
   $("permRefresh").addEventListener("click", () => void loadPermissions());
   if ($("extensionsRefresh")) $("extensionsRefresh").addEventListener("click", () => void loadExtensions());
+  if ($("extensionInstall")) $("extensionInstall").addEventListener("click", () => void installExtension());
   // The MCP panel points at Permissions where a rule would go; the link moves
   // the panel instead of navigating away from the app.
   $("settings-mcp").addEventListener("click", (event) => {
@@ -3466,6 +3467,40 @@ function setChatMode(mode) {
 
 /* Extensions are read-only here: the panel shows the manifest each folder
    declares and why one is unusable, and offers no install or run action. */
+async function installExtension() {
+  const input = $("extensionInstallPath");
+  const path = input ? input.value.trim() : "";
+  if (!path) {
+    toast("Enter the folder to install.");
+    return;
+  }
+  const result = await api("/api/extensions/install", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not install that extension.");
+    return;
+  }
+  if (input) input.value = "";
+  toast(`Installed ${result.data.id}.`);
+  loadExtensions();
+}
+
+async function removeExtension(extension) {
+  if (!confirm(`Remove the extension "${extension.id}"? Its folder moves to .removed.`)) return;
+  const result = await api(`/api/extensions/${encodeURIComponent(extension.id)}/remove`, {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not remove that extension.");
+    return;
+  }
+  toast("Extension removed.");
+  loadExtensions();
+}
+
 async function loadExtensions() {
   const host = $("extensionsList");
   if (!host) return;
@@ -3510,6 +3545,10 @@ async function loadExtensions() {
     badge.className = `badge ${extension.valid ? "on" : "broken"}`;
     badge.textContent = extension.valid ? "valid" : "invalid";
     row.appendChild(badge);
+    const actions = document.createElement("span");
+    actions.className = "project-menu-actions-row";
+    actions.appendChild(rowButton("Remove", () => removeExtension(extension), "danger"));
+    row.appendChild(actions);
     host.appendChild(row);
   });
 }

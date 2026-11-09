@@ -824,7 +824,13 @@
           <h2 class="form-group-title">Extensions</h2>
           <p>Folders with a <code>manifest.json</code> in the directory below. This panel reports what is installed and whether it is usable; nothing here is executed yet, and installing means putting a folder in place.</p>
           <p class="muted" id="extensionsDirectory"></p>
+          <label class="field">
+            <span>Folder to install</span>
+            <input id="extensionInstallPath" type="text" placeholder="C:\path\to\hello-tools" autocomplete="off">
+            <small>The folder is copied into the directory above. Its name must equal the manifest id, and symlinks are refused.</small>
+          </label>
           <div class="form-actions">
+            <button type="button" id="extensionInstall" class="btn btn-accent">Install folder</button>
             <button type="button" id="extensionsRefresh" class="btn btn-quiet">Refresh</button>
           </div>
           <div id="extensionsList" class="list-block"></div>

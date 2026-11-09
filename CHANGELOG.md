@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.17.0
+
+Extensions can be installed and removed from the app now.
+
+- Install copies a folder into the extensions directory through a staging
+  folder: a bad manifest, a missing entry file or a symlink leaves nothing
+  behind. The source folder name must equal the manifest id, the manifest is
+  validated before any copy, and the installed copy is re-read so the entry and
+  canonical containment checks apply. The copy is capped at 500 files / 16 MiB.
+- Uninstall validates the id, confirms the canonical folder is inside the
+  extensions directory, and moves it to `.removed/` instead of deleting it.
+  Discovery skips hidden folders, so a removed extension stops reporting.
+- Settings → Extensions gains a folder-path field with Install, and a Remove
+  action on each row.
+- Checks: `cargo test --locked` **465 passed, 1 ignored** (three new: install and
+  duplicate refusal, rollback on a bad manifest and a missing entry, uninstall
+  moving aside and refusing a traversal id); clippy `-D warnings` clean;
+  `node --check` clean; frontend 18 passed; e2e 19 passed. Live: install → valid
+  → remove → empty, with the folder moved to `.removed`.
+- The new panel controls were not clicked in a browser; the endpoints were
+  exercised with `curl`.
+
 ## 2.16.0
 
 The manifest API had no visible surface; Settings → Extensions is now one.

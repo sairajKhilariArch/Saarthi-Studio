@@ -35,12 +35,14 @@
 //! believing an extension cannot do something that it can.
 
 use crate::AppState;
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Closed permission vocabulary. Adding one is a product decision, not a typo.
 const ALLOWED_PERMISSIONS: [&str; 5] = [
@@ -51,6 +53,10 @@ const ALLOWED_PERMISSIONS: [&str; 5] = [
     "mcp.call",
 ];
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+/// Install limits: an extension is copied into the app's data directory, so an
+/// unbounded copy could fill the disk. These are ceilings, not quotas.
+const MAX_FILES: usize = 500;
+const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
@@ -200,6 +206,149 @@ fn invalid(folder: &str, error: String) -> Value {
     })
 }
 
+fn is_hidden(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with('.'))
+        .unwrap_or(false)
+}
+
+/// Copy a folder into the extensions directory. Refuses symlinks outright: a
+/// link could point anywhere on the machine, and the manifest's canonical check
+/// only covers `entry`. The copy is staged and renamed, so a failure leaves no
+/// half-installed folder behind.
+fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    let mut pending = vec![(source.to_path_buf(), destination.to_path_buf())];
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    while let Some((from, to)) = pending.pop() {
+        fs::create_dir_all(&to).map_err(|error| format!("Could not create a folder: {error}"))?;
+        for entry in fs::read_dir(&from).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let file_type = entry.file_type().map_err(|error| error.to_string())?;
+            let target = to.join(entry.file_name());
+            if file_type.is_symlink() {
+                return Err(format!(
+                    "{} is a symlink; extensions must be plain folders.",
+                    entry.path().display()
+                ));
+            }
+            if file_type.is_dir() {
+                pending.push((entry.path(), target));
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            files += 1;
+            bytes = bytes.saturating_add(entry.metadata().map(|meta| meta.len()).unwrap_or(0));
+            if files > MAX_FILES || bytes > MAX_TOTAL_BYTES {
+                return Err(format!(
+                    "The extension is larger than the install limit ({MAX_FILES} files, {} MiB).",
+                    MAX_TOTAL_BYTES / (1024 * 1024)
+                ));
+            }
+            fs::copy(entry.path(), &target).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn install_into(source: &Path, root: &Path) -> Result<String, String> {
+    let folder = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if !valid_id(folder) {
+        return Err(
+            "The folder name must be the extension id: 1-40 lowercase letters, digits, - or _."
+                .to_string(),
+        );
+    }
+    let manifest_path = source.join("manifest.json");
+    let meta = fs::metadata(&manifest_path)
+        .map_err(|_| "The folder has no readable manifest.json.".to_string())?;
+    if meta.len() > MAX_MANIFEST_BYTES {
+        return Err(format!(
+            "manifest.json is larger than {MAX_MANIFEST_BYTES} bytes."
+        ));
+    }
+    let text = fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?;
+    let raw: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("manifest.json is not valid JSON: {error}"))?;
+    let manifest = parse_manifest(folder, &raw)?;
+    fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    let destination = root.join(&manifest.id);
+    if destination.exists() {
+        return Err(format!(
+            "Extension \"{}\" is already installed. Remove it first.",
+            manifest.id
+        ));
+    }
+    let staging = root.join(format!(".install-{}", uuid::Uuid::new_v4().simple()));
+    let staged: Result<(), String> = (|| {
+        copy_tree(source, &staging)?;
+        fs::rename(&staging, &destination).map_err(|error| error.to_string())
+    })();
+    if let Err(error) = staged {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    // Re-read the copy: this is what checks the entry file and canonical containment.
+    let entries = inspect(root);
+    let installed = entries
+        .iter()
+        .find(|entry| entry["id"] == manifest.id.as_str());
+    match installed {
+        Some(entry) if entry["valid"] == Value::Bool(true) => Ok(manifest.id),
+        Some(entry) => {
+            let error = entry["error"]
+                .as_str()
+                .unwrap_or("The installed manifest is not valid.")
+                .to_string();
+            let _ = fs::remove_dir_all(&destination);
+            Err(error)
+        }
+        None => {
+            let _ = fs::remove_dir_all(&destination);
+            Err("The installed extension could not be read back.".to_string())
+        }
+    }
+}
+
+/// Removing moves the folder into `.removed/` instead of deleting it, matching
+/// skills: a mistaken removal is recoverable, and an install can then proceed.
+fn remove_extension(root: &Path, id: &str) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("Invalid extension id.".to_string());
+    }
+    let target = root.join(id);
+    if !target.is_dir() {
+        return Err("No such extension.".to_string());
+    }
+    let base = root.canonicalize().map_err(|error| error.to_string())?;
+    let canonical = target.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical.starts_with(&base) {
+        return Err("Refusing to remove a folder outside the extensions directory.".to_string());
+    }
+    let removed = root.join(".removed");
+    fs::create_dir_all(&removed).map_err(|error| error.to_string())?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    fs::rename(&canonical, removed.join(format!("{id}-{stamp}")))
+        .map_err(|error| error.to_string())
+}
+
+fn bad(message: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "ok": false, "error": message.to_string() })),
+    )
+        .into_response()
+}
+
 fn inspect(dir: &Path) -> Vec<Value> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -207,7 +356,7 @@ fn inspect(dir: &Path) -> Vec<Value> {
     let mut folders: Vec<PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
+        .filter(|path| path.is_dir() && !is_hidden(path))
         .collect();
     folders.sort();
     folders
@@ -279,6 +428,34 @@ pub(crate) async fn list(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
+pub(crate) async fn install(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> Response {
+    let Some(path) = input
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return bad("Provide the folder path to install.");
+    };
+    match install_into(Path::new(path), &extensions_dir(&state)) {
+        Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
+        Err(error) => bad(error),
+    }
+}
+
+pub(crate) async fn remove(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match remove_extension(&extensions_dir(&state), &id) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(error) => bad(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +468,78 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch directory");
         dir
+    }
+
+    #[test]
+    fn installing_copies_a_valid_extension_and_refuses_a_second_copy() {
+        let root = scratch("install");
+        let source = root.join("src").join("hello-tools");
+        fs::create_dir_all(&source).expect("source folder");
+        fs::write(
+            source.join("manifest.json"),
+            r#"{"id":"hello-tools","name":"Hello Tools","version":"1.0.0","entry":"main.js"}"#,
+        )
+        .expect("manifest");
+        fs::write(source.join("main.js"), "export default {};\n").expect("entry");
+
+        let target = root.join("extensions");
+        assert_eq!(install_into(&source, &target).expect("install"), "hello-tools");
+        assert!(target.join("hello-tools").join("main.js").is_file());
+        assert_eq!(inspect(&target)[0]["valid"], true);
+
+        let error = install_into(&source, &target).expect_err("second copy");
+        assert!(error.contains("already installed"), "{error}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_install_leaves_nothing_and_a_missing_entry_fails() {
+        let root = scratch("install-bad");
+        let bad = root.join("src").join("bad-tools");
+        fs::create_dir_all(&bad).expect("bad folder");
+        fs::write(
+            bad.join("manifest.json"),
+            r#"{"id":"bad-tools","name":"Bad","version":"1.0.0","permissions":["root"]}"#,
+        )
+        .expect("bad manifest");
+        let target = root.join("extensions");
+        let error = install_into(&bad, &target).expect_err("bad manifest");
+        assert!(error.contains("unknown permission"), "{error}");
+        assert!(!target.join("bad-tools").exists());
+
+        let no_entry = root.join("src").join("no-entry");
+        fs::create_dir_all(&no_entry).expect("folder");
+        fs::write(
+            no_entry.join("manifest.json"),
+            r#"{"id":"no-entry","name":"No Entry","version":"1.0.0","entry":"missing.js"}"#,
+        )
+        .expect("manifest");
+        let error = install_into(&no_entry, &target).expect_err("missing entry");
+        assert!(error.contains("missing"), "{error}");
+        assert!(!target.join("no-entry").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn uninstalling_moves_the_folder_aside_and_validates_the_id() {
+        let root = scratch("remove");
+        let folder = root.join("hello-tools");
+        fs::create_dir_all(&folder).expect("extension folder");
+        fs::write(
+            folder.join("manifest.json"),
+            r#"{"id":"hello-tools","name":"Hello Tools","version":"1.0.0"}"#,
+        )
+        .expect("manifest");
+
+        remove_extension(&root, "hello-tools").expect("remove");
+        assert!(!root.join("hello-tools").exists());
+        assert!(root.join(".removed").is_dir());
+        // The moved folder is hidden from discovery.
+        assert!(inspect(&root).is_empty());
+
+        assert!(remove_extension(&root, "missing").is_err());
+        assert!(remove_extension(&root, "../escape").is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
