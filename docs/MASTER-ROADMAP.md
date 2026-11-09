@@ -157,8 +157,14 @@ scalar-type validation, `mcp_tool` permission binding with an audit trail,
 health/logs from real handshakes, OAuth sign-in for remote servers, and agent
 use of MCP tools behind a per-run flag.
 
-Open: full JSON Schema validation rather than required-argument and scalar-type
-checks.
+*Delivered 2.7.0: schema validation* — `mcp.rs` checks every call against the
+tool's own `inputSchema` beyond presence: type lists, `enum`/`const`, nested
+`properties` and `items`, `additionalProperties`, numeric/string/array/object
+bounds, `allOf`/`anyOf`/`oneOf`/`not`, boolean schemas and local `$ref`s, with a
+depth limit for recursive schemas. Keywords it does not model (`pattern`,
+`format`, `propertyNames`, remote refs) accept the value so the server remains
+the authority, and an unreadable schema is refused at call time. Phase 7 is
+closed; nothing in the specification remains open here.
 
 ## Phase 8 — Project knowledge and memory
 

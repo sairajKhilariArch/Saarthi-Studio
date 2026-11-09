@@ -1341,11 +1341,20 @@ fn cap(value: &str, limit: usize) -> String {
 // ---------------------------------------------------------------------------
 // Schema validation: refuse a call the server itself would reject
 
+/// A recursive schema (a tree, a linked list) must not cost unbounded work.
+const SCHEMA_DEPTH_LIMIT: usize = 16;
+
 fn matches_type(expected: &str, value: &Value) -> bool {
     match expected {
         "string" => value.is_string(),
         "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        // JSON Schema counts 1.0 as an integer; a model that sends a float for
+        // an integer field meant the whole number.
+        "integer" => {
+            value.as_i64().is_some()
+                || value.as_u64().is_some()
+                || value.as_f64().is_some_and(|number| number.fract() == 0.0)
+        }
         "boolean" => value.is_boolean(),
         "object" => value.is_object(),
         "array" => value.is_array(),
@@ -1356,33 +1365,335 @@ fn matches_type(expected: &str, value: &Value) -> bool {
     }
 }
 
-/// Check the arguments against the tool's own `inputSchema`. Only `required`
-/// presence and declared scalar types are enforced — enough to catch the
-/// mistake a model actually makes (dropping a required field, sending a number
-/// as a string) without pretending to implement JSON Schema.
-fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), String> {
-    let Some(object) = arguments.as_object() else {
-        return Err("Tool arguments must be a JSON object.".to_string());
-    };
-    let Some(required) = schema.get("required").and_then(Value::as_array) else {
+fn argument_label(path: &str) -> String {
+    if path.is_empty() {
+        "The arguments".to_string()
+    } else {
+        format!("Argument \"{path}\"")
+    }
+}
+
+fn child_path(path: &str, name: &str) -> String {
+    if path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path}.{name}")
+    }
+}
+
+fn index_path(path: &str, index: usize) -> String {
+    format!("{path}[{index}]")
+}
+
+/// Only document-local references are followed. A remote `$ref` is the
+/// server's to resolve, so it accepts the value here.
+fn resolve_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
+    let pointer = reference.strip_prefix('#')?;
+    if !pointer.starts_with('/') {
+        return None;
+    }
+    root.pointer(pointer)
+}
+
+/// Validate one value against one schema node. The keyword subset is: `type`,
+/// `enum`, `const`, `required`, `properties`, `additionalProperties`, `items`,
+/// `minItems`/`maxItems`, `uniqueItems`, `minLength`/`maxLength`, `minimum`/
+/// `maximum`/`exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`,
+/// `minProperties`/`maxProperties`, `allOf`/`anyOf`/`oneOf`/`not` and local
+/// `$ref`s. Everything else — `pattern`, `format`, `propertyNames`, remote
+/// references — is left to the server, because it is the authority on its own
+/// tool: refusing a call a server would have accepted is worse than letting the
+/// server reject one with its own message.
+fn validate_value(
+    root: &Value,
+    schema: &Value,
+    value: &Value,
+    path: &str,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > SCHEMA_DEPTH_LIMIT {
+        return Ok(());
+    }
+    // A boolean schema carries its whole meaning.
+    if let Value::Bool(allowed) = schema {
+        if *allowed {
+            return Ok(());
+        }
+        let verb = if path.is_empty() { "are" } else { "is" };
+        return Err(format!(
+            "{} {verb} not accepted by this tool.",
+            argument_label(path)
+        ));
+    }
+    let Some(object) = schema.as_object() else {
+        // A schema this client cannot model must not refuse a valid call.
         return Ok(());
     };
-    for name in required.iter().filter_map(Value::as_str) {
-        let Some(value) = object.get(name) else {
-            return Err(format!("Missing required argument \"{name}\"."));
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        // Sibling keywords next to `$ref` are ignored, as draft-4 reads it.
+        if let Some(target) = resolve_ref(root, reference) {
+            return validate_value(root, target, value, path, depth + 1);
+        }
+    }
+
+    if let Some(declared) = object.get("type") {
+        let expected = match declared {
+            Value::String(name) => vec![name.as_str()],
+            Value::Array(names) => names.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
         };
-        let expected = schema
-            .get("properties")
-            .and_then(|properties| properties.get(name))
-            .and_then(|property| property.get("type"))
-            .and_then(Value::as_str);
-        if let Some(expected) = expected {
-            if !matches_type(expected, value) {
-                return Err(format!("Argument \"{name}\" must be {expected}."));
+        if !expected.is_empty() && !expected.iter().any(|name| matches_type(name, value)) {
+            return Err(format!(
+                "{} must be {}.",
+                argument_label(path),
+                expected.join(" or ")
+            ));
+        }
+    }
+
+    if let Some(options) = object.get("enum").and_then(Value::as_array) {
+        if !options.iter().any(|option| option == value) {
+            let listed = options
+                .iter()
+                .take(6)
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!("{} must be one of {listed}.", argument_label(path)));
+        }
+    }
+    if let Some(constant) = object.get("const") {
+        if constant != value {
+            return Err(format!("{} must be {constant}.", argument_label(path)));
+        }
+    }
+
+    if let Some(branches) = object.get("allOf").and_then(Value::as_array) {
+        for branch in branches {
+            validate_value(root, branch, value, path, depth + 1)?;
+        }
+    }
+    if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+        if !branches.is_empty()
+            && !branches
+                .iter()
+                .any(|branch| validate_value(root, branch, value, path, depth + 1).is_ok())
+        {
+            return Err(format!(
+                "{} must match one of {} declared forms.",
+                argument_label(path),
+                branches.len()
+            ));
+        }
+    }
+    if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
+        let matched = branches
+            .iter()
+            .filter(|branch| validate_value(root, branch, value, path, depth + 1).is_ok())
+            .count();
+        if !branches.is_empty() && matched != 1 {
+            return Err(format!(
+                "{} must match exactly one of {} declared forms ({matched} matched).",
+                argument_label(path),
+                branches.len()
+            ));
+        }
+    }
+    if let Some(excluded) = object.get("not") {
+        if validate_value(root, excluded, value, path, depth + 1).is_ok() {
+            return Err(format!(
+                "{} uses a form this tool excludes.",
+                argument_label(path)
+            ));
+        }
+    }
+
+    if let Some(text) = value.as_str() {
+        let length = text.chars().count() as u64;
+        if let Some(min) = object.get("minLength").and_then(Value::as_u64) {
+            if length < min {
+                return Err(format!(
+                    "{} must be at least {min} characters.",
+                    argument_label(path)
+                ));
+            }
+        }
+        if let Some(max) = object.get("maxLength").and_then(Value::as_u64) {
+            if length > max {
+                return Err(format!(
+                    "{} must be at most {max} characters.",
+                    argument_label(path)
+                ));
+            }
+        }
+    }
+
+    if let Some(number) = value.as_f64() {
+        if let Some(min) = object.get("minimum").and_then(Value::as_f64) {
+            if number < min {
+                return Err(format!("{} must be at least {min}.", argument_label(path)));
+            }
+        }
+        if let Some(max) = object.get("maximum").and_then(Value::as_f64) {
+            if number > max {
+                return Err(format!("{} must be at most {max}.", argument_label(path)));
+            }
+        }
+        if let Some(min) = object.get("exclusiveMinimum").and_then(Value::as_f64) {
+            if number <= min {
+                return Err(format!(
+                    "{} must be greater than {min}.",
+                    argument_label(path)
+                ));
+            }
+        }
+        if let Some(max) = object.get("exclusiveMaximum").and_then(Value::as_f64) {
+            if number >= max {
+                return Err(format!("{} must be less than {max}.", argument_label(path)));
+            }
+        }
+        if let Some(step) = object.get("multipleOf").and_then(Value::as_f64) {
+            if step > 0.0 {
+                let quotient = number / step;
+                if (quotient - quotient.round()).abs() > 1e-9 {
+                    return Err(format!(
+                        "{} must be a multiple of {step}.",
+                        argument_label(path)
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(items) = value.as_array() {
+        if let Some(min) = object.get("minItems").and_then(Value::as_u64) {
+            if (items.len() as u64) < min {
+                return Err(format!(
+                    "{} must have at least {min} items.",
+                    argument_label(path)
+                ));
+            }
+        }
+        if let Some(max) = object.get("maxItems").and_then(Value::as_u64) {
+            if (items.len() as u64) > max {
+                return Err(format!(
+                    "{} must have at most {max} items.",
+                    argument_label(path)
+                ));
+            }
+        }
+        if object
+            .get("uniqueItems")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            for (index, entry) in items.iter().enumerate() {
+                if items[..index].contains(entry) {
+                    return Err(format!(
+                        "{} must not repeat the same item.",
+                        argument_label(path)
+                    ));
+                }
+            }
+        }
+        match object.get("items") {
+            // Draft-4 tuple form: one schema per position.
+            Some(Value::Array(per_position)) => {
+                for (index, entry) in items.iter().enumerate() {
+                    if let Some(branch) = per_position.get(index) {
+                        validate_value(root, branch, entry, &index_path(path, index), depth + 1)?;
+                    }
+                }
+            }
+            Some(branch) => {
+                for (index, entry) in items.iter().enumerate() {
+                    validate_value(root, branch, entry, &index_path(path, index), depth + 1)?;
+                }
+            }
+            None => {}
+        }
+    }
+
+    if let Some(members) = value.as_object() {
+        let declared = object.get("properties").and_then(Value::as_object);
+        if let Some(required) = object.get("required").and_then(Value::as_array) {
+            for name in required.iter().filter_map(Value::as_str) {
+                if !members.contains_key(name) {
+                    return Err(format!(
+                        "Missing required argument \"{}\".",
+                        child_path(path, name)
+                    ));
+                }
+            }
+        }
+        if let Some(declared) = declared {
+            for (name, member) in members {
+                if let Some(property) = declared.get(name) {
+                    validate_value(root, property, member, &child_path(path, name), depth + 1)?;
+                }
+            }
+        }
+        if let Some(min) = object.get("minProperties").and_then(Value::as_u64) {
+            if (members.len() as u64) < min {
+                return Err(format!(
+                    "{} must name at least {min} fields.",
+                    argument_label(path)
+                ));
+            }
+        }
+        if let Some(max) = object.get("maxProperties").and_then(Value::as_u64) {
+            if (members.len() as u64) > max {
+                return Err(format!(
+                    "{} must name at most {max} fields.",
+                    argument_label(path)
+                ));
+            }
+        }
+        // Without a pattern matcher, `additionalProperties: false` alongside
+        // `patternProperties` cannot tell a pattern-allowed name from an extra
+        // one, so it is left to the server rather than guessing.
+        if object.get("patternProperties").is_none() {
+            match object.get("additionalProperties") {
+                Some(Value::Bool(false)) => {
+                    for name in members.keys() {
+                        let known = declared.is_some_and(|declared| declared.contains_key(name));
+                        if !known {
+                            return Err(format!(
+                                "Argument \"{}\" is not declared by the tool.",
+                                child_path(path, name)
+                            ));
+                        }
+                    }
+                }
+                Some(extra @ Value::Object(_)) => {
+                    for (name, member) in members {
+                        let known = declared.is_some_and(|declared| declared.contains_key(name));
+                        if !known {
+                            validate_value(
+                                root,
+                                extra,
+                                member,
+                                &child_path(path, name),
+                                depth + 1,
+                            )?;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
     Ok(())
+}
+
+/// Check the arguments against the tool's own `inputSchema`. The object shape is
+/// required because MCP tools take an argument object; everything below that is
+/// `validate_value`'s keyword subset.
+fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), String> {
+    if !arguments.is_object() {
+        return Err("Tool arguments must be a JSON object.".to_string());
+    }
+    validate_value(schema, schema, arguments, "", 0)
 }
 
 /// Flatten a `tools/call` result into the text a caller can read, keeping the
@@ -1506,6 +1817,15 @@ pub(crate) async fn invoke(
         .get("inputSchema")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    // An input schema that is neither an object nor a boolean cannot be read, and
+    // guessing at a call is worse than naming the problem.
+    if !schema.is_object() && !schema.is_boolean() {
+        session.close().await;
+        return Err(CallFailure::BadRequest(format!(
+            "{} declares an input schema for \"{tool}\" this client cannot read.",
+            server.name
+        )));
+    }
     if let Err(error) = validate_arguments(&schema, arguments) {
         session.close().await;
         return Err(CallFailure::BadRequest(error));
@@ -2349,6 +2669,191 @@ mod tests {
         let schema = json!({ "type": "object", "properties": {} });
         assert!(validate_arguments(&schema, &json!({})).is_ok());
         assert!(validate_arguments(&schema, &json!([])).is_err());
+    }
+
+    #[test]
+    fn declared_property_types_and_bounds_are_checked_even_when_optional() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "path": { "type": "string", "minLength": 1, "maxLength": 4 }
+            }
+        });
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "limit": "5" })),
+            Err("Argument \"limit\" must be integer.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "limit": 0 })),
+            Err("Argument \"limit\" must be at least 1.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "limit": 101 })),
+            Err("Argument \"limit\" must be at most 100.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "path": "" })),
+            Err("Argument \"path\" must be at least 1 characters.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "path": "abcde" })),
+            Err("Argument \"path\" must be at most 4 characters.".to_string())
+        );
+        // JSON Schema counts a whole-valued float as an integer.
+        assert!(validate_arguments(&schema, &json!({ "limit": 2.0 })).is_ok());
+        assert!(validate_arguments(&schema, &json!({ "limit": 2, "path": "src" })).is_ok());
+    }
+
+    #[test]
+    fn nested_objects_and_arrays_are_validated() {
+        let schema = json!({
+            "type": "object",
+            "required": ["options"],
+            "properties": {
+                "options": {
+                    "type": "object",
+                    "required": ["timeout"],
+                    "properties": { "timeout": { "type": "integer" } },
+                    "additionalProperties": false
+                },
+                "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 2 },
+                "codes": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+            }
+        });
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "options": {} })),
+            Err("Missing required argument \"options.timeout\".".to_string())
+        );
+        assert_eq!(
+            validate_arguments(
+                &schema,
+                &json!({ "options": { "timeout": 1, "extra": true } })
+            ),
+            Err("Argument \"options.extra\" is not declared by the tool.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(
+                &schema,
+                &json!({ "options": { "timeout": 1 }, "tags": ["a", 2] })
+            ),
+            Err("Argument \"tags[1]\" must be string.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(
+                &schema,
+                &json!({ "options": { "timeout": 1 }, "tags": ["a", "b", "c"] })
+            ),
+            Err("Argument \"tags\" must have at most 2 items.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(
+                &schema,
+                &json!({ "options": { "timeout": 1 }, "codes": ["a", "a"] })
+            ),
+            Err("Argument \"codes\" must not repeat the same item.".to_string())
+        );
+        assert!(validate_arguments(
+            &schema,
+            &json!({ "options": { "timeout": 1 }, "tags": ["a"], "codes": ["a", "b"] })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn choices_and_combinators_are_explained() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "mode": { "enum": ["fast", "safe"] },
+                "exact": { "const": 7 },
+                "either": { "anyOf": [ { "type": "string" }, { "type": "integer" } ] },
+                "one": { "oneOf": [ { "type": "number" }, { "type": "integer" } ] },
+                "forbidden": { "not": { "type": "null" } }
+            }
+        });
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "mode": "turbo" })),
+            Err("Argument \"mode\" must be one of \"fast\", \"safe\".".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "exact": 8 })),
+            Err("Argument \"exact\" must be 7.".to_string())
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "either": true })),
+            Err("Argument \"either\" must match one of 2 declared forms.".to_string())
+        );
+        // An integer is also a number, so it matches both branches of `oneOf`.
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "one": 1 })),
+            Err(
+                "Argument \"one\" must match exactly one of 2 declared forms (2 matched)."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "forbidden": null })),
+            Err("Argument \"forbidden\" uses a form this tool excludes.".to_string())
+        );
+        assert!(validate_arguments(
+            &schema,
+            &json!({ "mode": "safe", "exact": 7, "either": 1, "one": 1.5, "forbidden": "x" })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn local_refs_resolve_and_a_cycle_stops_at_the_depth_limit() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "options": { "$ref": "#/$defs/options" } },
+            "$defs": {
+                "options": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": { "name": { "type": "string" } }
+                }
+            }
+        });
+        assert_eq!(
+            validate_arguments(&schema, &json!({ "options": {} })),
+            Err("Missing required argument \"options.name\".".to_string())
+        );
+        assert!(validate_arguments(&schema, &json!({ "options": { "name": "x" } })).is_ok());
+
+        // A self-referential schema must terminate rather than recurse forever.
+        let recursive = json!({
+            "type": "object",
+            "properties": { "child": { "$ref": "#/$defs/node" } },
+            "$defs": { "node": {
+                "type": "object",
+                "properties": { "child": { "$ref": "#/$defs/node" } }
+            } }
+        });
+        let mut value = json!({});
+        for _ in 0..40 {
+            value = json!({ "child": value });
+        }
+        assert!(validate_arguments(&recursive, &value).is_ok());
+
+        // A remote reference is the server's to resolve.
+        let remote = json!({
+            "type": "object",
+            "properties": { "x": { "$ref": "https://example.com/schema.json" } }
+        });
+        assert!(validate_arguments(&remote, &json!({ "x": 1 })).is_ok());
+    }
+
+    #[test]
+    fn a_boolean_schema_means_everything_or_nothing() {
+        assert!(validate_arguments(&json!(true), &json!({ "anything": 1 })).is_ok());
+        assert_eq!(
+            validate_arguments(&json!(false), &json!({})),
+            Err("The arguments are not accepted by this tool.".to_string())
+        );
+        // A schema this client cannot model accepts the value for the server.
+        assert!(validate_arguments(&json!("nope"), &json!({})).is_ok());
     }
 
     #[test]

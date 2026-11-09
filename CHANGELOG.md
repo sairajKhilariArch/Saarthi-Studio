@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.7.0
+
+Closes the last named gap in Phase 7: an MCP tool call is now checked against
+the tool's own `inputSchema`, not just its `required` list.
+
+- `validate_value` in `app/src/mcp.rs` walks the schema and the arguments
+  together — `type` (a name or a list, with `1.0` counting as an integer),
+  `enum`/`const`, nested `properties`, `items` (one schema or the draft-4 tuple
+  form), `additionalProperties` (`false` or a schema), `minLength`/`maxLength`,
+  `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`,
+  `minItems`/`maxItems`/`uniqueItems`, `minProperties`/`maxProperties`,
+  `allOf`/`anyOf`/`oneOf`/`not`, boolean schemas and local `$ref`s
+  (`#/$defs/…`, `#/definitions/…`).
+- The error names the field by path and says what it expected, in the same plain
+  wording as before: `Argument "options.timeout" must be integer.`,
+  `Argument "tags[1]" must be string.`, `Missing required argument
+  "options.name".` The agent loop already feeds that text back to the model to
+  repair the call.
+- Deliberately bounded: a recursive schema stops at depth 16; `pattern`,
+  `format`, `propertyNames` and remote references are left to the server (it is
+  the authority on its own tool); `additionalProperties: false` is not applied
+  beside `patternProperties`, because refusing a name a pattern would allow
+  without a regex engine would be worse than the server's own answer. A schema
+  that is neither an object nor a boolean is refused at call time (`declares an
+  input schema … this client cannot read`), which is the phase's "invalid
+  schemas are rejected" half.
+- `cargo test --locked`: **448 passed, 1 ignored** (5 new cases over the shared
+  validator). Clippy `--all-targets -D warnings` clean, rustfmt clean. No new
+  dependency and no frontend change; validation errors already surfaced through
+  the existing 400 and agent-step text paths.
+- Phase 7 is closed against the specification's rows. The route was not driven
+  against a live MCP server in this slice: the validator the route and the agent
+  loop share is covered by unit tests, and the call-path check is a three-line
+  guard.
+
 ## 2.6.0
 
 Phase 16 lands a process-level end-to-end run: not another in-process test, but

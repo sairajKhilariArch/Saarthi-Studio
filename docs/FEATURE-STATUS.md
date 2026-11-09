@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 2.7.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,10 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.7.0 (2026-11-09):** Phase 7's last row closed — MCP calls are
+validated against a bounded JSON Schema subset. The row-level verdicts below
+otherwise stand as written at 2.1.0.
+
 **Revision 2.1.0 (2026-11-09):** rows re-verified against the tree at `2.1.0`.
 Closed since the 1.28.0 pass: Phase 2 configuration editor and dependency
 probing (1.43.0), Phase 3 circuit breaker and provider health (1.50.0), Phase 10
@@ -31,7 +35,7 @@ the shipped-version checklist, `MASTER-ROADMAP.md` the ordering and
 Phases 2, 3, 4, 5, 6, 7, 8, 10, 11 and 14 are delivered in substance; what
 remains inside them is named per row (router update/uninstall in the panel,
 remote-service routers, a price for native OpenAI picks, per-skill permissions,
-full JSON Schema validation for MCP, an editor that bypasses the run lease, live
+an editor that bypasses the run lease, live
 capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 is still a flat
 saved-prompt list rather than a workflow graph, and Phase 15 has no extension
@@ -56,7 +60,7 @@ row below moves, so they cannot drift from the tables.
 | 4 | Thinking + OpenAI Platform | 88% | tool calling / structured output through the platform path |
 | 5 | Agent execution | 100% | named caveats only (an editor save bypasses the run lease) |
 | 6 | Skills | 92% | per-skill permissions |
-| 7 | MCP | 100% | full JSON Schema validation |
+| 7 | MCP | 100% | — (schema validation landed 2.7.0) |
 | 8 | Memory and RAG | 93% | embeddings are a router proxy, not a local index |
 | 9 | Developer environment | 82% | editor engine, debugger, watch mode |
 | 10 | Safety and permissions | 100% | updates have no in-app route to gate |
@@ -178,7 +182,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Server registry | Working (1.37.0) | `mcp.json` beside the config; `transport` (stdio/http/sse), `url` for remote servers, `env` for stdio and write-only `headers` for remote — values stored, only names returned; an entry without `transport` reads as stdio |
 | Connection lifecycle | Working (1.39.0) | a live session per server is reused across calls (handshake skipped, tool list re-read), warm for five idle minutes, evicted on save/remove and on a failed request, with a fresh-handshake fallback; a dropped stdio child is killed and an SSE reader aborted |
 | Tool discovery | Working (1.33.0) | `tools/list`, schemas kept |
-| Schema validation | Working (1.33.0) | `required` presence + declared scalar types; not full JSON Schema |
+| Schema validation | Working (2.7.0) | Bounded JSON Schema subset: type lists, enum/const, nested properties and items, `additionalProperties`, bounds, combinators, boolean schemas and local `$ref`s, depth-limited; `pattern`/`format`/remote refs left to the server |
 | Permission binding | Working (1.33.0) | `mcp_tool` on `server.tool`; ask/deny/allow, audited |
 | Health, logs, reconnect | Working (1.36.0) | health recorded from a real handshake (`serverInfo.version`, protocol, tool count, latency, time), `unknown` before any contact; stderr and client events in a 200-line in-memory ring; one handshake retry after 250 ms, never a retried `tools/call`; `/api/mcp/health`, `/api/mcp/health/check`, `/api/mcp/logs?name=`; an idle supervisor pings each pooled session every 60 s with a 5 s budget and evicts only silence or a dead transport (1.45.0) |
 | SSE / HTTP transports | Working (1.37.0) | streamable HTTP (one POST per message, JSON or SSE answer, `Mcp-Session-Id` carried forward) and legacy HTTP+SSE (GET stream, `endpoint` event, id-matched answers); both share handshake, catalogue, validation, gating and health/log state with stdio |
