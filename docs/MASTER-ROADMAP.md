@@ -288,9 +288,13 @@ Scheduling also shipped (2.10.0): `everyMinutes` on the workflow, a 30-second
 tick, `lastRunAt`/`nextRunAt` in the list, and a window that advances on start so
 a restart cannot fire early or queue missed intervals.
 
-Remaining: a visual node canvas (the editor is JSON today), import/export, and
-resume after an application close. Cancelling a run stops the graph but does not
-forcibly stop a child agent run in flight; scheduling is per process.
+Resume also shipped (2.11.0): an interrupted run keeps its finished steps, reopens
+the ones that never ended, and refuses to resume a graph that changed or was
+deleted.
+
+Remaining: a visual node canvas (the editor is JSON today) and graph
+import/export. Cancelling a run stops the graph but does not forcibly stop a
+child agent run in flight; scheduling is per process.
 
 ## Phase 14 — Cross-platform
 

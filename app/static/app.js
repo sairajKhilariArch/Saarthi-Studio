@@ -4932,6 +4932,9 @@ function renderWorkflowRuns(runs) {
       actions.appendChild(rowButton("Approve", () => decideWorkflowRun(run, true)));
       actions.appendChild(rowButton("Reject", () => decideWorkflowRun(run, false), "danger"));
     }
+    if (run.status === "interrupted") {
+      actions.appendChild(rowButton("Resume", () => resumeWorkflowRun(run)));
+    }
     if (run.status === "running" || run.status === "waiting") {
       actions.appendChild(rowButton("Cancel", () => cancelWorkflowRun(run), "danger"));
     }
@@ -4962,6 +4965,16 @@ async function decideWorkflowRun(run, approve) {
     return;
   }
   toast(approve ? "Step approved." : "Step rejected.");
+  loadWorkflowRuns();
+}
+
+async function resumeWorkflowRun(run) {
+  const result = await api(`/api/workflow-runs/${encodeURIComponent(run.id)}/resume`, { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not resume that run.");
+    return;
+  }
+  toast("Run resumed.");
   loadWorkflowRuns();
 }
 

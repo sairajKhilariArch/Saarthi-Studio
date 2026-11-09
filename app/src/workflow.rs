@@ -613,6 +613,40 @@ fn step_status(state: &AppState, run_id: &str, node_id: &str) -> String {
         .unwrap_or_default()
 }
 
+fn step_rows(state: &AppState, run_id: &str) -> Vec<(String, String)> {
+    let Ok(conn) = crate::open_db(&state.database_path) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT node_id, status FROM workflow_steps WHERE run_id=?1 ORDER BY rowid",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([run_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
+        return Vec::new();
+    };
+    rows.flatten().collect()
+}
+
+/// Only a run the process abandoned can be resumed. A cancelled or failed run
+/// ended on purpose, and a live one still has a task driving it.
+fn resumable(status: &str) -> bool {
+    status == "interrupted"
+}
+
+/// Steps that keep their result across a resume: everything that already ended,
+/// including a branch that was skipped and an answered approval. Anything else —
+/// pending, running, waiting, interrupted — goes back to pending, because the
+/// task that was driving it is gone.
+fn carries_over(status: &str) -> bool {
+    matches!(
+        status,
+        "succeeded" | "failed" | "skipped" | "cancelled" | "approved" | "rejected"
+    )
+}
+
 fn step_statuses(state: &AppState, run_id: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let Ok(conn) = crate::open_db(&state.database_path) else {
@@ -1357,6 +1391,71 @@ pub(crate) async fn approve(
     ok(json!({ "ok": true, "status": next }))
 }
 
+pub(crate) async fn resume(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let status = run_status(&state, &id);
+    if status.is_empty() {
+        return not_found("No such workflow run.");
+    }
+    if !resumable(&status) {
+        return bad(format!(
+            "This workflow run is {status}; only an interrupted run can be resumed."
+        ));
+    }
+    let workflow_id = crate::open_db(&state.database_path)
+        .ok()
+        .and_then(|conn| {
+            conn.query_row("SELECT workflow_id FROM workflow_runs WHERE id=?1", [&id], |row| {
+                row.get::<_, String>(0)
+            })
+            .ok()
+        })
+        .unwrap_or_default();
+    let Some(workflow) = load(&state)
+        .into_iter()
+        .find(|workflow| workflow.id == workflow_id)
+    else {
+        return bad("The workflow behind this run was deleted, so it cannot be resumed.");
+    };
+    let nodes = match validate_nodes(&workflow.nodes) {
+        Ok(nodes) => nodes,
+        Err(error) => return bad(error),
+    };
+    let steps = step_rows(&state, &id);
+    if steps.is_empty() {
+        return bad("This run has no recorded steps to resume from.");
+    }
+    let mut stored = steps.iter().map(|(node, _)| node.as_str()).collect::<Vec<_>>();
+    stored.sort_unstable();
+    let mut expected = nodes.iter().map(|node| node.id.as_str()).collect::<Vec<_>>();
+    expected.sort_unstable();
+    if stored != expected {
+        return bad(
+            "The workflow changed after this run started, so it cannot be resumed. Start a new run instead.",
+        );
+    }
+    if let Ok(conn) = crate::open_db(&state.database_path) {
+        for (node_id, step_status) in &steps {
+            if carries_over(step_status) {
+                continue;
+            }
+            let _ = conn.execute(
+                "UPDATE workflow_steps SET status='pending', output='', started_at=0, ended_at=0 \
+                 WHERE run_id=?1 AND node_id=?2",
+                params![id.as_str(), node_id.as_str()],
+            );
+        }
+    }
+    set_run(&state, &id, "running", "");
+    spawn(state.clone(), id.clone(), nodes);
+    ok(json!({
+        "ok": true,
+        "run": { "id": id, "status": "running" }
+    }))
+}
+
 pub(crate) async fn cancel(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -1526,6 +1625,22 @@ mod tests {
         states.insert("repair".to_string(), "succeeded".to_string());
         let (ok, _) = outcome(&nodes, &states);
         assert!(ok, "a successful repair branch handles the failure");
+    }
+
+    #[test]
+    fn a_resume_reopens_only_what_never_finished() {
+        assert!(resumable("interrupted"));
+        assert!(!resumable("running"));
+        assert!(!resumable("waiting"));
+        assert!(!resumable("succeeded"));
+        assert!(carries_over("succeeded"));
+        assert!(carries_over("failed"));
+        assert!(carries_over("skipped"));
+        assert!(carries_over("approved"));
+        assert!(!carries_over("waiting"));
+        assert!(!carries_over("running"));
+        assert!(!carries_over("interrupted"));
+        assert!(!carries_over("pending"));
     }
 
     #[test]

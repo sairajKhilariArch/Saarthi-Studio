@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.11.0
+
+An interrupted workflow run can be resumed instead of written off.
+
+- `POST /api/workflow-runs/:id/resume` accepts a run whose status is
+  `interrupted` — the state the boot sweep gives a run whose process closed.
+- Resume is a re-entry, not a replay: steps that already ended (succeeded,
+  failed, skipped, cancelled, approved, rejected) keep their result; anything
+  pending, running, waiting or interrupted returns to `pending`, and the same
+  engine loop picks it up. The run goes back to `running` and its error clears.
+- Refused with a reason when the run is not interrupted, the workflow was
+  deleted, or the graph no longer has the same node ids as the stored steps — an
+  edited graph is a new run, not a resume.
+- A resumed agent node starts a fresh agent run: the original did not survive
+  the process either. Its finished siblings are not repeated.
+- The run list offers Resume on interrupted runs.
+- Checks: `cargo test --locked` **457 passed, 1 ignored** (one new case for the
+  resume boundary: only interrupted runs qualify, only finished steps carry
+  over); clippy `--all-targets -D warnings` clean; `node --check` clean. Live
+  headless: an approval-only workflow parked at `waiting`, the app was killed and
+  restarted (the boot sweep marked the run `interrupted`), resume returned it to
+  `waiting`, and approving finished it `succeeded`.
+
 ## 2.10.0
 
 Workflows can run on a schedule, with the timing recorded rather than held in
