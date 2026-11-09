@@ -292,9 +292,14 @@ Resume also shipped (2.11.0): an interrupted run keeps its finished steps, reope
 the ones that never ended, and refuses to resume a graph that changed or was
 deleted.
 
-Remaining: a visual node canvas (the editor is JSON today) and graph
-import/export. Cancelling a run stops the graph but does not forcibly stop a
-child agent run in flight; scheduling is per process.
+A canvas shipped in 2.12.0: cards in dependency columns, SVG edges (dashed for
+a `failed` edge), add/rename/delete with dependency rewriting, an inspector for
+every node field, and the JSON field kept as a synced advanced view. Layout is
+automatic, not free positioning.
+
+Remaining: graph import/export. Cancelling a run stops the graph but does not
+forcibly stop a child agent run in flight; scheduling is per process. The canvas
+has no frontend-harness case and has not been browser-verified.
 
 ## Phase 14 — Cross-platform
 

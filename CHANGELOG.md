@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.12.0
+
+Phase 13 gains a canvas: the workflow graph can be built and edited visually
+instead of only as JSON.
+
+- Nodes render as cards in dependency columns; edges are curves in an SVG
+  overlay, dashed when the edge asks for a failure. The layout is computed from
+  the graph, so a cycle cannot spin it (the server refuses cycles anyway).
+- Add a node by kind from the toolbar; select one to edit its id, title, kind,
+  prompt, profile, model, retries, auto-approve, condition `expect` or task note,
+  and tick its dependencies with a per-edge `succeeded`/`failed` choice.
+- Renaming a node rewrites every dependency that pointed at it; deleting one
+  removes the edges to it.
+- The JSON field stays as the advanced view and is kept in sync in both
+  directions. The server remains the only validator: canvas edits still go
+  through the same save route.
+- Checks: `node --check app/static/app.js` clean; `cargo test --locked` **457
+  passed, 1 ignored** (the backend is unchanged); clippy `-D warnings` clean;
+  e2e 19 passed, so the app still boots and serves the panel.
+- Limit stated plainly: the canvas has no case in the frontend harness and was
+  not opened in a browser in this change, so its rendering and interaction are
+  unverified.
+
 ## 2.11.0
 
 An interrupted workflow run can be resumed instead of written off.

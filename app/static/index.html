@@ -425,7 +425,7 @@
             <select id="workflowSkill"><option value="">No skill</option></select>
           </label>
           <label class="field">
-            <span>Nodes (JSON, optional)</span>
+            <span>Graph JSON (advanced, synced with the canvas)</span>
             <textarea id="workflowNodes" rows="6" spellcheck="false" placeholder='[{&quot;id&quot;:&quot;plan&quot;,&quot;kind&quot;:&quot;agent&quot;,&quot;prompt&quot;:&quot;Plan the change&quot;,&quot;profile&quot;:&quot;planner&quot;},{&quot;id&quot;:&quot;gate&quot;,&quot;kind&quot;:&quot;approval&quot;,&quot;dependsOn&quot;:[&quot;plan&quot;]}]'></textarea>
           </label>
           <small class="muted">Kinds: agent, approval, condition, task. A dependency is an id, or {&quot;id&quot;:&quot;x&quot;,&quot;when&quot;:&quot;failed&quot;} for a repair branch.</small>
@@ -433,6 +433,19 @@
             <span>Schedule every N minutes (0 = manual)</span>
             <input id="workflowScheduleMinutes" type="number" min="0" max="10080" step="5" value="0">
           </label>
+          <div class="graph-toolbar">
+            <span class="graph-toolbar-label">Graph</span>
+            <button type="button" class="btn btn-quiet btn-small" data-add-node="agent">+ Agent</button>
+            <button type="button" class="btn btn-quiet btn-small" data-add-node="approval">+ Approval</button>
+            <button type="button" class="btn btn-quiet btn-small" data-add-node="condition">+ Condition</button>
+            <button type="button" class="btn btn-quiet btn-small" data-add-node="task">+ Task</button>
+            <button type="button" class="btn btn-quiet btn-small" id="workflowNodeDelete">Delete node</button>
+          </div>
+          <div id="workflowCanvas" class="graph-canvas">
+            <svg id="workflowEdges" class="graph-edges" aria-hidden="true"></svg>
+            <div id="workflowNodesLayer" class="graph-nodes"></div>
+          </div>
+          <div id="workflowNodeEditor" class="graph-inspector"></div>
           <div class="form-actions">
             <button type="button" id="workflowCancel" class="btn btn-quiet btn-small">Cancel</button>
             <button type="submit" class="btn btn-accent btn-small">Save workflow</button>

@@ -1110,6 +1110,57 @@ kbd {
 }
 .project-menu-actions .tree-tool { flex: 1; text-align: center; }
 
+/* workflow canvas: cards in dependency columns, edges in an SVG overlay */
+.graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 8px; }
+.graph-toolbar-label {
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--mute); margin-right: 4px;
+}
+.graph-canvas {
+  position: relative; min-height: 150px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px;
+  background:
+    radial-gradient(circle, var(--line-soft) 1px, transparent 1px) 0 0 / 16px 16px,
+    var(--surface);
+}
+.graph-edges { position: absolute; inset: 0; pointer-events: none; }
+.graph-nodes { position: absolute; inset: 0; }
+.graph-node {
+  position: absolute; display: flex; flex-direction: column; gap: 3px;
+  padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line-strong);
+  background: var(--panel); color: var(--text); text-align: left; cursor: pointer;
+}
+.graph-node:hover { border-color: var(--accent-border); }
+.graph-node strong {
+  font-size: 12.5px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.graph-node code { font-family: var(--mono); font-size: 10.5px; color: var(--mute); }
+.graph-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-border); }
+.graph-node-kind {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--mute);
+}
+.graph-node-agent { border-left: 3px solid var(--accent); }
+.graph-node-approval { border-left: 3px solid #e0b341; }
+.graph-node-condition { border-left: 3px solid #59a6d8; }
+.graph-node-task { border-left: 3px solid var(--line-strong); }
+.graph-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.6; }
+.graph-edge-failed { stroke-dasharray: 5 4; }
+.graph-inspector { display: grid; gap: 8px; margin-top: 10px; }
+.graph-inspector-fields {
+  display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.graph-inspector .field { margin: 0; }
+.graph-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); }
+.graph-deps { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.graph-deps-title {
+  width: 100%; margin: 0; font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--mute);
+}
+.graph-dep { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
+.graph-dep code { font-family: var(--mono); font-size: 11px; color: var(--text); }
+
 /* composer skill picker: button + dropdown, mirrors the project menu */
 .skill-picker-wrap { position: relative; }
 .skill-menu {

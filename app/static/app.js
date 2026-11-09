@@ -5010,11 +5010,14 @@ function editWorkflow(workflow, override = {}) {
   $("workflowName").value = workflow.name || "";
   $("workflowPrompt").value = workflow.prompt || "";
   const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+  workflowGraph = nodes;
+  selectedWorkflowNode = "";
   if ($("workflowNodes")) $("workflowNodes").value = nodes.length ? JSON.stringify(nodes, null, 2) : "";
   if ($("workflowScheduleMinutes")) $("workflowScheduleMinutes").value = String(workflow.everyMinutes || 0);
   fillSkillOptions(override.skill != null ? override.skill : workflow.skill || "");
   $("workflowForm").dataset.editing = workflow.id || "";
   $("workflowForm").classList.remove("hidden");
+  renderWorkflowCanvas();
   $("workflowName").focus();
 }
 
@@ -5039,6 +5042,437 @@ async function runWorkflow(workflow) {
   $("prompt").focus();
   toast(`${workflow.name} loaded — send when ready.`);
 }
+
+/* Workflow canvas: the stored graph as a diagram. It edits the same JSON the
+   textarea holds, so the server stays the only validator, and a workflow saved
+   before graphs existed simply renders an empty canvas. */
+let workflowGraph = [];
+let selectedWorkflowNode = "";
+const GRAPH_NODE_WIDTH = 190;
+const GRAPH_NODE_HEIGHT = 84;
+const GRAPH_COLUMN = 240;
+const GRAPH_ROW = 108;
+
+function readWorkflowGraph() {
+  const raw = $("workflowNodes") ? $("workflowNodes").value.trim() : "";
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((node) => node && typeof node === "object" && !Array.isArray(node));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function graphDependencyIds(node) {
+  const deps = Array.isArray(node.dependsOn) ? node.dependsOn : [];
+  return deps
+    .map((dep) => (typeof dep === "string" ? dep : String((dep && dep.id) || "")))
+    .filter(Boolean);
+}
+
+function graphEdgeWhen(node, dependencyId) {
+  const deps = Array.isArray(node.dependsOn) ? node.dependsOn : [];
+  const edge = deps.find((dep) => (typeof dep === "string" ? dep : String((dep && dep.id) || "")) === dependencyId);
+  return edge && typeof edge === "object" && edge.when === "failed" ? "failed" : "succeeded";
+}
+
+function graphDepth(id, byId, memo, trail) {
+  if (memo.has(id)) return memo.get(id);
+  if (trail.has(id)) return 0;
+  trail.add(id);
+  const node = byId.get(id);
+  const deps = node ? graphDependencyIds(node).filter((dep) => byId.has(dep)) : [];
+  const depth = deps.length ? 1 + Math.max(...deps.map((dep) => graphDepth(dep, byId, memo, trail))) : 0;
+  trail.delete(id);
+  memo.set(id, depth);
+  return depth;
+}
+
+function graphLayout(nodes) {
+  const byId = new Map(nodes.map((node) => [String(node.id || ""), node]));
+  const memo = new Map();
+  const columns = new Map();
+  nodes.forEach((node) => {
+    const id = String(node.id || "");
+    if (!id) return;
+    const depth = graphDepth(id, byId, memo, new Set());
+    const column = columns.get(depth) || [];
+    column.push(id);
+    columns.set(depth, column);
+  });
+  const positions = new Map();
+  columns.forEach((ids, depth) => {
+    ids.forEach((id, index) => {
+      positions.set(id, { x: 24 + depth * GRAPH_COLUMN, y: 24 + index * GRAPH_ROW });
+    });
+  });
+  return positions;
+}
+
+function graphTextInput(value, onCommit) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.addEventListener("change", () => onCommit(input.value));
+  return input;
+}
+
+function graphNumberInput(value, low, high, onCommit) {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = String(low);
+  input.max = String(high);
+  input.value = String(value);
+  input.addEventListener("change", () => {
+    onCommit(Math.min(high, Math.max(low, Number(input.value) || 0)));
+  });
+  return input;
+}
+
+function graphTextArea(value, onCommit) {
+  const area = document.createElement("textarea");
+  area.rows = 3;
+  area.value = value;
+  area.addEventListener("change", () => onCommit(area.value));
+  return area;
+}
+
+function graphCheckbox(labelText, checked, onChange) {
+  const wrap = document.createElement("span");
+  wrap.className = "graph-check";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = checked;
+  box.addEventListener("change", () => onChange(box.checked));
+  const label = document.createElement("span");
+  label.textContent = labelText;
+  wrap.append(box, label);
+  return wrap;
+}
+
+function graphSelect(options, value, onChange) {
+  const select = document.createElement("select");
+  options.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = option.value;
+    item.textContent = option.label;
+    if (option.value === value) item.selected = true;
+    select.appendChild(item);
+  });
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+function graphField(labelText, control) {
+  const field = document.createElement("label");
+  field.className = "field";
+  const label = document.createElement("span");
+  label.textContent = labelText;
+  field.append(label, control);
+  return field;
+}
+
+function syncWorkflowGraph() {
+  if ($("workflowNodes")) {
+    $("workflowNodes").value = workflowGraph.length ? JSON.stringify(workflowGraph, null, 2) : "";
+  }
+  renderWorkflowCanvas();
+}
+
+function updateWorkflowNode(nodeId, patch) {
+  workflowGraph = workflowGraph.map((node) =>
+    String(node.id || "") === String(nodeId) ? { ...node, ...patch } : node
+  );
+  syncWorkflowGraph();
+}
+
+function setWorkflowDependency(nodeId, dependencyId, on, when = "succeeded") {
+  const node = workflowGraph.find((entry) => String(entry.id || "") === String(nodeId));
+  if (!node) return;
+  const deps = Array.isArray(node.dependsOn) ? node.dependsOn.slice() : [];
+  const index = deps.findIndex(
+    (dep) => (typeof dep === "string" ? dep : String((dep && dep.id) || "")) === dependencyId
+  );
+  if (on) {
+    if (index >= 0) deps[index] = { id: dependencyId, when };
+    else deps.push({ id: dependencyId, when });
+  } else if (index >= 0) {
+    deps.splice(index, 1);
+  }
+  updateWorkflowNode(nodeId, { dependsOn: deps });
+}
+
+function renameWorkflowNode(oldId, requested) {
+  const next = requested.trim();
+  if (!next || next === oldId) {
+    renderWorkflowCanvas();
+    return;
+  }
+  if (workflowGraph.some((node) => String(node.id || "") === next)) {
+    toast(`Node id "${next}" is already used.`);
+    renderWorkflowCanvas();
+    return;
+  }
+  workflowGraph = workflowGraph
+    .map((node) => (String(node.id || "") === oldId ? { ...node, id: next } : node))
+    .map((node) => {
+      if (!Array.isArray(node.dependsOn)) return node;
+      return {
+        ...node,
+        dependsOn: node.dependsOn.map((dep) => {
+          const depId = typeof dep === "string" ? dep : String((dep && dep.id) || "");
+          if (depId !== oldId) return dep;
+          return typeof dep === "string" ? next : { ...dep, id: next };
+        }),
+      };
+    });
+  selectedWorkflowNode = next;
+  syncWorkflowGraph();
+}
+
+function addWorkflowNode(kind) {
+  const ids = new Set(workflowGraph.map((node) => String(node.id || "")));
+  let counter = workflowGraph.length + 1;
+  let id = `${kind}-${counter}`;
+  while (ids.has(id)) id = `${kind}-${++counter}`;
+  const node = { id, kind, title: "" };
+  if (kind === "agent") {
+    Object.assign(node, { prompt: "", profile: "", retries: 1, autoApprove: false, allowWrites: true });
+  } else if (kind === "condition") {
+    node.expect = "succeeded";
+  } else if (kind === "task") {
+    node.note = "";
+  }
+  workflowGraph = workflowGraph.concat([node]);
+  selectedWorkflowNode = id;
+  syncWorkflowGraph();
+}
+
+function deleteWorkflowNode() {
+  if (!selectedWorkflowNode) {
+    toast("Select a node first.");
+    return;
+  }
+  const removed = selectedWorkflowNode;
+  workflowGraph = workflowGraph
+    .filter((node) => String(node.id || "") !== removed)
+    .map((node) => {
+      if (!Array.isArray(node.dependsOn)) return node;
+      return {
+        ...node,
+        dependsOn: node.dependsOn.filter(
+          (dep) => (typeof dep === "string" ? dep : String((dep && dep.id) || "")) !== removed
+        ),
+      };
+    });
+  selectedWorkflowNode = "";
+  syncWorkflowGraph();
+}
+
+function graphNodeCard(node, position) {
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = `graph-node graph-node-${String(node.kind || "task")}`;
+  const id = String(node.id || "");
+  if (id === selectedWorkflowNode) card.classList.add("selected");
+  card.style.left = `${position.x}px`;
+  card.style.top = `${position.y}px`;
+  card.style.width = `${GRAPH_NODE_WIDTH}px`;
+  card.style.minHeight = `${GRAPH_NODE_HEIGHT}px`;
+  const kind = document.createElement("span");
+  kind.className = "graph-node-kind";
+  kind.textContent = String(node.kind || "task");
+  const title = document.createElement("strong");
+  title.textContent = node.title || id || "(unnamed)";
+  const code = document.createElement("code");
+  code.textContent = id;
+  card.append(kind, title, code);
+  card.addEventListener("click", () => {
+    selectedWorkflowNode = id;
+    renderWorkflowCanvas();
+  });
+  return card;
+}
+
+function graphArrowDefs() {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const defs = document.createElementNS(svgNS, "defs");
+  const marker = document.createElementNS(svgNS, "marker");
+  marker.setAttribute("id", "graphArrow");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "9");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "7");
+  marker.setAttribute("markerHeight", "7");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const tip = document.createElementNS(svgNS, "path");
+  tip.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  tip.setAttribute("fill", "context-stroke");
+  marker.appendChild(tip);
+  defs.appendChild(marker);
+  return defs;
+}
+
+function graphEdgePath(from, to, when) {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const x1 = from.x + GRAPH_NODE_WIDTH;
+  const y1 = from.y + GRAPH_NODE_HEIGHT / 2;
+  const x2 = to.x;
+  const y2 = to.y + GRAPH_NODE_HEIGHT / 2;
+  const bend = Math.max(36, Math.abs(x2 - x1) / 2);
+  const path = document.createElementNS(svgNS, "path");
+  path.setAttribute("d", `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+  path.setAttribute("class", when === "failed" ? "graph-edge graph-edge-failed" : "graph-edge");
+  path.setAttribute("marker-end", "url(#graphArrow)");
+  const title = document.createElementNS(svgNS, "title");
+  title.textContent = when === "failed" ? "runs when the source failed" : "runs after the source succeeded";
+  path.appendChild(title);
+  return path;
+}
+
+function graphDependencies(node) {
+  const wrap = document.createElement("div");
+  wrap.className = "graph-deps";
+  const heading = document.createElement("p");
+  heading.className = "graph-deps-title";
+  heading.textContent = "Runs after";
+  wrap.appendChild(heading);
+  const others = workflowGraph.filter((entry) => String(entry.id || "") !== String(node.id || ""));
+  if (!others.length) {
+    wrap.appendChild(pageNote("No other nodes yet."));
+    return wrap;
+  }
+  others.forEach((other) => {
+    const otherId = String(other.id || "");
+    const known = graphDependencyIds(node).includes(otherId);
+    const row = document.createElement("label");
+    row.className = "graph-dep";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = known;
+    box.addEventListener("change", () => setWorkflowDependency(node.id, otherId, box.checked));
+    const code = document.createElement("code");
+    code.textContent = otherId;
+    row.append(box, code);
+    if (known) {
+      const select = document.createElement("select");
+      [
+        ["succeeded", "succeeds"],
+        ["failed", "fails"],
+      ].forEach(([value, label]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        if (value === graphEdgeWhen(node, otherId)) option.selected = true;
+        select.appendChild(option);
+      });
+      select.addEventListener("change", () => setWorkflowDependency(node.id, otherId, true, select.value));
+      row.appendChild(select);
+    }
+    wrap.appendChild(row);
+  });
+  return wrap;
+}
+
+function renderWorkflowNodeEditor() {
+  const host = $("workflowNodeEditor");
+  if (!host) return;
+  host.replaceChildren();
+  const node = workflowGraph.find((entry) => String(entry.id || "") === selectedWorkflowNode);
+  if (!node) {
+    host.appendChild(pageNote("Select a node to edit it."));
+    return;
+  }
+  const id = String(node.id || "");
+  const fields = document.createElement("div");
+  fields.className = "graph-inspector-fields";
+  fields.appendChild(graphField("Id", graphTextInput(id, (value) => renameWorkflowNode(id, value))));
+  fields.appendChild(graphField("Title", graphTextInput(String(node.title || ""), (value) => updateWorkflowNode(id, { title: value }))));
+  fields.appendChild(
+    graphField(
+      "Kind",
+      graphSelect(
+        ["agent", "approval", "condition", "task"].map((value) => ({ value, label: value })),
+        String(node.kind || "task"),
+        (value) => updateWorkflowNode(id, { kind: value })
+      )
+    )
+  );
+  if (node.kind === "agent") {
+    fields.appendChild(graphField("Prompt", graphTextArea(String(node.prompt || ""), (value) => updateWorkflowNode(id, { prompt: value }))));
+    fields.appendChild(graphField("Profile", graphTextInput(String(node.profile || ""), (value) => updateWorkflowNode(id, { profile: value }))));
+    fields.appendChild(graphField("Model", graphTextInput(String(node.model || ""), (value) => updateWorkflowNode(id, { model: value }))));
+    fields.appendChild(graphField("Retries", graphNumberInput(Number(node.retries || 0), 0, 3, (value) => updateWorkflowNode(id, { retries: value }))));
+    fields.appendChild(
+      graphField(
+        "Writes",
+        graphCheckbox("Auto-approve writes", Boolean(node.autoApprove), (checked) => updateWorkflowNode(id, { autoApprove: checked }))
+      )
+    );
+  }
+  if (node.kind === "condition") {
+    fields.appendChild(
+      graphField(
+        "Expect",
+        graphSelect(
+          [
+            { value: "succeeded", label: "succeeded" },
+            { value: "failed", label: "failed" },
+          ],
+          String(node.expect || "succeeded"),
+          (value) => updateWorkflowNode(id, { expect: value })
+        )
+      )
+    );
+  }
+  if (node.kind === "task") {
+    fields.appendChild(graphField("Note", graphTextArea(String(node.note || ""), (value) => updateWorkflowNode(id, { note: value }))));
+  }
+  host.appendChild(fields);
+  host.appendChild(graphDependencies(node));
+}
+
+function renderWorkflowCanvas() {
+  const canvas = $("workflowCanvas");
+  const layer = $("workflowNodesLayer");
+  const svg = $("workflowEdges");
+  if (!canvas || !layer || !svg) return;
+  layer.replaceChildren();
+  svg.replaceChildren();
+  const positions = graphLayout(workflowGraph);
+  let height = 0;
+  workflowGraph.forEach((node) => {
+    const position = positions.get(String(node.id || ""));
+    if (!position) return;
+    height = Math.max(height, position.y + GRAPH_NODE_HEIGHT + 20);
+    layer.appendChild(graphNodeCard(node, position));
+  });
+  if (!workflowGraph.length) {
+    layer.appendChild(pageNote("No nodes yet. Add one above, or write the graph JSON below."));
+  }
+  const width = Math.max(canvas.clientWidth || 640, 640);
+  const canvasHeight = Math.max(150, height);
+  canvas.style.height = `${canvasHeight}px`;
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(canvasHeight));
+  svg.appendChild(graphArrowDefs());
+  workflowGraph.forEach((node) => {
+    const target = positions.get(String(node.id || ""));
+    if (!target) return;
+    graphDependencyIds(node).forEach((dependency) => {
+      const source = positions.get(dependency);
+      if (source) svg.appendChild(graphEdgePath(source, target, graphEdgeWhen(node, dependency)));
+    });
+  });
+  renderWorkflowNodeEditor();
+}
+
+window.addEventListener("resize", () => {
+  const canvas = $("workflowCanvas");
+  if (canvas && canvas.offsetParent) renderWorkflowCanvas();
+});
 
 async function loadUsage() {
   const query = state.usageQuery;
@@ -6346,11 +6780,33 @@ function bindEvents() {
     if ($("workflowNodes")) $("workflowNodes").value = "";
     if ($("workflowScheduleMinutes")) $("workflowScheduleMinutes").value = "0";
     fillSkillOptions("");
+    workflowGraph = [];
+    selectedWorkflowNode = "";
+    $("workflowForm").classList.remove("hidden");
+    renderWorkflowCanvas();
     $("workflowForm").classList.remove("hidden");
     $("workflowName").focus();
   });
   $("workflowCancel").addEventListener("click", () => $("workflowForm").classList.add("hidden"));
   if ($("workflowRunsRefresh")) $("workflowRunsRefresh").addEventListener("click", loadWorkflowRuns);
+  document.querySelectorAll("[data-add-node]").forEach((button) => {
+    button.addEventListener("click", () => addWorkflowNode(button.dataset.addNode));
+  });
+  if ($("workflowNodeDelete")) $("workflowNodeDelete").addEventListener("click", deleteWorkflowNode);
+  if ($("workflowNodes")) {
+    $("workflowNodes").addEventListener("change", () => {
+      const parsed = readWorkflowGraph();
+      if (parsed === null) {
+        toast("Graph JSON must be an array of nodes.");
+        return;
+      }
+      workflowGraph = parsed;
+      if (!workflowGraph.some((node) => String(node.id || "") === selectedWorkflowNode)) {
+        selectedWorkflowNode = "";
+      }
+      renderWorkflowCanvas();
+    });
+  }
   $("workflowForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     let nodes = [];
