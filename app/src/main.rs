@@ -4200,6 +4200,9 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     ensure_setup(&state)?;
+    // Scheduled workflows wake on a timer; the first tick is one interval after
+    // boot, so starting the app never runs a schedule early.
+    workflow::start_scheduler(state.clone());
     // The process log lives beside the database: it is the one record that
     // survives a crash before the row was committed, so it starts before
     // anything that can fail. A no-op until this point by design.

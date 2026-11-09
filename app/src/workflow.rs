@@ -107,6 +107,13 @@ pub(crate) struct Workflow {
     /// graphs existed, which is why it defaults to an empty array.
     #[serde(default)]
     pub nodes: Value,
+    /// 0 means manual only; anything else is the interval in minutes.
+    #[serde(default, rename = "everyMinutes")]
+    pub every_minutes: i64,
+    /// Start of the current schedule window (unix seconds). Advanced when a
+    /// scheduled run starts, so a restart does not fire early.
+    #[serde(default, rename = "scheduleSince")]
+    pub schedule_since: f64,
 }
 
 fn path(state: &AppState) -> PathBuf {
@@ -967,7 +974,76 @@ fn server_error(message: impl std::fmt::Display) -> Response {
 }
 
 pub(crate) async fn list(State(state): State<AppState>) -> Response {
-    ok(json!({ "ok": true, "workflows": load(&state) }))
+    let workflows = load(&state)
+        .iter()
+        .map(|workflow| workflow_json(&state, workflow))
+        .collect::<Vec<_>>();
+    ok(json!({ "ok": true, "workflows": workflows }))
+}
+
+fn last_run_at(state: &AppState, workflow_id: &str) -> f64 {
+    crate::open_db(&state.database_path)
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT COALESCE(MAX(created_at),0) FROM workflow_runs WHERE workflow_id=?1",
+                [workflow_id],
+                |row| row.get::<_, f64>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(0.0)
+}
+
+fn live_run(state: &AppState, workflow_id: &str) -> bool {
+    crate::open_db(&state.database_path)
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id=?1 AND status IN ('running','waiting')",
+                [workflow_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(0)
+        > 0
+}
+
+/// When the next scheduled run is due. `None` means the workflow is manual. The
+/// later of the last run and the window start is the anchor, so a long run does
+/// not stack up missed intervals, and a restart cannot fire early.
+fn due_at(last_run: f64, since: f64, every_minutes: i64) -> Option<f64> {
+    if every_minutes <= 0 {
+        return None;
+    }
+    let anchor = last_run.max(since);
+    Some(if anchor <= 0.0 {
+        0.0
+    } else {
+        anchor + (every_minutes as f64) * 60.0
+    })
+}
+
+fn parse_interval(minutes: i64) -> Result<i64, String> {
+    if minutes == 0 {
+        return Ok(0);
+    }
+    if (5..=10_080).contains(&minutes) {
+        return Ok(minutes);
+    }
+    Err("A schedule runs every 5 minutes to 7 days, or 0 for manual only.".to_string())
+}
+
+fn workflow_json(state: &AppState, workflow: &Workflow) -> Value {
+    let mut value = serde_json::to_value(workflow).unwrap_or_else(|_| json!({}));
+    let last = last_run_at(state, &workflow.id);
+    value["lastRunAt"] = json!(last);
+    value["nextRunAt"] = match due_at(last, workflow.schedule_since, workflow.every_minutes) {
+        Some(next) => json!(next),
+        None => Value::Null,
+    };
+    value
 }
 
 fn clipped(value: Option<&str>, max: usize) -> String {
@@ -996,6 +1072,16 @@ pub(crate) async fn save(State(state): State<AppState>, Json(input): Json<Value>
         return bad("A workflow needs a prompt or at least one node.");
     }
 
+    let every_minutes = match parse_interval(
+        input.get("everyMinutes").and_then(Value::as_i64).unwrap_or(0),
+    ) {
+        Ok(minutes) => minutes,
+        Err(error) => return bad(error),
+    };
+    if every_minutes > 0 && canonical.is_empty() {
+        return bad("A scheduled workflow needs at least one node.");
+    }
+
     let mut workflows = load(&state);
     let requested_id = input.get("id").and_then(Value::as_str).unwrap_or("");
     let known = workflows
@@ -1006,6 +1092,16 @@ pub(crate) async fn save(State(state): State<AppState>, Json(input): Json<Value>
     } else {
         uuid::Uuid::new_v4().to_string()
     };
+    let previous = workflows.iter().find(|workflow| workflow.id == id).cloned();
+    // Keeping the same interval keeps its window; any change starts a fresh one,
+    // so saving a workflow never makes it due immediately by accident.
+    let schedule_since = match (&previous, every_minutes) {
+        (_, 0) => 0.0,
+        (Some(previous), minutes) if previous.every_minutes == minutes && previous.schedule_since > 0.0 => {
+            previous.schedule_since
+        }
+        _ => now(),
+    };
     workflows.retain(|workflow| workflow.id != id);
     workflows.push(Workflow {
         id: id.clone(),
@@ -1013,6 +1109,8 @@ pub(crate) async fn save(State(state): State<AppState>, Json(input): Json<Value>
         prompt,
         skill,
         nodes: Value::Array(canonical),
+        every_minutes,
+        schedule_since,
     });
     workflows.sort_by_key(|workflow| workflow.name.to_lowercase());
     if let Err(error) = store(&state, &workflows) {
@@ -1048,19 +1146,89 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
     if nodes.is_empty() {
         return bad("This workflow has no nodes yet. Add a graph, or load its prompt instead.");
     }
+    match begin_run(&state, &workflow, &nodes) {
+        Ok(run_id) => ok(json!({
+            "ok": true,
+            "run": { "id": run_id, "status": "running" }
+        })),
+        Err(error) => server_error(error),
+    }
+}
+
+fn begin_run(
+    state: &AppState,
+    workflow: &Workflow,
+    nodes: &[ValidNode],
+) -> Result<String, String> {
     let run_id = uuid::Uuid::new_v4().to_string();
-    if let Err(error) = insert_run(&state, &run_id, &workflow) {
-        return server_error(error);
+    insert_run(state, &run_id, workflow)?;
+    if let Err(error) = insert_steps(state, &run_id, nodes) {
+        set_run(state, &run_id, "failed", "Could not record the steps.");
+        return Err(error);
     }
-    if let Err(error) = insert_steps(&state, &run_id, &nodes) {
-        set_run(&state, &run_id, "failed", "Could not record the steps.");
-        return server_error(error);
+    spawn(state.clone(), run_id.clone(), nodes.to_vec());
+    Ok(run_id)
+}
+
+/// Scheduled workflows wake on a timer. The first tick is one interval after
+/// boot, so a restart never runs a schedule early; a due workflow with a live
+/// run is skipped rather than stacked.
+pub(crate) fn start_scheduler(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            tick(&state).await;
+        }
+    });
+}
+
+async fn tick(state: &AppState) {
+    let mut workflows = load(state);
+    let mut changed = false;
+    for workflow in workflows.iter_mut() {
+        if workflow.every_minutes <= 0 || live_run(state, &workflow.id) {
+            continue;
+        }
+        let last = last_run_at(state, &workflow.id);
+        let Some(next) = due_at(last, workflow.schedule_since, workflow.every_minutes) else {
+            continue;
+        };
+        if now() < next {
+            continue;
+        }
+        let Ok(nodes) = validate_nodes(&workflow.nodes) else {
+            continue;
+        };
+        if nodes.is_empty() {
+            continue;
+        }
+        match begin_run(state, workflow, &nodes) {
+            Ok(run_id) => {
+                // The new row is already on disk; moving the window keeps this
+                // workflow from firing again on the next tick. If the write
+                // below fails, the run's own created_at is still the anchor.
+                workflow.schedule_since = now();
+                changed = true;
+                crate::oplog::record(
+                    "info",
+                    "workflow",
+                    "scheduled",
+                    format!("{} started run {run_id} (every {} min)", workflow.name, workflow.every_minutes),
+                );
+            }
+            Err(error) => {
+                crate::oplog::record(
+                    "error",
+                    "workflow",
+                    "schedule-failed",
+                    format!("{} could not start: {error}", workflow.name),
+                );
+            }
+        }
     }
-    spawn(state.clone(), run_id.clone(), nodes);
-    ok(json!({
-        "ok": true,
-        "run": { "id": run_id, "status": "running" }
-    }))
+    if changed {
+        let _ = store(state, &workflows);
+    }
 }
 
 fn run_rows(state: &AppState, id: Option<&str>, limit: usize) -> Vec<Value> {
@@ -1358,6 +1526,28 @@ mod tests {
         states.insert("repair".to_string(), "succeeded".to_string());
         let (ok, _) = outcome(&nodes, &states);
         assert!(ok, "a successful repair branch handles the failure");
+    }
+
+    #[test]
+    fn a_schedule_is_due_after_its_interval_from_the_later_anchor() {
+        assert_eq!(due_at(0.0, 0.0, 0), None);
+        assert_eq!(due_at(1_000.0, 0.0, 5), Some(1_300.0));
+        // A window that started later than the last run wins.
+        assert_eq!(due_at(1_000.0, 1_200.0, 5), Some(1_500.0));
+        // A run that outlasted its interval anchors on the run, not the window.
+        assert_eq!(due_at(2_000.0, 1_200.0, 5), Some(2_300.0));
+        // An empty workflow schedule is manual, never due.
+        assert_eq!(due_at(0.0, 0.0, -5), None);
+    }
+
+    #[test]
+    fn schedule_intervals_are_bounded() {
+        assert_eq!(parse_interval(0), Ok(0));
+        assert_eq!(parse_interval(5), Ok(5));
+        assert_eq!(parse_interval(10_080), Ok(10_080));
+        assert!(parse_interval(4).is_err());
+        assert!(parse_interval(10_081).is_err());
+        assert!(parse_interval(-1).is_err());
     }
 
     #[test]

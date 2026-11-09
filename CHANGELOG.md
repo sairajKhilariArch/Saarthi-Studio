@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.10.0
+
+Workflows can run on a schedule, with the timing recorded rather than held in
+memory.
+
+- A workflow carries `everyMinutes` (0 = manual, otherwise 5–10080) and
+  `scheduleSince`. Saving keeps the window when the interval is unchanged and
+  starts a fresh one when it changes, so saving a workflow never makes it due
+  immediately.
+- A scheduler task wakes every 30 seconds, loads the workflows and starts a run
+  once `max(last run, window start) + interval` has passed. A workflow with a
+  live `running`/`waiting` run is skipped rather than stacked, and the window
+  advances when the run starts.
+- The anchor is the later of the last run and the window start, so a run longer
+  than its interval does not queue missed intervals, and a restart cannot fire
+  early.
+- `GET /api/workflows` now includes `lastRunAt` and `nextRunAt` (unix seconds,
+  `null` when manual); the Automation row shows the interval and the next run.
+- Validation refuses an interval outside 0/5–10080 and a schedule with no
+  nodes.
+- Checks: `cargo test --locked` **456 passed, 1 ignored** (two new: due-time
+  anchoring and interval bounds); clippy `--all-targets -D warnings` clean;
+  `node --check` clean. Live headless run: a workflow saved with
+  `everyMinutes: 5` and a past window was picked up by the scheduler within one
+  tick, ran its agent node to `succeeded`, wrote the file, and advanced its
+  window.
+- Limit: scheduling is per process. Two app instances sharing one config could
+  both start a run; the desktop app is single-instance by design, and a run's
+  own `created_at` still prevents a tight loop.
+
 ## 2.9.0
 
 Phase 13 stops being a saved prompt: a workflow is a validated graph, and a

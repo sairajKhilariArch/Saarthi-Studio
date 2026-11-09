@@ -4,7 +4,7 @@
 
 | Suite | Location | Run with | Size |
 |---|---|---|---|
-| Rust unit/integration | `app/src/*.rs` `#[test]` / `#[tokio::test]` | `cd app && cargo test --locked` | 454 passed (1 ignored) at the 2.9.0 run; includes MCP argument validation against the validator the route and agent loop share, and workflow graph validation plus dependency scheduling |
+| Rust unit/integration | `app/src/*.rs` `#[test]` / `#[tokio::test]` | `cd app && cargo test --locked` | 456 passed (1 ignored) at the 2.10.0 run; includes MCP argument validation against the validator the route and agent loop share, workflow graph validation, dependency scheduling and schedule due-time anchoring |
 | Frontend helpers | `app/static/tests/` | `bash scripts/ci/test-frontend.sh` (Node `--test`) | 12 cases over the real `app.js`, loaded in a browser-free `node:vm` harness |
 | VS Code extension logic | `vscode-extension/test/` | `cd vscode-extension && npm test` (Node `node --test`) | agent, lib, extension suites |
 | Android JVM | `android/app/src/test/` | `cd android && gradle testDebugUnitTest` | policy/migration tests |

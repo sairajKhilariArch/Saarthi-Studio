@@ -429,6 +429,10 @@
             <textarea id="workflowNodes" rows="6" spellcheck="false" placeholder='[{&quot;id&quot;:&quot;plan&quot;,&quot;kind&quot;:&quot;agent&quot;,&quot;prompt&quot;:&quot;Plan the change&quot;,&quot;profile&quot;:&quot;planner&quot;},{&quot;id&quot;:&quot;gate&quot;,&quot;kind&quot;:&quot;approval&quot;,&quot;dependsOn&quot;:[&quot;plan&quot;]}]'></textarea>
           </label>
           <small class="muted">Kinds: agent, approval, condition, task. A dependency is an id, or {&quot;id&quot;:&quot;x&quot;,&quot;when&quot;:&quot;failed&quot;} for a repair branch.</small>
+          <label class="field">
+            <span>Schedule every N minutes (0 = manual)</span>
+            <input id="workflowScheduleMinutes" type="number" min="0" max="10080" step="5" value="0">
+          </label>
           <div class="form-actions">
             <button type="button" id="workflowCancel" class="btn btn-quiet btn-small">Cancel</button>
             <button type="submit" class="btn btn-accent btn-small">Save workflow</button>

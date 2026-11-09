@@ -37,9 +37,9 @@ remains inside them is named per row (router update/uninstall in the panel,
 remote-service routers, a price for native OpenAI picks, per-skill permissions,
 an editor that bypasses the run lease, live
 capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
-Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs
-but has no visual canvas or scheduler, and Phase 15 has no extension manifest at
-all**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
+Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs on a
+schedule but has no visual canvas and no resume after a close, and Phase 15 has
+no extension manifest at all**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
 the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 has no installer or update path.
 Phase 17 closed in 2.4.0.
 
@@ -65,7 +65,7 @@ row below moves, so they cannot drift from the tables.
 | 10 | Safety and permissions | 100% | updates have no in-app route to gate |
 | 11 | Token and context | 100% | — |
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
-| 13 | Workflow builder | 55% | visual canvas, scheduled runs, resume after a close |
+| 13 | Workflow builder | 65% | visual canvas, import/export, resume after a close |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
@@ -278,7 +278,7 @@ persisted execution of it.
 | Persisted run history | Working (2.9.0) | `workflow_runs`/`workflow_steps` carry status, output, timing and the agent run id; a boot sweep marks a run the process abandoned as `interrupted` |
 | Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph (a child agent run in flight is not forcibly stopped) |
 | Visual editor | Partial | the Automation editor is node JSON with server-side validation; there is no canvas |
-| Scheduled execution | Missing | no scheduler, no recurring runs |
+| Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, and a live run is not stacked |
 
 ## Phase 14 — Cross-platform integration
 
@@ -299,7 +299,7 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 454 passed, 1 ignored at the 2.9.0 run; the count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 456 passed, 1 ignored at the 2.10.0 run; the count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |

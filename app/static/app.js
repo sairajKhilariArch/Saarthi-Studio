@@ -4859,10 +4859,13 @@ function renderWorkflows(workflows) {
     strong.textContent = workflow.name;
     main.appendChild(strong);
     const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+    const schedule = workflow.everyMinutes > 0
+      ? ` · every ${workflow.everyMinutes} min${workflow.nextRunAt ? ` (next ${new Date(workflow.nextRunAt * 1000).toLocaleTimeString()})` : ""}`
+      : "";
     const small = document.createElement("small");
-    small.textContent = nodes.length
+    small.textContent = (nodes.length
       ? `${nodes.length} nodes${workflow.prompt ? ` · ${workflow.prompt}` : ""}`
-      : workflow.prompt;
+      : workflow.prompt) + schedule;
     small.title = workflow.prompt || "";
     main.appendChild(small);
     row.appendChild(main);
@@ -4995,6 +4998,7 @@ function editWorkflow(workflow, override = {}) {
   $("workflowPrompt").value = workflow.prompt || "";
   const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
   if ($("workflowNodes")) $("workflowNodes").value = nodes.length ? JSON.stringify(nodes, null, 2) : "";
+  if ($("workflowScheduleMinutes")) $("workflowScheduleMinutes").value = String(workflow.everyMinutes || 0);
   fillSkillOptions(override.skill != null ? override.skill : workflow.skill || "");
   $("workflowForm").dataset.editing = workflow.id || "";
   $("workflowForm").classList.remove("hidden");
@@ -6327,6 +6331,7 @@ function bindEvents() {
     $("workflowName").value = "";
     $("workflowPrompt").value = "";
     if ($("workflowNodes")) $("workflowNodes").value = "";
+    if ($("workflowScheduleMinutes")) $("workflowScheduleMinutes").value = "0";
     fillSkillOptions("");
     $("workflowForm").classList.remove("hidden");
     $("workflowName").focus();
@@ -6355,6 +6360,9 @@ function bindEvents() {
       prompt: $("workflowPrompt").value.trim(),
       skill: $("workflowSkill") ? $("workflowSkill").value : "",
       nodes,
+      everyMinutes: $("workflowScheduleMinutes")
+        ? Number($("workflowScheduleMinutes").value || 0)
+        : 0,
     };
     const result = await api("/api/workflows", { method: "POST", body: JSON.stringify(payload) });
     if (!result.ok) {

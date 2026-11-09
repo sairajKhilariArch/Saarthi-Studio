@@ -284,9 +284,13 @@ Delivered in 2.9.0:
 - Routes for save/list/delete/run, run history, detail, approve and cancel; an
   Automation editor for the node JSON and a live run list.
 
-Remaining: a visual node canvas (the editor is JSON today), scheduled and
-recurring runs, import/export, and resume after an application close. Cancelling
-a run stops the graph but does not forcibly stop a child agent run in flight.
+Scheduling also shipped (2.10.0): `everyMinutes` on the workflow, a 30-second
+tick, `lastRunAt`/`nextRunAt` in the list, and a window that advances on start so
+a restart cannot fire early or queue missed intervals.
+
+Remaining: a visual node canvas (the editor is JSON today), import/export, and
+resume after an application close. Cancelling a run stops the graph but does not
+forcibly stop a child agent run in flight; scheduling is per process.
 
 ## Phase 14 — Cross-platform
 
