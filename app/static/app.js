@@ -49,6 +49,7 @@ function setSettingsSection(name) {
   if (name === "permissions") void loadPermissions();
   if (name === "mcp") void loadMcp();
   if (name === "diagnostics") void loadDiagnostics();
+  if (name === "extensions") void loadExtensions();
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
 
@@ -104,6 +105,7 @@ function setupSettingsNav() {
   });
   $("permAdd").addEventListener("click", () => void addPermissionRule());
   $("permRefresh").addEventListener("click", () => void loadPermissions());
+  if ($("extensionsRefresh")) $("extensionsRefresh").addEventListener("click", () => void loadExtensions());
   // The MCP panel points at Permissions where a rule would go; the link moves
   // the panel instead of navigating away from the app.
   $("settings-mcp").addEventListener("click", (event) => {
@@ -3460,6 +3462,56 @@ function setChatMode(mode) {
   $("modeBuild").setAttribute("aria-pressed", String(build));
   $("modePlan").classList.toggle("active", !build);
   $("modePlan").setAttribute("aria-pressed", String(!build));
+}
+
+/* Extensions are read-only here: the panel shows the manifest each folder
+   declares and why one is unusable, and offers no install or run action. */
+async function loadExtensions() {
+  const host = $("extensionsList");
+  if (!host) return;
+  const result = await api("/api/extensions");
+  if (!result.ok) {
+    host.replaceChildren(pageNote(result.data.error || "Could not read the extensions folder."));
+    return;
+  }
+  const directory = $("extensionsDirectory");
+  if (directory) {
+    directory.replaceChildren();
+    directory.append("Read from ");
+    const code = document.createElement("code");
+    code.textContent = result.data.directory || "";
+    directory.appendChild(code);
+  }
+  const extensions = Array.isArray(result.data.extensions) ? result.data.extensions : [];
+  host.replaceChildren();
+  if (!extensions.length) {
+    host.appendChild(pageNote("No extensions installed. Add a folder with manifest.json to that directory, then Refresh."));
+    return;
+  }
+  extensions.forEach((extension) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item";
+    const main = document.createElement("span");
+    main.className = "project-menu-main";
+    const strong = document.createElement("strong");
+    strong.textContent = extension.valid
+      ? `${extension.name} ${extension.version}`
+      : String(extension.id || "(unnamed folder)");
+    main.appendChild(strong);
+    const small = document.createElement("small");
+    const permissions = Array.isArray(extension.permissions) ? extension.permissions : [];
+    small.textContent = extension.valid
+      ? extension.description || (permissions.length ? permissions.join(", ") : "no permissions requested")
+      : extension.error;
+    if (permissions.length) small.title = permissions.join(", ");
+    main.appendChild(small);
+    row.appendChild(main);
+    const badge = document.createElement("span");
+    badge.className = `badge ${extension.valid ? "on" : "broken"}`;
+    badge.textContent = extension.valid ? "valid" : "invalid";
+    row.appendChild(badge);
+    host.appendChild(row);
+  });
 }
 
 async function loadSettings() {

@@ -326,6 +326,8 @@ Delivered in 2.15.0:
 - Unknown permissions, a missing manifest or entry file, a path escape and a
   64 KiB size cap all fail validation with a stated reason; one bad folder does
   not hide the valid ones.
+- Settings → Extensions lists the directory and every folder's status, with a
+  Refresh action (2.16.0). Read-only: no install, uninstall or run.
 
 Remaining: execution under a sandbox, custom tools, provider adapters, UI
 extensions, and dependency/compatibility metadata.

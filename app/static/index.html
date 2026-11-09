@@ -668,6 +668,7 @@
           <button type="button" data-settings-section="permissions" aria-selected="false">Permissions</button>
           <button type="button" data-settings-section="mcp" aria-selected="false">MCP</button>
           <button type="button" data-settings-section="diagnostics" aria-selected="false">Diagnostics</button>
+          <button type="button" data-settings-section="extensions" aria-selected="false">Extensions</button>
           <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
@@ -817,6 +818,16 @@
             <button type="button" id="diagLogRefresh" class="btn btn-quiet">Load process log</button>
           </div>
           <ul id="diagLog" class="perm-audit"></ul>
+          </section>
+
+          <section id="settings-extensions" class="settings-section card form-card-inner hidden">
+          <h2 class="form-group-title">Extensions</h2>
+          <p>Folders with a <code>manifest.json</code> in the directory below. This panel reports what is installed and whether it is usable; nothing here is executed yet, and installing means putting a folder in place.</p>
+          <p class="muted" id="extensionsDirectory"></p>
+          <div class="form-actions">
+            <button type="button" id="extensionsRefresh" class="btn btn-quiet">Refresh</button>
+          </div>
+          <div id="extensionsList" class="list-block"></div>
           </section>
 
           <section id="settings-permissions" class="settings-section card form-card-inner hidden">

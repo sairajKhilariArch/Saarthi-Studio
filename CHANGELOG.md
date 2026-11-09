@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.16.0
+
+The manifest API had no visible surface; Settings → Extensions is now one.
+
+- The panel shows the directory extensions are read from, then one row per
+  folder: name and version (or the folder id when invalid), the description or
+  the validation error, and a valid/invalid badge. Refresh re-reads the folder
+  without a restart.
+- It is a read-only view over the same `GET /api/extensions` the API exposes.
+  There is no install, uninstall or run action, because none of those exists yet.
+- Checks: `node --check` clean; `bash scripts/ci/test-frontend.sh` 18 passed;
+  `cargo test --locked` 462 passed, 1 ignored (backend unchanged); clippy
+  `-D warnings` clean; e2e 19 passed.
+- The panel was not opened in a browser, so its rendering is unverified; the
+  endpoint behind it was exercised live in 2.15.0.
+
 ## 2.15.0
 
 Phase 15 starts with an extension manifest — discovered and validated, not
