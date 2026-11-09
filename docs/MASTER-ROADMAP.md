@@ -283,6 +283,13 @@ Frontend unit tests, end-to-end runs (launch → chat → agent → approve →
 restart), failure injection matrix, platform matrices, and release-artifact
 install smokes in CI.
 
+Delivered in 2.5.0: the frontend unit layer — `app/static/tests/` loads the real
+`app.js` in a browser-free `node:vm` harness, 12 cases over pure helpers, run by
+`scripts/ci/test-frontend.sh` and gated in `desktop-ci.yml`.
+
+Remaining: a render smoke and a harness for `ide.js`, the end-to-end flow, the
+failure-injection matrix, install smokes in CI, and a Windows Rust job.
+
 ## Phase 17 — Observability
 
 Delivered in 1.72.0: one read-only timeline over `request_log`,

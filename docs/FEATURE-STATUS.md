@@ -35,9 +35,9 @@ full JSON Schema validation for MCP, an editor that bypasses the run lease, live
 capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 is still a flat
 saved-prompt list rather than a workflow graph, and Phase 15 has no extension
-manifest at all**; Phase 12 lacks a live step view, Phase 16 has no frontend,
-end-to-end or failure-matrix layer, and Phase 18 has no installer or update path.
-Phase 17 closed in 2.4.0.
+manifest at all**; Phase 12 lacks a live step view, Phase 16 now has a frontend
+unit layer (2.5.0) but no end-to-end, failure-matrix or install-smoke layer, and
+Phase 18 has no installer or update path. Phase 17 closed in 2.4.0.
 
 ## Completion by phase (derived, not a release gate)
 
@@ -64,7 +64,7 @@ row below moves, so they cannot drift from the tables.
 | 13 | Workflow builder | 20% | the node graph itself |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
-| 16 | Testing and quality | 44% | frontend, end-to-end, failure matrix, install smokes |
+| 16 | Testing and quality | 56% | end-to-end, failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
@@ -291,7 +291,7 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
-| Frontend | **Missing** | no runner; `app/static/` has no build step |
+| Frontend | Working (2.5.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 12 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys and the icon fallback. Wired into `desktop-ci.yml`. Scope is pure helpers only — no render smoke, and `ide.js` has no harness |
 | End-to-end (launch → chat → agent → restart) | Missing | ad-hoc local smokes only |
 | Failure-injection matrix | Missing | — |
 | Install smokes in CI | Missing | — |
@@ -330,9 +330,10 @@ table and no second log pipeline, so it cannot disagree with the panels:
 1. ~~**Phase 17 remainder**~~ — closed in 2.4.0: the process log (2.2.0),
    install/MCP timeline rows (2.3.0), request ids for non-run operations and the
    readiness view (2.4.0).
-2. **Phase 16 remainder** — a frontend test runner and one end-to-end harness
-   (headless launch + mock router). Both are named in `KNOWN-ISSUES.md` and
-   neither exists; the backend suite is the only automated layer today.
+2. **Phase 16 remainder** — an end-to-end harness (headless launch + mock
+   router + restart), then the failure-injection matrix and install smokes. The
+   frontend unit layer landed in 2.5.0; a render smoke and an `ide.js` harness
+   are still open inside it.
 3. **Phase 13 workflow graph** — the last phase with no real implementation. It
    depends on the Phase 5 lifecycle, which is now complete.
 4. **Phase 18 installer and update path** — Windows MSI/EXE, macOS `.app`, and

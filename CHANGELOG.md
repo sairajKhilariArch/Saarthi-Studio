@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.5.0
+
+Starts Phase 16 with the layer the repo never had: automated tests for the static
+UI, using no new dependency and no build step.
+
+- `app/static/tests/harness.js` evaluates the real `app.js` inside a `node:vm`
+  context whose DOM records calls and never draws — stub elements, a style object
+  that stores custom properties, inert observers, inert timers (a live one kept
+  the test process alive) and a `fetch` that answers 503 instead of rejecting, so
+  a load-time loader cannot surface as an unhandled rejection. The file is run,
+  not copied: the functions under test are the ones the browser runs.
+- `app/static/tests/app.test.js` — 12 cases: HTML escaping, the markdown subset
+  (including HTML typed inside bold staying inert and a `javascript:` link
+  remaining text), byte and time formatting at their boundaries, `basename`/
+  `parentPath`, tab keys, and the icon fallback.
+- `scripts/ci/test-frontend.sh` runs them through Node's built-in runner and
+  refuses an absent or too-old Node, and `desktop-ci.yml` now calls it next to
+  the version-regression suite.
+- Scope is stated rather than implied: pure helpers only. There is no render
+  smoke, and `app/static/ide.js` still has no harness — `docs/TESTING-STRATEGY.md`
+  and `KNOWN-ISSUES.md` say so.
+- `bash scripts/ci/test-frontend.sh`: 12 passed, 0 failed. `cargo test --locked`:
+  443 passed, 1 ignored. Clippy `--all-targets -D warnings` clean.
+
 ## 2.4.0
 
 Closes Phase 17: every privileged call can now be matched to the request that

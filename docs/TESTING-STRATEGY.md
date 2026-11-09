@@ -4,7 +4,8 @@
 
 | Suite | Location | Run with | Size |
 |---|---|---|---|
-| Rust unit/integration | `app/src/*.rs` `#[test]` / `#[tokio::test]` | `cd app && cargo test --locked` | 133 test functions; 127 passed at last full run |
+| Rust unit/integration | `app/src/*.rs` `#[test]` / `#[tokio::test]` | `cd app && cargo test --locked` | 435 test functions; 443 passed at the 2.5.0 run |
+| Frontend helpers | `app/static/tests/` | `bash scripts/ci/test-frontend.sh` (Node `--test`) | 12 cases over the real `app.js`, loaded in a browser-free `node:vm` harness |
 | VS Code extension logic | `vscode-extension/test/` | `cd vscode-extension && npm test` (Node `node --test`) | agent, lib, extension suites |
 | Android JVM | `android/app/src/test/` | `cd android && gradle testDebugUnitTest` | policy/migration tests |
 | Android instrumentation | `android/app/src/androidTest/` | emulator script `android/scripts/ci/run-android-instrumentation.sh` | launch, DB migration, paging, backup |
@@ -12,15 +13,24 @@
 | Artifact gate | `scripts/ci/verify-artifacts.sh` | `bash scripts/ci/verify-artifacts.sh dist` | names, presence, checksums |
 
 CI gates: `desktop-ci.yml` (clippy `-D warnings`, tests, layout checks, version
-regressions, ubuntu + macOS), `rust-host-api-ci.yml` (rustfmt on host modules,
-tests, clippy), `android-ci.yml` (unit, lint, assemble, emulator instrumentation,
-hard validation gate), `desktop-release.yml` (real artifacts).
+regressions, frontend tests, ubuntu + macOS), `rust-host-api-ci.yml` (rustfmt on
+host modules, tests, clippy), `android-ci.yml` (unit, lint, assemble, emulator
+instrumentation, hard validation gate), `desktop-release.yml` (real artifacts).
+
+The frontend layer is deliberately narrow. `app/static/app.js` is a classic
+script with no exports, so `app/static/tests/harness.js` evaluates the real file
+in a `node:vm` context whose DOM records calls and never draws; the tests then
+call the top-level bindings directly. Only pure behaviour is asserted — escaping,
+markdown, formatting, path keys — because a test cannot honestly verify a layout
+it never rendered. Anything that needs a real element belongs in the browser
+smoke layer below, not here.
 
 ## Gaps to close (ordered)
 
-1. **Frontend tests.** `app/static/` has no runner. Add a node-based DOM-free
-   unit layer for pure helpers (packing, formatting, state reducers) and a
-   browser smoke for render-critical paths.
+1. ~~**Frontend unit tests.**~~ Done in 2.5.0: `scripts/ci/test-frontend.sh`
+   runs the real `app.js` in a browser-free harness (12 cases, wired into
+   `desktop-ci.yml`). Still open: a browser smoke for render-critical paths, and
+   the same treatment for `ide.js`.
 2. **End-to-end.** Launch the binary headless on a scratch port, drive the API
    for a full flow (open folder → chat via mock router → agent run with
    approval → restart → verify persistence). `scripts/mock-router.py` already
@@ -47,6 +57,8 @@ hard validation gate), `desktop-release.yml` (real artifacts).
 ```bash
 # backend
 cd app && cargo build --release --locked && cargo test --locked && cargo clippy --locked --all-targets -- -D warnings
+# frontend helpers (Node 18+)
+bash scripts/ci/test-frontend.sh
 # pipeline logic
 bash scripts/ci/test-version.sh
 # packaging gate
