@@ -336,6 +336,10 @@ Sandbox decision (2.18.0): `docs/adr/0001-extension-execution-sandbox.md` —
 WASM-first, capability-brokered, no in-process execution. JS entries stay
 installable but not runnable until a sandboxed JS runtime exists.
 
+Runtime gating (2.19.0): `runtime: "wasm"` with a `.wasm` entry, per-extension
+`runnable`/`blockedReason`, and `POST /api/extensions/:id/run` refusing before
+any code is loaded, naming the unsupported permission or the missing runner.
+
 Remaining: a WASM runner that follows ADR 0001, custom tools, provider adapters,
 UI extensions, and dependency/compatibility metadata. Nothing is executed yet, so
 the install path grants no capability by itself.

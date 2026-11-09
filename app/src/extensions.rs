@@ -57,6 +57,9 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 /// unbounded copy could fill the disk. These are ceilings, not quotas.
 const MAX_FILES: usize = 500;
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+/// The capabilities the v1 runner is designed to provide (ADR 0001). A manifest
+/// may request more, but it cannot run until the runner provides them.
+const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
 const MAX_PERMISSIONS: usize = 16;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
@@ -70,6 +73,9 @@ struct Manifest {
     description: String,
     author: String,
     entry: Option<String>,
+    /// Only `wasm` today. Missing means the extension is installable but has no
+    /// runtime this app can execute.
+    runtime: Option<String>,
     permissions: Vec<String>,
 }
 
@@ -156,6 +162,24 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
             }
         }
     };
+    let runtime = match raw.get("runtime").and_then(Value::as_str) {
+        None => None,
+        Some("wasm") => Some("wasm".to_string()),
+        Some(other) => {
+            return Err(format!(
+                "runtime \"{other}\" is not supported; the v1 runtime is \"wasm\"."
+            ))
+        }
+    };
+    if runtime.as_deref() == Some("wasm") {
+        match entry.as_deref() {
+            None => return Err("A wasm extension needs a .wasm entry file.".to_string()),
+            Some(path) if !path.ends_with(".wasm") => {
+                return Err("A wasm extension's entry must end in .wasm.".to_string())
+            }
+            Some(_) => {}
+        }
+    }
     let permissions = match raw.get("permissions") {
         None => Vec::new(),
         Some(Value::Array(list)) => {
@@ -188,8 +212,30 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         description,
         author,
         entry,
+        runtime,
         permissions,
     })
+}
+
+/// Why the v1 runner cannot run this manifest, if it cannot. The last branch is
+/// deliberately temporary: the manifest has passed the gates, but no sandboxed
+/// runner exists yet, so `runnable` stays false. Removing that branch is the
+/// first commit that is allowed to execute extension code.
+fn run_block(manifest: &Manifest) -> Option<String> {
+    match manifest.runtime.as_deref() {
+        None => Some("No runtime declared, so this extension cannot run.".to_string()),
+        Some("wasm") => {
+            for permission in &manifest.permissions {
+                if !V1_PERMISSIONS.contains(&permission.as_str()) {
+                    return Some(format!(
+                        "Requires \"{permission}\", which the v1 runner does not provide."
+                    ));
+                }
+            }
+            Some("The WASM runner is not implemented yet.".to_string())
+        }
+        Some(other) => Some(format!("Runtime \"{other}\" is not supported.")),
+    }
 }
 
 fn invalid(folder: &str, error: String) -> Value {
@@ -200,8 +246,11 @@ fn invalid(folder: &str, error: String) -> Value {
         "description": "",
         "author": "",
         "entry": Value::Null,
+        "runtime": Value::Null,
         "permissions": [],
         "valid": false,
+        "runnable": false,
+        "blockedReason": error.clone(),
         "error": error,
     })
 }
@@ -401,17 +450,23 @@ fn inspect(dir: &Path) -> Vec<Value> {
                 Ok(manifest)
             });
             match parsed {
-                Ok(manifest) => json!({
-                    "id": manifest.id,
-                    "name": manifest.name,
-                    "version": manifest.version,
-                    "description": manifest.description,
-                    "author": manifest.author,
-                    "entry": manifest.entry,
-                    "permissions": manifest.permissions,
-                    "valid": true,
-                    "error": "",
-                }),
+                Ok(manifest) => {
+                    let blocked = run_block(&manifest);
+                    json!({
+                        "id": manifest.id,
+                        "name": manifest.name,
+                        "version": manifest.version,
+                        "description": manifest.description,
+                        "author": manifest.author,
+                        "entry": manifest.entry,
+                        "runtime": manifest.runtime,
+                        "permissions": manifest.permissions,
+                        "valid": true,
+                        "runnable": blocked.is_none(),
+                        "blockedReason": blocked.unwrap_or_default(),
+                        "error": "",
+                    })
+                }
                 Err(error) => invalid(&name, error),
             }
         })
@@ -454,6 +509,45 @@ pub(crate) async fn remove(
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(error) => bad(error),
     }
+}
+
+/// Gate 2 of ADR 0001: a run request must fail with a reason before any code is
+/// loaded. Until the WASM runner exists, even a manifest that passes every gate
+/// is refused here rather than silently doing nothing.
+pub(crate) async fn run(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if !valid_id(&id) {
+        return bad("Invalid extension id.");
+    }
+    let entries = inspect(&extensions_dir(&state));
+    let Some(entry) = entries.iter().find(|entry| entry["id"] == id.as_str()) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": "No such extension." })),
+        )
+            .into_response();
+    };
+    if entry["valid"] != Value::Bool(true) {
+        return bad(
+            entry["error"]
+                .as_str()
+                .unwrap_or("The extension is not valid."),
+        );
+    }
+    let reason = entry["blockedReason"].as_str().unwrap_or("");
+    if !reason.is_empty() {
+        return bad(reason);
+    }
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "ok": false,
+            "error": "The WASM runner is not implemented yet."
+        })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -539,6 +633,89 @@ mod tests {
 
         assert!(remove_extension(&root, "missing").is_err());
         assert!(remove_extension(&root, "../escape").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_wasm_manifest_needs_a_wasm_entry() {
+        let base = json!({
+            "id": "wasm-tools",
+            "name": "Wasm Tools",
+            "version": "1.0.0"
+        });
+        let with = |key: &str, value: Value| {
+            let mut copy = base.clone();
+            copy[key] = value;
+            copy
+        };
+        let parsed = parse_manifest(
+            "wasm-tools",
+            &json!({
+                "id": "wasm-tools", "name": "Wasm Tools", "version": "1.0.0",
+                "runtime": "wasm", "entry": "tool.wasm"
+            }),
+        )
+        .expect("wasm manifest");
+        assert_eq!(parsed.runtime.as_deref(), Some("wasm"));
+        assert!(parse_manifest("wasm-tools", &with("runtime", json!("wasm")))
+            .unwrap_err()
+            .contains(".wasm entry"));
+        let mut js_entry = with("runtime", json!("wasm"));
+        js_entry["entry"] = json!("main.js");
+        assert!(parse_manifest("wasm-tools", &js_entry)
+            .unwrap_err()
+            .contains("end in .wasm"));
+        assert!(parse_manifest("wasm-tools", &with("runtime", json!("js")))
+            .unwrap_err()
+            .contains("not supported"));
+        // No runtime is still installable: a saved manifest predates the field.
+        assert!(parse_manifest("wasm-tools", &base).is_ok());
+    }
+
+    #[test]
+    fn runtime_gating_names_the_reason() {
+        let manifest = |runtime: Option<&str>, permissions: Vec<&str>| Manifest {
+            id: "x".to_string(),
+            name: "X".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            entry: runtime.map(|_| "tool.wasm".to_string()),
+            runtime: runtime.map(str::to_string),
+            permissions: permissions.into_iter().map(str::to_string).collect(),
+        };
+        assert!(run_block(&manifest(None, vec![]))
+            .unwrap_or_default()
+            .contains("No runtime"));
+        assert!(
+            run_block(&manifest(Some("wasm"), vec!["workspace.read", "network"]))
+                .unwrap_or_default()
+                .contains("network")
+        );
+        assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"]))
+            .unwrap_or_default()
+            .contains("not implemented"));
+    }
+
+    #[test]
+    fn inspection_exposes_the_runtime_and_the_run_block_reason() {
+        let root = scratch("wasm-inspect");
+        let folder = root.join("wasm-tools");
+        fs::create_dir_all(&folder).expect("folder");
+        fs::write(
+            folder.join("manifest.json"),
+            r#"{"id":"wasm-tools","name":"Wasm Tools","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","permissions":["workspace.read"]}"#,
+        )
+        .expect("manifest");
+        fs::write(folder.join("tool.wasm"), b"\0asm").expect("entry");
+
+        let entries = inspect(&root);
+        assert_eq!(entries[0]["runtime"], "wasm");
+        assert_eq!(entries[0]["runnable"], false);
+        assert!(entries[0]["blockedReason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not implemented"));
         let _ = fs::remove_dir_all(&root);
     }
 

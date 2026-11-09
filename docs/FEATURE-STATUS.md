@@ -68,7 +68,7 @@ row below moves, so they cannot drift from the tables.
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
-| 15 | Extension ecosystem | 50% | execution and sandboxing, custom tools, provider adapters |
+| 15 | Extension ecosystem | 55% | the WASM runner, custom tools, provider adapters |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
@@ -304,7 +304,8 @@ sets the sandbox decision before any loader is written.
 | Manifest (id, name, version, description, author, entry, permissions) | Working (2.15.0) | `GET /api/extensions` scans `<data>/extensions/*/manifest.json`; the id must equal the folder, the version must be `1.2.3`, `entry` must stay inside the folder and exist, and permissions are a closed list |
 | Management UI | Working (2.16.0) | Settings → Extensions shows the directory, each folder's validity, description or error, and a Refresh action |
 | Install / uninstall | Working (2.17.0) | install copies a folder through staging with validation and rollback, symlink refusal and a 500-file/16 MiB cap; uninstall moves the folder to `.removed/` after a canonical containment check |
-| Execution and sandboxing | Design (2.18.0) | ADR 0001: no in-process execution; the v1 runner is WASM (Wasmtime) with WASI disabled and a deny-by-default host-call broker. No loader yet; `terminal.run`, `mcp.call` and `network` are refused at run in v1 |
+| Execution and sandboxing | Design (2.18.0) | ADR 0001: no in-process execution; the v1 runner is WASM (Wasmtime) with WASI disabled and a deny-by-default host-call broker. No loader yet |
+| Runtime gating | Working (2.19.0) | `runtime: "wasm"` requires a `.wasm` entry; discovery exposes `runnable`/`blockedReason`; `POST /api/extensions/:id/run` refuses with the reason, naming an unsupported v1 permission or the missing runner |
 | Custom tools | Missing | — |
 | Provider adapters | Missing | — |
 | UI extensions | Missing | — |
@@ -313,7 +314,7 @@ sets the sandbox decision before any loader is written.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 465 passed, 1 ignored at the 2.17.0 run; the count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 468 passed, 1 ignored at the 2.19.0 run; the count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |

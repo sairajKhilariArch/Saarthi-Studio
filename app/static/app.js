@@ -3535,8 +3535,14 @@ async function loadExtensions() {
     main.appendChild(strong);
     const small = document.createElement("small");
     const permissions = Array.isArray(extension.permissions) ? extension.permissions : [];
+    const blocked = extension.runnable === false ? String(extension.blockedReason || "") : "";
     small.textContent = extension.valid
-      ? extension.description || (permissions.length ? permissions.join(", ") : "no permissions requested")
+      ? [
+          extension.description || (permissions.length ? permissions.join(", ") : "no permissions requested"),
+          blocked,
+        ]
+          .filter(Boolean)
+          .join(" \u00b7 ")
       : extension.error;
     if (permissions.length) small.title = permissions.join(", ");
     main.appendChild(small);

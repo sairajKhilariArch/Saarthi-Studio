@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.19.0
+
+ADR 0001's first gate is implemented: an extension can be gated before any code
+would be loaded.
+
+- The manifest accepts `runtime`; only `"wasm"` is valid, and a wasm extension
+  needs an `entry` ending in `.wasm`. A manifest without `runtime` still
+  installs and keeps its old meaning: not runnable.
+- Discovery reports `runtime`, `runnable` and `blockedReason` per folder. The
+  reason names the first obstacle: no runtime declared, a permission the v1
+  runner does not provide (`network`, `terminal.run`, `mcp.call`), or — today —
+  that the WASM runner itself is not implemented.
+- `POST /api/extensions/:id/run` refuses with that reason (400), and with 501
+  only for a manifest that passes every gate, so a future runner has one place
+  to attach. No code is loaded.
+- Settings shows the block reason on each row and offers no run action.
+- Checks: `cargo test --locked` **468 passed, 1 ignored** (three new: wasm entry
+  rules, gating reasons, inspection metadata); clippy `-D warnings` clean;
+  `node --check` clean; frontend 18 passed; e2e 19 passed. Live: a wasm manifest
+  installed and reported the runner reason, a legacy `main.js` reported no
+  runtime, and both run attempts were refused with 400.
+- Everything is still install-and-inspect only. Removing the "runner not
+  implemented" branch is the first commit allowed to execute extension code.
+
 ## 2.18.0
 
 No code: this release records the decision that governs extension execution
