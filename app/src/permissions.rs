@@ -498,7 +498,8 @@ pub(crate) fn initialize(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
             action TEXT NOT NULL, target TEXT NOT NULL, decision TEXT NOT NULL,
             scope TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
-            detail TEXT NOT NULL DEFAULT ''
+            detail TEXT NOT NULL DEFAULT '',
+            request_id TEXT NOT NULL DEFAULT ''
         );",
     )
 }
@@ -534,10 +535,14 @@ pub(crate) fn record(
             format!("{}{project_note}: {detail}", action.as_str()),
         );
     }
+    // The id of the HTTP call that asked for this, when there was one. A
+    // background sweep has none, and an empty value says so rather than
+    // borrowing an id from whatever ran next.
+    let request_id = crate::trace::current();
     let _ = crate::open_db(&state.database_path).and_then(|conn| {
         conn.execute(
-            "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail,request_id) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 crate::now_seconds(),
                 action.as_str(),
@@ -546,6 +551,7 @@ pub(crate) fn record(
                 scope.as_str(),
                 project,
                 detail.chars().take(500).collect::<String>(),
+                request_id,
             ],
         )
     });

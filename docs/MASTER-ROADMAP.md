@@ -302,8 +302,14 @@ ending.
 Delivered in 2.3.0: router installs and answering MCP servers are timeline rows
 with their own timestamps and `router`/`mcp` area filters.
 
-Remaining: a request id for operations that are not agent runs, and a readiness
-dashboard beyond `/api/health` and the provider health card.
+Delivered in 2.4.0: a request id per local API call (`trace.rs`, echoed as
+`x-request-id`, stored on `permission_audit` by in-place migration, shown on
+timeline and log rows) and `GET /api/ready` — cheap local checks with only the
+database and the data directory marked required, and a Readiness block above the
+timeline.
+
+**Phase 17 is complete.** What remains in the roadmap is 13 (workflow graph), 15
+(extension manifest) and the 16/18 quality and packaging work.
 
 ## Phase 18 — Installers and updates
 

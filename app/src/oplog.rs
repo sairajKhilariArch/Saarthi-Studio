@@ -91,13 +91,19 @@ impl Log {
 
     /// Append one entry. `level` is `info`, `warn` or `error`.
     pub(crate) fn push(&self, level: &str, area: &str, event: &str, detail: &str) {
-        let entry = json!({
+        // The calling request's id, when there is one, is what lets a log line
+        // be matched to the audit row and the HTTP call that produced it.
+        let request = crate::trace::current();
+        let mut entry = json!({
             "at": now_seconds(),
             "level": level,
             "area": area,
             "event": event.chars().take(120).collect::<String>(),
             "detail": diagnostics::clip(&diagnostics::redact(detail), DETAIL_CHARS),
         });
+        if !request.is_empty() {
+            entry["request_id"] = json!(request);
+        }
         let Ok(mut held) = self.inner.held.lock() else {
             return;
         };

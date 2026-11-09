@@ -36,8 +36,8 @@ capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 is still a flat
 saved-prompt list rather than a workflow graph, and Phase 15 has no extension
 manifest at all**; Phase 12 lacks a live step view, Phase 16 has no frontend,
-end-to-end or failure-matrix layer, Phase 17 has no log file or request ids, and
-Phase 18 has no installer or update path.
+end-to-end or failure-matrix layer, and Phase 18 has no installer or update path.
+Phase 17 closed in 2.4.0.
 
 ## Completion by phase (derived, not a release gate)
 
@@ -65,10 +65,10 @@ row below moves, so they cannot drift from the tables.
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
 | 16 | Testing and quality | 44% | frontend, end-to-end, failure matrix, install smokes |
-| 17 | Observability | 81% | request ids for non-run operations, a readiness view |
+| 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
-**Overall (mean of the 18 phases): 79%.** Read it as "one reliable core, most
+**Overall (mean of the 18 phases): 80%.** Read it as "one reliable core, most
 phases closed, the remaining work concentrated in 13, 15, 16 and 18". The
 per-row method is the arbiter: a phase moves only when a row here moves.
 
@@ -310,9 +310,9 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Support bundle with redaction | Working (1.72.0) | `GET /api/diagnostics/bundle`: version, OS/arch, non-secret settings, credential booleans, summary and timeline. Run goals are excluded; every string is redacted (`sk-`/`ghp_`/`xoxb-`, `Bearer`, sensitive `name=value`, long opaque runs) and clipped to 400 chars |
 | Diagnostics UI | Working (1.72.0) | Settings → Diagnostics: timeline with area/level colour and the short correlation id, server-side area filter, row count, 24-hour summary line, and a bundle download the browser saves without composing it |
 | Structured log file + console ring | Working (2.2.0) | `app/src/oplog.rs` appends one redacted JSON object per line to `studio.log` beside the database, flushed per write, rotated at 1 MiB into one previous file, with a 200-entry ring in memory; `GET /api/diagnostics/log?limit=` serves the ring and Settings → Diagnostics shows it with the file's path. Written at boot, router install/update/uninstall/restart, permission ask/deny, provider failures and every run ending |
-| Request id for non-run operations | **Missing** | provider rows carry the conversation id, permission rows the project; a terminal command or a Git call has no id of its own |
+| Request id for non-run operations | Working (2.4.0) | `trace.rs` gives every local API request an id, kept in a task-local for the handler's lifetime and echoed as `x-request-id`; a caller's own id is accepted only if it is 8–64 characters of alphanumerics/`-_.`. `permission_audit` gained a `request_id` column (migrated in place, old rows keep `''` rather than a guessed id), so a terminal open, a Git stage or a settings save is now tied to the call that asked for it; the timeline and the process log both show it |
 | Router installs and MCP connections in the timeline | Working (2.3.0) | `timeline_value` adds one row per router from `router-installs.json` (the newest record, since that file keeps one per router) and one per MCP server that has actually answered, at its own `checked_at` — a server never contacted adds nothing rather than a row stamped "now". Areas `router` and `mcp` are valid filters, and the panel offers them |
-| Health/readiness dashboard | Partial | `/api/health` (liveness) and the provider health card exist; there is no single readiness view |
+| Health/readiness dashboard | Working (2.4.0) | `GET /api/ready` runs only cheap local checks — database opens and answers, the data directory accepts a write (a probe file, then removed), provider base URL and whether a key is saved plus the credential store mode, latest router install outcomes, and MCP servers by health. Only the first two are `required`; the rest change what works, not whether the app runs. Shown at the top of Settings → Diagnostics |
 
 ## Phase 18 — Installation and updates
 
@@ -327,9 +327,9 @@ table and no second log pipeline, so it cannot disagree with the panels:
 
 ## What to build next (spec order, 2.1.0)
 
-1. **Phase 17 remainder** — a request id for operations that are not agent runs
-   (a terminal command, a Git call, a settings save) and a readiness view. The
-   process log landed in 2.2.0 and the install/MCP timeline rows in 2.3.0.
+1. ~~**Phase 17 remainder**~~ — closed in 2.4.0: the process log (2.2.0),
+   install/MCP timeline rows (2.3.0), request ids for non-run operations and the
+   readiness view (2.4.0).
 2. **Phase 16 remainder** — a frontend test runner and one end-to-end harness
    (headless launch + mock router). Both are named in `KNOWN-ISSUES.md` and
    neither exists; the backend suite is the only automated layer today.

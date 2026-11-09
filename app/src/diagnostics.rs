@@ -137,6 +137,9 @@ struct Entry {
     level: &'static str,
     correlation: String,
     detail: String,
+    /// The HTTP call that caused the row, when there was one. Empty for
+    /// background work and for rows written before ids existed.
+    request: String,
 }
 
 /// Merge the existing records into one newest-last list.
@@ -199,6 +202,7 @@ pub(crate) fn timeline_value(
                 level: if ok { "info" } else { "error" },
                 correlation: conversation,
                 detail,
+                request: String::new(),
             });
         }
     }
@@ -207,7 +211,8 @@ pub(crate) fn timeline_value(
     {
         let mut stmt = conn
             .prepare(
-                "SELECT created_at, action, target, decision, scope, project, detail
+                "SELECT created_at, action, target, decision, scope, project, detail,
+                        COALESCE(request_id,'')
                    FROM permission_audit ORDER BY id DESC LIMIT ?1",
             )
             .map_err(|error| error.to_string())?;
@@ -221,11 +226,12 @@ pub(crate) fn timeline_value(
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
                 ))
             })
             .map_err(|error| error.to_string())?;
         for row in rows {
-            let (at, action, target, decision, scope, project, detail) =
+            let (at, action, target, decision, scope, project, detail, request) =
                 row.map_err(|error| error.to_string())?;
             let mut summary = format!("{target} · scope {scope}");
             if !detail.is_empty() {
@@ -238,6 +244,7 @@ pub(crate) fn timeline_value(
                 level: if decision == "allow" { "info" } else { "warn" },
                 correlation: project,
                 detail: summary,
+                request,
             });
         }
     }
@@ -293,6 +300,7 @@ pub(crate) fn timeline_value(
                 },
                 correlation: id,
                 detail,
+                request: String::new(),
             });
         }
     }
@@ -326,6 +334,7 @@ pub(crate) fn timeline_value(
                 level: if action == "fail" { "error" } else { "warn" },
                 correlation: run_id,
                 detail: summary,
+                request: String::new(),
             });
         }
     }
@@ -350,6 +359,7 @@ pub(crate) fn timeline_value(
             level: if ok { "info" } else { "error" },
             correlation: record.id,
             detail,
+            request: String::new(),
         });
     }
 
@@ -390,6 +400,7 @@ pub(crate) fn timeline_value(
             },
             correlation: name,
             detail,
+            request: String::new(),
         });
     }
 
@@ -415,6 +426,7 @@ pub(crate) fn timeline_value(
                 "event": redact(&entry.event),
                 "level": entry.level,
                 "correlation": entry.correlation,
+                "request_id": entry.request,
                 "detail": clip(&redact(&entry.detail), DETAIL_CHARS),
             })
         })
@@ -608,6 +620,143 @@ async fn log_route(AxumQuery(params): AxumQuery<HashMap<String, String>>) -> Res
     .into_response()
 }
 
+/// What a readiness answer is allowed to claim.
+///
+/// `required` is the difference between "Studio cannot work" and "something it
+/// uses is misconfigured". Only the database and a writable data directory stop
+/// the app from functioning at all; a missing router or an unhealthy MCP server
+/// changes what works, not whether it works.
+fn check(name: &str, ok: bool, required: bool, detail: impl Into<String>) -> Value {
+    json!({
+        "name": name,
+        "ok": ok,
+        "required": required,
+        "detail": clip(&redact(&detail.into()), DETAIL_CHARS),
+    })
+}
+
+/// Cheap by design: no router probe, no provider request, no MCP handshake.
+/// Those are slow and can block; `/api/routers` and `/api/health/providers` are
+/// the places to look for measured state. This answers "is anything structurally
+/// broken" in the time it takes to read a file and open one connection.
+pub(crate) fn readiness_value(state: &AppState) -> Value {
+    let mut checks: Vec<Value> = Vec::new();
+
+    let database = open_db(&state.database_path).and_then(|conn| {
+        conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })
+    });
+    checks.push(match database {
+        Ok(objects) => check(
+            "database",
+            true,
+            true,
+            format!("{} objects in {}", objects, state.database_path.display()),
+        ),
+        Err(error) => check("database", false, true, error.to_string()),
+    });
+
+    // A probe file rather than a permission bit: the question is whether a write
+    // lands, and only writing answers that.
+    let probe = state
+        .database_path
+        .with_file_name(format!(".ready-probe-{}", std::process::id()));
+    let writable = std::fs::write(&probe, b"ok").and_then(|_| std::fs::remove_file(&probe));
+    checks.push(match writable {
+        Ok(()) => check(
+            "data directory",
+            true,
+            true,
+            state
+                .database_path
+                .parent()
+                .map(|dir| dir.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        ),
+        Err(error) => check("data directory", false, true, error.to_string()),
+    });
+
+    let config = crate::load_config(state);
+    // The store mode belongs here: a development build answers from a mock
+    // vault, and "key saved" without that context would be a claim the build
+    // cannot support.
+    let store = crate::keychain::current_mode().as_str();
+    checks.push(check(
+        "provider",
+        !config.base_url.trim().is_empty(),
+        false,
+        format!(
+            "{} · key {} · {} store",
+            if config.base_url.trim().is_empty() {
+                "no base URL".to_string()
+            } else {
+                config.base_url.clone()
+            },
+            if config.api_key.trim().is_empty() {
+                "not saved (fine for local inference)"
+            } else {
+                "saved"
+            },
+            store
+        ),
+    ));
+
+    let installed = crate::router_registry::install_records(state);
+    let failed: Vec<String> = installed
+        .iter()
+        .filter(|record| record.outcome != "ok")
+        .map(|record| record.id.clone())
+        .collect();
+    checks.push(check(
+        "routers",
+        failed.is_empty(),
+        false,
+        if installed.is_empty() {
+            "none installed".to_string()
+        } else if failed.is_empty() {
+            format!("{} installed", installed.len())
+        } else {
+            format!(
+                "{} installed; last install failed for {}",
+                installed.len(),
+                failed.join(", ")
+            )
+        },
+    ));
+
+    let mcp = crate::mcp::health_rows(state);
+    let unhealthy = mcp
+        .iter()
+        .filter(|row| row.get("health").and_then(Value::as_str) == Some("unhealthy"))
+        .count();
+    checks.push(check(
+        "mcp",
+        unhealthy == 0,
+        false,
+        if mcp.is_empty() {
+            "no servers registered".to_string()
+        } else {
+            format!("{} registered · {unhealthy} unhealthy", mcp.len())
+        },
+    ));
+
+    let ready = checks.iter().all(|entry| {
+        entry.get("ok").and_then(Value::as_bool) == Some(true)
+            || entry.get("required").and_then(Value::as_bool) == Some(false)
+    });
+    json!({
+        "ok": true,
+        "ready": ready,
+        "at": now_seconds(),
+        "checks": checks,
+    })
+}
+
+async fn ready_route(State(state): State<AppState>) -> Response {
+    Json(readiness_value(&state)).into_response()
+}
+
 /// `GET /api/diagnostics/bundle` — a redacted JSON file for a bug report.
 async fn bundle_route(State(state): State<AppState>) -> Response {
     match bundle_value(&state) {
@@ -623,6 +772,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/diagnostics", get(timeline_route))
         .route("/api/diagnostics/bundle", get(bundle_route))
         .route("/api/diagnostics/log", get(log_route))
+        .route("/api/ready", get(ready_route))
         .route_layer(axum::middleware::from_fn_with_state(
             crate::workspace::LocalOriginGuard::new(port),
             crate::workspace::guard_local_origin,
@@ -829,6 +979,68 @@ mod tests {
             "a key reached the timeline: {detail}"
         );
         assert!(detail.contains("401"));
+    }
+
+    #[test]
+    fn readiness_requires_only_the_database_and_a_writable_data_directory() {
+        let state = fixture("ready");
+        let ready = readiness_value(&state);
+        assert_eq!(ready["ready"], true, "a fixture with a live database is ready");
+        let checks = ready["checks"].as_array().expect("checks");
+        let names: Vec<&str> = checks
+            .iter()
+            .filter_map(|entry| entry["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["database", "data directory", "provider", "routers", "mcp"]
+        );
+        assert!(checks
+            .iter()
+            .any(|entry| entry["name"] == "database" && entry["ok"] == true));
+        // The optional checks do not carry the verdict: an unconfigured provider
+        // is not a broken install.
+        assert!(checks
+            .iter()
+            .filter(|entry| entry["required"] == false)
+            .all(|entry| entry["ok"] == true || entry["required"] == false));
+        // The probe file must not be left behind.
+        let dir = state.database_path.parent().expect("data dir");
+        let leftovers = std::fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".ready-probe")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn a_permission_row_carries_the_calling_request_id_and_an_old_row_does_not() {
+        let state = fixture("request-id");
+        let conn = open_db(&state.database_path).expect("open");
+        conn.execute(
+            "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail,request_id)
+             VALUES(?1,'git','stage','deny','project','','refused','req-abc-123')",
+            params![now_seconds()],
+        )
+        .expect("seed with a request id");
+        conn.execute(
+            "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail)
+             VALUES(?1,'git','commit','allow','project','','ok')",
+            params![now_seconds() - 1.0],
+        )
+        .expect("seed an old-style row");
+
+        let payload = timeline_value(&state, 10, Some("permission"), true).expect("timeline");
+        let events = payload["events"].as_array().expect("events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["request_id"], "req-abc-123");
+        assert_eq!(events[0]["request_id"], "", "no id is invented");
     }
 
     #[test]

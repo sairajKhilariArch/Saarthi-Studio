@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.4.0
+
+Closes Phase 17: every privileged call can now be matched to the request that
+asked for it, and one endpoint says whether the install can work.
+
+- `app/src/trace.rs` assigns an id to every local API request, keeps it in a
+  task-local for the handler's lifetime, and echoes it as `x-request-id`. A
+  caller's own id is accepted only when it is 8–64 characters of alphanumerics,
+  `-`, `_` or `.`; anything else is replaced, because the id is stored and shown.
+- `permission_audit` gained a `request_id` column through an in-place migration.
+  Old rows keep `''` — they were written before ids existed and guessing one
+  would be a fabrication. A terminal open, a Git call and a settings save are now
+  tied to the HTTP call that caused them, in the timeline and in the process log.
+- `GET /api/ready` answers from cheap local checks only: the database opens and
+  answers, the data directory accepts a write (a probe file, removed again),
+  provider base URL plus whether a key is saved and which credential store holds
+  it, the latest router install outcomes, and MCP servers by health. Only the
+  database and the data directory are `required`; the rest change what works,
+  not whether the app runs. It performs no network probe — measured state stays
+  in the Router view and the Provider health card.
+- Settings → Diagnostics gained a Readiness block above the timeline, with the
+  request id shown on audit and log rows.
+- `cargo test --locked`: **443 passed, 1 ignored** (8 new: id minting, the
+  acceptance and rejection rules, the task-local not leaking out of its scope,
+  the migration running twice and leaving the pre-existing row empty, the five
+  readiness checks with no probe file left behind, and a permission row carrying
+  its id while an older row carries none). Clippy `--all-targets -D warnings`
+  clean; `node --check` clean.
+- Phase 17 is complete; what remains in the roadmap is 13, 15, 16 and 18.
+
 ## 2.3.0
 
 Router installs and MCP servers now appear on the diagnostics timeline instead of

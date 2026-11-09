@@ -750,6 +750,14 @@
 
           <section id="settings-diagnostics" class="settings-section card form-card-inner hidden">
           <h2 class="form-group-title">Diagnostics</h2>
+          <h3>Readiness</h3>
+          <p class="muted">Whether Studio can work right now. The database and a writable data directory are required; a provider without a key, a failed router install or an unhealthy MCP server changes what works, not whether the app runs. Nothing here probes the network &mdash; measured state lives in the Router view and the Provider health card.</p>
+          <p id="readyVerdict" class="muted"></p>
+          <ul id="readyChecks" class="perm-audit"></ul>
+          <div class="form-actions">
+            <button type="button" id="readyRefresh" class="btn btn-quiet">Check again</button>
+          </div>
+          <h3>Timeline</h3>
           <p>What Studio actually did, newest last: provider requests, permission decisions and agent runs in one timeline. Each row carries the run, project or conversation it belongs to. Prompts, file bodies and key values are never stored here, and the support bundle redacts what a provider returned before it leaves this machine.</p>
           <div class="form-row">
             <label class="field">

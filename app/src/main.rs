@@ -57,6 +57,7 @@ mod model_scope;
 mod openai;
 mod oplog;
 mod permissions;
+mod trace;
 mod privacy;
 mod router;
 mod router_console;
@@ -356,6 +357,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = migrate_request_log_costs(&conn);
     let _ = migrate_conversation_model(&conn);
     let _ = permissions::initialize(&conn);
+    let _ = migrate_permission_request_id(&conn);
     let _ = skills::initialize(&conn);
     let _ = memory::initialize(&conn);
     let _ = embeddings::initialize(&conn);
@@ -452,6 +454,26 @@ fn migrate_conversation_model(conn: &Connection) -> rusqlite::Result<()> {
     };
     if !has_column {
         conn.execute_batch("ALTER TABLE conversations ADD COLUMN model TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+/// Give `permission_audit` the id of the HTTP call that caused the decision, so
+/// a refusal can be matched to the action a person took instead of only to a
+/// target and a time. An old row keeps `''`: it was written before ids existed
+/// and guessing one would be a fabrication.
+fn migrate_permission_request_id(conn: &Connection) -> rusqlite::Result<()> {
+    let names = {
+        let mut stmt = conn.prepare("PRAGMA table_info(permission_audit)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names
+    };
+    if !names.is_empty() && !names.iter().any(|name| name == "request_id") {
+        conn.execute_batch(
+            "ALTER TABLE permission_audit ADD COLUMN request_id TEXT NOT NULL DEFAULT '';",
+        )?;
     }
     Ok(())
 }
@@ -4401,6 +4423,9 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .merge(router_console::router(port))
         .merge(router_api)
         .layer(middleware::from_fn(local_security_headers))
+        // Outermost layer: every route, including the guards inside it, runs
+        // with the request's id in scope.
+        .layer(middleware::from_fn(trace::assign))
         .with_state(state.clone());
     let remote_config = host_transport::RemoteListenerConfig::from_env()?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -4582,6 +4607,56 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn permission_audit_gains_a_request_id_column_once() {
+        let conn = Connection::open_in_memory().expect("memory database");
+        // The pre-2.4.0 shape: no request_id column.
+        conn.execute_batch(
+            "CREATE TABLE permission_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
+                action TEXT NOT NULL, target TEXT NOT NULL, decision TEXT NOT NULL,
+                scope TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .expect("old schema");
+        conn.execute(
+            "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail)
+             VALUES(1.0,'git','stage','deny','project','','old row')",
+            [],
+        )
+        .expect("old row");
+
+        migrate_permission_request_id(&conn).expect("migrate");
+        // Idempotent: a second boot must not try to add it again.
+        migrate_permission_request_id(&conn).expect("migrate twice");
+
+        let columns: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(permission_audit)").expect("pragma");
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .expect("columns")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("collect")
+        };
+        assert!(columns.iter().any(|name| name == "request_id"));
+        // The row written before the column existed keeps an empty id rather
+        // than being given one it never had.
+        let old: String = conn
+            .query_row(
+                "SELECT request_id FROM permission_audit WHERE target='stage'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("old row reads");
+        assert_eq!(old, "");
+        conn.execute(
+            "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail,request_id)
+             VALUES(2.0,'git','commit','deny','project','','new row','req-1')",
+            [],
+        )
+        .expect("a new row carries an id");
     }
 
     #[test]

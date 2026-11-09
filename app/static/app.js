@@ -119,6 +119,7 @@ function setupSettingsNav() {
   $("diagRefresh").addEventListener("click", () => void loadDiagnostics());
   $("diagBundle").addEventListener("click", () => void downloadDiagnosticsBundle());
   $("diagLogRefresh").addEventListener("click", () => void loadProcessLog());
+  $("readyRefresh").addEventListener("click", () => void loadReadiness());
   $("diagArea").addEventListener("change", () => void loadDiagnostics());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
@@ -3677,8 +3678,10 @@ async function loadPermissions() {
 async function loadDiagnostics() {
   const host = $("diagEvents");
   if (!host) return;
-  // The process log is independent of the timeline query, so it loads too.
+  // The process log and the readiness answer are independent of the timeline
+  // query, so they load too.
   void loadProcessLog();
+  void loadReadiness();
   const limitInput = $("diagLimit");
   const limit = Math.max(10, Math.min(500, Number(limitInput && limitInput.value) || 100));
   if (limitInput) limitInput.value = String(limit);
@@ -3719,8 +3722,43 @@ async function loadDiagnostics() {
     const detail = document.createElement("span");
     detail.className = "perm-audit-detail";
     const short = entry.correlation ? String(entry.correlation).slice(0, 8) : "";
-    detail.textContent = [short ? `#${short}` : "", entry.detail].filter(Boolean).join(" · ");
+    const call = entry.request_id ? `req ${String(entry.request_id).slice(0, 12)}` : "";
+    detail.textContent = [short ? `#${short}` : "", call, entry.detail]
+      .filter(Boolean)
+      .join(" · ");
     item.append(time, what, detail);
+    host.appendChild(item);
+  });
+}
+
+/* Readiness is the server's own verdict over cheap local checks; the browser
+   does not re-derive it, so the panel cannot claim a state the backend did not
+   verify. */
+async function loadReadiness() {
+  const host = $("readyChecks");
+  if (!host) return;
+  const result = await api("/api/ready");
+  host.replaceChildren();
+  const verdict = $("readyVerdict");
+  if (!result.ok) {
+    if (verdict) verdict.textContent = "";
+    host.appendChild(pageNote(result.data.error || "Could not read the readiness checks."));
+    return;
+  }
+  if (verdict) {
+    verdict.textContent = result.data.ready
+      ? "Ready: every required check passed."
+      : "Not ready: a required check failed.";
+  }
+  (Array.isArray(result.data.checks) ? result.data.checks : []).forEach((entry) => {
+    const item = document.createElement("li");
+    const what = document.createElement("span");
+    what.className = `diag-row diag-${entry.ok ? "info" : entry.required ? "error" : "warn"}`;
+    what.textContent = `${entry.name}${entry.required ? "" : " (optional)"}`;
+    const detail = document.createElement("span");
+    detail.className = "perm-audit-detail";
+    detail.textContent = entry.detail || "";
+    item.append(what, detail);
     host.appendChild(item);
   });
 }
@@ -3752,7 +3790,8 @@ async function loadProcessLog() {
     what.textContent = `${entry.area} · ${entry.event}`;
     const detail = document.createElement("span");
     detail.className = "perm-audit-detail";
-    detail.textContent = entry.detail || "";
+    const call = entry.request_id ? `req ${String(entry.request_id).slice(0, 12)}` : "";
+    detail.textContent = [call, entry.detail].filter(Boolean).join(" · ");
     item.append(time, what, detail);
     host.appendChild(item);
   });
