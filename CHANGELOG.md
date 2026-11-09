@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.18.0
+
+No code: this release records the decision that governs extension execution
+before any loader is written.
+
+- `docs/adr/0001-extension-execution-sandbox.md`: execution is out-of-process
+  and WebAssembly-first, with WASI disabled and every capability reached through
+  a host function that checks the manifest permission and the existing
+  permission rules at call time. Deny by default.
+- No in-process JS, no Node child process with an ambient environment, no
+  Docker-only sandbox. `terminal.run`, `mcp.call` and `network` are not offered
+  in v1; a manifest that requires them installs but cannot run, with a stated
+  reason.
+- Existing `entry: "main.js"` extensions stay installable and are reported as
+  not runnable until a sandboxed JS runtime is chosen. Installing grants no
+  capability.
+- The ADR carries the implementation gates and required tests (path scoping,
+  permission refusal, fuel/memory limits, audit trail, UI refusal reason,
+  stopping an instance before uninstall).
+- Checks: `scripts/ci/test-version.sh` 20 passed; documentation only, no
+  behaviour change.
+
 ## 2.17.0
 
 Extensions can be installed and removed from the app now.

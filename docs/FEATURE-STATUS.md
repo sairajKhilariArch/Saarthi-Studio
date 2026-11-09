@@ -295,15 +295,16 @@ persisted execution of it.
 
 ## Phase 15 — Extension and plugin ecosystem
 
-Manifests are discovered and validated as of 2.15.0, and listed in Settings as
-of 2.16.0; nothing is executed yet.
+Manifests are discovered and validated as of 2.15.0, listed in Settings as of
+2.16.0 and installed/removed as of 2.17.0; nothing is executed yet, and ADR 0001
+sets the sandbox decision before any loader is written.
 
 | Item | Status | Notes |
 |---|---|---|
 | Manifest (id, name, version, description, author, entry, permissions) | Working (2.15.0) | `GET /api/extensions` scans `<data>/extensions/*/manifest.json`; the id must equal the folder, the version must be `1.2.3`, `entry` must stay inside the folder and exist, and permissions are a closed list |
 | Management UI | Working (2.16.0) | Settings → Extensions shows the directory, each folder's validity, description or error, and a Refresh action |
 | Install / uninstall | Working (2.17.0) | install copies a folder through staging with validation and rollback, symlink refusal and a 500-file/16 MiB cap; uninstall moves the folder to `.removed/` after a canonical containment check |
-| Execution and sandboxing | Missing | no loader, so no sandbox claim is made |
+| Execution and sandboxing | Design (2.18.0) | ADR 0001: no in-process execution; the v1 runner is WASM (Wasmtime) with WASI disabled and a deny-by-default host-call broker. No loader yet; `terminal.run`, `mcp.call` and `network` are refused at run in v1 |
 | Custom tools | Missing | — |
 | Provider adapters | Missing | — |
 | UI extensions | Missing | — |

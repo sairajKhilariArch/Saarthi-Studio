@@ -332,8 +332,12 @@ Delivered in 2.15.0:
   manifest validated first, symlinks refused and a 500-file/16 MiB cap; removal
   checks canonical containment and moves the folder to `.removed/`.
 
-Remaining: execution under a sandbox, custom tools, provider adapters, UI
-extensions, and dependency/compatibility metadata. Nothing is executed yet, so
+Sandbox decision (2.18.0): `docs/adr/0001-extension-execution-sandbox.md` —
+WASM-first, capability-brokered, no in-process execution. JS entries stay
+installable but not runnable until a sandboxed JS runtime exists.
+
+Remaining: a WASM runner that follows ADR 0001, custom tools, provider adapters,
+UI extensions, and dependency/compatibility metadata. Nothing is executed yet, so
 the install path grants no capability by itself.
 
 ## Phase 16 — Testing
