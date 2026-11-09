@@ -152,6 +152,31 @@ wait_ready() {
   return 1
 }
 
+# The stored status of a run, read through the same public route the panel
+# uses, so the poll below observes what a client would.
+run_state() { # run id
+  http GET "$base/api/runs/$1" >/dev/null
+  field status
+}
+
+wait_run_state() { # run id, wanted, tries
+  local id="$1" wanted="$2" limit="${3:-60}" tries=0 state
+  while [ "$tries" -lt "$limit" ]; do
+    state="$(run_state "$id")"
+    [ "$state" = "$wanted" ] && return 0
+    case "$state" in
+      failed | cancelled | interrupted) return 2 ;;
+    esac
+    tries=$((tries + 1))
+    sleep 0.25
+  done
+  return 1
+}
+
+step_actions() { # comma-joined action tags of the run in $work/body
+  "$py" -c 'import json,sys;print(",".join(str(s.get("action","")) for s in json.load(open(sys.argv[1],encoding="utf-8")).get("stepList") or []))' "$work/body"
+}
+
 start_studio() {
   ( cd "${FREE_AI_STUDIO_HOME}" && exec "$binary" --headless ) \
     >>"$log" 2>&1 &
@@ -262,6 +287,76 @@ else
   die "process log endpoint failed"
 fi
 
+# -- agent run --------------------------------------------------------------
+# The half a chat turn cannot prove: a run that reads its goal, asks for a
+# write, waits at the approval gate, executes it, is verified, and leaves the
+# file on disk. The provider's answers are scripted in mock-router.py; every
+# step below goes through the real routes and the real run loop.
+ws="$work/ws"
+mkdir -p "$ws"
+# The binary is native, so a Git Bash `/tmp/...` path is not an absolute path to
+# it. `cygpath -m` keeps forward slashes, which also need no JSON escaping.
+ws_native="$(cygpath -m "$ws" 2>/dev/null || printf '%s' "$ws")"
+
+code="$(http POST "$base/api/workspace/open" "{\"path\":\"$ws_native\"}")"
+if [ "$code" = "200" ] && [ "$(field ok)" = "True" ]; then
+  pass "workspace folder opened for the agent"
+else
+  die "could not open a workspace folder (HTTP $code: $(cat "$work/body"))"
+  exit 1
+fi
+
+code="$(http POST "$base/api/runs" '{"goal":"e2e-agent: write the marker file","allowWrites":true,"profile":"coding","maxSteps":6}')"
+run_id="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$run_id" ]; then
+  pass "agent run created ($run_id)"
+else
+  die "could not create an agent run (HTTP $code: $(cat "$work/body"))"
+  exit 1
+fi
+
+if wait_run_state "$run_id" awaiting_approval 80; then
+  pass "the run stops at the write approval gate"
+else
+  die "run never asked for approval (state $(run_state "$run_id")): $(cat "$work/body")"
+fi
+
+code="$(http POST "$base/api/runs/$run_id/approve" '{"approve":true}')"
+if [ "$code" = "200" ]; then
+  pass "the waiting write was approved"
+else
+  die "approving the write failed (HTTP $code: $(cat "$work/body"))"
+fi
+
+tries=0
+state=""
+while [ "$tries" -lt 120 ]; do
+  state="$(run_state "$run_id")"
+  case "$state" in
+    succeeded | failed | cancelled | interrupted) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+if [ "$state" = "succeeded" ]; then
+  pass "the agent run finished after verification"
+else
+  die "run ended $state: $(cat "$work/body")"
+fi
+
+if [ -f "$ws/e2e-agent.txt" ] && grep -q 'written by the agent' "$ws/e2e-agent.txt"; then
+  pass "the approved write landed in the workspace on disk"
+else
+  die "the agent's file is missing or wrong"
+fi
+
+http GET "$base/api/runs/$run_id" >/dev/null
+actions="$(step_actions)"
+case "$actions" in
+  *write*verify*done*) pass "the run log keeps write, verify and done steps" ;;
+  *) die "run steps are not write, verify, done: $actions" ;;
+esac
+
 # -- restart ----------------------------------------------------------------
 # The point of the restart: state must come from disk, not from memory.
 stop_studio
@@ -292,6 +387,18 @@ if [ -f "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3" ]; th
   pass "history is in the documented database path"
 else
   die "no database at the documented path"
+fi
+
+# The run is the harder half of persistence: its row, its steps and its
+# approval outcome all have to come back from the database, not from memory.
+if [ "$(http GET "$base/api/runs/$run_id")" = "200" ] && [ "$(field status)" = "succeeded" ]; then
+  if [ -n "$(field stepList.0.action)" ]; then
+    pass "the agent run and its steps survived the restart"
+  else
+    die "the run came back with no steps after the restart"
+  fi
+else
+  die "the agent run did not survive the restart"
 fi
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

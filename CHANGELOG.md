@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.8.0
+
+The end-to-end run grows the half it was missing: a real agent task that stops
+for approval, executes the write, is verified, and survives a restart.
+
+- `scripts/ci/test-e2e.sh` now opens a scratch workspace folder, creates a run
+  with `allowWrites`, polls the run's own detail route until it parks at
+  `awaiting_approval`, approves the pending write, polls to `succeeded`, asserts
+  the file on disk says what the model wrote, asserts the step log is
+  `write, verify, done`, then restarts the process and re-reads the run and its
+  steps from the database. 19 checks, up from 11.
+- `scripts/mock-router.py` scripts just that goal: the first agent call answers
+  a `write` action, the next a `done`, and the verifier prompt an `APPROVE`. Any
+  other turn keeps the plain reply the UI and console smokes expect.
+- The fix the first attempt found: the binary is native, so a Git Bash
+  `/tmp/...` path is not absolute to it. The workspace call converts the scratch
+  path with `cygpath -m` (forward slashes, so no JSON escaping), and a folder
+  that will not open now fails the flow instead of cascading into the checks
+  that depend on it.
+- `bash scripts/ci/test-e2e.sh`: **19 passed, 0 failed** (run twice, exit 0);
+  `cargo test --locked`: 448 passed, 1 ignored; `bash -n` and `python -m
+  py_compile` clean.
+- Still open in the same flow: a provider-failure case, and install smokes over
+  real release artifacts.
+
 ## 2.7.0
 
 Closes the last named gap in Phase 7: an MCP tool call is now checked against

@@ -10,7 +10,7 @@
 | Android JVM | `android/app/src/test/` | `cd android && gradle testDebugUnitTest` | policy/migration tests |
 | Android instrumentation | `android/app/src/androidTest/` | emulator script `android/scripts/ci/run-android-instrumentation.sh` | launch, DB migration, paging, backup |
 | Release-pipeline regressions | `scripts/ci/test-version.sh` | `bash scripts/ci/test-version.sh` | version parsing + artifact-name rules |
-| End-to-end (process level) | `scripts/ci/test-e2e.sh` | `bash scripts/ci/test-e2e.sh` | 11 checks: real binary boots headless against a scratch `FREE_AI_STUDIO_HOME`, mock provider answers a chat turn, the turn is stored, the process log and readiness payload are read, the process is killed, restarted, and the conversation re-read from disk — ~3 s |
+| End-to-end (process level) | `scripts/ci/test-e2e.sh` | `bash scripts/ci/test-e2e.sh` | 19 checks: real binary boots headless against a scratch `FREE_AI_STUDIO_HOME`, mock provider answers a chat turn, the turn is stored, the process log and readiness payload are read, a workspace opens, an agent run parks at its write approval gate, the write is approved and lands on disk, the step log is `write, verify, done`, the process is killed and restarted, and both the conversation and the run with its steps are re-read from disk |
 | Artifact gate | `scripts/ci/verify-artifacts.sh` | `bash scripts/ci/verify-artifacts.sh dist` | names, presence, checksums |
 
 CI gates: `desktop-ci.yml` (clippy `-D warnings`, tests, layout checks, version
@@ -33,9 +33,11 @@ smoke layer below, not here.
    `desktop-ci.yml`). Still open: a browser smoke for render-critical paths, and
    the same treatment for `ide.js`.
 2. **End-to-end.** Shipped in 2.6.0 for launch → chat → restart → verify
-   persistence (`scripts/ci/test-e2e.sh`, wired into `desktop-ci.yml`). Still
-   open in the same flow: an agent run with an approval decision, opening a
-   folder, and a second provider failure case inside the same run.
+   persistence, and extended in 2.8.0 through a real agent run: a folder opens,
+   the run stops at its write approval gate, the write is approved, the run is
+   verified, and both the run and its steps are re-read after a restart
+   (`scripts/ci/test-e2e.sh`, wired into `desktop-ci.yml`). Still open in the
+   same flow: a provider failure case.
 3. **Failure injection.** Offline provider, 401/429, timeout, disk full,
    locked DB, corrupted config, killed agent mid-step.
 4. **Installation smokes in CI.** After packaging: `dpkg -i` in a container,

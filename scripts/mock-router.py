@@ -36,6 +36,9 @@ STATE = {
         "exploreEnabled": True,
         "keySelectionStrategy": "auto",
     },
+    # One scripted agent run for the process-level end-to-end flow: the first
+    # agent call writes a file, the next one finishes, and the verifier approves.
+    "agent_calls": 0,
     "logs": [
         {"id": 3, "ts": "2026-10-24T06:10:00.000Z", "level": "info",
          "provider": "groq", "message": "routed chat request to llama-3.3-70b-versatile"},
@@ -195,12 +198,37 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/chat/completions":
             body = self.read_json()
             model = body.get("model", "auto")
+            messages = body.get("messages", [])
+            system = "\n".join(
+                str(m.get("content", "")) for m in messages if m.get("role") == "system"
+            )
+            transcript = "\n".join(str(m.get("content", "")) for m in messages)
+            # Only the e2e goal is scripted; every other turn keeps the plain
+            # reply the UI and console smokes expect.
+            if "e2e-agent" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: e2e-agent.txt exists with the requested marker."
+                elif "EXACTLY ONE JSON object" in system:
+                    STATE["agent_calls"] += 1
+                    if STATE["agent_calls"] <= 1:
+                        content = json.dumps({
+                            "action": "write",
+                            "path": "e2e-agent.txt",
+                            "content": "written by the agent\n",
+                        })
+                    else:
+                        content = json.dumps({
+                            "action": "done",
+                            "summary": "e2e-agent.txt written",
+                        })
+                else:
+                    content = "Mock router reply."
+            else:
+                content = "Mock router reply. Context packed: " + str(len(messages)) + " messages."
             return self.send_json({
                 "id": "chatcmpl-mock", "object": "chat.completion", "model": model,
                 "choices": [{"index": 0, "finish_reason": "stop",
-                             "message": {"role": "assistant",
-                                         "content": "Mock router reply. Context packed: "
-                                                    + str(len(body.get("messages", []))) + " messages."}}],
+                             "message": {"role": "assistant", "content": content}}],
                 "usage": {"prompt_tokens": 120, "completion_tokens": 48, "total_tokens": 168},
                 "provider": "mock", "fallback_attempts": "0",
             })

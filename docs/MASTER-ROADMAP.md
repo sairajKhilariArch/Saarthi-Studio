@@ -298,9 +298,16 @@ Delivered in 2.6.0: the end-to-end flow up to the agent step —
 mock provider, runs a chat turn, reads the stored conversation, then restarts the
 process and confirms the state came from disk (11 checks, ~3 s, gated in CI).
 
-Remaining: an agent run with an approval decision inside that flow, a render
-smoke and a harness for `ide.js`, the failure-injection matrix, install smokes in
-CI, and a Windows Rust job.
+Delivered in 2.8.0: the same flow through a real agent run — a workspace folder
+opens, the run parks at its write approval gate, the approved write lands on
+disk, the step log is `write, verify, done`, and the run with its steps is
+re-read after the restart (19 checks, gated in CI). The first attempt failed on
+a Git Bash `/tmp` path the native binary cannot resolve; the workspace call now
+passes a `cygpath -m` path.
+
+Remaining: a provider-failure case inside that flow, a render smoke and a
+harness for `ide.js`, the failure-injection matrix, install smokes in CI, and a
+Windows Rust job.
 
 ## Phase 17 — Observability
 

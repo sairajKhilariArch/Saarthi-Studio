@@ -39,9 +39,8 @@ an editor that bypasses the run lease, live
 capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 is still a flat
 saved-prompt list rather than a workflow graph, and Phase 15 has no extension
-manifest at all**; Phase 12 lacks a live step view, Phase 16 now has a frontend
-unit layer (2.5.0) and a process-level end-to-end run (2.6.0) but no failure
-matrix or install-smoke layer, and Phase 18 has no installer or update path.
+manifest at all**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
+the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 has no installer or update path.
 Phase 17 closed in 2.4.0.
 
 ## Completion by phase (derived, not a release gate)
@@ -69,7 +68,7 @@ row below moves, so they cannot drift from the tables.
 | 13 | Workflow builder | 20% | the node graph itself |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
-| 16 | Testing and quality | 61% | failure matrix, install smokes, Windows Rust CI |
+| 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
@@ -292,12 +291,12 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 435 test functions in tree; the passing count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 448 passed, 1 ignored at the 2.8.0 run; the count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
 | Frontend | Working (2.5.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 12 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys and the icon fallback. Wired into `desktop-ci.yml`. Scope is pure helpers only — no render smoke, and `ide.js` has no harness |
-| End-to-end (launch → chat → agent → restart) | Partial (2.6.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, creates a conversation, runs a chat turn through it, reads the two stored messages, checks the process log and the readiness payload, kills the process, restarts it and re-reads the same conversation; 11 checks. The agent-approval half of the arrow is still covered only by in-process Rust tests |
+| End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; 19 checks. A provider-failure case inside the flow is still open |
 | Failure-injection matrix | Missing | — |
 | Install smokes in CI | Missing | — |
 | Windows Rust CI job | Missing | Windows is exercised only by the release build |
