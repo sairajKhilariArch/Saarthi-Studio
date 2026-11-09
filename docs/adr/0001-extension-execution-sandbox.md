@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0 (see the implementation notes below)
+- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0 (see the implementation notes below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -206,6 +206,36 @@ and the same saved `fs_read`/`fs_write` rules apply to the name. A write still
 defaults to `ask`, so it needs a saved allow rule; that is deliberate
 unattended-write policy, not a gap. Calls are audited as `data.read` and
 `data.write`, and count against the same 64-call, 1 MiB-per-call budget.
+
+## Implementation note (2.23.0) — stopping a run
+
+Point 6 asked for "a fuel budget and a wall-clock cap"; fuel arrived in 2.20.0,
+the wall clock here.
+
+**The wall clock is checked at host boundaries, not inside the interpreter.**
+wasmi offers no way to interrupt a running instance from another thread, and
+pretending otherwise would be a false promise. A 5-second budget is therefore
+compared against `Instant::now()` at the start of every host function; once it
+has passed, the call is refused, the reason is recorded, and the run's result is
+discarded in favour of `Err("The run exceeded its 5-second wall-clock
+budget.")`. Computation remains bounded by fuel, which is deterministic.
+
+**Cancellation uses the same boundary.** `POST /api/extensions/:id/cancel` sets
+an `AtomicBool` shared with the run; the same host-boundary check notices it and
+stops the run with `"The run was cancelled."`. One run per extension is allowed
+(a second request answers 409), so the cancel names exactly one run and a stuck
+module cannot accumulate blocking threads; the registry entry is removed when
+the request returns, including on error.
+
+**Uninstall stops a run first.** Gate 7 is now satisfied: removing an extension
+cancels a run in flight before moving the folder. The module bytes were loaded
+before execution began, so the run ends at its next host call instead of reading
+from a folder that just moved.
+
+**The honest limit:** a module that performs no host calls cannot be cancelled
+or time-capped mid-computation; it ends when fuel runs out, and the route
+reports that fuel stop. This is stated in the UI copy and in `KNOWN-ISSUES.md`
+rather than implied away.
 
 ## Consequences
 

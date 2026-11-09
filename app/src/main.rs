@@ -4308,6 +4308,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/extensions/install", post(extensions::install))
         .route("/api/extensions/:id/remove", post(extensions::remove))
         .route("/api/extensions/:id/run", post(extensions::run))
+        .route("/api/extensions/:id/cancel", post(extensions::cancel))
         .route("/api/workflows/import", post(workflow::import_graph))
         .route("/api/workflows/:id/export", get(workflow::export))
         .route("/api/workflows/:id/delete", post(workflow::delete))

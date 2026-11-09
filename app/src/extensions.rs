@@ -40,8 +40,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Closed permission vocabulary. Adding one is a product decision, not a typo.
@@ -399,6 +402,55 @@ fn bad(message: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
+/// At most one run per extension, so a cancel request names exactly one run and
+/// a stuck extension cannot pile up blocking threads. The entry is removed when
+/// the ticket drops, which is when the route returns — including on error.
+static RUNNING: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+fn running() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    RUNNING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct RunTicket {
+    id: String,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for RunTicket {
+    fn drop(&mut self) {
+        if let Ok(mut map) = running().lock() {
+            map.remove(&self.id);
+        }
+    }
+}
+
+fn begin_run(id: &str) -> Option<RunTicket> {
+    let mut map = running().lock().ok()?;
+    if map.contains_key(id) {
+        return None;
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    map.insert(id.to_string(), cancel.clone());
+    Some(RunTicket {
+        id: id.to_string(),
+        cancel,
+    })
+}
+
+fn cancel_run(id: &str) -> bool {
+    let flag = running()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(id).cloned());
+    match flag {
+        Some(flag) => {
+            flag.store(true, Ordering::Relaxed);
+            true
+        }
+        None => false,
+    }
+}
+
 fn server_error(message: impl std::fmt::Display) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -514,6 +566,12 @@ pub(crate) async fn remove(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
+    // Gate 7 of ADR 0001: an uninstall stops a run in flight before moving the
+    // folder. The module bytes are already loaded, so the run ends at its next
+    // host call rather than reading from a folder that just moved.
+    if cancel_run(&id) {
+        crate::oplog::record("info", "extensions", "cancel", format!("{id}: cancelled by uninstall"));
+    }
     match remove_extension(&extensions_dir(&state), &id) {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(error) => bad(error),
@@ -524,6 +582,26 @@ pub(crate) async fn remove(
 /// loaded. Only then is the module handed to the sandboxed runner. Execution is
 /// blocking interpreter work, so it runs on a blocking thread instead of the
 /// async runtime's worker.
+pub(crate) async fn cancel(AxumPath(id): AxumPath<String>) -> Response {
+    if !valid_id(&id) {
+        return bad("Invalid extension id.");
+    }
+    let cancelled = cancel_run(&id);
+    if cancelled {
+        crate::oplog::record("info", "extensions", "cancel", format!("{id}: stop requested"));
+    }
+    Json(json!({
+        "ok": true,
+        "cancelled": cancelled,
+        "detail": if cancelled {
+            "The run stops at its next host call."
+        } else {
+            "No run of this extension is in progress."
+        }
+    }))
+    .into_response()
+}
+
 pub(crate) async fn run(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -573,9 +651,26 @@ pub(crate) async fn run(
         read: declared.iter().any(|permission| permission == "workspace.read"),
         write: declared.iter().any(|permission| permission == "workspace.write"),
     };
-    let outcome =
-        tokio::task::spawn_blocking(move || crate::extension_run::run_file(&module_path, Some(grant)))
-            .await;
+    let Some(ticket) = begin_run(&id) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "error": "This extension is already running. Cancel that run first."
+            })),
+        )
+            .into_response();
+    };
+    let cancel = ticket.cancel.clone();
+    let _ticket = ticket;
+    let options = crate::extension_run::RunOptions {
+        cancel: Some(cancel),
+        wall: None,
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::extension_run::run_file_with(&module_path, Some(grant), options)
+    })
+    .await;
     let outcome = match outcome {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(error)) => {

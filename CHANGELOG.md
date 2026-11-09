@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.23.0
+
+A run in flight can now be stopped, and only one run per extension exists at a
+time.
+
+- `POST /api/extensions/:id/cancel` sets the run's stop flag; the run ends at its
+  next host call and answers 400 `"The run was cancelled."` Rather than pretend
+  an interpreter can be interrupted mid-instruction, the limit is stated: a
+  module that makes no host calls still ends only at the fuel limit.
+- A second run of the same extension while one is in flight answers 409, so a
+  cancel names exactly one run and a stuck module cannot pile up blocking
+  threads. The entry clears when the request returns.
+- A 5-second wall-clock budget is checked at every host boundary, which is the
+  part fuel cannot bound (time spent in I/O). Computation stays fuel-bounded and
+  deterministic.
+- Uninstall now cancels a run in flight before moving the folder (ADR gate 7);
+  the module is already loaded, so it stops at its next host call.
+- Settings shows `Running…` with a `Cancel` action while a run is in flight,
+  instead of a button that silently re-submits.
+- Checks: `cargo test --locked` **482 passed, 1 ignored** (two new: a
+  pre-cancelled run stops at its first host call, and a zero wall budget is
+  enforced); clippy `-D warnings` clean; `node --check` clean; frontend 18;
+  version 20; e2e 19. Live: cancel while idle answered `cancelled:false`; a slow
+  module cancelled 150 ms into its run answered 400 `"The run was cancelled."`
+  with `stop requested` in the log; a second concurrent run answered 409; the
+  same run without interference ended at the fuel budget in 0.6 s.
+- The UI's Running/Cancel states were not clicked in a browser; the endpoints
+  behind them were exercised directly.
+
 ## 2.22.0
 
 Extensions can persist state now — in their own folder and nowhere else.

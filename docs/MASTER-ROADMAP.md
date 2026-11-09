@@ -363,10 +363,15 @@ Per-extension data (2.22.0): `env.data_read`/`env.data_write` are rooted at
 workspace paths and gated by the same declared permissions. The module's code
 folder and every other extension stay unreachable.
 
-Remaining: an extension run history and a wall-clock backstop, custom tools,
-provider adapters, UI extensions, and dependency/compatibility metadata.
-Installing still grants no capability by itself, and the only reachable surface
-is the two workspace pairs plus `last_error`.
+Run control (2.23.0): one run per extension, `POST /api/extensions/:id/cancel`
+stops it at the next host call, a 5-second wall-clock budget is checked at every
+host boundary, and uninstall cancels a run in flight before moving the folder.
+Settings shows `Running…` with `Cancel` while the request is open.
+
+Remaining: an extension run history, custom tools, provider adapters, UI
+extensions, and dependency/compatibility metadata. Installing still grants no
+capability by itself, and the only reachable surface is the two workspace pairs
+plus `last_error`.
 
 ## Phase 16 — Testing
 

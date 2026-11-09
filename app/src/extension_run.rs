@@ -34,7 +34,9 @@
 use crate::permissions::{self, Action, Decision, Rule, Scope};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use wasmi::errors::{MemoryError, TableError};
 use wasmi::{Config, Engine, Linker, Memory, Module, ResourceLimiter, Store};
 
@@ -50,6 +52,20 @@ const MAX_MODULE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_HOST_CALLS: usize = 64;
 const MAX_HOST_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
+/// Wall-clock backstop. Computation is already bounded by fuel, which is
+/// deterministic; this bounds the part fuel cannot — time spent inside host
+/// calls — and is checked at every host boundary. A module that never calls a
+/// host function still ends at the fuel limit, not here.
+pub(crate) const WALL_BUDGET: Duration = Duration::from_secs(5);
+
+/// How a caller can stop a run early. The flag is polled at host boundaries;
+/// wasmi cannot be interrupted mid-instruction, so a pure-compute loop stops
+/// only when fuel runs out.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RunOptions {
+    pub cancel: Option<Arc<AtomicBool>>,
+    pub wall: Option<Duration>,
+}
 
 #[derive(Debug)]
 pub(crate) struct Outcome {
@@ -136,9 +152,36 @@ struct HostState {
     audit: Vec<HostCall>,
     calls: usize,
     last_error: String,
+    cancel: Option<Arc<AtomicBool>>,
+    deadline: Instant,
+    wall: Duration,
+    /// Set by a host call that saw the run cancelled or out of time. The run is
+    /// reported as stopped even if the module swallows the error code.
+    stop: Option<String>,
 }
 
 impl HostState {
+    /// A cancelled or over-time run stops at the next host boundary.
+    fn stop_requested(&mut self) -> Option<i32> {
+        if let Some(cancel) = self.cancel.as_ref() {
+            if cancel.load(Ordering::Relaxed) {
+                self.stop = Some("The run was cancelled.".to_string());
+                self.last_error = "The run was cancelled.".to_string();
+                return Some(-1);
+            }
+        }
+        if Instant::now() >= self.deadline {
+            let message = format!(
+                "The run exceeded its {}-second wall-clock budget.",
+                self.wall.as_secs()
+            );
+            self.stop = Some(message.clone());
+            self.last_error = message;
+            return Some(-1);
+        }
+        None
+    }
+
     fn cap_reached(&mut self) -> bool {
         self.calls += 1;
         if self.calls > MAX_HOST_CALLS {
@@ -187,7 +230,18 @@ impl HostState {
     }
 }
 
+/// The common case: default budgets, no cancel flag. Used by tests, where the
+/// route's own options would otherwise have to be repeated everywhere.
+#[cfg(test)]
 pub(crate) fn run_file(path: &Path, grant: Option<HostGrant>) -> Result<Outcome, String> {
+    run_file_with(path, grant, RunOptions::default())
+}
+
+pub(crate) fn run_file_with(
+    path: &Path,
+    grant: Option<HostGrant>,
+    options: RunOptions,
+) -> Result<Outcome, String> {
     let meta = fs::metadata(path).map_err(|error| format!("The module cannot be read: {error}"))?;
     if meta.len() > MAX_MODULE_BYTES {
         return Err(format!(
@@ -196,10 +250,14 @@ pub(crate) fn run_file(path: &Path, grant: Option<HostGrant>) -> Result<Outcome,
         ));
     }
     let bytes = fs::read(path).map_err(|error| format!("The module cannot be read: {error}"))?;
-    run_bytes(&bytes, grant)
+    run_bytes(&bytes, grant, options)
 }
 
-fn run_bytes(bytes: &[u8], grant: Option<HostGrant>) -> Result<Outcome, String> {
+fn run_bytes(
+    bytes: &[u8],
+    grant: Option<HostGrant>,
+    options: RunOptions,
+) -> Result<Outcome, String> {
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
@@ -228,6 +286,7 @@ fn run_bytes(bytes: &[u8], grant: Option<HostGrant>) -> Result<Outcome, String> 
         }
     }
 
+    let wall = options.wall.unwrap_or(WALL_BUDGET);
     let mut store = Store::new(
         &engine,
         HostState {
@@ -236,6 +295,10 @@ fn run_bytes(bytes: &[u8], grant: Option<HostGrant>) -> Result<Outcome, String> 
             audit: Vec::new(),
             calls: 0,
             last_error: String::new(),
+            cancel: options.cancel,
+            deadline: Instant::now() + wall,
+            wall,
+            stop: None,
         },
     );
     store.limiter(|state| &mut state.limits);
@@ -281,6 +344,11 @@ fn run_bytes(bytes: &[u8], grant: Option<HostGrant>) -> Result<Outcome, String> 
         .map_err(|_| "The module must export run() -> i32.".to_string())?;
     let call = run.call(&mut store, ());
     let audit = std::mem::take(&mut store.data_mut().audit);
+    // A cancelled or timed-out run is reported by its reason, even when the
+    // module ignored the error code and returned normally.
+    if let Some(reason) = store.data_mut().stop.take() {
+        return Err(reason);
+    }
     let exit_code = call.map_err(|error| {
         // A trap leaves a little residual fuel, so the trap code is the reliable
         // signal — `fuel_consumed() == FUEL` does not hold exactly.
@@ -393,6 +461,9 @@ fn host_read(
     out_ptr: i32,
     out_cap: i32,
 ) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
     if caller.data_mut().cap_reached() {
         return -1;
     }
@@ -418,6 +489,9 @@ fn host_data_read(
     out_ptr: i32,
     out_cap: i32,
 ) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
     if caller.data_mut().cap_reached() {
         return -1;
     }
@@ -478,6 +552,9 @@ fn host_write(
     data_ptr: i32,
     data_len: i32,
 ) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
     if caller.data_mut().cap_reached() {
         return -1;
     }
@@ -512,6 +589,9 @@ fn host_data_write(
     data_ptr: i32,
     data_len: i32,
 ) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
     if caller.data_mut().cap_reached() {
         return -1;
     }
@@ -564,6 +644,9 @@ fn guest_content(
 }
 
 fn host_last_error(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, cap: i32) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
     let message = caller.data().last_error.clone();
     if message.is_empty() {
         return 0;
@@ -891,6 +974,58 @@ mod tests {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&data);
+    }
+
+    fn reader_module(name: &str) -> PathBuf {
+        module_file(
+            name,
+            r#"(module
+                 (import "env" "read" (func $read (param i32 i32 i32 i32) (result i32)))
+                 (memory (export "memory") 1)
+                 (data (i32.const 0) "hello.txt")
+                 (func (export "run") (result i32)
+                   (call $read (i32.const 0) (i32.const 9) (i32.const 64) (i32.const 100))))"#,
+        )
+    }
+
+    #[test]
+    fn a_cancelled_run_stops_at_the_next_host_call() {
+        use std::sync::atomic::AtomicBool;
+        let root = workspace("cancel");
+        fs::write(root.join("hello.txt"), "hi").expect("file");
+        let path = reader_module("cancel");
+        let cancel = Arc::new(AtomicBool::new(true));
+        let error = run_file_with(
+            &path,
+            Some(grant(&root, true, false)),
+            RunOptions {
+                cancel: Some(cancel),
+                wall: None,
+            },
+        )
+        .expect_err("a cancelled run is stopped");
+        assert!(error.contains("cancelled"), "{error}");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_expired_wall_budget_stops_the_run_at_a_host_call() {
+        let root = workspace("wall");
+        fs::write(root.join("hello.txt"), "hi").expect("file");
+        let path = reader_module("wall");
+        let error = run_file_with(
+            &path,
+            Some(grant(&root, true, false)),
+            RunOptions {
+                cancel: None,
+                wall: Some(Duration::ZERO),
+            },
+        )
+        .expect_err("the wall budget is enforced");
+        assert!(error.contains("wall-clock"), "{error}");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

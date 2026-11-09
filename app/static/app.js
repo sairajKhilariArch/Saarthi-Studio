@@ -881,6 +881,9 @@ const state = {
   projects: [],
   activeProject: null,
   activeProjectId: null,
+  /* extensions: ids whose run request is in flight, so the row can show it and
+     offer a cancel without polling the server. */
+  extensionsRunning: new Set(),
   /* skills: local SKILL.md folders served by /api/skills. */
   skills: [],
   openSkillId: null,
@@ -3489,19 +3492,39 @@ async function installExtension() {
 }
 
 async function runExtension(extension) {
-  const result = await api(`/api/extensions/${encodeURIComponent(extension.id)}/run`, {
+  if (state.extensionsRunning.has(extension.id)) return;
+  state.extensionsRunning.add(extension.id);
+  loadExtensions();
+  try {
+    const result = await api(`/api/extensions/${encodeURIComponent(extension.id)}/run`, {
+      method: "POST",
+      body: "{}",
+    });
+    if (!result.ok) {
+      toast(result.data.error || "Could not run that extension.");
+      return;
+    }
+    const run = result.data.run || {};
+    toast(
+      `${extension.id} exited with ${run.exitCode} after ${run.elapsedMs} ms ` +
+      `(${Number(run.fuelUsed || 0).toLocaleString()} fuel, ${run.hostCalls || 0} host calls).`
+    );
+  } finally {
+    state.extensionsRunning.delete(extension.id);
+    loadExtensions();
+  }
+}
+
+async function cancelExtension(extension) {
+  const result = await api(`/api/extensions/${encodeURIComponent(extension.id)}/cancel`, {
     method: "POST",
     body: "{}",
   });
   if (!result.ok) {
-    toast(result.data.error || "Could not run that extension.");
+    toast(result.data.error || "Could not cancel that run.");
     return;
   }
-  const run = result.data.run || {};
-  toast(
-    `${extension.id} exited with ${run.exitCode} after ${run.elapsedMs} ms ` +
-    `(${Number(run.fuelUsed || 0).toLocaleString()} fuel, ${run.hostCalls || 0} host calls).`
-  );
+  toast(result.data.detail || (result.data.cancelled ? "Stop requested." : "No run in progress."));
 }
 
 async function removeExtension(extension) {
@@ -3570,7 +3593,18 @@ async function loadExtensions() {
     row.appendChild(badge);
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";
-    if (extension.runnable === true) actions.appendChild(rowButton("Run", () => runExtension(extension)));
+    if (extension.runnable === true) {
+      if (state.extensionsRunning.has(extension.id)) {
+        // A run holds the request open, so the row shows the live state and
+        // offers the only thing that can stop it.
+        const running = rowButton("Running…", () => {}, "");
+        running.disabled = true;
+        actions.appendChild(running);
+        actions.appendChild(rowButton("Cancel", () => cancelExtension(extension)));
+      } else {
+        actions.appendChild(rowButton("Run", () => runExtension(extension)));
+      }
+    }
     actions.appendChild(rowButton("Remove", () => removeExtension(extension), "danger"));
     row.appendChild(actions);
     host.appendChild(row);
