@@ -515,6 +515,25 @@ pub(crate) fn record(
     project: &str,
     detail: &str,
 ) {
+    // A decision that lets the action through is not news; a refusal or a prompt
+    // is exactly what someone reading the log after the fact is looking for.
+    // Editing the rule list is bookkeeping, not a decision about an action, so
+    // it stays in the audit table and the editor rather than the process log —
+    // otherwise "a deny rule was added" reads like something was denied.
+    let bookkeeping = detail == "rule added" || detail.starts_with("rule revoked");
+    if decision != Decision::Allow && !bookkeeping {
+        let project_note = if project.is_empty() {
+            String::new()
+        } else {
+            format!(" in {project}")
+        };
+        crate::oplog::record(
+            if decision == Decision::Deny { "warn" } else { "info" },
+            "permission",
+            decision.as_str(),
+            format!("{}{project_note}: {detail}", action.as_str()),
+        );
+    }
     let _ = crate::open_db(&state.database_path).and_then(|conn| {
         conn.execute(
             "INSERT INTO permission_audit(created_at,action,target,decision,scope,project,detail) \

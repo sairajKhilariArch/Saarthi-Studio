@@ -55,7 +55,7 @@ fn sensitive_name(name: &str) -> bool {
 /// echo a URL, a header or a fragment of a request, and none of that belongs in
 /// an exported bundle. It is conservative — redacting a public digest costs
 /// nothing, printing a private key costs everything.
-fn redact(text: &str) -> String {
+pub(crate) fn redact(text: &str) -> String {
     if text.is_empty() {
         return String::new();
     }
@@ -121,7 +121,7 @@ fn pair_is_sensitive(word: &str) -> bool {
         })
 }
 
-fn clip(text: &str, max: usize) -> String {
+pub(crate) fn clip(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max).collect();
     if text.chars().count() > max {
         out.push('…');
@@ -523,6 +523,28 @@ async fn timeline_route(
     }
 }
 
+/// `GET /api/diagnostics/log` — the process log, which is the one record that
+/// exists when nothing was committed to the database.
+///
+/// It reads the bounded in-memory ring, not the file: the ring is already
+/// redacted and clipped exactly as the file is, and reading it cannot fail on a
+/// locked or missing file.
+async fn log_route(AxumQuery(params): AxumQuery<HashMap<String, String>>) -> Response {
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, MAX_LIMIT);
+    let records = crate::oplog::tail(limit);
+    Json(json!({
+        "ok": true,
+        "path": crate::oplog::path(),
+        "count": records.len(),
+        "records": records,
+    }))
+    .into_response()
+}
+
 /// `GET /api/diagnostics/bundle` — a redacted JSON file for a bug report.
 async fn bundle_route(State(state): State<AppState>) -> Response {
     match bundle_value(&state) {
@@ -537,6 +559,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
     Router::new()
         .route("/api/diagnostics", get(timeline_route))
         .route("/api/diagnostics/bundle", get(bundle_route))
+        .route("/api/diagnostics/log", get(log_route))
         .route_layer(axum::middleware::from_fn_with_state(
             crate::workspace::LocalOriginGuard::new(port),
             crate::workspace::guard_local_origin,

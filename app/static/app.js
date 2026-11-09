@@ -118,6 +118,7 @@ function setupSettingsNav() {
   $("mcpHealth").addEventListener("click", () => void checkMcpHealth());
   $("diagRefresh").addEventListener("click", () => void loadDiagnostics());
   $("diagBundle").addEventListener("click", () => void downloadDiagnosticsBundle());
+  $("diagLogRefresh").addEventListener("click", () => void loadProcessLog());
   $("diagArea").addEventListener("change", () => void loadDiagnostics());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
@@ -3676,6 +3677,8 @@ async function loadPermissions() {
 async function loadDiagnostics() {
   const host = $("diagEvents");
   if (!host) return;
+  // The process log is independent of the timeline query, so it loads too.
+  void loadProcessLog();
   const limitInput = $("diagLimit");
   const limit = Math.max(10, Math.min(500, Number(limitInput && limitInput.value) || 100));
   if (limitInput) limitInput.value = String(limit);
@@ -3717,6 +3720,39 @@ async function loadDiagnostics() {
     detail.className = "perm-audit-detail";
     const short = entry.correlation ? String(entry.correlation).slice(0, 8) : "";
     detail.textContent = [short ? `#${short}` : "", entry.detail].filter(Boolean).join(" · ");
+    item.append(time, what, detail);
+    host.appendChild(item);
+  });
+}
+
+/* The process log is the one record written before a database row exists. The
+   server has already redacted and clipped it; this only formats it. */
+async function loadProcessLog() {
+  const host = $("diagLog");
+  if (!host) return;
+  const result = await api("/api/diagnostics/log?limit=100");
+  host.replaceChildren();
+  if (!result.ok) {
+    host.appendChild(pageNote(result.data.error || "Could not read the process log."));
+    return;
+  }
+  const pathLine = $("diagLogPath");
+  if (pathLine && result.data.path) pathLine.textContent = result.data.path;
+  const records = Array.isArray(result.data.records) ? result.data.records : [];
+  if (!records.length) {
+    host.appendChild(pageNote("Nothing written yet. The log fills as Studio starts routers, refuses actions and finishes runs."));
+    return;
+  }
+  records.forEach((entry) => {
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = entry.at ? new Date(entry.at * 1000).toLocaleTimeString() : "";
+    const what = document.createElement("span");
+    what.className = `diag-row diag-${entry.level || "info"}`;
+    what.textContent = `${entry.area} · ${entry.event}`;
+    const detail = document.createElement("span");
+    detail.className = "perm-audit-detail";
+    detail.textContent = entry.detail || "";
     item.append(time, what, detail);
     host.appendChild(item);
   });

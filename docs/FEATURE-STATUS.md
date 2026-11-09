@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 1.28.0
+# Feature status report — audit of `main` @ 2.1.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -9,24 +9,68 @@ implementation), **Broken** (exists and fails).
 
 | Check | Command | Result |
 |---|---|---|
-| Rust suite | `cd app && cargo test --locked` | **183 passed, 0 failed, 1 ignored** (2026-11-05) |
-| Route registrations | `grep -c '\.route(' app/src/{main,agent,host_api}.rs` | 37 / 7 / 8 |
-| Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 182 |
+| Rust suite | `cd app && cargo test --locked` | see the count recorded in `PROGRESS.md` for this version (test functions in tree: 435) |
+| Route registrations | `grep -c '\.route(' app/src/{main,agent,host_api,git}.rs` | 44 / 15 / 8 / 28 |
+| Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 435 |
 | Last green release | run `41884439627` (`v1.26.6`) | all six jobs success, 9 assets |
-| Release line | `8ff7c5e` … `1.27.0` | 1.26.4 → 1.26.23 all shipped, LF manifests |
+| Release line | `8ff7c5e` … `2.1.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.1.0 (2026-11-09):** rows re-verified against the tree at `2.1.0`.
+Closed since the 1.28.0 pass: Phase 2 configuration editor and dependency
+probing (1.43.0), Phase 3 circuit breaker and provider health (1.50.0), Phase 10
+credential store (1.42.0) and global emergency stop (1.41.0), Phase 17 timeline
+and bundle (1.72.0). This file is the per-requirement verdict; `PROGRESS.md` is
+the shipped-version checklist, `MASTER-ROADMAP.md` the ordering and
+`KNOWN-ISSUES.md` the defect list. When they disagree, this file and
+`PROGRESS.md` are corrected together.
+
 ## Verdict in one paragraph
 
-Phases 1 and 2 are effectively delivered (Phase 1 needs only install smokes and
-the dead-tag decision; Phase 2 needs only a configuration editor and
-dependency/package-manager probing). Phases 5 (run engine + team/crew
-orchestration), 9 (workspace + PTY), 10 (guards), 11 (context/usage), 14
-(clients) and 16 (backend/client tests) are largely there. **Phase 4 (Thinking +
-OpenAI Platform) and Phase 7 (MCP) have no implementation at all**, Phase 13 is a
-flat saved-prompt list rather than a workflow graph, and Phases 3, 6, 8, 12, 15,
-17, 18 are partial in the specific ways listed below.
+Phases 2, 3, 4, 5, 6, 7, 8, 10, 11 and 14 are delivered in substance; what
+remains inside them is named per row (router update/uninstall in the panel,
+remote-service routers, a price for native OpenAI picks, per-skill permissions,
+full JSON Schema validation for MCP, an editor that bypasses the run lease, live
+capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
+Phase 9 lacks an editor engine and a debugger, **Phase 13 is still a flat
+saved-prompt list rather than a workflow graph, and Phase 15 has no extension
+manifest at all**; Phase 12 lacks a live step view, Phase 16 has no frontend,
+end-to-end or failure-matrix layer, Phase 17 has no log file or request ids, and
+Phase 18 has no installer or update path.
+
+## Completion by phase (derived, not a release gate)
+
+Method: each phase's requirement rows in this file count **Working = 1**,
+**Partial = 0.5**, **Missing/Broken = 0**; the phase percentage is that sum over
+the row count, and "overall" is the unweighted mean of the phases. Rows the
+specification marks optional (Ruflo) are excluded. The numbers move only when a
+row below moves, so they cannot drift from the tables.
+
+| Phase | Area | Completion | Largest open gap |
+|---|---|---|---|
+| 1 | CI/CD and release | 78% | install smokes in CI, dead-tag decision |
+| 2 | Router manager | 92% | remote-service routers; update/uninstall flow in the panel |
+| 3 | Model and provider | 89% | price and context for native OpenAI picks |
+| 4 | Thinking + OpenAI Platform | 88% | tool calling / structured output through the platform path |
+| 5 | Agent execution | 100% | named caveats only (an editor save bypasses the run lease) |
+| 6 | Skills | 92% | per-skill permissions |
+| 7 | MCP | 100% | full JSON Schema validation |
+| 8 | Memory and RAG | 93% | embeddings are a router proxy, not a local index |
+| 9 | Developer environment | 82% | editor engine, debugger, watch mode |
+| 10 | Safety and permissions | 100% | updates have no in-app route to gate |
+| 11 | Token and context | 100% | — |
+| 12 | Live monitoring | 90% | live step view while a model call is in flight |
+| 13 | Workflow builder | 20% | the node graph itself |
+| 14 | Cross-platform | 80% | client subsets, capability-driven gating |
+| 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
+| 16 | Testing and quality | 44% | frontend, end-to-end, failure matrix, install smokes |
+| 17 | Observability | 69% | request ids for non-run operations, install/MCP rows in the timeline |
+| 18 | Installation and updates | 75% | installer, update path, migration rollback |
+
+**Overall (mean of the 18 phases): 78%.** Read it as "one reliable core, most
+phases closed, the remaining work concentrated in 13, 15, 16 and 18". The
+per-row method is the arbiter: a phase moves only when a row here moves.
 
 ## Phase 1 — CI/CD and error diagnosis
 
@@ -59,8 +103,9 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 | Update + uninstall (data kept unless `purge`) | Working | 1.26.23 |
 | Auto-start sweep, external routers never stopped | Working | 1.26.17, rule tested both ways |
 | UI: list, health, start/stop, restart, tester, logs | Working | 1.26.13–1.26.16 |
-| **Configuration editor** | **Missing** | no route, no UI |
-| Dependency/package-manager probing (Docker, npm, brew) | Missing | registry gates OS/arch only |
+| Configuration editor | Working (1.43.0) | `GET /api/routers/:id/config` lists whitelisted files in the install's config dir; `GET/POST /api/routers/:id/config/file?name=` reads and writes one of them through the same validator, 64 KiB cap, gated on `fs_write`; a router with no editable file explains why instead of showing an empty box |
+| Dependency/package-manager probing | Working (1.43.0) | `/api/routers` reports the measured host: OS + version, arch, apt/dnf/pacman/zypper/apk/brew/winget/choco/scoop/port with versions, Docker and compose, read from PATH and the tools' own output |
+| Update and uninstall from the panel | Partial | both routes exist, are approval-gated and keep the data volume unless `purge`; the panel shows the plan rather than driving a full update/uninstall flow |
 | Remote service routers | Missing | registry is local-process only |
 
 ## Phase 3 — Model and provider manager
@@ -112,8 +157,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Parallel execution + worktree isolation / file locks | Working (2.1.0) | each writing run works in its own worktree, a command claims its checkout while it runs, and the lease ledger lives in the database so more than one process sees it. An editor save or another program still writes behind the lease, caught on the run's next write |
 | Verification step before `succeeded` | Working (1.56.0) | a run that wrote, ran a command or called a tool goes to the verifier, which must answer `APPROVE`; ISSUES hands the findings back for one repair round and a second ISSUES ends the run `failed` with the findings kept. Read-only runs and `team` mode are not verified twice. No human sign-off step: the verifier is a model on the same router |
 | Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
-
-| Isolation between live runs: a writing run executes in its own worktree on a `run/<id>` branch, and a finished one can be applied back and cleaned up (2.0.0) | Working (2.0.0) | Nothing is applied automatically, the lease still covers only the agent's own writes, and the ledger is in-process |
+| Live-run checkout hand-back | Working (2.0.0) | a finished run's `run/<id>` branch is committed, the shared checkout is fast-forwarded and the worktree removed; nothing is applied automatically and an unapplied worktree stays on disk |
 
 ## Phase 6 — Skills
 
@@ -179,10 +223,10 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Host API bearer auth + TLS + body caps | Working | `host_auth.rs`, `host_transport.rs` |
 | Central policy store (once/session/project/deny) | Working (1.31.0) | `permissions.rs`; rules scoped once/session/project/always, resolved longest-target → deny → scope |
 | Privileged UI routes gated | Working (1.40.0, 1.66.0) | terminal open, editor saves, workspace create/rename/delete, settings/key saves and — since 1.66.0 — git stage/unstage/discard/commit/branch create/switch consult saved rules on their own actions (`command`, `fs_write`, `settings`, `git`); deny → 403, ask → 409 until `approve: true`, both audited. No rule means no prompt — the click is the consent. UI routes pass an empty project, so `project`-scoped rules still apply to agent steps only. Updates have no in-app route |
-| Enforcement of that store | Partial (1.31.0) | agent steps and router installs consult it; terminal, editor writes, git, updates and settings do not yet |
-| OS keychain for secrets | Missing | keys live in mode-restricted `config.json` |
+| Enforcement of that store | Working (1.40.0, 1.66.0) | agent steps, router installs and MCP calls consult it (1.31.0–1.33.0); terminal open, editor saves, workspace create/rename/delete, settings/key saves (1.40.0) and the Git routes (1.66.0) do too. The only privileged path with no route to gate is an application update, because there is no in-app update |
+| OS keychain for secrets | Working (1.42.0) | `keychain.rs` stores `api_key`, `search_api_key`, `openai_api_key` and MCP OAuth material in Windows Credential Manager / macOS Keychain / Linux Secret Service; startup migrates plaintext and blanks the file, a store failure falls back to the permission-restricted file, and the store mode is reported in `GET /api/config` |
 | Privileged-operation audit log | Working (1.31.0) | `permission_audit` table + `/api/permissions/audit` |
-| Global kill switch | Missing | per-run cancel exists; no stop-everything control |
+| Global kill switch | Working (1.41.0) | `POST /api/emergency-stop` cancels every live agent run (flagged and finished, mirroring per-run cancel), reaches parked/paused runs, and closes every terminal session; deliberately not policy-gated, always audited |
 | Permissions UI | Working (1.32.0) | Settings → Permissions: add a rule, list rules in force, revoke, read the audit trail |
 
 ## Phase 11 — Token, context and cost
@@ -243,7 +287,7 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 183 passed / 1 ignored at 1.28.0 |
+| Rust unit/integration | Working | 435 test functions in tree; the passing count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
@@ -265,9 +309,9 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Counts per area | Working (1.72.0) | From the same rows: provider requests/errors over 24 h, permission decisions by the decision names stored in the table, agent runs by status, live runs |
 | Support bundle with redaction | Working (1.72.0) | `GET /api/diagnostics/bundle`: version, OS/arch, non-secret settings, credential booleans, summary and timeline. Run goals are excluded; every string is redacted (`sk-`/`ghp_`/`xoxb-`, `Bearer`, sensitive `name=value`, long opaque runs) and clipped to 400 chars |
 | Diagnostics UI | Working (1.72.0) | Settings → Diagnostics: timeline with area/level colour and the short correlation id, server-side area filter, row count, 24-hour summary line, and a bundle download the browser saves without composing it |
-| Structured log file / console ring buffer | **Missing** | nothing is appended to a log file; the timeline is read from SQLite |
+| Structured log file + console ring | Working (2.2.0) | `app/src/oplog.rs` appends one redacted JSON object per line to `studio.log` beside the database, flushed per write, rotated at 1 MiB into one previous file, with a 200-entry ring in memory; `GET /api/diagnostics/log?limit=` serves the ring and Settings → Diagnostics shows it with the file's path. Written at boot, router install/update/uninstall/restart, permission ask/deny, provider failures and every run ending |
 | Request id for non-run operations | **Missing** | provider rows carry the conversation id, permission rows the project; a terminal command or a Git call has no id of its own |
-| Router installs and MCP connections in the timeline | **Missing** | installs live in `router-installs.json` and MCP sessions in memory; neither is projected |
+| Router installs and MCP connections in the timeline | Partial (2.2.0) | installs, updates, uninstalls and restarts now write a process-log line, so they survive a crash; they are still not rows in the SQLite timeline, and MCP sessions remain in memory only |
 | Health/readiness dashboard | Partial | `/api/health` (liveness) and the provider health card exist; there is no single readiness view |
 
 ## Phase 18 — Installation and updates
@@ -281,15 +325,23 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | VS Code VSIX | Working | published |
 | Auto-update, DB migration rollback, uninstall | **Missing** | data paths preserved by design; manual reinstall |
 
-## What to build next (spec order)
+## What to build next (spec order, 2.1.0)
 
-1. **Phase 3 capability table** — the only hard prerequisite for Phase 4, and
-   the smallest honest unit of work: provider-reported metadata only, no
-   invented capabilities.
-2. **Phase 4 Thinking + OpenAI Platform** — the largest untouched block in the
-   specification and the reason this audit exists.
-3. ~~**Phase 10 policy store**~~ — shipped in 1.31.0; it gates agent steps,
-   router installs and MCP calls. It unblocks MCP (Phase 7) and makes the existing
-   per-run flags uniform.
-4. **Phase 2 configuration editor** + dependency probing — closes a phase that
-   is already 80 % delivered.
+1. **Phase 17 remainder** — a request id for operations that are not agent runs
+   (a terminal command, a Git call, a settings save), install and MCP rows in the
+   SQLite timeline, and a readiness view. The process log landed in 2.2.0 and
+   covers the crash-before-the-row case.
+2. **Phase 16 remainder** — a frontend test runner and one end-to-end harness
+   (headless launch + mock router). Both are named in `KNOWN-ISSUES.md` and
+   neither exists; the backend suite is the only automated layer today.
+3. **Phase 13 workflow graph** — the last phase with no real implementation. It
+   depends on the Phase 5 lifecycle, which is now complete.
+4. **Phase 18 installer and update path** — Windows MSI/EXE, macOS `.app`, and
+   an update that preserves data with a migration that can roll back.
+5. **Phase 15 extension manifest** — name, version, compatibility, permissions,
+   entry point and source, plus a boundary for untrusted extensions.
+
+Deliberately not next, though open: per-skill permissions (a skill is prompt
+text and never executes), a price table for native OpenAI picks (the app mirrors
+no prices rather than inventing them), and an editor engine or debugger (both
+are a product decision, not a missing route).

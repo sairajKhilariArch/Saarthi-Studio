@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.2.0
+
+Adds the one record that survives a crash before any database row exists.
+
+- `app/src/oplog.rs` appends a JSON object per line to `studio.log` beside the
+  database: redacted with the same scanner the support bundle uses, clipped at
+  400 characters, flushed per write, rotated at 1 MiB into one previous file
+  (`studio.log.1`), with the newest 200 entries also held in memory.
+- `GET /api/diagnostics/log?limit=` (loopback-guarded, 1–500, default 100)
+  answers from that ring and names the file. Settings → Diagnostics lists the
+  entries under the timeline, with the file's path.
+- Writes land where a failure currently leaves nothing behind: app start, a
+  router install/update/uninstall/restart, a permission ask or deny, a failed
+  provider call, and every run ending — written before the status row, so the
+  final status is on disk even if the write that follows fails.
+- Editing the rule list is not a decision about an action, so adding or
+  revoking a rule stays in `permission_audit` and out of the log.
+- `cargo test --locked`: **434 passed, 1 ignored** (six new cases: one object per
+  line, ring bound, rotation, redaction and clipping before disk, an unwritable
+  location still logging in memory, and a no-op before `init`). Clippy
+  `--all-targets -D warnings` clean; `node --check` clean.
+- Also in this version: the status documents are reconciled at 2.2.0.
+  `FEATURE-STATUS.md` carried a 1.28.0 header and rows that 1.41.0–1.72.0 had
+  already closed; `PROGRESS.md` still listed two finished Phase 5 items as open;
+  and its release table had twelve blank lines between the header and the rows,
+  which broke it into an unheaded block.
+- Still open: a request id for operations that are not agent runs, router
+  installs and MCP sessions as rows in the SQLite timeline, and a readiness
+  view.
+
 ## 2.1.0
 
 Completes the isolation stage: runs no longer share a file system view or a lease

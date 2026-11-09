@@ -8,18 +8,7 @@ partial, `[ ]` not started.
 
 | Version         | Commit      | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Release evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | --------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-
-
-
-
-
-
-
-
-
-
-
-
+| 2.2.0 | this commit | Phase 17: **a process log that outlives the crash**. `app/src/oplog.rs` appends one redacted JSON object per line to `studio.log` beside the database — flushed per write, rotated at 1 MiB into one previous file, with a 200-entry ring in memory — and `GET /api/diagnostics/log?limit=` serves the ring while Settings → Diagnostics shows the entries and the file's path. Written at boot, on router install/update/uninstall/restart, on a permission ask or deny, on a provider failure and at every run ending, so the entry that matters most (the last one before a crash) exists before the SQLite row does. Rule edits stay in the audit table: a deny rule being added is not a denial | `cargo test --locked`: 434 passed, 1 ignored (6 new: one object per line, ring bound keeps the newest, rotation into one previous file, redaction and clipping before disk, an unwritable location still logs in memory, a no-op before `init`); clippy `--all-targets -D warnings` clean; `node --check` clean; live headless on :8985 with a sandboxed `FREE_AI_STUDIO_HOME` — the boot line `v2.1.0 on windows/x86_64` (that binary predated the bump) appeared in both the route and the file, a `settings` deny rule followed by a 403 config save wrote two permission rows, and an unreachable router wrote `provider · request-failed` with its measured latency. The Diagnostics panel was not viewed in a browser |
 | 2.1.0 | this commit | Phase 5 item 4, completed: **a shared lease ledger and command claims**. Leases persist in `studio.db` (`run_leases`, `run_reads`) so two processes on one database see each other; a command step claims its entire checkout, refusing another run's command there as a non-fatal `command-conflict`; `max_concurrent_runs` defaults to 2 and is honoured only where the workspace is itself a repository root (one checkout per run), otherwise one | `cargo test --locked`: 428 passed, 1 ignored, run twice (new: checkout claim, refusal, different checkout allowed, release); clippy `-D warnings` clean; build ok; `node --check` clean. Editor saves still bypass the lease, each process admits on its own, and an unapplied worktree stays on disk |
 | 2.0.0 | this commit | Phase 5 item 4: **a run's checkout hands its work back**. `apply_run_worktree` commits the run's `run/<id>` branch, fast-forwards the shared checkout onto it, and removes the worktree; `POST /api/runs/:id/apply` gates it on the `git` action, refuses a live run, and returns git's own reason when the shared checkout cannot fast-forward. The detail payload names the checkout and the pane offers Apply | `cargo test --locked`: 427 passed, 1 ignored (two new end-to-end tests: a finished run applies into the repository, keeps its branch and a second apply is a 409; a run awaiting approval is refused as still live); clippy `-D warnings` clean; build ok; `node --check` clean. Leases still miss command steps and the ledger is in-process |
 | 1.92.0 | this commit | Phase 5 item 4, isolation: **a worktree per writing run**. `run_step_root` sends every read, write and command of a run that may write or run commands to its own checkout (`<repo>-run-<id>`, branch `run/<id>`), so two runs cannot share a path; read-only runs and non-git folders keep the shared root. File leases are keyed by checkout as well as path | `cargo test --locked`: 425 passed, 1 ignored (one new end-to-end test: a real writing run leaves the shared folder untouched and writes in its own `run/<id>` checkout beside the seeded file); clippy `-D warnings` clean; build ok. Worktrees are not applied back or cleaned up, the lease still misses command steps, and the ledger is in-process |
@@ -125,11 +114,11 @@ partial, `[ ]` not started.
 
 ## Foundations running alongside Phase 1
 
-- [~] Permission engine — per-run flags + route guards exist, no central policy store (Phase 10)
+- [X] Permission engine — central policy store with once/session/project/always scopes, gated routes and an audit trail (1.31.0–1.40.0, 1.66.0)
 
 - [X] Specification audit at 1.27.0 — per-phase delivered/remaining with the evidence read from the tree (`FEATURE-STATUS.md`)
 
-- [~] Observability — `request_log` + SSE, no structured logs/correlation IDs
+- [~] Observability — `request_log` + SSE, plus a read-only timeline with correlation keys and a redacted bundle (1.72.0); a log file and a request id for non-run operations are still missing
 
 - [X] Spec documents (`ARCHITECTURE`, `IMPLEMENTATION-SPECIFICATION`, `MASTER-ROADMAP`, `TESTING-STRATEGY`, `KNOWN-ISSUES`, `FEATURE-STATUS`, this file)
 - [ ] Frontend test runner
@@ -177,7 +166,7 @@ lifecycle and points at its facts rather than re-deriving them.
 - [X] Model scope with one precedence and a reported origin: task (composer pick or a run's `model`) > agent (`agent_model`) > project (`projects.model`) > global (`model`) > `auto` (1.46.0)
 - [X] Per-project model column, migration, create/update/list routes and a project-menu editor that can also clear it back to inherit (1.46.0)
 - [X] Client-side fallback chain: ordered, deduplicated, capped at four, `local:` picks dropped, and only an unavailable provider (429/5xx/timeout/unreachable) moves to the next model; streaming falls back only before the first byte, and the meta names every attempt (1.46.0)
-- [ ] Provider health monitoring and a circuit breaker (still only the on-demand `/api/test` probe)
+- [X] Provider health monitoring and a circuit breaker: `breaker.rs` opens after three consecutive unavailable answers, refuses the model for 45 s, then allows one probe; `GET /api/health/providers` merges live breaker state with 24 h of `request_log` and the usage page shows a Provider health card (1.50.0)
 - [ ] Per-turn scope beyond the composer: a run's task scope exists, a single message's persisted default does not
 
 ## Phase 4 — Thinking and the OpenAI Platform
@@ -200,7 +189,7 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [X] Platform models in the composer's model menu under `openai:` ids (1.30.0)
 - [X] Headless launch fixed: a `--no-default-features` build serves instead of shutting down at once (1.30.0)
 - [ ] Tool calling and structured output through the platform path (the request shape supports them; no agent tool loop uses `openai:` yet)
-- [ ] `@Thinking` mention in the composer's slash/prompt helpers so discoverability does not depend on docs
+- [~] `@Thinking` discoverability: the composer shows a live hint that mirrors the server's rules (including the `\@Thinking` escape), but there is no slash/autocomplete palette to surface the token before it is typed
 
 ## Phase 10 — Safety and permissions
 
@@ -243,7 +232,7 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [X] Task queue: `queued` state, priority, dependencies, in-order admission, one dispatcher pass (1.53.0)
 - [X] Concurrency limit honoured by the queue (`max_concurrent_runs`, clamped 1–4, default 1) (1.53.0)
 - [X] Conflict detection before a write: a `write` is refused as a `write-conflict` step when another live run claims the path or the content on disk is not what this run last read; the run re-reads and continues (1.54.0)
-- [ ] Parallel execution isolation: file leases cover the agent's own `write` only (a command step, an editor save or another program is caught only afterwards by the fingerprint), worktrees can be created, listed and removed from the pane since 1.91.0 but a run does not execute in one yet, and the ledger is in-process, which is why the default limit stays 1 (1.54.0)
+- [X] Parallel execution isolation: each writing run executes in its own worktree (1.92.0), a finished run applies back and is cleaned up (2.0.0), a command claims its whole checkout while it runs, and the lease ledger lives in `studio.db` so two processes see each other (2.1.0); `max_concurrent_runs` defaults to 2 where the workspace is a repository root. Remaining caveats: an editor save or another program still writes behind the lease (caught on the run's next write), each process admits runs on its own, and an unapplied worktree stays on disk
 - [X] Verification before `succeeded`: a run that wrote, ran a command or called a tool goes to the verifier, which must answer `APPROVE`; ISSUES hands the findings back for one repair round and a second ISSUES ends the run `failed` with the findings kept. Read-only runs and `team` mode (already verified by its reviewer) are not verified twice (1.56.0)
 - [X] File leases between live runs plus conflict detection before a write: a `write` claimed by another live run, or one that would overwrite content this run never read, is refused as a non-fatal `write-conflict` step (1.54.0)
 - [X] Retry as its own control, distinct from resume: `POST /api/runs/:id/retry` starts a clean run from a finished run's settings with `retry_of` linking back, an empty log, no inherited dependencies, no carried tokens or error, and a `retry` step naming the original (1.55.0)
@@ -274,8 +263,9 @@ Backend half shipped in 1.29.0; the composer half is the next commit.
 - [X] Counts from the same rows: provider requests/errors (24 h), permission decisions by name, agent runs by status, live runs (1.72.0)
 - [X] Redacted support bundle: version, platform, non-secret settings, credential booleans, summary and timeline; goals and every secret-shaped value removed before export (1.72.0)
 - [X] Settings → Diagnostics panel with the timeline, the filter, the summary line and the bundle download (1.72.0)
-- [ ] A persistent structured log file and a console ring buffer; a request id for operations that are not agent runs
-- [ ] Router installs and MCP connections in the timeline (the bundle covers provider, permission and agent rows only)
+- [X] A persistent structured log file and a console ring buffer: `app/src/oplog.rs` appends one redacted JSON object per line to `studio.log` beside the database, flushed per write and rotated at 1 MiB into one previous file, with a 200-entry ring served by `GET /api/diagnostics/log` and shown in Settings → Diagnostics with the path; written at boot, on router install/update/uninstall/restart, on permission ask/deny, on provider failure and at every run ending (2.2.0)
+- [ ] A request id for operations that are not agent runs
+- [~] Router installs and MCP connections in the timeline: installs, updates, uninstalls and restarts now write a process-log line (2.2.0), but they are not rows in the SQLite timeline, and MCP sessions remain in memory only
 - [ ] A health/readiness dashboard beyond `/api/health` and the provider health card
 
 ## Next up
@@ -287,8 +277,20 @@ queued run is a real state with priority, dependencies and a place in line
 (1.53.0 queue, which closes Phase 12's queue-view gap).
 
 1. Phase 5 item 4 - complete as of 2.1.0: each writing run gets its own worktree (1.92.0), a finished run's branch can be applied back and the worktree removed (2.0.0), a command claims its whole checkout while it runs, the ledger lives in the database so two processes see it, and `max_concurrent_runs` defaults to 2 where the workspace is a repository root. What remains is narrower: an editor save or another program still bypasses the lease (caught by the fingerprint on the run's next write), each process still admits runs on its own, and a worktree that is never applied stays on disk.
-2. Phase 5 item 5 - an enforced verification step before `succeeded`, instead of the opt-in team reviewer.
-3. Phase 3 last piece - a price for native OpenAI Platform picks, which stay unpriced because the app mirrors no price table.
-4. Phase 6 remainder - per-skill permissions, which only matter if skills ever execute (automatic selection shipped in 1.57.0).
-5. Phase 9 remainder - a debugger and watch mode (build/test runner and diagnostics in 1.67.0; fetch, pull and push in 1.68.0; per-hunk staging and commit detail in 1.69.0; merge and abort in 1.74.0; whole-tree checkpoints in 1.75.0; rebase and its continue path in 1.76.0–1.77.0; line-level staging in 1.78.0; remotes in the pane in 1.79.0; changing a remote URL in 1.80.0; keyboard line selection in 1.81.0; select-all in 1.82.0; an announced count in 1.83.0; a file-wide selection in 1.84.0; a selection across files in 1.85.0; a conflict-marker guard on commit in 1.86.0; a line-ending guard in 1.87.0; a selection that survives a reload in 1.88.0; a repo sanity check in 1.89.0, run automatically on open in 1.90.0). Worktrees can be created, listed and removed from the pane (1.91.0) but a run does not use one yet; a debugger and watch mode also remain open.
-6. Phase 17 remainder - a persistent structured log file and console ring buffer, router-install and MCP rows in the timeline, a request id for non-run operations, and a health dashboard (timeline, counts and the redacted bundle shipped in 1.72.0).
+2. Phase 5 item 5 - complete as of 1.56.0: a run that changed the workspace goes to the verifier and only `APPROVE` marks it complete (this list lagged the tree).
+3. Phase 17 remainder - a persistent structured log file and console ring buffer, router-install and MCP rows in the timeline, a request id for non-run operations, and a health dashboard (timeline, counts and the redacted bundle shipped in 1.72.0). This is the next slice.
+4. Phase 16 remainder - a frontend test runner and an end-to-end harness (headless launch + mock router), plus the failure-injection matrix and install smokes in CI.
+5. Phase 13 - the workflow node graph, the last phase with no real implementation; it depends on the Phase 5 lifecycle, which is now complete.
+6. Phase 18 - a Windows installer, a macOS `.app`, and an update path that preserves user data with a migration that can roll back.
+7. Phase 15 - an extension manifest (name, version, compatibility, permissions, entry point, source) and a boundary for untrusted extensions.
+
+Not next, though open: per-skill permissions (a skill is prompt text and never executes), a price table for native OpenAI Platform picks (the app mirrors no prices rather than inventing them), and an editor engine or debugger (a product decision, not a missing route).
+
+## Reconciliation note (2.1.0)
+
+`FEATURE-STATUS.md` still carried its 1.28.0 header while this file described
+2.1.0 work, and three of its Phase 10 rows and both of its Phase 2 "missing"
+rows had been closed by later versions. Both files were re-verified against the
+tree at 2.1.0, `FEATURE-STATUS.md` gained a derived completion table with its
+method stated, and this list dropped the two items the tree had already
+finished (verification before `succeeded`, and the parallel-isolation work).

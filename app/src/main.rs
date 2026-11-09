@@ -55,6 +55,7 @@ mod media;
 mod memory;
 mod model_scope;
 mod openai;
+mod oplog;
 mod permissions;
 mod privacy;
 mod router;
@@ -1734,7 +1735,9 @@ async fn routers_install(
             ),
         );
     }
-    match router_registry::install(&state, &id, approve, digest).await {
+    let result = router_registry::install(&state, &id, approve, digest).await;
+    log_install("install", &id, &result);
+    match result {
         Ok(record) => {
             permissions::record(
                 &state,
@@ -1774,6 +1777,25 @@ async fn routers_update_status(
     }
 }
 
+/// Record how an install or update ended. This is the one operation that changes
+/// the machine, and a failure here is what a user reports, so it goes in the
+/// process log before the response is mapped.
+fn log_install(
+    action: &str,
+    id: &str,
+    result: &Result<router_registry::InstallRecord, router_registry::InstallError>,
+) {
+    match result {
+        Ok(_) => oplog::record("info", "router", action, format!("{id} succeeded")),
+        Err(error) => oplog::record(
+            "error",
+            "router",
+            action,
+            format!("{id}: {}", error.message()),
+        ),
+    }
+}
+
 /// One mapping for the install-shaped routes, so each refusal gets the status it
 /// deserves instead of every failure looking the same.
 fn install_outcome(
@@ -1807,7 +1829,9 @@ async fn routers_update(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let digest = input.get("digest").and_then(Value::as_str).unwrap_or("");
-    install_outcome(router_registry::update(&state, &id, approve, digest).await)
+    let result = router_registry::update(&state, &id, approve, digest).await;
+    log_install("update", &id, &result);
+    install_outcome(result)
 }
 
 /// Remove an install. `purge` is the explicit "and delete its data" switch, so
@@ -1828,7 +1852,22 @@ async fn routers_uninstall(
             "The uninstall was not approved. Send {\"approve\": true} to remove an install.",
         );
     }
-    match router_registry::uninstall(&state, &id, purge).await {
+    let result = router_registry::uninstall(&state, &id, purge).await;
+    match &result {
+        Ok(_) => oplog::record(
+            "info",
+            "router",
+            "uninstall",
+            format!("{id} removed{}", if purge { " with its data" } else { "" }),
+        ),
+        Err(error) => oplog::record(
+            "error",
+            "router",
+            "uninstall",
+            format!("{id}: {}", error.message()),
+        ),
+    }
+    match result {
         Ok(outcome) => Json(serde_json::to_value(outcome).unwrap_or(Value::Null)).into_response(),
         Err(router_registry::InstallError::Unknown(message)) => {
             json_error(StatusCode::NOT_FOUND, message)
@@ -1884,9 +1923,13 @@ async fn routers_restart(Path(id): Path<String>) -> Response<Body> {
     }
     match router_registry::restart(&id).await {
         Ok(message) => {
+            oplog::record("info", "router", "restart", format!("{id}: {message}"));
             Json(json!({"id": id, "restarted": true, "message": message})).into_response()
         }
-        Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
+        Err(error) => {
+            oplog::record("error", "router", "restart", format!("{id}: {error}"));
+            json_error(StatusCode::BAD_GATEWAY, error)
+        }
     }
 }
 
@@ -3309,6 +3352,12 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
 
 /// Record a failed router call so the usage page reflects it.
 fn log_router_error(state: &AppState, cid: &str, error: &str, latency: i64, model: &str) {
+    oplog::record(
+        "error",
+        "provider",
+        "request-failed",
+        format!("{model} after {latency} ms: {error}"),
+    );
     let _ = open_db(&state.database_path).and_then(|conn| conn.execute(
         "INSERT INTO request_log(created_at,conversation_id,model,provider,status,latency_ms,error) VALUES(?1,?2,?3,'router / unknown','error',?4,?5)",
         params![now_seconds(), cid, model, latency, error.chars().take(2500).collect::<String>()],
@@ -4217,6 +4266,23 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     ensure_setup(&state)?;
+    // The process log lives beside the database: it is the one record that
+    // survives a crash before the row was committed, so it starts before
+    // anything that can fail. A no-op until this point by design.
+    if let Some(dir) = state.database_path.parent() {
+        oplog::init(dir);
+    }
+    oplog::record(
+        "info",
+        "app",
+        "started",
+        format!(
+            "v{} on {}/{}",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
     // Auto-start runs once the state exists, because it applies the same measured
     // state the Router view shows: only a router that is enabled, installed here
     // and not already answering is started, and one that answers is never adopted.

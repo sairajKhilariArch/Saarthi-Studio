@@ -717,6 +717,24 @@ fn set_run(
 }
 
 fn finish(state: &AppState, run_id: &str, status: &str, error: &str) -> Result<(), String> {
+    // One row per ending, whichever path ended it — and written before the
+    // database call, so a run that dies during its own final write is still in
+    // the log with the status it reached.
+    let level = match status {
+        "failed" | "interrupted" => "error",
+        "cancelled" => "warn",
+        _ => "info",
+    };
+    crate::oplog::record(
+        level,
+        "agent",
+        status,
+        if error.is_empty() {
+            format!("run {run_id} finished")
+        } else {
+            format!("run {run_id}: {error}")
+        },
+    );
     // A run that has stopped holds no claim on a file any more. Released here
     // rather than in the loop tail so every way a run can end — cancel, the
     // emergency stop, an exhausted step ceiling — frees the same leases.

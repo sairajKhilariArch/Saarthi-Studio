@@ -774,6 +774,12 @@
           </div>
           <p id="diagSummary" class="muted"></p>
           <ul id="diagEvents" class="perm-audit"></ul>
+          <h3>Process log</h3>
+          <p class="muted">Every line is appended to <code id="diagLogPath">studio.log</code> beside the database as it happens, so an entry survives a crash that never reached the timeline. Newest last, redacted and clipped exactly as the support bundle is.</p>
+          <div class="form-actions">
+            <button type="button" id="diagLogRefresh" class="btn btn-quiet">Load process log</button>
+          </div>
+          <ul id="diagLog" class="perm-audit"></ul>
           </section>
 
           <section id="settings-permissions" class="settings-section card form-card-inner hidden">

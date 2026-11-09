@@ -55,6 +55,14 @@ Remaining for Phase 1 sign-off:
 
 ## Phase 2 — Router manager
 
+Delivered through 1.43.0: registry, capability gating, live probes, a real
+configuration editor behind a whitelist + `fs_write`, measured host and
+package-manager probing, approval-gated install/update/uninstall with pinned
+digests and verified downloads, and an auto-start sweep that never adopts an
+external router. Open: remote-service routers (the registry is local-process
+only) and a panel that drives update/uninstall end to end rather than showing
+the plan (both routes already exist).
+
 1. Replace the hard-coded FreeLLMAPI/OmniRoute paths in `router.rs` with a
    registry of descriptors (id, name, OS/arch support, install methods, min
    version, config location, health probe, start/stop/update/uninstall).
@@ -81,21 +89,34 @@ Remaining for Phase 1 sign-off:
 
 1. Capability table per model (context, modalities, tools, reasoning,
    structured output) sourced from provider metadata, never invented.
+   **Done (1.28.0)** — `capabilities.rs`, unknown stays `null`.
 2. Model selection at global/agent/project/task scope with documented
-   precedence.
+   precedence. **Done (1.46.0)** — `model_scope::resolve` with a reported
+   origin.
 3. Health checks, timeouts, retry policy with idempotency guard, circuit
-   breaker, explicit fallback chain.
+   breaker, explicit fallback chain. **Done (1.50.0)** — `breaker.rs` plus a
+   provider health card built from the breaker and 24 h of `request_log`.
+
+Open: native OpenAI Platform picks carry no price (`cost.rs` mirrors no price
+table), and a single message cannot persist a scope of its own beyond the
+composer's task pick.
 
 ## Phase 4 — Thinking + OpenAI Platform
 
+Delivered 1.29.0 (backend) and 1.30.0 (composer and settings):
+
 1. Native OpenAI Platform provider using the Responses API behind the existing
-   provider abstraction; keys stay server-side.
+   provider abstraction; keys in the OS credential store, never client-side.
 2. Thinking control (`off|low|medium|high|model default`) mapped only to
-   parameters the selected model supports; unsupported choices rejected with a
-   clear message.
+   parameters the selected model supports; an unsupported model is refused with
+   its reason and a rejected parameter is dropped once and recorded.
 3. `@Thinking` composer token: activates the control, shows level + model,
-   preserves scope, and gives a literal-text escape.
-4. Surface summaries/progress — never claim access to hidden chain-of-thought.
+   preserves scope, and `\@Thinking` stays literal.
+4. Reasoning summaries rendered from the provider's own summary frames; hidden
+   chain-of-thought is never claimed or displayed.
+
+Open: tool calling and structured output through the platform path (the request
+shape supports them; no agent tool loop uses `openai:` yet).
 
 ## Phase 5 — Agent execution engine
 
@@ -130,8 +151,14 @@ and only matter if a skill ever executes.*
 
 ## Phase 7 — MCP manager
 
-Registry + connection lifecycle + tool discovery + schema validation +
-permission binding through the Phase 10 engine + health/logs/reconnect.
+Delivered 1.33.0–1.45.0: registry, stdio + streamable-HTTP + SSE transports,
+pooled sessions with an idle supervisor, tool discovery, required-argument and
+scalar-type validation, `mcp_tool` permission binding with an audit trail,
+health/logs from real handshakes, OAuth sign-in for remote servers, and agent
+use of MCP tools behind a per-run flag.
+
+Open: full JSON Schema validation rather than required-argument and scalar-type
+checks.
 
 ## Phase 8 — Project knowledge and memory
 
@@ -159,6 +186,13 @@ model is set, and a sidebar Index tab to search both ways (1.64.0).*
 Editor niceties that do not require a bundled editor engine, real git
 operations (status/branch/diff/stage/commit/worktree checkpoints), build/test
 runner with a problems panel, and diagnostics tied to real file locations.
+
+Status at 2.1.0: the git and build/test halves are delivered (1.66.0–1.91.0,
+including merge, rebase, line-level staging, remotes and worktrees), a run that
+may write executes in its own worktree and can hand it back (1.92.0–2.1.0), and a
+repository sanity check runs when a folder opens (1.89.0–1.90.0). Open: an
+editor engine (syntax highlighting, completion, formatting), a debugger, and
+watch mode; only the detected build/test presets can be run.
 
 *Delivered 1.66.0: the Git half — `app/src/git.rs` (diff, stage, unstage,
 discard, commit, branches, log) behind the `git` permission action with paths
@@ -190,15 +224,26 @@ writes.*
 
 ## Phase 10 — Safety and permissions
 
-Central policy store covering files, directories, terminal, network, MCP,
-router install, updates, git, secrets, settings; scopes: once/session/project/
-always-deny; OS keychain for secrets; audit log; global emergency stop.
+Delivered 1.31.0–1.42.0, extended by every route added since: the policy store
+(once/session/project/always, longest-target then deny/ask/allow) gates agent
+steps, router installs, MCP calls, terminal open, editor saves, workspace
+create/rename/delete, settings and key saves, and the Git routes; the OS
+credential store holds provider keys and MCP OAuth material; `permission_audit`
+records grants, revokes, refusals and approved installs; and the emergency stop
+cancels every live run and closes every terminal session.
+
+No workstream remains open here. An application update has no in-app route, so
+there is nothing yet to gate.
 
 ## Phase 11 — Token/context/cost
 
-Accurate usage attribution, context utilisation display, compression that
-preserves structure, budget enforcement that can stop a run, provider pricing
-with "estimate" labelling when usage is not reported.
+Delivered: token-budgeted packing (1 k–32 k clamp), `request_log` with
+aggregates/series/by-model, cost from the provider's own price row times its
+reported tokens with unpriced rows counted rather than zeroed, a rolling 24 h
+budget that refuses before the chain runs and before a stream, structural
+compression that reports every condensed and dropped message, and a context
+meter with an over-budget state. Native OpenAI Platform picks remain unpriced by
+design; nothing is inferred.
 
 ## Phase 12 — Live monitoring
 
@@ -215,8 +260,11 @@ reordering beyond a numeric priority.
 
 ## Phase 13 — Workflow builder
 
-Validated node graph (task/agent/model/tool/conditional/approval), dependency
-resolution, retry, scheduling with a visible scheduler, and run history.
+**Not started.** `workflows.json` holds flat `{id, name, prompt, skill}` macros
+with CRUD routes and a one-button run — a saved prompt, not a node graph. No
+task/agent/model/tool/conditional nodes, no dependency resolution, no
+validation, no scheduler, no run history. This is the largest untouched phase
+left; it depends on the Phase 5 lifecycle, which is complete.
 
 ## Phase 14 — Cross-platform
 
@@ -225,8 +273,9 @@ router management; VS Code agent parity; consistent API contracts.
 
 ## Phase 15 — Extension ecosystem
 
-Manifest (name, version, compatibility, permissions, deps, entry point,
-source), sandboxing for untrusted extensions, custom agents/skills/MCP/tools.
+**Not started** beyond skills. There is no manifest (name, version,
+compatibility, permissions, dependencies, entry point, source), no sandbox, no
+custom tools, no provider adapters and no UI extensions.
 
 ## Phase 16 — Testing
 
@@ -244,13 +293,20 @@ non-secret settings, credential booleans and the timeline, with run goals omitte
 and every secret-shaped value redacted. Settings → Diagnostics shows it and saves
 the bundle.
 
-Remaining: a persistent structured log file and console ring buffer, a request id
-for operations that are not agent runs, router-install and MCP rows in the
-timeline, and a readiness dashboard beyond `/api/health` and the provider health
-card.
+Delivered in 2.2.0: a persistent structured log file and console ring buffer
+(`oplog.rs` → `studio.log`, rotated at 1 MiB, 200-entry ring behind
+`GET /api/diagnostics/log`, shown in Settings → Diagnostics), written at boot,
+on router lifecycle changes, permission ask/deny, provider failures and every run
+ending.
+
+Remaining: a request id for operations that are not agent runs, router-install
+and MCP rows as timeline entries (installs are process-log lines only), and a
+readiness dashboard beyond `/api/health` and the provider health card.
 
 ## Phase 18 — Installers and updates
 
-Windows MSI/EXE, macOS `.app`/dmg (signed or clearly documented as unsigned),
-update mechanism preserving user data, DB migrations with rollback, clean
-uninstall.
+Delivered: Linux `.deb`, AppImage and tarball, a Windows portable zip, an
+unsigned macOS universal tarball, an Android APK/AAB and a VS Code VSIX.
+
+Open: a Windows MSI/EXE, a macOS `.app`/dmg, an update mechanism that preserves
+user data, DB migrations with rollback, and a clean uninstall.
