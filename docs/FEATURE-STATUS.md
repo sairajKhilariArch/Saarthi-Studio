@@ -37,9 +37,9 @@ remains inside them is named per row (router update/uninstall in the panel,
 remote-service routers, a price for native OpenAI picks, per-skill permissions,
 an editor that bypasses the run lease, live
 capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
-Phase 9 lacks an editor engine and a debugger, **Phase 13 is still a flat
-saved-prompt list rather than a workflow graph, and Phase 15 has no extension
-manifest at all**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
+Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs
+but has no visual canvas or scheduler, and Phase 15 has no extension manifest at
+all**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
 the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 has no installer or update path.
 Phase 17 closed in 2.4.0.
 
@@ -65,7 +65,7 @@ row below moves, so they cannot drift from the tables.
 | 10 | Safety and permissions | 100% | updates have no in-app route to gate |
 | 11 | Token and context | 100% | — |
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
-| 13 | Workflow builder | 20% | the node graph itself |
+| 13 | Workflow builder | 55% | visual canvas, scheduled runs, resume after a close |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
@@ -267,10 +267,18 @@ drag-to-reorder — priority is a number on the form.
 
 ## Phase 13 — Workflow builder
 
-Partial. `workflows.json` holds flat `{id, name, prompt, skill}` macros with CRUD
-routes and a one-button run (Automation view). That is a saved prompt, **not** a
-node graph: no task/agent/model/tool/conditional nodes, no dependency
-resolution, no validation, no scheduler, no run history.
+Started in 2.9.0: a workflow is a validated dependency graph, and a run is a
+persisted execution of it.
+
+| Item | Status | Notes |
+|---|---|---|
+| Task / agent / approval / condition nodes | Working (2.9.0) | `agent` starts a real agent run and waits for it, including at its approval gate; `approval` parks the workflow; `condition` asserts dependency outcomes; `task` records a note |
+| Dependencies and branches | Working (2.9.0) | `dependsOn` ids or `{id, when: "failed"}`; an unmet edge marks the node `skipped`; a failure counts as handled only when its repair branch succeeded |
+| Validation before execution | Working (2.9.0) | ids, kinds, profiles, missing deps, self references, cycles, per-kind requirements, a 50-node cap — each error names the node |
+| Persisted run history | Working (2.9.0) | `workflow_runs`/`workflow_steps` carry status, output, timing and the agent run id; a boot sweep marks a run the process abandoned as `interrupted` |
+| Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph (a child agent run in flight is not forcibly stopped) |
+| Visual editor | Partial | the Automation editor is node JSON with server-side validation; there is no canvas |
+| Scheduled execution | Missing | no scheduler, no recurring runs |
 
 ## Phase 14 — Cross-platform integration
 
@@ -291,7 +299,7 @@ no sandboxing, no custom tools, no provider adapters, no UI extensions.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 448 passed, 1 ignored at the 2.8.0 run; the count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 454 passed, 1 ignored at the 2.9.0 run; the count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |

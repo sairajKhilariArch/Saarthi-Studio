@@ -4858,14 +4858,18 @@ function renderWorkflows(workflows) {
     const strong = document.createElement("strong");
     strong.textContent = workflow.name;
     main.appendChild(strong);
+    const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
     const small = document.createElement("small");
-    small.textContent = workflow.prompt;
-    small.title = workflow.prompt;
+    small.textContent = nodes.length
+      ? `${nodes.length} nodes${workflow.prompt ? ` · ${workflow.prompt}` : ""}`
+      : workflow.prompt;
+    small.title = workflow.prompt || "";
     main.appendChild(small);
     row.appendChild(main);
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";
-    actions.appendChild(rowButton("Run", () => runWorkflow(workflow)));
+    if (nodes.length) actions.appendChild(rowButton("Start", () => startWorkflow(workflow)));
+    actions.appendChild(rowButton(nodes.length ? "Load prompt" : "Run", () => runWorkflow(workflow)));
     if (workflow.skill) actions.appendChild(rowButton("Detach skill", () => editWorkflow(workflow, { skill: "" })));
     actions.appendChild(rowButton("Edit", () => editWorkflow(workflow)));
     actions.appendChild(rowButton("Delete", () => deleteWorkflow(workflow), "danger"));
@@ -4884,6 +4888,89 @@ async function loadWorkflows() {
     return;
   }
   renderWorkflows(Array.isArray(result.data.workflows) ? result.data.workflows : []);
+  loadWorkflowRuns();
+}
+
+async function startWorkflow(workflow) {
+  const result = await api(`/api/workflows/${encodeURIComponent(workflow.id)}/run`, { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not start that workflow.");
+    return;
+  }
+  const run = result.data.run || {};
+  toast(`Workflow started${run.id ? ` as run ${String(run.id).slice(0, 8)}` : ""}.`);
+  loadWorkflowRuns();
+}
+
+function renderWorkflowRuns(runs) {
+  const host = $("automationRuns");
+  if (!host) return;
+  host.replaceChildren();
+  if (!runs.length) {
+    host.appendChild(pageNote("No workflow runs yet."));
+    return;
+  }
+  runs.forEach((run) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item";
+    const main = document.createElement("span");
+    main.className = "project-menu-main";
+    const strong = document.createElement("strong");
+    strong.textContent = `${run.name || "workflow"} · ${run.status}`;
+    main.appendChild(strong);
+    const small = document.createElement("small");
+    small.textContent = `${run.succeededSteps || 0}/${run.steps || 0} steps${run.error ? ` · ${run.error}` : ""}`;
+    if (run.error) small.title = run.error;
+    main.appendChild(small);
+    row.appendChild(main);
+    const actions = document.createElement("span");
+    actions.className = "project-menu-actions-row";
+    if (run.status === "waiting") {
+      actions.appendChild(rowButton("Approve", () => decideWorkflowRun(run, true)));
+      actions.appendChild(rowButton("Reject", () => decideWorkflowRun(run, false), "danger"));
+    }
+    if (run.status === "running" || run.status === "waiting") {
+      actions.appendChild(rowButton("Cancel", () => cancelWorkflowRun(run), "danger"));
+    }
+    row.appendChild(actions);
+    host.appendChild(row);
+  });
+}
+
+async function loadWorkflowRuns() {
+  const host = $("automationRuns");
+  if (!host) return;
+  const result = await api("/api/workflow-runs?limit=10");
+  if (!result.ok) {
+    host.replaceChildren();
+    host.appendChild(pageNote(result.data.error || "Could not load workflow runs."));
+    return;
+  }
+  renderWorkflowRuns(Array.isArray(result.data.runs) ? result.data.runs : []);
+}
+
+async function decideWorkflowRun(run, approve) {
+  const result = await api(`/api/workflow-runs/${encodeURIComponent(run.id)}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ approve }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not answer that step.");
+    return;
+  }
+  toast(approve ? "Step approved." : "Step rejected.");
+  loadWorkflowRuns();
+}
+
+async function cancelWorkflowRun(run) {
+  if (!confirm(`Cancel the workflow run "${run.name || "workflow"}"?`)) return;
+  const result = await api(`/api/workflow-runs/${encodeURIComponent(run.id)}/cancel`, { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not cancel that run.");
+    return;
+  }
+  toast("Workflow cancelled.");
+  loadWorkflowRuns();
 }
 
 function fillSkillOptions(selectedId) {
@@ -4906,6 +4993,8 @@ function fillSkillOptions(selectedId) {
 function editWorkflow(workflow, override = {}) {
   $("workflowName").value = workflow.name || "";
   $("workflowPrompt").value = workflow.prompt || "";
+  const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+  if ($("workflowNodes")) $("workflowNodes").value = nodes.length ? JSON.stringify(nodes, null, 2) : "";
   fillSkillOptions(override.skill != null ? override.skill : workflow.skill || "");
   $("workflowForm").dataset.editing = workflow.id || "";
   $("workflowForm").classList.remove("hidden");
@@ -6237,18 +6326,35 @@ function bindEvents() {
     $("workflowForm").dataset.editing = "";
     $("workflowName").value = "";
     $("workflowPrompt").value = "";
+    if ($("workflowNodes")) $("workflowNodes").value = "";
     fillSkillOptions("");
     $("workflowForm").classList.remove("hidden");
     $("workflowName").focus();
   });
   $("workflowCancel").addEventListener("click", () => $("workflowForm").classList.add("hidden"));
+  if ($("workflowRunsRefresh")) $("workflowRunsRefresh").addEventListener("click", loadWorkflowRuns);
   $("workflowForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    let nodes = [];
+    const rawNodes = $("workflowNodes") ? $("workflowNodes").value.trim() : "";
+    if (rawNodes) {
+      try {
+        nodes = JSON.parse(rawNodes);
+      } catch (_error) {
+        toast("Nodes must be valid JSON.");
+        return;
+      }
+      if (!Array.isArray(nodes)) {
+        toast("Nodes must be a JSON array.");
+        return;
+      }
+    }
     const payload = {
       id: $("workflowForm").dataset.editing || "",
       name: $("workflowName").value.trim(),
       prompt: $("workflowPrompt").value.trim(),
       skill: $("workflowSkill") ? $("workflowSkill").value : "",
+      nodes,
     };
     const result = await api("/api/workflows", { method: "POST", body: JSON.stringify(payload) });
     if (!result.ok) {

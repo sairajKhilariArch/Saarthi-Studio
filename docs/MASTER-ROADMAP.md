@@ -266,11 +266,27 @@ reordering beyond a numeric priority.
 
 ## Phase 13 — Workflow builder
 
-**Not started.** `workflows.json` holds flat `{id, name, prompt, skill}` macros
-with CRUD routes and a one-button run — a saved prompt, not a node graph. No
-task/agent/model/tool/conditional nodes, no dependency resolution, no
-validation, no scheduler, no run history. This is the largest untouched phase
-left; it depends on the Phase 5 lifecycle, which is complete.
+Started in 2.9.0. `workflows.json` now carries an optional `nodes` array, so a
+saved prompt is still valid and a graph is a first-class workflow.
+
+Delivered in 2.9.0:
+
+- Node kinds that execute against real state: `agent` (a real agent run, waited
+  on, including its approval gate), `approval` (parks the workflow), `condition`
+  (asserts dependency outcomes) and `task` (a recorded note).
+- Dependency edges as ids or `{id, when: "failed"}`, with unmet branches marked
+  `skipped`; a failure counts as handled only when its repair branch succeeded.
+- Validation before a run row exists: ids, kinds, profiles, dependencies,
+  self references, cycles, per-kind requirements, a 50-node cap — each error
+  names the node.
+- Persisted `workflow_runs`/`workflow_steps`, one spawned execution task,
+  per-node retries, cancel, and a boot sweep that marks live runs `interrupted`.
+- Routes for save/list/delete/run, run history, detail, approve and cancel; an
+  Automation editor for the node JSON and a live run list.
+
+Remaining: a visual node canvas (the editor is JSON today), scheduled and
+recurring runs, import/export, and resume after an application close. Cancelling
+a run stops the graph but does not forcibly stop a child agent run in flight.
 
 ## Phase 14 — Cross-platform
 

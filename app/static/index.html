@@ -403,9 +403,9 @@
     <section id="automationView" class="view page-view hidden" role="tabpanel" aria-label="Automation">
       <div class="page">
         <header class="page-head">
-          <p class="eyebrow">Saved prompt recipes</p>
+          <p class="eyebrow">Saved prompts and workflow graphs</p>
           <h1>Automation</h1>
-          <p>A workflow stores a prompt and an optional skill. Running one opens a fresh thread with both loaded — no template engine, no background jobs.</p>
+          <p>A workflow stores a prompt, an optional skill, and an optional graph of nodes. A workflow with nodes starts a real run: agent nodes are agent runs, approval nodes wait for you, and dependencies decide the order.</p>
         </header>
         <div id="automationList" class="list-block"></div>
         <button id="workflowNew" class="btn btn-quiet btn-small">
@@ -424,11 +424,19 @@
             <span>Skill (optional)</span>
             <select id="workflowSkill"><option value="">No skill</option></select>
           </label>
+          <label class="field">
+            <span>Nodes (JSON, optional)</span>
+            <textarea id="workflowNodes" rows="6" spellcheck="false" placeholder='[{&quot;id&quot;:&quot;plan&quot;,&quot;kind&quot;:&quot;agent&quot;,&quot;prompt&quot;:&quot;Plan the change&quot;,&quot;profile&quot;:&quot;planner&quot;},{&quot;id&quot;:&quot;gate&quot;,&quot;kind&quot;:&quot;approval&quot;,&quot;dependsOn&quot;:[&quot;plan&quot;]}]'></textarea>
+          </label>
+          <small class="muted">Kinds: agent, approval, condition, task. A dependency is an id, or {&quot;id&quot;:&quot;x&quot;,&quot;when&quot;:&quot;failed&quot;} for a repair branch.</small>
           <div class="form-actions">
             <button type="button" id="workflowCancel" class="btn btn-quiet btn-small">Cancel</button>
             <button type="submit" class="btn btn-accent btn-small">Save workflow</button>
           </div>
         </form>
+        <h2 class="form-group-title">Workflow runs</h2>
+        <div id="automationRuns" class="list-block"></div>
+        <button id="workflowRunsRefresh" type="button" class="btn btn-quiet btn-small">Refresh runs</button>
       </div>
     </section>
 

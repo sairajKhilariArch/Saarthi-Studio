@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 mod agent;
 mod breaker;
+mod workflow;
 mod browser;
 mod capabilities;
 mod context;
@@ -364,6 +365,9 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = index::initialize(&conn);
     if let Err(error) = agent::initialize(&conn) {
         println!("agent run tables: {error}");
+    }
+    if let Err(error) = workflow::initialize(&conn) {
+        println!("workflow tables: {error}");
     }
     migrate_message_attachments(&conn)
 }
@@ -2249,98 +2253,6 @@ async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, Stri
 
 /* Workflows: saved prompt recipes. They live in a small JSON file next to
 the config — no schema migration, and they are machine-global by nature. */
-#[derive(Clone, Serialize, Deserialize)]
-struct Workflow {
-    id: String,
-    name: String,
-    prompt: String,
-    #[serde(default)]
-    skill: String,
-}
-
-fn workflows_path(state: &AppState) -> PathBuf {
-    state.config_path.with_file_name("workflows.json")
-}
-
-fn load_workflows(state: &AppState) -> Vec<Workflow> {
-    fs::read(workflows_path(state))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Vec<Workflow>>(&bytes).ok())
-        .unwrap_or_default()
-        // Drop malformed entries instead of failing the whole list.
-        .into_iter()
-        .filter(|w| !w.id.is_empty() && !w.name.is_empty())
-        .collect()
-}
-
-fn save_workflows(state: &AppState, workflows: &[Workflow]) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(workflows).map_err(|e| e.to_string())?;
-    let temp = workflows_path(state).with_extension("tmp");
-    fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-    set_private_permissions(&temp, false).map_err(|e| e.to_string())?;
-    fs::rename(&temp, workflows_path(state)).map_err(|e| e.to_string())
-}
-
-async fn list_workflows(State(state): State<AppState>) -> Response<Body> {
-    Json(json!({ "ok": true, "workflows": load_workflows(&state) })).into_response()
-}
-
-fn clipped_string(value: Option<&str>, max: usize) -> String {
-    value.unwrap_or("").chars().take(max).collect::<String>()
-}
-
-async fn save_workflow(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
-    let name = clean_title(input.get("name").and_then(Value::as_str).unwrap_or(""));
-    let prompt = clipped_string(input.get("prompt").and_then(Value::as_str), 4000);
-    let skill = clipped_string(input.get("skill").and_then(Value::as_str), 160);
-    if name.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "A workflow needs a name.");
-    }
-    if prompt.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "A workflow needs a prompt.");
-    }
-
-    let mut workflows = load_workflows(&state);
-    // Existing id means update; anything else is a new recipe.
-    let requested_id = input.get("id").and_then(Value::as_str).unwrap_or("");
-    let known = workflows
-        .iter()
-        .any(|w| !requested_id.is_empty() && w.id == requested_id);
-    let id = if known {
-        requested_id.to_string()
-    } else {
-        Uuid::new_v4().to_string()
-    };
-    workflows.retain(|w| w.id != id);
-    workflows.push(Workflow {
-        id: id.clone(),
-        name,
-        prompt,
-        skill,
-    });
-    workflows.sort_by_key(|workfluff| workfluff.name.to_lowercase());
-    if let Err(e) = save_workflows(&state, &workflows) {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
-    }
-    Json(json!({ "ok": true, "id": id })).into_response()
-}
-
-async fn delete_workflow(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response<Body> {
-    let mut workflows = load_workflows(&state);
-    let before = workflows.len();
-    workflows.retain(|w| w.id != id);
-    if workflows.len() == before {
-        return json_error(StatusCode::NOT_FOUND, "No such workflow.");
-    }
-    if let Err(e) = save_workflows(&state, &workflows) {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, e);
-    }
-    Json(json!({ "ok": true })).into_response()
-}
-
 /* Crew templates: saved stage rosters for crew runs. Same pattern as
 workflows — a small JSON file next to the config, no schema migration;
 keyed by name, because that is what people type in the composer. */
@@ -4318,6 +4230,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
     // call paying the full operation timeout to discover it.
     mcp::start_supervisor();
     agent::mark_interrupted(&state);
+    workflow::mark_interrupted(&state);
     // Queued runs outlive a restart on purpose: the interrupted sweep above has
     // freed the slots they were waiting for, so admit them now instead of
     // leaving them parked until something else happens to dispatch.
@@ -4385,8 +4298,13 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/projects/:id/update", post(update_project))
         .route("/api/projects/:id/delete", post(delete_project))
         .route("/api/projects/:id/activate", post(activate_project))
-        .route("/api/workflows", get(list_workflows).post(save_workflow))
-        .route("/api/workflows/:id/delete", post(delete_workflow))
+        .route("/api/workflows", get(workflow::list).post(workflow::save))
+        .route("/api/workflows/:id/delete", post(workflow::delete))
+        .route("/api/workflows/:id/run", post(workflow::run))
+        .route("/api/workflow-runs", get(workflow::runs))
+        .route("/api/workflow-runs/:id", get(workflow::run_detail))
+        .route("/api/workflow-runs/:id/approve", post(workflow::approve))
+        .route("/api/workflow-runs/:id/cancel", post(workflow::cancel))
         .route(
             "/api/crew-templates",
             get(list_crew_templates).post(save_crew_template),

@@ -3160,6 +3160,17 @@ const PROFILES: [&str; 8] = [
     "coding", "frontend", "backend", "database", "planner", "testing", "debugger", "review",
 ];
 
+/// The same profile check a run form uses, for callers that are not the run
+/// form — workflow agent nodes, which must fail validation before a run row
+/// exists rather than at the first model call.
+pub(crate) fn checked_profile(name: &str) -> Result<String, String> {
+    let profile = normalize_profile(name);
+    if profile.trim().is_empty() {
+        return Err(format!("Unknown agent profile \"{name}\"."));
+    }
+    Ok(profile)
+}
+
 fn normalize_profile(input: &str) -> String {
     let trimmed = input.trim().to_lowercase();
     if trimmed.is_empty() {

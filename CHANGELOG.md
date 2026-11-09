@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.9.0
+
+Phase 13 stops being a saved prompt: a workflow is a validated graph, and a
+graph runs as a persisted workflow run.
+
+- `app/src/workflow.rs` holds the model, validation, storage and engine. A
+  workflow is still `workflows.json` beside the config, so saved prompts keep
+  working (no nodes = the old behaviour).
+- **Nodes:** `agent` starts a real agent run — the same `agent_runs` loop the
+  Runs panel drives — and waits for it, including at its approval gate;
+  `approval` parks the workflow until a person answers it; `condition` asserts
+  what its dependencies ended as; `task` records a note as an explicit step.
+- **Edges:** `dependsOn` entries are an id ("after it succeeded") or
+  `{id, when: "failed"}` for a repair branch. A dependent whose edge condition
+  is not met is marked `skipped` instead of blocking the graph.
+- **Validation before any run row exists:** duplicate or malformed ids, unknown
+  kinds, unknown profiles, missing dependencies, self references, cycles, an
+  agent node without a prompt, a condition without dependencies, bad `when` and
+  `expect` values, and more than 50 nodes are all refused with the node named.
+- **Persistence:** `workflow_runs` and `workflow_steps` in SQLite. Every step
+  has a stored status, output, start/end and the agent run it started, so the
+  history is the execution record, not a reconstruction. A run that was live
+  when the app closed is marked `interrupted` at boot.
+- **Routes:** `POST /api/workflows/:id/run`, `GET /api/workflow-runs`,
+  `GET /api/workflow-runs/:id`, `POST /api/workflow-runs/:id/approve`,
+  `POST /api/workflow-runs/:id/cancel`, plus the existing save/list/delete with
+  a `nodes` array.
+- **Engine:** one spawned task walks the graph in dependency order, retries a
+  failed agent node up to its `retries` (0–3), stops on cancel, and treats a
+  failure as handled only when a `when: "failed"` dependent actually succeeded.
+- **UI:** Automation gains a nodes editor (JSON, validated by the server with
+  the error shown), `Start` for graphs, `Load prompt` for the old behaviour,
+  and a live run history with Approve/Reject and Cancel.
+- Checks: `cargo test --locked` **454 passed, 1 ignored** (six new workflow
+  cases); clippy `--all-targets -D warnings` clean; `node --check` clean. Live
+  headless smoke against the mock provider: a one-node agent graph ran to
+  `succeeded`, the agent's file was on disk, and `/api/workflow-runs` showed
+  `1/1` steps.
+- Remaining in Phase 13, stated rather than implied: a visual canvas (the
+  editor is JSON today), scheduled and recurring runs, workflow import/export,
+  and resume after an app close. Cancelling a workflow stops the graph; a child
+  agent run already in flight is not forcibly stopped.
+
 ## 2.8.0
 
 The end-to-end run grows the half it was missing: a real agent task that stops
