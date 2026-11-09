@@ -368,10 +368,15 @@ stops it at the next host call, a 5-second wall-clock budget is checked at every
 host boundary, and uninstall cancels a run in flight before moving the folder.
 Settings shows `Running…` with `Cancel` while the request is open.
 
-Remaining: an extension run history, custom tools, provider adapters, UI
-extensions, and dependency/compatibility metadata. Installing still grants no
-capability by itself, and the only reachable surface is the two workspace pairs
-plus `last_error`.
+Run history (2.24.0): `extension_runs` keeps one row per run that reached the
+sandbox — including loader failures, traps, fuel stops and cancellations — with
+the project, duration, exit code, fuel, host calls and error. `GET
+/api/extension-runs` serves the newest 50 and Settings lists them.
+
+Remaining: custom tools, provider adapters, UI extensions, and
+dependency/compatibility metadata. Installing still grants no capability by
+itself, and the only reachable surface is the two workspace pairs plus
+`last_error`.
 
 ## Phase 16 — Testing
 

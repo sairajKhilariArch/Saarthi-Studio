@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.24.0
+
+Every extension run now leaves a row in the database, not only a log line.
+
+- `extension_runs` (id, extension, project, started_at, duration_ms, exit_code,
+  fuel_used, host_calls, error), created idempotently with the rest of the
+  schema and indexed by start time.
+- A row is written for each run that reached the sandbox: successes, traps, fuel
+  stops, cancellations, and runs whose module would not load. A failed insert
+  never fails the run that already happened, matching the permission audit.
+- `GET /api/extension-runs` returns the newest 50. Settings lists them under the
+  installed extensions with time, duration, exit code, fuel, host calls and the
+  error, so "it did nothing" and "it failed" stay distinguishable after the
+  toast is gone.
+- Checks: `cargo test --locked` **483 passed, 1 ignored** (one new: history
+  round-trips newest-first, including a row with no exit code); clippy
+  `-D warnings` clean; `node --check` clean; frontend 18; version 20; e2e 19.
+  Live: a valid run (exit 8, 7 fuel, 1 host call) and an unloadable module both
+  appear in `/api/extension-runs`, newest first, with the project id and the
+  loader error.
+- The Settings history list was not opened in a browser; the endpoint it reads
+  was exercised directly.
+
 ## 2.23.0
 
 A run in flight can now be stopped, and only one run per extension exists at a

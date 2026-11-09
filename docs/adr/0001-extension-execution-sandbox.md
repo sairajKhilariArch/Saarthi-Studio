@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0 (see the implementation notes below)
+- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0, run history in 2.24.0 (see the implementation notes below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -236,6 +236,20 @@ from a folder that just moved.
 or time-capped mid-computation; it ends when fuel runs out, and the route
 reports that fuel stop. This is stated in the UI copy and in `KNOWN-ISSUES.md`
 rather than implied away.
+
+## Implementation note (2.24.0) — a durable run history
+
+Gate 5 asked for audit tests, not a table; the table exists because a log line
+rotates and an extension that failed to load leaves no other trace.
+`extension_runs` holds one row per run request that reached the sandbox:
+extension, project, start, duration, exit code (null when no module ever ran),
+fuel, host calls and the error text. That covers success, trap, fuel stop,
+cancellation and loader refusal with the same shape, so the UI can tell "it did
+nothing" from "it never started".
+
+Writes never fail the run they describe — the run already happened, as with the
+permission audit — and the read path is bounded to the newest 50. The table is
+created alongside the rest of the schema, so an upgrade adds it on next launch.
 
 ## Consequences
 

@@ -3609,6 +3609,44 @@ async function loadExtensions() {
     row.appendChild(actions);
     host.appendChild(row);
   });
+  loadExtensionRuns();
+}
+
+/* A run leaves a row even when it never started, so "it did nothing" and "it
+   failed" look different after the toast is gone. */
+async function loadExtensionRuns() {
+  const host = $("extensionRuns");
+  if (!host) return;
+  const result = await api("/api/extension-runs");
+  host.replaceChildren();
+  if (!result.ok) {
+    host.appendChild(pageNote(result.data.error || "Run history is unavailable."));
+    return;
+  }
+  const runs = Array.isArray(result.data.runs) ? result.data.runs : [];
+  if (!runs.length) {
+    host.appendChild(pageNote("No runs yet."));
+    return;
+  }
+  runs.forEach((run) => {
+    const row = document.createElement("div");
+    row.className = "project-menu-item";
+    const main = document.createElement("span");
+    main.className = "project-menu-main";
+    const strong = document.createElement("strong");
+    const exit = run.exit_code == null ? "did not run" : `exit ${run.exit_code}`;
+    strong.textContent = `${run.extension} \u00b7 ${exit}`;
+    main.appendChild(strong);
+    const small = document.createElement("small");
+    const when = run.started_at ? new Date(run.started_at * 1000).toLocaleString() : "";
+    const parts = [when, `${run.duration_ms} ms`, `${run.fuel_used} fuel`, `${run.host_calls} host calls`]
+      .filter(Boolean);
+    if (run.error) parts.push(run.error);
+    small.textContent = parts.join(" \u00b7 ");
+    main.appendChild(small);
+    row.appendChild(main);
+    host.appendChild(row);
+  });
 }
 
 async function loadSettings() {

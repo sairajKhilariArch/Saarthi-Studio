@@ -361,6 +361,7 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
     let _ = migrate_conversation_model(&conn);
     let _ = permissions::initialize(&conn);
     let _ = migrate_permission_request_id(&conn);
+    let _ = extensions::initialize(&conn);
     let _ = skills::initialize(&conn);
     let _ = memory::initialize(&conn);
     let _ = embeddings::initialize(&conn);
@@ -4309,6 +4310,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/extensions/:id/remove", post(extensions::remove))
         .route("/api/extensions/:id/run", post(extensions::run))
         .route("/api/extensions/:id/cancel", post(extensions::cancel))
+        .route("/api/extension-runs", get(extensions::runs))
         .route("/api/workflows/import", post(workflow::import_graph))
         .route("/api/workflows/:id/export", get(workflow::export))
         .route("/api/workflows/:id/delete", post(workflow::delete))

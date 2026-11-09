@@ -84,6 +84,85 @@ struct Manifest {
     permissions: Vec<String>,
 }
 
+/// History of runs, newest last. One row per run request that reached the
+/// sandbox, including the ones that failed to load or stopped early: a run that
+/// left no trace would make "it did nothing" indistinguishable from "it
+/// failed".
+pub(crate) fn initialize(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS extension_runs (
+            id TEXT PRIMARY KEY, extension TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
+            started_at REAL NOT NULL, duration_ms INTEGER NOT NULL,
+            exit_code INTEGER, fuel_used INTEGER NOT NULL DEFAULT 0,
+            host_calls INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS extension_runs_started
+            ON extension_runs(started_at DESC);",
+    )
+}
+
+struct RunRecord<'a> {
+    extension: &'a str,
+    project: &'a str,
+    started_at: f64,
+    duration_ms: u128,
+    exit_code: Option<i32>,
+    fuel_used: u64,
+    host_calls: usize,
+    error: &'a str,
+}
+
+/// A failed write must never fail the run it describes — the run already
+/// happened — so this ignores storage errors, like the permission audit does.
+fn record_run(db: &std::path::Path, run: &RunRecord<'_>) {
+    let _ = crate::open_db(db).and_then(|conn| {
+        initialize(&conn)?;
+        conn.execute(
+            "INSERT INTO extension_runs(id,extension,project,started_at,duration_ms,exit_code,fuel_used,host_calls,error) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                run.extension,
+                run.project,
+                run.started_at,
+                run.duration_ms as i64,
+                run.exit_code,
+                run.fuel_used as i64,
+                run.host_calls as i64,
+                run.error.chars().take(500).collect::<String>(),
+            ],
+        )
+    });
+}
+
+pub(crate) fn runs_at(db: &std::path::Path, limit: usize) -> Vec<Value> {
+    let limit = limit.clamp(1, 500) as i64;
+    let Ok(conn) = crate::open_db(db) else {
+        return Vec::new();
+    };
+    let _ = initialize(&conn);
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT extension, project, started_at, duration_ms, exit_code, fuel_used, host_calls, error \
+         FROM extension_runs ORDER BY started_at DESC, rowid DESC LIMIT ?1",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map([limit], |row| {
+        Ok(json!({
+            "extension": row.get::<_, String>(0)?,
+            "project": row.get::<_, String>(1)?,
+            "started_at": row.get::<_, f64>(2)?,
+            "duration_ms": row.get::<_, i64>(3)?,
+            "exit_code": row.get::<_, Option<i32>>(4)?,
+            "fuel_used": row.get::<_, i64>(5)?,
+            "host_calls": row.get::<_, i64>(6)?,
+            "error": row.get::<_, String>(7)?,
+        }))
+    })
+    .map(|rows| rows.filter_map(Result::ok).collect())
+    .unwrap_or_default()
+}
+
 fn extensions_dir(state: &AppState) -> PathBuf {
     state
         .database_path
@@ -582,6 +661,14 @@ pub(crate) async fn remove(
 /// loaded. Only then is the module handed to the sandboxed runner. Execution is
 /// blocking interpreter work, so it runs on a blocking thread instead of the
 /// async runtime's worker.
+pub(crate) async fn runs(State(state): State<AppState>) -> Response {
+    Json(json!({
+        "ok": true,
+        "runs": runs_at(&state.database_path, 50),
+    }))
+    .into_response()
+}
+
 pub(crate) async fn cancel(AxumPath(id): AxumPath<String>) -> Response {
     if !valid_id(&id) {
         return bad("Invalid extension id.");
@@ -667,6 +754,8 @@ pub(crate) async fn run(
         cancel: Some(cancel),
         wall: None,
     };
+    let started_at = crate::now_seconds();
+    let started = std::time::Instant::now();
     let outcome = tokio::task::spawn_blocking(move || {
         crate::extension_run::run_file_with(&module_path, Some(grant), options)
     })
@@ -674,15 +763,54 @@ pub(crate) async fn run(
     let outcome = match outcome {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(error)) => {
+            record_run(
+                &state.database_path,
+                &RunRecord {
+                    extension: &id,
+                    project: &project,
+                    started_at,
+                    duration_ms: started.elapsed().as_millis(),
+                    exit_code: None,
+                    fuel_used: 0,
+                    host_calls: 0,
+                    error: &error,
+                },
+            );
             crate::oplog::record("warn", "extensions", "run", format!("{id}: {error}"));
             return bad(error);
         }
         Err(error) => {
             let message = format!("The extension stopped unexpectedly: {error}");
+            record_run(
+                &state.database_path,
+                &RunRecord {
+                    extension: &id,
+                    project: &project,
+                    started_at,
+                    duration_ms: started.elapsed().as_millis(),
+                    exit_code: None,
+                    fuel_used: 0,
+                    host_calls: 0,
+                    error: &message,
+                },
+            );
             crate::oplog::record("warn", "extensions", "run", format!("{id}: {message}"));
             return server_error(message);
         }
     };
+    record_run(
+        &state.database_path,
+        &RunRecord {
+            extension: &id,
+            project: &project,
+            started_at,
+            duration_ms: outcome.elapsed_ms,
+            exit_code: Some(outcome.exit_code),
+            fuel_used: outcome.fuel_used,
+            host_calls: outcome.audit.len(),
+            error: "",
+        },
+    );
     crate::oplog::record(
         "info",
         "extensions",
@@ -823,6 +951,47 @@ mod tests {
         assert!(remove_extension(&root, "missing").is_err());
         assert!(remove_extension(&root, "../escape").is_err());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_history_round_trips_newest_first() {
+        let dir = scratch("runs");
+        let db = dir.join("studio.db");
+        record_run(
+            &db,
+            &RunRecord {
+                extension: "seven-tools",
+                project: "p1",
+                started_at: 10.0,
+                duration_ms: 5,
+                exit_code: Some(7),
+                fuel_used: 3,
+                host_calls: 1,
+                error: "",
+            },
+        );
+        record_run(
+            &db,
+            &RunRecord {
+                extension: "broken-tools",
+                project: "p1",
+                started_at: 20.0,
+                duration_ms: 9,
+                exit_code: None,
+                fuel_used: 0,
+                host_calls: 0,
+                error: "Not valid WebAssembly",
+            },
+        );
+        let runs = runs_at(&db, 10);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0]["extension"], "broken-tools");
+        assert_eq!(runs[0]["exit_code"], Value::Null);
+        assert_eq!(runs[0]["error"], "Not valid WebAssembly");
+        assert_eq!(runs[1]["exit_code"], 7);
+        assert_eq!(runs[1]["fuel_used"], 3);
+        assert_eq!(runs[1]["host_calls"], 1);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
