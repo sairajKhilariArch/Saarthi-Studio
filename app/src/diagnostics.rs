@@ -330,6 +330,69 @@ pub(crate) fn timeline_value(
         }
     }
 
+    // Router installs and MCP health are not SQLite rows, but they are records
+    // the app already keeps, so they belong on the same timeline instead of in
+    // a separate panel the reader has to remember to visit.
+    for record in crate::router_registry::install_records(state) {
+        let ok = record.outcome == "ok";
+        let mut detail = format!("{} · {} · {}", record.id, record.method, record.source);
+        if !record.message.is_empty() {
+            detail.push_str(&format!(" — {}", record.message));
+        }
+        entries.push(Entry {
+            at: record.installed_at_unix as f64,
+            area: "router",
+            event: if ok {
+                "install ok".to_string()
+            } else {
+                "install failed".to_string()
+            },
+            level: if ok { "info" } else { "error" },
+            correlation: record.id,
+            detail,
+        });
+    }
+
+    // A server that was never contacted has no time to place on a timeline, so
+    // it is left out rather than given "now" — `unknown` is not an event.
+    for row in crate::mcp::health_rows(state) {
+        let at = row.get("checked_at").and_then(Value::as_f64).unwrap_or(0.0);
+        if at <= 0.0 {
+            continue;
+        }
+        let name = row
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let health = row
+            .get("health")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let tools = row.get("tools").and_then(Value::as_u64).unwrap_or(0);
+        let version = row.get("version").and_then(Value::as_str).unwrap_or("");
+        let error = row.get("error").and_then(Value::as_str).unwrap_or("");
+        let mut detail = format!("{tools} tool{}", if tools == 1 { "" } else { "s" });
+        if !version.is_empty() {
+            detail.push_str(&format!(" · v{version}"));
+        }
+        if !error.is_empty() {
+            detail.push_str(&format!(" — {error}"));
+        }
+        entries.push(Entry {
+            at,
+            area: "mcp",
+            event: health.to_string(),
+            level: if health == "unhealthy" {
+                "warn"
+            } else {
+                "info"
+            },
+            correlation: name,
+            detail,
+        });
+    }
+
     if let Some(area) = area {
         entries.retain(|entry| entry.area == area);
     }
@@ -360,7 +423,7 @@ pub(crate) fn timeline_value(
     Ok(json!({
         "ok": true,
         "limit": limit,
-        "areas": ["provider", "permission", "agent"],
+        "areas": ["provider", "permission", "agent", "router", "mcp"],
         "events": events,
     }))
 }
@@ -506,10 +569,10 @@ async fn timeline_route(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if let Some(named) = area.as_deref() {
-        if !matches!(named, "provider" | "permission" | "agent") {
+        if !matches!(named, "provider" | "permission" | "agent" | "router" | "mcp") {
             return crate::json_error(
                 StatusCode::BAD_REQUEST,
-                "area must be provider, permission or agent",
+                "area must be provider, permission, agent, router or mcp",
             );
         }
     }
@@ -695,6 +758,56 @@ mod tests {
 
         let clamped = timeline_value(&state, 0, None, true).expect("timeline");
         assert_eq!(clamped["limit"], 1);
+    }
+
+    #[test]
+    fn router_installs_join_the_timeline_and_mcp_is_a_valid_area() {
+        let state = fixture("router-rows");
+        let now = now_seconds();
+        seed_provider(&state, now - 30.0, "ok", "");
+        // The install file keeps one record per router; the row is the last
+        // attempt, which is what the panel shows too.
+        std::fs::write(
+            state.config_path.with_file_name("router-installs.json"),
+            serde_json::json!({
+                "records": {
+                    "omniroute": {
+                        "id": "omniroute",
+                        "method": "docker-image",
+                        "source": "diegosouzapw/omniroute:latest",
+                        "artifact": "sha256:abc",
+                        "digest": "abc",
+                        "installed_at_unix": (now - 10.0) as u64,
+                        "outcome": "failed",
+                        "message": "docker is not running"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("seed install record");
+
+        let payload = timeline_value(&state, 50, None, true).expect("timeline");
+        let events = payload["events"].as_array().expect("events");
+        let install = events
+            .iter()
+            .find(|event| event["area"] == "router")
+            .expect("the install record is on the timeline");
+        assert_eq!(install["event"], "install failed");
+        assert_eq!(install["level"], "error");
+        assert_eq!(install["correlation"], "omniroute");
+        assert!(install["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("docker is not running"));
+
+        let only_router = timeline_value(&state, 50, Some("router"), true).expect("filtered");
+        assert_eq!(only_router["events"].as_array().unwrap().len(), 1);
+
+        // A server that was never contacted has no checked_at, so it adds no
+        // row rather than one stamped "now".
+        let no_mcp = timeline_value(&state, 50, Some("mcp"), true).expect("mcp");
+        assert!(no_mcp["events"].as_array().unwrap().is_empty());
     }
 
     #[test]

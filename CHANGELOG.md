@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.3.0
+
+Router installs and MCP servers now appear on the diagnostics timeline instead of
+in a panel the reader has to remember to visit.
+
+- `timeline_value` projects `router-installs.json` as one row per router, using
+  the record's own `installed_at_unix` and outcome — the file keeps one record
+  per router, so the row is the newest attempt. Every attempt, successes and
+  failures included, is already in the 2.2.0 process log.
+- Every MCP server that has actually answered contributes a row at its
+  `checked_at`, carrying its tool count and version. A server that was never
+  contacted adds nothing: `unknown` is not an event, and stamping it "now" would
+  invent one.
+- `router` and `mcp` are valid `area` filters on `GET /api/diagnostics` and in
+  the panel's Show menu; an unknown area still answers 400 naming the accepted
+  set.
+- `cargo test --locked`: **435 passed, 1 ignored** (one new case: a seeded failed
+  install becomes an error row with its message and the router id as the
+  correlation key, `area=router` returns exactly that row, and `area=mcp` is
+  accepted while returning nothing when no server was contacted). Clippy
+  `--all-targets -D warnings` clean; `node --check` clean.
+- Still open in Phase 17: a request id for operations that are not agent runs,
+  and a readiness view.
+
 ## 2.2.0
 
 Adds the one record that survives a crash before any database row exists.

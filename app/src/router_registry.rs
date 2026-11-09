@@ -1601,6 +1601,16 @@ pub(crate) fn install_record(
         .cloned())
 }
 
+/// The newest install record per router, for the diagnostics timeline. The file
+/// keeps one record per router, so this is what was installed last, not a
+/// history — every attempt is in the process log.
+pub(crate) fn install_records(state: &AppState) -> Vec<InstallRecord> {
+    load_installs_from(&installs_path(state))
+        .records
+        .into_values()
+        .collect()
+}
+
 /// Record a failed attempt and turn it into the error the route answers with. A
 /// failure is recorded too: the panel should not pretend the router was never
 /// attempted.

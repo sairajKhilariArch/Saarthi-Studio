@@ -290,7 +290,10 @@ fn report_json(server: &Server, state: &ServerState) -> Value {
     })
 }
 
-fn health_rows(state: &AppState) -> Vec<Value> {
+/// Every registered server's health row. Public within the crate because the
+/// diagnostics timeline projects the same rows the panel shows, rather than
+/// deriving a second opinion.
+pub(crate) fn health_rows(state: &AppState) -> Vec<Value> {
     let servers = read_servers(&registry_path(state));
     let all = monitor()
         .lock()

@@ -65,10 +65,10 @@ row below moves, so they cannot drift from the tables.
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
 | 16 | Testing and quality | 44% | frontend, end-to-end, failure matrix, install smokes |
-| 17 | Observability | 69% | request ids for non-run operations, install/MCP rows in the timeline |
+| 17 | Observability | 81% | request ids for non-run operations, a readiness view |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
-**Overall (mean of the 18 phases): 78%.** Read it as "one reliable core, most
+**Overall (mean of the 18 phases): 79%.** Read it as "one reliable core, most
 phases closed, the remaining work concentrated in 13, 15, 16 and 18". The
 per-row method is the arbiter: a phase moves only when a row here moves.
 
@@ -311,7 +311,7 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Diagnostics UI | Working (1.72.0) | Settings → Diagnostics: timeline with area/level colour and the short correlation id, server-side area filter, row count, 24-hour summary line, and a bundle download the browser saves without composing it |
 | Structured log file + console ring | Working (2.2.0) | `app/src/oplog.rs` appends one redacted JSON object per line to `studio.log` beside the database, flushed per write, rotated at 1 MiB into one previous file, with a 200-entry ring in memory; `GET /api/diagnostics/log?limit=` serves the ring and Settings → Diagnostics shows it with the file's path. Written at boot, router install/update/uninstall/restart, permission ask/deny, provider failures and every run ending |
 | Request id for non-run operations | **Missing** | provider rows carry the conversation id, permission rows the project; a terminal command or a Git call has no id of its own |
-| Router installs and MCP connections in the timeline | Partial (2.2.0) | installs, updates, uninstalls and restarts now write a process-log line, so they survive a crash; they are still not rows in the SQLite timeline, and MCP sessions remain in memory only |
+| Router installs and MCP connections in the timeline | Working (2.3.0) | `timeline_value` adds one row per router from `router-installs.json` (the newest record, since that file keeps one per router) and one per MCP server that has actually answered, at its own `checked_at` — a server never contacted adds nothing rather than a row stamped "now". Areas `router` and `mcp` are valid filters, and the panel offers them |
 | Health/readiness dashboard | Partial | `/api/health` (liveness) and the provider health card exist; there is no single readiness view |
 
 ## Phase 18 — Installation and updates
@@ -328,9 +328,8 @@ table and no second log pipeline, so it cannot disagree with the panels:
 ## What to build next (spec order, 2.1.0)
 
 1. **Phase 17 remainder** — a request id for operations that are not agent runs
-   (a terminal command, a Git call, a settings save), install and MCP rows in the
-   SQLite timeline, and a readiness view. The process log landed in 2.2.0 and
-   covers the crash-before-the-row case.
+   (a terminal command, a Git call, a settings save) and a readiness view. The
+   process log landed in 2.2.0 and the install/MCP timeline rows in 2.3.0.
 2. **Phase 16 remainder** — a frontend test runner and one end-to-end harness
    (headless launch + mock router). Both are named in `KNOWN-ISSUES.md` and
    neither exists; the backend suite is the only automated layer today.

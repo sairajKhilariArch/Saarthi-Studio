@@ -299,9 +299,11 @@ Delivered in 2.2.0: a persistent structured log file and console ring buffer
 on router lifecycle changes, permission ask/deny, provider failures and every run
 ending.
 
-Remaining: a request id for operations that are not agent runs, router-install
-and MCP rows as timeline entries (installs are process-log lines only), and a
-readiness dashboard beyond `/api/health` and the provider health card.
+Delivered in 2.3.0: router installs and answering MCP servers are timeline rows
+with their own timestamps and `router`/`mcp` area filters.
+
+Remaining: a request id for operations that are not agent runs, and a readiness
+dashboard beyond `/api/health` and the provider health card.
 
 ## Phase 18 — Installers and updates
 
