@@ -348,10 +348,21 @@ answers `{exitCode, fuelUsed, elapsedMs}` and records the outcome in the oplog.
 Because no host function exists yet, any manifest requesting a capability is
 refused at run with the permission named.
 
-Remaining: workspace host functions with path scoping and per-call audit,
-custom tools, provider adapters, UI extensions, and dependency/compatibility
-metadata. Installing still grants no capability by itself, and a sandboxed
-extension can reach nothing outside its own computation.
+Workspace host functions (2.21.0): `env.read`/`env.write` plus
+`env.last_error`, linked only when the manifest declares `workspace.read` or
+`workspace.write`. Paths are resolved with the editor's own containment rules,
+writes reuse the atomic `write_text_file`, and each call is checked against the
+saved permission rules for the active project. A `deny` refuses the call and a
+rule that would `ask` also refuses, because unattended code cannot answer a
+prompt — reads default to allow and writes need a saved allow rule. Every call
+is audited with the extension id (process log, plus the permission audit table
+for refusals), and I/O is capped at 64 calls and 1 MiB per call.
+
+Remaining: the extension-private data directory, an extension run history and a
+wall-clock backstop, custom tools, provider adapters, UI extensions, and
+dependency/compatibility metadata. Installing still grants no capability by
+itself, and nothing but the two workspace functions is reachable from inside
+the sandbox.
 
 ## Phase 16 — Testing
 

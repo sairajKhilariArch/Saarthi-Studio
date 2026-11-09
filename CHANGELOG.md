@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.21.0
+
+The sandbox can now touch the workspace — through two host functions, scoped to
+the open folder and checked against the same saved permission rules the agent
+obeys.
+
+- `env.read(path, len, out, cap)` and `env.write(path, len, data, len)` are the
+  whole ABI alongside `env.last_error(ptr, cap)`. A host function is linked only
+  when the manifest holds the matching permission, so a module importing one it
+  did not declare fails to instantiate with the import named.
+- `workspace.read` and `workspace.write` are back in `V1_PERMISSIONS`: a manifest
+  declaring either is runnable again. `network`, `terminal.run` and `mcp.call`
+  are still refused at run.
+- Paths go through `workspace::resolve_inside`, so absolute paths, `..`, symlink
+  escapes and the missing-parent case are refused exactly as they are for the
+  editor and the agent; writes reuse `write_text_file`, which is atomic and
+  size-capped.
+- Rules apply as they do for a run: a saved deny refuses the call. An extension
+  has no UI to answer a prompt, so a rule that would `ask` is also a refusal,
+  with a message naming Settings → Permissions — unattended code never gets an
+  approval it could not obtain. Reads default to allow, writes to ask, so a
+  write needs a saved allow rule.
+- Every call is audited with the extension id: `extensions`/`host` in the
+  process log for allows and refusals, and the permission audit table (shown in
+  Settings) for refusals. The run response reports `hostCalls`.
+- I/O is bounded separately from fuel: at most 64 host calls, 1 MiB per read or
+  write, 1 KiB per path. Error codes are stable: `-1` refused, `-2` invalid
+  path, `-3` missing, `-4` too large, `-5` not UTF-8 text, `-6` I/O failure.
+- Checks: `cargo test --locked` **478 passed, 1 ignored** (six new: read with the
+  grant, an import not granted, a path escape, a saved deny, a write needing an
+  allow rule, and `last_error`); clippy `-D warnings` clean; `node --check`
+  clean; frontend 18; version 20; e2e 19. Live: a handcrafted reader module
+  returned the 8 bytes of `hello.txt` (`hostCalls: 1`), and after a saved
+  `fs_read` deny on that path the same run returned `-1` with a `warn` host line
+  and a permission-audit row naming the extension.
+- Still missing: the extension-private data directory, a wall-clock backstop
+  behind fuel, and a run history beyond the log line.
+
 ## 2.20.0
 
 Extension code can now run — but only inside a sandbox that grants it nothing.

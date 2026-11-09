@@ -57,11 +57,11 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 /// unbounded copy could fill the disk. These are ceilings, not quotas.
 const MAX_FILES: usize = 500;
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
-/// The capabilities the v1 runner actually provides (ADR 0001). The first runner
-/// slice links no host functions at all, so the list is empty: a manifest that
-/// requests any capability is refused by name instead of being run with a
-/// silently narrower sandbox than it asked for.
-const V1_PERMISSIONS: [&str; 0] = [];
+/// The capabilities the runner actually provides (ADR 0001): the two workspace
+/// host functions. Everything else in the closed vocabulary installs but is
+/// refused at run by name, instead of running under a narrower sandbox than the
+/// manifest asked for.
+const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
 const MAX_PERMISSIONS: usize = 16;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
@@ -219,9 +219,9 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
     })
 }
 
-/// Why the v1 runner cannot run this manifest, if it cannot. A permissionless
-/// wasm extension is runnable; anything asking for a capability is not, because
-/// the runner links no host functions for it (ADR 0001).
+/// Why the runner cannot run this manifest, if it cannot. A wasm extension is
+/// runnable when every permission it declares is one the runner provides (ADR
+/// 0001); a capability with no host function behind it is refused here.
 fn run_block(manifest: &Manifest) -> Option<String> {
     match manifest.runtime.as_deref() {
         None => Some("No runtime declared, so this extension cannot run.".to_string()),
@@ -555,7 +555,24 @@ pub(crate) async fn run(
         return bad("This extension has no entry file to run.");
     };
     let module_path = dir.join(&id).join(entry_file);
-    let outcome = tokio::task::spawn_blocking(move || crate::extension_run::run_file(&module_path)).await;
+    // The grant is a snapshot: the rule list and the open folder are read once,
+    // here, so a rule added mid-run cannot widen it. A missing folder leaves an
+    // empty root, and every host call then reports that nothing is open.
+    let declared: Vec<String> = entry["permissions"]
+        .as_array()
+        .map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let project = crate::active_project_id(&state);
+    let grant = crate::extension_run::HostGrant {
+        root: state.workspace.root().unwrap_or_default(),
+        project: project.clone(),
+        rules: crate::permissions::rules(&state),
+        read: declared.iter().any(|permission| permission == "workspace.read"),
+        write: declared.iter().any(|permission| permission == "workspace.write"),
+    };
+    let outcome =
+        tokio::task::spawn_blocking(move || crate::extension_run::run_file(&module_path, Some(grant)))
+            .await;
     let outcome = match outcome {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(error)) => {
@@ -573,10 +590,44 @@ pub(crate) async fn run(
         "extensions",
         "run",
         format!(
-            "{id} exited with {} after {} ms ({} fuel)",
-            outcome.exit_code, outcome.elapsed_ms, outcome.fuel_used
+            "{id} exited with {} after {} ms ({} fuel, {} host calls)",
+            outcome.exit_code,
+            outcome.elapsed_ms,
+            outcome.fuel_used,
+            outcome.audit.len()
         ),
     );
+    // Every host call is audited with the extension id. Refusals and asks also
+    // reach the permission audit table, where the agent's own refusals live, so
+    // Settings → Permissions shows why an extension was stopped.
+    for call in &outcome.audit {
+        crate::oplog::record(
+            if call.decision == crate::permissions::Decision::Allow {
+                "info"
+            } else {
+                "warn"
+            },
+            "extensions",
+            "host",
+            format!("{id} {} \"{}\": {}", call.capability, call.path, call.detail),
+        );
+        if call.decision != crate::permissions::Decision::Allow {
+            let action = if call.capability == "workspace.write" {
+                crate::permissions::Action::FsWrite
+            } else {
+                crate::permissions::Action::FsRead
+            };
+            crate::permissions::record(
+                &state,
+                action,
+                &call.path,
+                call.decision,
+                call.scope,
+                &project,
+                &format!("extension {id} host call"),
+            );
+        }
+    }
     Json(json!({
         "ok": true,
         "id": id,
@@ -584,6 +635,7 @@ pub(crate) async fn run(
             "exitCode": outcome.exit_code,
             "fuelUsed": outcome.fuel_used,
             "elapsedMs": outcome.elapsed_ms,
+            "hostCalls": outcome.audit.len(),
         }
     }))
     .into_response()
@@ -729,16 +781,20 @@ mod tests {
         assert!(
             run_block(&manifest(Some("wasm"), vec!["workspace.read", "network"]))
                 .unwrap_or_default()
-                .contains("workspace.read")
+                .contains("network")
         );
         assert!(run_block(&manifest(Some("wasm"), vec!["network"]))
             .unwrap_or_default()
             .contains("network"));
         assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"]))
+            .is_none());
+        assert!(
+            run_block(&manifest(Some("wasm"), vec!["workspace.read", "workspace.write"]))
+                .is_none()
+        );
+        assert!(run_block(&manifest(Some("wasm"), vec!["terminal.run"]))
             .unwrap_or_default()
-            .contains("workspace.read"));
-        // The first runner slice links no host functions, so only a
-        // permissionless module is runnable.
+            .contains("terminal.run"));
         assert!(run_block(&manifest(Some("wasm"), vec![])).is_none());
     }
 
@@ -773,11 +829,10 @@ mod tests {
         assert_eq!(by_id("plain-tools")["runtime"], "wasm");
         assert_eq!(by_id("plain-tools")["runnable"], true);
         assert_eq!(by_id("plain-tools")["blockedReason"], "");
-        assert_eq!(by_id("wasm-tools")["runnable"], false);
-        assert!(by_id("wasm-tools")["blockedReason"]
-            .as_str()
-            .unwrap_or("")
-            .contains("workspace.read"));
+        // The workspace host functions exist as of 2.21.0, so a read grant is
+        // runnable; the reason column stays empty.
+        assert_eq!(by_id("wasm-tools")["runnable"], true);
+        assert_eq!(by_id("wasm-tools")["blockedReason"], "");
         let _ = fs::remove_dir_all(&root);
     }
 

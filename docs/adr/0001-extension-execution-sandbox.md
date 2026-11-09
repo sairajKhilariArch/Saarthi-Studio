@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted; implementation started — compute-only runner shipped in 2.20.0 (see the implementation note below)
+- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0 (see the implementation notes below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -128,8 +128,55 @@ Gates from the list above that this slice satisfies: 1 (runtime validated),
 2 (refusal with a test per refused permission), 4 (fuel and memory limits
 proven by tests), 6 (no run action for a non-runnable extension) and partially 7
 (nothing can be running during an uninstall, because no instance outlives one
-request). Gate 3 and the audit-per-host-call part of gate 5 remain open until
-host functions exist.
+request). Gate 3 and the audit-per-host-call part of gate 5 stayed open at that point;
+both close in the 2.21.0 note below.
+
+## Implementation note (2.21.0) — workspace host functions
+
+Points 3, 4 and 5 of the decision are now implemented for read and write.
+
+**The whole ABI.** A module may import only these, and only when the manifest
+does not lack the permission:
+
+```text
+env.read(path_ptr, path_len, out_ptr, out_cap) -> i32   bytes written, or < 0
+env.write(path_ptr, path_len, data_ptr, data_len) -> i32  0, or < 0
+env.last_error(ptr, cap) -> i32                         message bytes written
+```
+
+Error codes are part of the contract: `-1` refused, `-2` invalid path, `-3`
+missing, `-4` too large, `-5` not UTF-8 text, `-6` I/O failure. `last_error`
+exists so a module can surface *why* without the host printing into it. A module
+that imports anything else — including `read` when the manifest lacks
+`workspace.read` — fails to instantiate with the import named, rather than
+being linked to a stub that always refuses.
+
+**Path scoping reuses the app's own resolver.** `workspace::resolve_inside`
+rejects absolute paths, `..`, and symlink escapes after canonicalisation, and
+requires an existing parent for a new file; writes go through
+`workspace::write_text_file`, which is atomic and size-capped. An extension
+cannot reach the database, `config.json`, provider keys, the extension's own
+code folder, or another extension's folder through these functions.
+
+**Rules are enforced per call, but `ask` means no.** Each call resolves
+`fs_read`/`fs_write` for the target path against the active project, exactly as
+the agent does. `allow` runs the call; `deny` refuses it. `ask` also refuses —
+synchronously, with no UI to answer — and says so in `last_error` and in the
+audit trail. This follows point 3 ("applies the same permission rules the agent
+already obeys") and the deny-by-default stance: a manifest permission is what
+makes a capability *available*, not what makes a destructive action *approved*.
+Reads default to allow and writes to ask, so a write needs a saved allow rule.
+
+**Limits and audit.** Fuel still bounds computation; I/O is bounded separately
+at 64 host calls and 1 MiB per read or write (1 KiB per path), because host
+calls are not metered by gas. Every call appends `{capability, path, decision,
+scope, detail}`; the caller writes allows and refusals to the process log under
+`extensions`/`host`, and refusals to the permission audit table so they appear
+in Settings. The runner itself never touches the database, so it stays testable
+without an AppState.
+
+Gate 3 (path-scoping tests) and the audit half of gate 5 are now covered by
+unit tests for escape, deny, ungranted import and write-requires-allow.
 
 ## Consequences
 

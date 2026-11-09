@@ -822,7 +822,7 @@
 
           <section id="settings-extensions" class="settings-section card form-card-inner hidden">
           <h2 class="form-group-title">Extensions</h2>
-          <p>Folders with a <code>manifest.json</code> in the directory below. Installing means putting a folder in place. A <code>runtime: "wasm"</code> extension that requests no permissions can be run: it executes in a sandbox with no filesystem, network or clock access, and reports the exit code it returns. An extension that asks for a capability is listed with the reason it cannot run yet.</p>
+          <p>Folders with a <code>manifest.json</code> in the directory below. Installing means putting a folder in place. A <code>runtime: "wasm"</code> extension runs in a sandbox with no network or clock access; it can reach the open folder only through <code>workspace.read</code> / <code>workspace.write</code>, and every call is checked against the rules in Permissions and audited. A write needs an allow rule there, because an extension cannot answer a prompt. Capabilities without a sandbox function are listed with the reason they cannot run yet.</p>
           <p class="muted" id="extensionsDirectory"></p>
           <label class="field">
             <span>Folder to install</span>

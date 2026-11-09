@@ -3500,7 +3500,7 @@ async function runExtension(extension) {
   const run = result.data.run || {};
   toast(
     `${extension.id} exited with ${run.exitCode} after ${run.elapsedMs} ms ` +
-    `(${Number(run.fuelUsed || 0).toLocaleString()} fuel).`
+    `(${Number(run.fuelUsed || 0).toLocaleString()} fuel, ${run.hostCalls || 0} host calls).`
   );
 }
 

@@ -56,6 +56,12 @@ impl WorkspaceError {
     pub(crate) fn message(&self) -> &str {
         &self.message
     }
+
+    /// The status decides which sandbox error code a host call returns, so the
+    /// extension sees "missing" or "outside the folder" rather than one blur.
+    pub(crate) fn status(&self) -> StatusCode {
+        self.status
+    }
 }
 
 impl IntoResponse for WorkspaceError {
