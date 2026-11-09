@@ -37,6 +37,7 @@ mod deepsearch;
 mod diagnostics;
 mod embeddings;
 mod events;
+mod extension_run;
 mod extensions;
 mod filelock;
 mod git;

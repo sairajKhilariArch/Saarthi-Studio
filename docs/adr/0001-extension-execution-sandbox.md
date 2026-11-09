@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted (design); implementation not started
+- **Status:** accepted; implementation started — compute-only runner shipped in 2.20.0 (see the implementation note below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -87,6 +87,49 @@ once. This ADR exists so that decision is made before a loader, not after.
    only for a runnable extension, and the refusal reason (unsupported
    permission, missing runtime, invalid module) is shown where the action would
    be.
+
+## Implementation note (2.20.0) — compute-only first slice
+
+The first runner slice revises three points above. Each revision narrows the
+sandbox rather than widening it, so nothing promised to a user is weaker than
+the ADR says.
+
+1. **wasmi, not Wasmtime.** The app declares `rust-version = "1.80"`; Wasmtime
+   requires a much newer compiler and pulls a C toolchain on some targets. The
+   runner is **wasmi 0.31.2**, a pure-Rust interpreter pinned with `=` so a
+   transitive update cannot change sandbox semantics. It is an interpreter, so
+   it is slower than a JIT — acceptable for short computations, and it means no
+   executable memory is generated. Binary size grows; that was the ADR's
+   accepted cost and it still holds.
+
+2. **No host functions at all in the first slice.** Point 5's `workspace.read`
+   and `workspace.write` are **not** provided yet: the runner links an empty
+   linker and refuses any module that imports something. `V1_PERMISSIONS` is
+   therefore empty, and a manifest requesting *any* permission is refused at run
+   with the permission named. This is points 2 and 4 honoured literally: an
+   extension can only compute and return an `i32` exit code. The workspace host
+   functions are the next gate, and they arrive with their own path-scoping and
+   audit tests (gates 3 and 5).
+
+3. **Fuel replaces the wall-clock cap for v1.** `consume_fuel(true)` with a
+   50,000,000-unit budget, plus a 64 MiB memory ceiling and a 100,000-element
+   table limit enforced by a `ResourceLimiter`, and an 8 MiB module size cap.
+   Fuel is deterministic: the same module stops at the same instruction on every
+   machine, which a wall-clock kill cannot promise. A time-based backstop is
+   still worth adding when host calls (and therefore I/O waits) exist.
+
+The ABI in this slice is exactly: export `run() -> i32`; no imports; the return
+value is the exit code. A missing export, an import, a trap and an exhausted
+fuel budget each produce a distinct message, and the run route answers 400 with
+that message. Success/failure and the fuel used are written to the oplog under
+the `extensions` area.
+
+Gates from the list above that this slice satisfies: 1 (runtime validated),
+2 (refusal with a test per refused permission), 4 (fuel and memory limits
+proven by tests), 6 (no run action for a non-runnable extension) and partially 7
+(nothing can be running during an uninstall, because no instance outlives one
+request). Gate 3 and the audit-per-host-call part of gate 5 remain open until
+host functions exist.
 
 ## Consequences
 

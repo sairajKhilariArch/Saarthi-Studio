@@ -340,9 +340,18 @@ Runtime gating (2.19.0): `runtime: "wasm"` with a `.wasm` entry, per-extension
 `runnable`/`blockedReason`, and `POST /api/extensions/:id/run` refusing before
 any code is loaded, naming the unsupported permission or the missing runner.
 
-Remaining: a WASM runner that follows ADR 0001, custom tools, provider adapters,
-UI extensions, and dependency/compatibility metadata. Nothing is executed yet, so
-the install path grants no capability by itself.
+WASM runner, first slice (2.20.0): a permissionless wasm extension runs in a
+wasmi 0.31.2 interpreter with an empty linker and no WASI — `run() -> i32`, no
+imports, a 50,000,000 fuel budget, 64 MiB memory, a 100,000-element table limit
+and an 8 MiB module cap. Fuel makes cancellation deterministic. The run route
+answers `{exitCode, fuelUsed, elapsedMs}` and records the outcome in the oplog.
+Because no host function exists yet, any manifest requesting a capability is
+refused at run with the permission named.
+
+Remaining: workspace host functions with path scoping and per-call audit,
+custom tools, provider adapters, UI extensions, and dependency/compatibility
+metadata. Installing still grants no capability by itself, and a sandboxed
+extension can reach nothing outside its own computation.
 
 ## Phase 16 — Testing
 

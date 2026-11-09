@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.20.0
+
+Extension code can now run — but only inside a sandbox that grants it nothing.
+
+- `app/src/extension_run.rs`: a **wasmi 0.31.2** interpreter (pinned with `=`) with
+  an empty linker and no WASI. A module must export `run() -> i32` and import
+  nothing; its return value is the exit code. It is bounded by 50,000,000 fuel,
+  a 64 MiB memory ceiling, a 100,000-element table limit and an 8 MiB module
+  size cap.
+- Fuel is deterministic cancellation: the same module stops at the same
+  instruction on every machine, which a wall-clock kill cannot promise. A trap,
+  an import, a missing export and an exhausted budget each report a distinct
+  message.
+- `POST /api/extensions/:id/run` executes a runnable extension on a blocking
+  thread and answers `{exitCode, fuelUsed, elapsedMs}`. Each outcome is written
+  to the oplog under the `extensions` area.
+- `V1_PERMISSIONS` is now empty: the first slice links no host functions at all,
+  so a manifest asking for `workspace.read`, `workspace.write`, `network`,
+  `terminal.run` or `mcp.call` is refused at run (400) with the permission named,
+  never run with a narrower sandbox than it asked for.
+- Settings shows a Run action only for `runnable: true`, and its toast reports
+  the exit code, elapsed time and fuel used.
+- ADR 0001 gains an implementation note: wasmi instead of Wasmtime (the crate
+  pins `rust-version = "1.80"`), compute-only, and fuel in place of a wall-clock
+  cap.
+- Checks: `cargo test --locked` **472 passed, 1 ignored** (four new: exit code,
+  fuel stopping a spin loop, imports and a missing export refused, the memory
+  cap); clippy `-D warnings` clean; `node --check` clean; frontend 18; version
+  20; e2e 19. Live: a permissionless wasm extension installed, reported
+  `runnable: true`, ran and returned exit code 7 with 3 fuel used and one oplog
+  line; a manifest requesting `workspace.read` was refused with 400 naming the
+  permission.
+- No workspace, network or terminal capability exists yet. Host functions are
+  the next ADR gate, with their own path-scoping and audit tests.
+
 ## 2.19.0
 
 ADR 0001's first gate is implemented: an extension can be gated before any code

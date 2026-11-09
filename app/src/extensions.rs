@@ -1,9 +1,9 @@
 //! Extensions: installed folders with a `manifest.json`.
 //!
-//! This is the first Phase 15 slice and it is deliberately read-only: a manifest
-//! is discovered, validated and reported, never executed. That keeps the
-//! security boundary honest — nothing here can run code, so no sandbox claim is
-//! made. When execution arrives it must add the sandbox first, not after.
+//! A manifest is discovered, validated and reported here; execution goes through
+//! [`crate::extension_run`], a wasmi sandbox with no host functions (ADR 0001).
+//! This module only decides whether a manifest may run at all, and refuses by name
+//! any capability the runner does not provide.
 //!
 //! Layout, under the app's data directory:
 //!
@@ -57,9 +57,11 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 /// unbounded copy could fill the disk. These are ceilings, not quotas.
 const MAX_FILES: usize = 500;
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
-/// The capabilities the v1 runner is designed to provide (ADR 0001). A manifest
-/// may request more, but it cannot run until the runner provides them.
-const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
+/// The capabilities the v1 runner actually provides (ADR 0001). The first runner
+/// slice links no host functions at all, so the list is empty: a manifest that
+/// requests any capability is refused by name instead of being run with a
+/// silently narrower sandbox than it asked for.
+const V1_PERMISSIONS: [&str; 0] = [];
 const MAX_PERMISSIONS: usize = 16;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
@@ -217,10 +219,9 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
     })
 }
 
-/// Why the v1 runner cannot run this manifest, if it cannot. The last branch is
-/// deliberately temporary: the manifest has passed the gates, but no sandboxed
-/// runner exists yet, so `runnable` stays false. Removing that branch is the
-/// first commit that is allowed to execute extension code.
+/// Why the v1 runner cannot run this manifest, if it cannot. A permissionless
+/// wasm extension is runnable; anything asking for a capability is not, because
+/// the runner links no host functions for it (ADR 0001).
 fn run_block(manifest: &Manifest) -> Option<String> {
     match manifest.runtime.as_deref() {
         None => Some("No runtime declared, so this extension cannot run.".to_string()),
@@ -232,7 +233,7 @@ fn run_block(manifest: &Manifest) -> Option<String> {
                     ));
                 }
             }
-            Some("The WASM runner is not implemented yet.".to_string())
+            None
         }
         Some(other) => Some(format!("Runtime \"{other}\" is not supported.")),
     }
@@ -398,6 +399,14 @@ fn bad(message: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
+fn server_error(message: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "ok": false, "error": message.to_string() })),
+    )
+        .into_response()
+}
+
 fn inspect(dir: &Path) -> Vec<Value> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -512,8 +521,9 @@ pub(crate) async fn remove(
 }
 
 /// Gate 2 of ADR 0001: a run request must fail with a reason before any code is
-/// loaded. Until the WASM runner exists, even a manifest that passes every gate
-/// is refused here rather than silently doing nothing.
+/// loaded. Only then is the module handed to the sandboxed runner. Execution is
+/// blocking interpreter work, so it runs on a blocking thread instead of the
+/// async runtime's worker.
 pub(crate) async fn run(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -521,7 +531,8 @@ pub(crate) async fn run(
     if !valid_id(&id) {
         return bad("Invalid extension id.");
     }
-    let entries = inspect(&extensions_dir(&state));
+    let dir = extensions_dir(&state);
+    let entries = inspect(&dir);
     let Some(entry) = entries.iter().find(|entry| entry["id"] == id.as_str()) else {
         return (
             StatusCode::NOT_FOUND,
@@ -540,14 +551,42 @@ pub(crate) async fn run(
     if !reason.is_empty() {
         return bad(reason);
     }
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "ok": false,
-            "error": "The WASM runner is not implemented yet."
-        })),
-    )
-        .into_response()
+    let Some(entry_file) = entry["entry"].as_str() else {
+        return bad("This extension has no entry file to run.");
+    };
+    let module_path = dir.join(&id).join(entry_file);
+    let outcome = tokio::task::spawn_blocking(move || crate::extension_run::run_file(&module_path)).await;
+    let outcome = match outcome {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
+            crate::oplog::record("warn", "extensions", "run", format!("{id}: {error}"));
+            return bad(error);
+        }
+        Err(error) => {
+            let message = format!("The extension stopped unexpectedly: {error}");
+            crate::oplog::record("warn", "extensions", "run", format!("{id}: {message}"));
+            return server_error(message);
+        }
+    };
+    crate::oplog::record(
+        "info",
+        "extensions",
+        "run",
+        format!(
+            "{id} exited with {} after {} ms ({} fuel)",
+            outcome.exit_code, outcome.elapsed_ms, outcome.fuel_used
+        ),
+    );
+    Json(json!({
+        "ok": true,
+        "id": id,
+        "run": {
+            "exitCode": outcome.exit_code,
+            "fuelUsed": outcome.fuel_used,
+            "elapsedMs": outcome.elapsed_ms,
+        }
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -690,32 +729,55 @@ mod tests {
         assert!(
             run_block(&manifest(Some("wasm"), vec!["workspace.read", "network"]))
                 .unwrap_or_default()
-                .contains("network")
+                .contains("workspace.read")
         );
+        assert!(run_block(&manifest(Some("wasm"), vec!["network"]))
+            .unwrap_or_default()
+            .contains("network"));
         assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"]))
             .unwrap_or_default()
-            .contains("not implemented"));
+            .contains("workspace.read"));
+        // The first runner slice links no host functions, so only a
+        // permissionless module is runnable.
+        assert!(run_block(&manifest(Some("wasm"), vec![])).is_none());
     }
 
     #[test]
     fn inspection_exposes_the_runtime_and_the_run_block_reason() {
         let root = scratch("wasm-inspect");
-        let folder = root.join("wasm-tools");
-        fs::create_dir_all(&folder).expect("folder");
+        let plain = root.join("plain-tools");
+        fs::create_dir_all(&plain).expect("folder");
         fs::write(
-            folder.join("manifest.json"),
+            plain.join("manifest.json"),
+            r#"{"id":"plain-tools","name":"Plain Tools","version":"1.0.0","runtime":"wasm","entry":"tool.wasm"}"#,
+        )
+        .expect("manifest");
+        fs::write(plain.join("tool.wasm"), b"\0asm").expect("entry");
+
+        let asking = root.join("wasm-tools");
+        fs::create_dir_all(&asking).expect("folder");
+        fs::write(
+            asking.join("manifest.json"),
             r#"{"id":"wasm-tools","name":"Wasm Tools","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","permissions":["workspace.read"]}"#,
         )
         .expect("manifest");
-        fs::write(folder.join("tool.wasm"), b"\0asm").expect("entry");
+        fs::write(asking.join("tool.wasm"), b"\0asm").expect("entry");
 
         let entries = inspect(&root);
-        assert_eq!(entries[0]["runtime"], "wasm");
-        assert_eq!(entries[0]["runnable"], false);
-        assert!(entries[0]["blockedReason"]
+        let by_id = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap_or_else(|| panic!("entry {id}"))
+        };
+        assert_eq!(by_id("plain-tools")["runtime"], "wasm");
+        assert_eq!(by_id("plain-tools")["runnable"], true);
+        assert_eq!(by_id("plain-tools")["blockedReason"], "");
+        assert_eq!(by_id("wasm-tools")["runnable"], false);
+        assert!(by_id("wasm-tools")["blockedReason"]
             .as_str()
             .unwrap_or("")
-            .contains("not implemented"));
+            .contains("workspace.read"));
         let _ = fs::remove_dir_all(&root);
     }
 

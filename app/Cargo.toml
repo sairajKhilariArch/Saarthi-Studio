@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "2.19.0"
+version = "2.20.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Local-first AI chat and coding workspace for FreeLLMAPI"
@@ -28,6 +28,9 @@ tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "
 # Broadcast wrappers feed the live thread-mirroring SSE bus.
 tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
+# Sandboxed extension execution (ADR 0001). A pure-Rust interpreter, pinned so a
+# transitive update cannot silently change the sandbox's semantics.
+wasmi = "=0.31.2"
 # Real PTY terminals for the bottom panel (ConPTY on Windows, unix pty).
 portable-pty = "0.9"
 # Desktop application window (Tauri v2). Disable with --no-default-features
@@ -93,3 +96,5 @@ tauri-build = "2"
 
 [dev-dependencies]
 tower = { version = "=0.5.2", features = ["util"] }
+# Compiles the WAT modules the extension runner tests execute.
+wat = "1"

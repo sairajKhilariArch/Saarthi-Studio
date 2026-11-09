@@ -822,7 +822,7 @@
 
           <section id="settings-extensions" class="settings-section card form-card-inner hidden">
           <h2 class="form-group-title">Extensions</h2>
-          <p>Folders with a <code>manifest.json</code> in the directory below. This panel reports what is installed and whether it is usable; nothing here is executed yet, and installing means putting a folder in place.</p>
+          <p>Folders with a <code>manifest.json</code> in the directory below. Installing means putting a folder in place. A <code>runtime: "wasm"</code> extension that requests no permissions can be run: it executes in a sandbox with no filesystem, network or clock access, and reports the exit code it returns. An extension that asks for a capability is listed with the reason it cannot run yet.</p>
           <p class="muted" id="extensionsDirectory"></p>
           <label class="field">
             <span>Folder to install</span>

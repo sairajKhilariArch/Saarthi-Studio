@@ -3465,8 +3465,9 @@ function setChatMode(mode) {
   $("modePlan").setAttribute("aria-pressed", String(!build));
 }
 
-/* Extensions are read-only here: the panel shows the manifest each folder
-   declares and why one is unusable, and offers no install or run action. */
+/* Extensions: the panel shows the manifest each folder declares and why one is
+   unusable. A permissionless wasm extension can be run, and the run reports the
+   exit code the sandboxed module returned. */
 async function installExtension() {
   const input = $("extensionInstallPath");
   const path = input ? input.value.trim() : "";
@@ -3485,6 +3486,22 @@ async function installExtension() {
   if (input) input.value = "";
   toast(`Installed ${result.data.id}.`);
   loadExtensions();
+}
+
+async function runExtension(extension) {
+  const result = await api(`/api/extensions/${encodeURIComponent(extension.id)}/run`, {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not run that extension.");
+    return;
+  }
+  const run = result.data.run || {};
+  toast(
+    `${extension.id} exited with ${run.exitCode} after ${run.elapsedMs} ms ` +
+    `(${Number(run.fuelUsed || 0).toLocaleString()} fuel).`
+  );
 }
 
 async function removeExtension(extension) {
@@ -3553,6 +3570,7 @@ async function loadExtensions() {
     row.appendChild(badge);
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";
+    if (extension.runnable === true) actions.appendChild(rowButton("Run", () => runExtension(extension)));
     actions.appendChild(rowButton("Remove", () => removeExtension(extension), "danger"));
     row.appendChild(actions);
     host.appendChild(row);
