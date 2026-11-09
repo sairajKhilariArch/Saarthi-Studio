@@ -68,7 +68,7 @@ row below moves, so they cannot drift from the tables.
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
-| 15 | Extension ecosystem | 10% | manifest, sandboxing, custom tools |
+| 15 | Extension ecosystem | 25% | execution and sandboxing, custom tools, provider adapters |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
@@ -295,14 +295,21 @@ persisted execution of it.
 
 ## Phase 15 — Extension and plugin ecosystem
 
-Missing beyond skills. No manifest (name/version/permissions/entry point),
-no sandboxing, no custom tools, no provider adapters, no UI extensions.
+Manifests are discovered and validated as of 2.15.0; nothing is executed yet.
+
+| Item | Status | Notes |
+|---|---|---|
+| Manifest (id, name, version, description, author, entry, permissions) | Working (2.15.0) | `GET /api/extensions` scans `<data>/extensions/*/manifest.json`; the id must equal the folder, the version must be `1.2.3`, `entry` must stay inside the folder and exist, and permissions are a closed list |
+| Execution and sandboxing | Missing | no loader, so no sandbox claim is made |
+| Custom tools | Missing | — |
+| Provider adapters | Missing | — |
+| UI extensions | Missing | — |
 
 ## Phase 16 — Testing and quality
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 459 passed, 1 ignored at the 2.13.0 run; the count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 462 passed, 1 ignored at the 2.15.0 run; the count for each release is recorded in `PROGRESS.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |

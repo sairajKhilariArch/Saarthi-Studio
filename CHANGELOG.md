@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.15.0
+
+Phase 15 starts with an extension manifest — discovered and validated, not
+executed.
+
+- `app/src/extensions.rs` scans `<data>/extensions/*/manifest.json` and reports
+  every folder with `valid` plus an `error` when it is not usable.
+- Manifest fields: `id` (must equal the folder name), `name`, `version` (three
+  numeric parts), `description`, `author`, optional `entry`, and `permissions`
+  from a closed list (`workspace.read`, `workspace.write`, `terminal.run`,
+  `network`, `mcp.call`). An unknown permission is refused, not ignored.
+- `entry` must be a relative path inside the folder, free of `..`, and the file
+  must exist; canonical paths are compared so a symlink cannot escape either.
+- A missing manifest, invalid JSON, a 64 KiB size cap and an id/folder mismatch
+  each produce a stated reason while the other folders still report.
+- `GET /api/extensions` returns the directory and the entries.
+- Checks: `cargo test --locked` **462 passed, 1 ignored** (three new:
+  normalisation and permission de-duplication, rule refusals, folder inspection
+  that keeps the valid entries); clippy `-D warnings` clean. Live headless: a
+  valid folder, an unknown-permission folder and a folder with no manifest were
+  reported as valid, invalid and invalid with reasons.
+- Deliberately not shipped: execution, a sandbox, custom tools, provider
+  adapters and UI extensions. The manifest is where this slice stops, so no
+  sandbox claim is implied by it.
+
 ## 2.14.0
 
 The workflow canvas now has tests, at the layer a browser-free harness can

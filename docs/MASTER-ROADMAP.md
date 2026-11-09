@@ -312,9 +312,23 @@ router management; VS Code agent parity; consistent API contracts.
 
 ## Phase 15 — Extension ecosystem
 
-**Not started** beyond skills. There is no manifest (name, version,
-compatibility, permissions, dependencies, entry point, source), no sandbox, no
-custom tools, no provider adapters and no UI extensions.
+Started in 2.15.0 with the manifest, kept read-only on purpose: no code is
+loaded, so there is no sandbox to claim.
+
+Delivered in 2.15.0:
+
+- `extensions/<id>/manifest.json` under the data directory, discovered by
+  `GET /api/extensions` with per-folder validity and the reason for a failure.
+- Fields: id (must match the folder), name, version (`1.2.3`), description,
+  author, optional `entry` (relative, inside the folder, must exist) and
+  permissions from a closed list (`workspace.read`, `workspace.write`,
+  `terminal.run`, `network`, `mcp.call`).
+- Unknown permissions, a missing manifest or entry file, a path escape and a
+  64 KiB size cap all fail validation with a stated reason; one bad folder does
+  not hide the valid ones.
+
+Remaining: execution under a sandbox, custom tools, provider adapters, UI
+extensions, and dependency/compatibility metadata.
 
 ## Phase 16 — Testing
 
