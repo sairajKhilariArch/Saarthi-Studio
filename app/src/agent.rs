@@ -520,6 +520,10 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // What the run was handed at start (JSON: block + memory/code labels),
         // frozen here so the card can show it and the steps replay the same text.
         "ALTER TABLE agent_runs ADD COLUMN context TEXT NOT NULL DEFAULT ''",
+        // A step row appears when the step lands; `status='running'` marks the
+        // placeholder that shows the model call in flight. The step that
+        // resolves it deletes the placeholder, so one action stays one row.
+        "ALTER TABLE agent_steps ADD COLUMN status TEXT NOT NULL DEFAULT ''",
     ] {
         if let Err(error) = conn.execute(statement, []) {
             if !error.to_string().contains("duplicate column") {
@@ -712,6 +716,12 @@ fn insert_step(
     output: &str,
     checkpoint: &str,
 ) -> rusqlite::Result<()> {
+    // The in-flight placeholder is not a step: the step that replaces it takes
+    // its seq, so the log reads as one row per action, never two.
+    conn.execute(
+        "DELETE FROM agent_steps WHERE run_id=?1 AND status='running'",
+        [run_id],
+    )?;
     let seq: i64 = conn.query_row(
         "SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id=?1",
         [run_id],
@@ -725,6 +735,32 @@ fn insert_step(
     tx.commit()
 }
 
+/// Mark the model call in flight: a placeholder row the panel can show while the
+/// step it belongs to has not been decided yet. It costs one small insert per
+/// model turn, which is why the panel no longer sits frozen through a long call.
+fn begin_step(state: &AppState, run_id: &str) -> Result<(), String> {
+    let conn = db(state)?;
+    let seq: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id=?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO agent_steps(run_id,seq,action,summary,output,checkpoint,status,created_at) \
+         VALUES(?1,?2,'thinking',?3,'','','running',?4)",
+        params![
+            run_id,
+            seq,
+            "Waiting for the model to choose the next step…",
+            now()
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 fn set_run(
     state: &AppState,
     run_id: &str,
@@ -732,13 +768,21 @@ fn set_run(
     error: Option<&str>,
     pending: Option<&str>,
 ) -> Result<(), String> {
-    db(state)?
-        .execute(
-            "UPDATE agent_runs SET status=?1, error=?2, pending_action=?3, updated_at=?4 WHERE id=?5",
-            params![status, error.unwrap_or(""), pending.unwrap_or(""), now(), run_id],
-        )
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let conn = db(state)?;
+    conn.execute(
+        "UPDATE agent_runs SET status=?1, error=?2, pending_action=?3, updated_at=?4 WHERE id=?5",
+        params![status, error.unwrap_or(""), pending.unwrap_or(""), now(), run_id],
+    )
+    .map_err(|e| e.to_string())?;
+    // Nothing is in flight once a run stops running: a placeholder that outlived
+    // its call would leave the panel showing a wait that is over.
+    if status != RUNNING {
+        let _ = conn.execute(
+            "DELETE FROM agent_steps WHERE run_id=?1 AND status='running'",
+            [run_id],
+        );
+    }
+    Ok(())
 }
 
 fn finish(state: &AppState, run_id: &str, status: &str, error: &str) -> Result<(), String> {
@@ -2378,6 +2422,9 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
         return Ok(false); // cancelled while we were working
     }
+    // Say a model call is in flight before it starts: a poll that lands during a
+    // slow reply should show the wait, not a frozen log.
+    begin_step(state, &run.id)?;
     // Crew orchestration: the log itself is the orchestrator state. Stage k
     // (number of recorded handoffs) decides which specialist agent acts, so
     // prompts and tool gates always follow the stage, and the handoff steps
@@ -2477,6 +2524,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                         cap_chars(&guidance, 2_000)
                     ),
                 )?;
+                begin_step(state, &run.id)?;
                 let mut retry = messages;
                 retry.push(json!({
                     "role": "user",
@@ -3768,7 +3816,7 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     let mut stmt = match conn
-        .prepare("SELECT seq, action, summary, output, created_at, checkpoint FROM agent_steps WHERE run_id=?1 ORDER BY seq")
+        .prepare("SELECT seq, action, summary, output, created_at, checkpoint, status FROM agent_steps WHERE run_id=?1 ORDER BY seq")
     {
         Ok(stmt) => stmt,
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -3782,6 +3830,7 @@ async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> R
                 "output": row.get::<_, String>(3)?,
                 "at": row.get::<_, f64>(4)?,
                 "hasCheckpoint": !row.get::<_, String>(5)?.is_empty(),
+                "status": row.get::<_, String>(6)?,
             }))
         })
         .map_err(|e| e.to_string())
@@ -5836,6 +5885,60 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let bare = build_messages_with(&run, "(no steps yet)", "", &[]);
         let bare_prompt = bare[0]["content"].as_str().unwrap_or("");
         assert!(!bare_prompt.contains("\"action\":\"extension\""), "{bare_prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_live_run_shows_the_model_call_before_the_step_lands() {
+        let base = scripted_router(&[r#"{"action":"done","summary":"finished"}"#]).await;
+        let fixture = run_fixture("live-step", &base);
+        insert_run(&fixture.state, "run-live", RUNNING);
+        begin_step(&fixture.state, "run-live").expect("placeholder");
+
+        let response = fixture
+            .app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/runs/run-live")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap();
+        let detail: Value = serde_json::from_slice(&bytes).unwrap();
+        let steps = detail["stepList"].as_array().expect("steps");
+        assert_eq!(steps.len(), 1, "{detail}");
+        assert_eq!(steps[0]["action"], json!("thinking"));
+        assert_eq!(steps[0]["status"], json!("running"));
+
+        // The step that resolves the wait replaces the placeholder, same seq.
+        add_step(&fixture.state, "run-live", "read", "read a file", "hi").unwrap();
+        let conn = db(&fixture.state).unwrap();
+        let rows: Vec<(i64, String, String)> = conn
+            .prepare("SELECT seq, action, status FROM agent_steps WHERE run_id='run-live' ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(rows, vec![(1, "read".to_string(), String::new())]);
+
+        // A run that stops without a step leaves no spinner behind.
+        begin_step(&fixture.state, "run-live").unwrap();
+        set_run(&fixture.state, "run-live", SUCCEEDED, None, None).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id='run-live' AND status='running'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[tokio::test]

@@ -260,9 +260,16 @@ Delivered: the cross-run board and per-run timing/token facts (1.51.0),
 pause/resume of a live run at a step boundary (1.52.0), and the task queue
 (1.53.0) — a queued pill, `queue #N` on the card, a Queued count on the board, a
 waiting note with Cancel only, and priority / depends-on on the run form — which
-completes the control set against real state, queued runs included. Remaining: a
-live stepping view of the current step while a model call is in flight, and any
-reordering beyond a numeric priority.
+completes the control set against real state, queued runs included.
+
+Live step view (2.29.0): `agent_steps` carries a `status`, and the loop writes a
+`thinking` placeholder with `status: "running"` before each model call, so the
+panel shows the wait during a slow reply instead of a frozen log. The step that
+resolves it deletes the placeholder and takes its `seq` (one row per action, no
+gap), a run that stops without a step clears it, and the panel renders the row
+with a pulsing tag that respects `prefers-reduced-motion`.
+
+Remaining: reordering beyond a numeric priority.
 
 ## Phase 13 — Workflow builder
 

@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.29.0 (2026-11-10):** Phase 12's named gap — a live step view while a
+model call is in flight — closed in 2.29.0: the loop writes a `thinking`
+placeholder with `status: "running"` before each call and the step that resolves
+it replaces that row. The phase moves 90% → 95% (reordering beyond a numeric
+priority is what is left), which moves the overall mean 88% → 89% (1,597/18).
+
 **Revision 2.28.0 (2026-11-10):** Phase 15's custom-tool row now enforces the
 declared `inputSchema` before a module loads (2.28.0), so its largest open gaps are
 provider adapters and UI extensions. The phase stays 82% (9 of 11 rows) and the
@@ -92,7 +98,7 @@ row below moves, so they cannot drift from the tables.
 | 9 | Developer environment | 82% | editor engine, debugger, watch mode |
 | 10 | Safety and permissions | 100% | updates have no in-app route to gate |
 | 11 | Token and context | 100% | — |
-| 12 | Live monitoring | 90% | live step view while a model call is in flight |
+| 12 | Live monitoring | 95% | reordering beyond a numeric priority |
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
@@ -100,7 +106,7 @@ row below moves, so they cannot drift from the tables.
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
-**Overall (mean of the 18 phases): 88%.** Read it as "one reliable core, most
+**Overall (mean of the 18 phases): 89%.** Read it as "one reliable core, most
 phases closed, the remaining work concentrated in 1, 9, 14, 16 and 18". The
 per-row method is the arbiter: a phase moves only when a row here moves.
 
@@ -274,7 +280,8 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 
 ## Phase 12 — Live agent monitoring
 
-Working for monitoring (1.51.0) and controls (1.52.0), with one named gap.
+Working for monitoring (1.51.0), controls (1.52.0) and the live step view
+(2.29.0).
 `agent_runs`/`agent_steps`, SSE events and a runs panel with diffs,
 approve/reject, cancel, restore and pause/resume are real backend state;
 `GET /api/runs/overview` adds a cross-run dashboard (live, awaiting approval,

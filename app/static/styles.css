@@ -1521,6 +1521,11 @@ kbd {
 .run-steps { display: grid; gap: 8px; }
 .run-step { display: flex; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: rgba(255, 255, 255, .02); }
 .run-step-bad { border-color: var(--danger-border); background: var(--danger-soft); }
+/* A model call is in flight: the row appears before the step is decided. */
+.run-step-live { border-color: var(--accent-border, var(--line-soft)); background: rgba(255, 255, 255, .04); }
+.run-step-pulse { display: inline-block; width: 6px; height: 6px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--accent, var(--dim)); animation: run-step-pulse 1.1s ease-in-out infinite; }
+@keyframes run-step-pulse { 0%, 100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .run-step-pulse { animation: none; opacity: 1; } }
 .run-seq { flex-shrink: 0; width: 26px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 700; }
 .run-step-body { min-width: 0; flex: 1; }
 .run-step-action { font-size: 13px; margin-bottom: 4px; }

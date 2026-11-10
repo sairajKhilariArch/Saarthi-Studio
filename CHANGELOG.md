@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.29.0
+
+A run's step log now shows the model call while it is happening, instead of
+appearing only once the step is decided.
+
+- `agent_steps` gained a `status` column. Before each model call the loop writes
+  a placeholder row (`thinking`, "Waiting for the model to choose the next
+  step…", `status: "running"`), so a panel poll during a slow reply shows the
+  wait rather than a frozen log.
+- The step that resolves the wait deletes the placeholder and takes its `seq`, so
+  the finished log still reads as one row per action — no duplicate, no gap.
+- A run that stops without a step (cancel, failure, approval) clears any
+  placeholder, so a spinner never outlives the call it described.
+- `GET /api/runs/:id` returns `status` on every step, and the panel renders a
+  running row with a pulsing tag (motion suppressed under
+  `prefers-reduced-motion`).
+
 ## 2.28.0
 
 Extension tools now refuse a call whose arguments do not match what the tool

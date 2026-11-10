@@ -7823,7 +7823,9 @@ function buildRunDetail(detail) {
   const list = document.createElement("div");
   list.className = "run-steps";
   steps.forEach((step) => {
-    const row = document.createElement("div");    row.className = `run-step${step.action.endsWith("-error") || step.action === "unparsed" ? " run-step-bad" : ""}`;
+    const row = document.createElement("div");    const live = step.status === "running";
+    row.className = `run-step${step.action.endsWith("-error") || step.action === "unparsed" ? " run-step-bad" : ""}${live ? " run-step-live" : ""}`;
+    if (live) row.setAttribute("aria-live", "polite");
     const seq = document.createElement("span");
     seq.className = "run-seq";
     seq.textContent = step.seq;
@@ -7832,7 +7834,7 @@ function buildRunDetail(detail) {
     body.className = "run-step-body";
     const actionLine = document.createElement("div");
     actionLine.className = "run-step-action";
-    actionLine.innerHTML = `<span class="run-step-tag">${escapeHtml(step.action)}</span> `;
+    actionLine.innerHTML = `<span class="run-step-tag">${escapeHtml(step.action)}</span>${live ? '<span class="run-step-pulse" aria-hidden="true"></span> ' : " "}`;
     const actionText = document.createElement("span");
     actionText.textContent = step.summary || "";
     actionLine.appendChild(actionText);
