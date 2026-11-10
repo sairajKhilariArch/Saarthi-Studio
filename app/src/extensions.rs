@@ -1186,6 +1186,7 @@ pub(crate) async fn invoke_for_run(
             "Extension \"{extension}\" declares no tool \"{tool}\"."
         ));
     };
+    check_tool_arguments(definition, tool, arguments)?;
     let module_entry = definition["entry"]
         .as_str()
         .or_else(|| entry["entry"].as_str())
@@ -1360,6 +1361,25 @@ fn audit_calls(state: &AppState, id: &str, project: &str, outcome: &crate::exten
     }
 }
 
+/// Refuse arguments the tool's own `inputSchema` rejects, before the module is
+/// loaded. The keyword subset is MCP's, so an extension tool and an MCP tool
+/// behave the same way for the model; a tool that declares no schema takes any
+/// argument object.
+fn check_tool_arguments(definition: &Value, tool: &str, arguments: &Value) -> Result<(), String> {
+    // `inspect` writes a JSON null for a tool that declares no schema.
+    let schema = match definition.get("inputSchema") {
+        None | Some(Value::Null) => json!({}),
+        Some(schema) => schema.clone(),
+    };
+    if !schema.is_object() && !schema.is_boolean() {
+        return Err(format!(
+            "Tool \"{tool}\" declares an input schema this build cannot read."
+        ));
+    }
+    crate::mcp::validate_arguments(&schema, arguments)
+        .map_err(|error| format!("Tool \"{tool}\" rejected the arguments: {error}"))
+}
+
 /// A tool call is decided before the module is read. `deny` refuses, and so does
 /// `ask`: this route has no approval channel, the same reason an extension's own
 /// host calls cannot prompt.
@@ -1461,6 +1481,11 @@ pub(crate) async fn call_tool(
     let target = format!("{id}/{tool}");
     if let Some(response) = gate_tool_call(&state, &project, &target) {
         return response;
+    }
+    // Permission first, then content: a denied call must read as denied, not as a
+    // broken argument list.
+    if let Err(error) = check_tool_arguments(definition, &tool, &arguments) {
+        return bad(error);
     }
     let declared = declared_permissions(entry);
     let module_path = dir.join(&id).join(module_entry);
@@ -2096,6 +2121,37 @@ mod tests {
         assert!(error.contains("99.0.0"), "{error}");
         assert!(!target.join("future-tools").exists(), "nothing left behind");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tool_arguments_are_checked_against_the_declared_schema() {
+        let definition = json!({
+            "name": "echo", "description": "Echoes its text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "text": { "type": "string" } },
+                "required": ["text"]
+            }
+        });
+        assert!(check_tool_arguments(&definition, "echo", &json!({ "text": "hi" })).is_ok());
+        let missing = check_tool_arguments(&definition, "echo", &json!({})).unwrap_err();
+        assert!(missing.contains("echo"), "{missing}");
+        assert!(missing.contains("text"), "{missing}");
+        assert!(check_tool_arguments(&definition, "echo", &json!({ "text": 3 })).is_err());
+        // Arguments are an object, exactly as for an MCP call.
+        assert!(check_tool_arguments(&definition, "echo", &json!([])).is_err());
+
+        // No schema means the tool takes whatever it can serialize — both when
+        // the key is absent and when `inspect` wrote a null for it.
+        let open = json!({ "name": "echo", "description": "a" });
+        assert!(check_tool_arguments(&open, "echo", &json!({ "anything": 1 })).is_ok());
+        let null = json!({ "name": "echo", "description": "a", "inputSchema": null });
+        assert!(check_tool_arguments(&null, "echo", &json!({ "anything": 1 })).is_ok());
+        // A boolean schema carries its whole meaning.
+        let never = json!({ "name": "echo", "description": "a", "inputSchema": false });
+        assert!(check_tool_arguments(&never, "echo", &json!({})).is_err());
+        let always = json!({ "name": "echo", "description": "a", "inputSchema": true });
+        assert!(check_tool_arguments(&always, "echo", &json!({})).is_ok());
     }
 
     #[test]

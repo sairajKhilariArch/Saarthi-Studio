@@ -410,10 +410,18 @@ runs through the same sandbox with the same budgets, grants, one-run rule, cance
 boundary, `extension_runs` row and host-call audit; `env.result` becomes the step
 output.
 
-What remains in this phase: `inputSchema` is advertised but never enforced on the
-arguments, there are no provider adapters and no UI extensions, and a dependency
-cycle or an update path that re-checks a folder after the app is upgraded is still
-missing.
+Tool arguments (2.28.0): a call is checked against the tool's declared
+`inputSchema` before the module is loaded — the same bounded JSON Schema subset
+MCP calls use (`type`, `properties`, `required`, `enum`/`const`, bounds, array
+items, nested objects, draft-4 tuples) — with `true`/`false` schemas honoured, an
+unreadable schema refused rather than ignored, and the refusal naming the tool and
+the failing field. The prompt lists each tool's required argument names, and the
+route checks the saved permission rule before the arguments, so a denied call
+stays denied.
+
+What remains in this phase: there are no provider adapters and no UI extensions,
+and a dependency cycle or an update path that re-checks a folder after the app is
+upgraded is still missing.
 
 ## Phase 16 — Testing
 

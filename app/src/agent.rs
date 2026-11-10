@@ -1652,6 +1652,22 @@ fn extension_tool_block(tools: &[Value]) -> Option<String> {
         if !description.is_empty() {
             line.push_str(&format!(": {}", cap_chars(description, 160)));
         }
+        // The schema is enforced, so the model needs the required names in front
+        // of it; types stay out to keep the block small.
+        let required = tool
+            .get("inputSchema")
+            .and_then(|schema| schema.get("required"))
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        if !required.is_empty() {
+            line.push_str(&format!(" (required: {required})"));
+        }
         lines.push(line);
     }
     if tools.len() > MCP_PROMPT_TOOLS {

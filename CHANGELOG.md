@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.28.0
+
+Extension tools now refuse a call whose arguments do not match what the tool
+declared, before any module is loaded.
+
+- A declared `inputSchema` is enforced on every call — the HTTP route and the
+  agent step alike — with the bounded JSON Schema subset MCP calls already use
+  (`type`, `properties`, `required`, `enum`/`const`, string and number bounds,
+  array items, nested objects and the draft-4 tuple form). A boolean schema means
+  what it says (`true` accepts anything, `false` refuses everything), arguments
+  must be a JSON object, and a schema this build cannot read is refused rather
+  than ignored.
+- The refusal names the tool and the failing field (`Tool "echo" rejected the
+  arguments: \`text\` is required.`) and costs no fuel: nothing is loaded and no
+  run row is written, because no run started. On the route a saved rule is
+  checked first, so a denied call reads as denied instead of as a bad argument
+  list.
+- The prompt catalogue now lists each tool's required argument names, so the
+  model sees what a valid call needs; descriptions and types stay out to keep the
+  block small.
+
 ## 2.27.0
 
 The agent can call an installed extension's tools, and the progress checklist

@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.28.0 (2026-11-10):** Phase 15's custom-tool row now enforces the
+declared `inputSchema` before a module loads (2.28.0), so its largest open gaps are
+provider adapters and UI extensions. The phase stays 82% (9 of 11 rows) and the
+overall mean stays 88% — no row changed status, so no percentage moved.
+
 **Revision 2.27.0 (2026-11-10):** Phase 15's custom-tool row moved from Partial to
 Working — the agent's tool loop now offers installed tools (2.27.0) — so the phase
 is 9 of its 11 rows = 82%. Re-deriving it exposed two arithmetic slips, corrected
@@ -90,7 +95,7 @@ row below moves, so they cannot drift from the tables.
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
-| 15 | Extension ecosystem | 82% | enforced tool argument schemas, provider adapters, UI extensions |
+| 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
@@ -336,7 +341,7 @@ it needs, and both are enforced rather than displayed.
 | Run control | Working (2.23.0) | One run per extension (409 while one is open); `POST /api/extensions/:id/cancel` stops it at the next host call (a pure-compute loop still ends at the fuel limit); a 5-second wall-clock budget is checked at each host boundary; uninstall cancels first; Settings shows `Running…` and `Cancel` |
 | Run history | Working (2.24.0) | `extension_runs` records extension, project, start, duration, exit code, fuel, host calls and error for every run that reached the sandbox, including loader failures and cancellations; `GET /api/extension-runs` returns the newest 50 and Settings lists them |
 | Compatibility and dependencies | Working (2.25.0) | `requiresStudio` (numeric per-part floor against `CARGO_PKG_VERSION`) marks a manifest `valid` but `compatible: false` when this build is older, and both run and install are refused with both versions named; `apiVersion` defaults to 1 and refuses a higher number at parse; `dependencies` (≤16, deduped, validated, no self-reference) are reported as `missingDependencies` and block a run, not an install. Discovery reads every manifest before judging any. Not covered: a dependency's own compatibility, dependency cycles, and an update path that would re-check after the app is upgraded |
-| Custom tools | Working (2.27.0) | `tools` in the manifest (≤16; name, description, optional `.wasm` entry, optional `inputSchema`; the wasm runtime is required and each module is checked like the entry) and the `env.arguments`/`env.result` ABI; `POST /api/extensions/:id/tools/:tool` runs one in the same sandbox with the same budgets, grants, one-run rule and cancel, answering `{result, reported, run}`, gated by `extension_tool` (default ask; `ask` refuses with instructions because the route cannot prompt). Since 2.27.0 the agent's tool loop offers them too: the prompt carries a labelled catalogue of every valid, runnable folder's tools (none when nothing is installed), the `extension` step is gated by the same `extension_tool` permission on the same `extension/tool` target, and the call runs through the same sandbox, budgets, grants, one-run rule, cancel boundary, `extension_runs` row and host-call audit, with `env.result` becoming the step output. Not covered: `inputSchema` is advertised to the model but never enforced on the arguments |
+| Custom tools | Working (2.27.0) | `tools` in the manifest (≤16; name, description, optional `.wasm` entry, optional `inputSchema`; the wasm runtime is required and each module is checked like the entry) and the `env.arguments`/`env.result` ABI; `POST /api/extensions/:id/tools/:tool` runs one in the same sandbox with the same budgets, grants, one-run rule and cancel, answering `{result, reported, run}`, gated by `extension_tool` (default ask; `ask` refuses with instructions because the route cannot prompt). Since 2.27.0 the agent's tool loop offers them too: the prompt carries a labelled catalogue of every valid, runnable folder's tools (none when nothing is installed), the `extension` step is gated by the same `extension_tool` permission on the same `extension/tool` target, and the call runs through the same sandbox, budgets, grants, one-run rule, cancel boundary, `extension_runs` row and host-call audit, with `env.result` becoming the step output. Since 2.28.0 the declared `inputSchema` is enforced on every call before the module is loaded (MCP's bounded keyword subset, boolean schemas honoured, an unreadable schema refused) and the prompt lists each tool's required argument names; not covered: keywords outside that subset |
 | Provider adapters | Missing | — |
 | UI extensions | Missing | — |
 

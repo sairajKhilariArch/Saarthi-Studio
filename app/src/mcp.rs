@@ -1689,7 +1689,9 @@ fn validate_value(
 /// Check the arguments against the tool's own `inputSchema`. The object shape is
 /// required because MCP tools take an argument object; everything below that is
 /// `validate_value`'s keyword subset.
-fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), String> {
+/// Shared with extension tools, which enforce their declared `inputSchema` the
+/// same way an MCP server's call is checked.
+pub(crate) fn validate_arguments(schema: &Value, arguments: &Value) -> Result<(), String> {
     if !arguments.is_object() {
         return Err("Tool arguments must be a JSON object.".to_string());
     }
