@@ -193,6 +193,30 @@ pub(crate) fn claim_write(
     Ok(())
 }
 
+/// Who, if anyone, a live run has claimed `path` against in this checkout.
+///
+/// The editor asks this before saving: the agent's own `write` refuses a file
+/// another run holds, and this is the same question asked in the other direction,
+/// so a human save and a run's write cannot race in either order.
+pub(crate) fn claimed_by(state: &AppState, root: &str, path: &str) -> Option<String> {
+    let conn = connect(state).ok()?;
+    let db = scope(state);
+    let _ = purge(&conn, &db);
+    conn.query_row(
+        "SELECT run_id FROM run_leases WHERE scope=?1 AND checkout=?2 AND path=?3",
+        params![db, root, path],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+/// The live run, if any, that is running commands in this checkout. It can write
+/// anywhere inside it, so every path in the folder is effectively claimed while
+/// that command runs.
+pub(crate) fn command_claim(state: &AppState, root: &str) -> Option<String> {
+    claimed_by(state, root, COMMAND_SCOPE)
+}
+
 /// Claim the whole checkout for one command. A command can write anywhere inside
 /// its working directory, so per-file leases cannot express it; two runs may not
 /// run commands in the same checkout at the same time.

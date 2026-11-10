@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.45.0 (2026-11-10):** the editor now saves through the run lease:
+`filelock::claimed_by`/`command_claim` let a save, create, rename or delete ask
+which live run holds the path or the folder, and refuse with `409` naming it
+instead of racing it. The agent's write already refused the other direction, so a
+conflict now fails loudly on both sides. Phase counts are unchanged — this closes
+an open edge in row 20, not a feature row. Overall mean stays 92% (1,659/18).
+
 **Revision 2.44.0 (2026-11-10):** a portable (tarball/zip) install can now be
 uninstalled from Settings → About: `POST /api/uninstall` removes the program
 folder, the settings folder and the data folder after an `approve` plus a

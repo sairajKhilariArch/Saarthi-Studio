@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.45.0
+
+An agent run and the editor could write the same file at the same time, and the
+last write won. The agent's side already refused a file another run held; the
+editor now asks the same question, in the same ledger.
+
+- `filelock.rs` gained `claimed_by` and `command_claim`: which live run, if any,
+  holds a path — or the whole checkout, while it is running a command there.
+- Saving, creating, renaming and deleting from the IDE refuse with `409` and a
+  message naming the run while that run claims the path (or the folder). A
+  refusal writes nothing, so the run's work and the person's work cannot
+  interleave silently.
+- The reverse direction is unchanged and now has a matching failure: a run's
+  `write` is refused when a file changed on disk since that run read it, so a save
+  during a run fails loudly on both sides instead of quietly on one.
+- No frontend change was needed: the editor already shows the server's message in
+  a toast, and the approval retry only fires on `needs_approval`, which a lease
+  refusal is not.
+- Version 2.45.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Verified: `cargo test --locked` 540 passed, 1 ignored (1 new); clippy
+  `--all-targets -D warnings` clean; frontend 36; version 20; e2e 32; and a live
+  headless run where a lease row written straight into the database made a save
+  answer `409` naming that run with the file unchanged, the command claim did the
+  same for any file in the folder, and removing the row let the save through.
+- Not covered: a program outside Studio writing the file is still invisible to the
+  ledger — the fingerprint check catches it afterwards, not before.
+
 ## 2.44.0
 
 A portable install — the tarball and the zip — had no way off a computer. Studio

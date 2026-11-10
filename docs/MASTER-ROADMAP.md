@@ -585,6 +585,12 @@ and proves the payload with an administrative install, `smoke-package.sh` boots 
 installed binary, and the release job attaches the MSI beside the portable zip.
 The toolchain is WiX 5 (MIT) because WiX 7 gates builds behind a paid fee.
 
+Delivered in 2.45.0: the editor saves through the run lease. A save, create,
+rename or delete asks `filelock` which live run holds the path — or the folder,
+while that run is running a command there — and answers 409 naming the run rather
+than racing it. The agent's write already refused the other direction, so the
+conflict is now loud on both sides instead of silent on one.
+
 Delivered in 2.44.0: the way off a computer for a portable install. Settings →
 About names the program folder, the settings folder and the data folder with
 their counts, offers to keep chats/projects and settings, and removes the rest

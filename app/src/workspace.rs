@@ -863,6 +863,37 @@ async fn read_file(
     read_text_file(&root, &query.path).map(Json)
 }
 
+/// A live run owns the files it has claimed, and the whole folder while it is
+/// running a command there. The editor asks the same question the agent's `write`
+/// asks before claiming, so a human save and a run's write cannot race in either
+/// direction. A refusal changes nothing and names the run to wait for.
+fn run_claim(state: &AppState, root: &FsPath, paths: &[&str], action: &str) -> Option<Response> {
+    let root_key = root.to_string_lossy().to_string();
+    if let Some(run) = crate::filelock::command_claim(state, &root_key) {
+        return Some(
+            conflict(format!(
+                "A run in progress ({run}) is running commands in this folder, so it can write \
+                 anywhere inside it. {action} was refused and nothing was changed. Wait for the \
+                 run to finish, or stop it, then try again."
+            ))
+            .into_response(),
+        );
+    }
+    for path in paths {
+        if let Some(run) = crate::filelock::claimed_by(state, &root_key, path) {
+            return Some(
+                conflict(format!(
+                    "A run in progress ({run}) has claimed {path}. {action} now would race that \
+                     run's write, so it was refused and nothing was changed. Wait for the run to \
+                     finish, or stop it, then try again."
+                ))
+                .into_response(),
+            );
+        }
+    }
+    None
+}
+
 async fn write_file(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let Some(path) = input.get("path").and_then(Value::as_str) else {
         return bad_request("Provide the file path to save.").into_response();
@@ -888,6 +919,9 @@ async fn write_file(State(state): State<AppState>, Json(input): Json<Value>) -> 
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
+    if let Some(response) = run_claim(&state, &root, &[path], "Saving the file") {
+        return response;
+    }
     match write_text_file(&root, path, content) {
         Ok(payload) => Json(payload).into_response(),
         Err(error) => error.into_response(),
@@ -917,6 +951,9 @@ async fn create(State(state): State<AppState>, Json(input): Json<Value>) -> Resp
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
+    if let Some(response) = run_claim(&state, &root, &[path], "Creating the item") {
+        return response;
+    }
     match create_entry(&root, path, dir) {
         Ok(value) => Json(value).into_response(),
         Err(error) => error.into_response(),
@@ -948,6 +985,9 @@ async fn rename(State(state): State<AppState>, Json(input): Json<Value>) -> Resp
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
+    if let Some(response) = run_claim(&state, &root, &[from, to], "Renaming the item") {
+        return response;
+    }
     match rename_entry(&root, from, to) {
         Ok(value) => Json(value).into_response(),
         Err(error) => error.into_response(),
@@ -976,6 +1016,9 @@ async fn remove(State(state): State<AppState>, Json(input): Json<Value>) -> Resp
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
+    if let Some(response) = run_claim(&state, &root, &[path], "Deleting the item") {
+        return response;
+    }
     match delete_entry(&root, path) {
         Ok(value) => Json(value).into_response(),
         Err(error) => error.into_response(),

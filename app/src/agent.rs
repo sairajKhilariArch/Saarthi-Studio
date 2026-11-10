@@ -7421,6 +7421,38 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         crate::filelock::release(&fixture.state, &b);
     }
 
+    /// The editor saves through the same ledger, so it has to be able to ask who
+    /// holds a file — and the folder-wide command claim counts as holding all of
+    /// them.
+    #[tokio::test]
+    async fn the_editor_can_ask_who_holds_a_file() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-lookup", &base);
+        let a = format!("run-a-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &a, RUNNING);
+        assert!(crate::filelock::claimed_by(&fixture.state, "shared", "src/main.rs").is_none());
+        crate::filelock::claim_write(&fixture.state, "shared", &a, "src/main.rs", Some("same"))
+            .unwrap();
+        assert_eq!(
+            crate::filelock::claimed_by(&fixture.state, "shared", "src/main.rs").as_deref(),
+            Some(a.as_str())
+        );
+        // Another file, another checkout: nobody else's business.
+        assert!(crate::filelock::claimed_by(&fixture.state, "shared", "src/lib.rs").is_none());
+        assert!(crate::filelock::claimed_by(&fixture.state, "other", "src/main.rs").is_none());
+        // A command claims the whole checkout, because it can write anywhere.
+        crate::filelock::claim_command(&fixture.state, "shared", &a).unwrap();
+        assert_eq!(
+            crate::filelock::command_claim(&fixture.state, "shared").as_deref(),
+            Some(a.as_str())
+        );
+        assert!(crate::filelock::command_claim(&fixture.state, "other").is_none());
+        // Once the run ends, the editor is free to save again.
+        crate::filelock::release(&fixture.state, &a);
+        assert!(crate::filelock::claimed_by(&fixture.state, "shared", "src/main.rs").is_none());
+        assert!(crate::filelock::command_claim(&fixture.state, "shared").is_none());
+    }
+
     #[tokio::test]
     async fn a_finished_runs_claim_does_not_outlive_it() {
         let base = scripted_router(&[]).await;
