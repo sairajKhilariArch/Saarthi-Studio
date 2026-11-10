@@ -3575,16 +3575,25 @@ async function loadExtensions() {
     main.appendChild(strong);
     const small = document.createElement("small");
     const permissions = Array.isArray(extension.permissions) ? extension.permissions : [];
+    const tools = Array.isArray(extension.tools) ? extension.tools : [];
+    const toolSummary = tools.length
+      ? `${tools.length} tool${tools.length === 1 ? "" : "s"}: ${tools.map((tool) => tool.name).join(", ")}`
+      : "";
     const blocked = extension.runnable === false ? String(extension.blockedReason || "") : "";
     small.textContent = extension.valid
       ? [
           extension.description || (permissions.length ? permissions.join(", ") : "no permissions requested"),
+          toolSummary,
           blocked,
         ]
           .filter(Boolean)
           .join(" \u00b7 ")
       : extension.error;
-    if (permissions.length) small.title = permissions.join(", ");
+    // Descriptions are what the model chooses by, so they belong in the row's
+    // tooltip rather than in a list that has no caller.
+    const toolDetail = tools.map((tool) => `${tool.name}: ${tool.description || ""}`).join("\n");
+    const title = [permissions.join(", "), toolDetail].filter(Boolean).join("\n");
+    if (title) small.title = title;
     main.appendChild(small);
     row.appendChild(main);
     // A folder can be a perfectly good extension and still be unusable here:

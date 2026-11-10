@@ -80,6 +80,12 @@ const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
 const SUPPORTED_API_VERSION: u32 = 1;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_DEPENDENCIES: usize = 16;
+const MAX_TOOLS: usize = 16;
+const MAX_TOOL_DESCRIPTION_CHARS: usize = 400;
+const MAX_TOOL_SCHEMA_BYTES: usize = 8 * 1024;
+/// A tool call carries its arguments as JSON text; this bounds what the host
+/// hands the module so a call cannot become a bulk copy into the sandbox.
+const MAX_TOOL_ARGUMENT_BYTES: usize = 64 * 1024;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
 const MAX_ENTRY_CHARS: usize = 160;
@@ -103,7 +109,24 @@ struct Manifest {
     requires_studio: Option<String>,
     /// Other extension ids that must be installed first.
     dependencies: Vec<String>,
+    /// Tools the agent may call. Each one runs as its own sandboxed module, so a
+    /// manifest declaring tools must declare the wasm runtime.
+    tools: Vec<Tool>,
     permissions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Tool {
+    name: String,
+    /// What the tool does, in one line. The model chooses by it, so it is
+    /// required rather than optional.
+    description: String,
+    /// Module to run; `None` means the manifest's own `entry`.
+    entry: Option<String>,
+    /// Declared for the model; the sandbox does not enforce it (see
+    /// `docs/FEATURE-STATUS.md`), so an argument the module mishandles is the
+    /// module's problem, not a refusal.
+    input_schema: Option<Value>,
 }
 
 /// History of runs, newest last. One row per run request that reached the
@@ -210,9 +233,9 @@ fn valid_id(id: &str) -> bool {
 fn valid_version(version: &str) -> bool {
     let parts: Vec<&str> = version.split('.').collect();
     parts.len() == 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.len() <= 4 && part.chars().all(|c| c.is_ascii_digit()))
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.len() <= 4 && part.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// A relative path that cannot escape the extension folder on either platform.
@@ -263,7 +286,7 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
                 Some(value.to_string())
             } else {
                 return Err(
-                    "entry must be a relative path inside the extension folder.".to_string(),
+                    "entry must be a relative path inside the extension folder.".to_string()
                 );
             }
         }
@@ -336,6 +359,85 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         }
         Some(_) => return Err("dependencies must be a list of extension ids.".to_string()),
     };
+    let tools = match raw.get("tools") {
+        None => Vec::new(),
+        Some(Value::Array(list)) => {
+            if list.is_empty() {
+                return Err("tools must not be empty when present.".to_string());
+            }
+            if list.len() > MAX_TOOLS {
+                return Err(format!("tools: at most {MAX_TOOLS} entries are allowed."));
+            }
+            let mut tools: Vec<Tool> = Vec::new();
+            for entry in list {
+                if !entry.is_object() {
+                    return Err("Each tool must be an object.".to_string());
+                }
+                let name = clean_text(entry.get("name").and_then(Value::as_str), 40);
+                if !valid_id(&name) {
+                    return Err(format!(
+                        "tool name \"{name}\" must be 1-40 lowercase letters, digits, - or _."
+                    ));
+                }
+                if tools.iter().any(|tool| tool.name == name) {
+                    return Err(format!("tool \"{name}\" is declared twice."));
+                }
+                let description = clean_text(
+                    entry.get("description").and_then(Value::as_str),
+                    MAX_TOOL_DESCRIPTION_CHARS,
+                );
+                if description.is_empty() {
+                    return Err(format!(
+                        "tool \"{name}\" needs a description: the model picks tools by it."
+                    ));
+                }
+                let tool_entry = match entry.get("entry").and_then(Value::as_str) {
+                    None => None,
+                    Some(value) => {
+                        let value = value.trim();
+                        if !valid_entry(value) || !value.ends_with(".wasm") {
+                            return Err(format!(
+                                "tool \"{name}\" entry must be a relative .wasm path inside the extension folder."
+                            ));
+                        }
+                        Some(value.to_string())
+                    }
+                };
+                let input_schema = match entry.get("inputSchema") {
+                    None => None,
+                    Some(schema @ (Value::Object(_) | Value::Bool(_))) => {
+                        let too_big = serde_json::to_string(schema)
+                            .map(|text| text.len() > MAX_TOOL_SCHEMA_BYTES)
+                            .unwrap_or(true);
+                        if too_big {
+                            return Err(format!(
+                                "tool \"{name}\" inputSchema is larger than {MAX_TOOL_SCHEMA_BYTES} bytes."
+                            ));
+                        }
+                        Some(schema.clone())
+                    }
+                    Some(_) => {
+                        return Err(format!(
+                            "tool \"{name}\" inputSchema must be a JSON object or boolean."
+                        ))
+                    }
+                };
+                tools.push(Tool {
+                    name,
+                    description,
+                    entry: tool_entry,
+                    input_schema,
+                });
+            }
+            tools
+        }
+        Some(_) => return Err("tools must be a list of objects.".to_string()),
+    };
+    // Only the sandbox can run a tool, so declaring one without a runtime would
+    // be a promise nothing keeps.
+    if !tools.is_empty() && runtime.as_deref() != Some("wasm") {
+        return Err("Tools need runtime: \"wasm\" — only the sandbox can run them.".to_string());
+    }
     let permissions = match raw.get("permissions") {
         None => Vec::new(),
         Some(Value::Array(list)) => {
@@ -372,6 +474,7 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         api_version,
         requires_studio,
         dependencies,
+        tools,
         permissions,
     })
 }
@@ -449,6 +552,7 @@ fn invalid(folder: &str, error: String) -> Value {
         "requiresStudio": Value::Null,
         "dependencies": [],
         "missingDependencies": [],
+        "tools": [],
         "permissions": [],
         "valid": false,
         "compatible": false,
@@ -606,8 +710,7 @@ fn remove_extension(root: &Path, id: &str) -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
-    fs::rename(&canonical, removed.join(format!("{id}-{stamp}")))
-        .map_err(|error| error.to_string())
+    fs::rename(&canonical, removed.join(format!("{id}-{stamp}"))).map_err(|error| error.to_string())
 }
 
 fn bad(message: impl std::fmt::Display) -> Response {
@@ -654,10 +757,7 @@ fn begin_run(id: &str) -> Option<RunTicket> {
 }
 
 fn cancel_run(id: &str) -> bool {
-    let flag = running()
-        .lock()
-        .ok()
-        .and_then(|map| map.get(id).cloned());
+    let flag = running().lock().ok().and_then(|map| map.get(id).cloned());
     match flag {
         Some(flag) => {
             flag.store(true, Ordering::Relaxed);
@@ -695,15 +795,25 @@ fn read_manifest(folder: &Path, name: &str) -> Result<Manifest, String> {
         },
         Err(_) => Err("manifest.json is missing or unreadable.".to_string()),
     }?;
-    if let Some(entry) = parsed.entry.as_deref() {
+    /** Every module the manifest names must exist and stay inside the folder. */
+    fn check_entry(folder: &Path, entry: &str, label: &str) -> Result<(), String> {
         let path = folder.join(entry);
         if !path.is_file() {
-            return Err(format!("entry file \"{entry}\" is missing."));
+            return Err(format!("{label} \"{entry}\" is missing."));
         }
         let base = folder.canonicalize().map_err(|error| error.to_string())?;
         let canonical = path.canonicalize().map_err(|error| error.to_string())?;
         if !canonical.starts_with(&base) {
-            return Err("entry file must stay inside the extension folder.".to_string());
+            return Err(format!("{label} must stay inside the extension folder."));
+        }
+        Ok(())
+    }
+    if let Some(entry) = parsed.entry.as_deref() {
+        check_entry(folder, entry, "entry file")?;
+    }
+    for tool in &parsed.tools {
+        if let Some(entry) = tool.entry.as_deref() {
+            check_entry(folder, entry, &format!("tool \"{}\" entry", tool.name))?;
         }
     }
     Ok(parsed)
@@ -752,6 +862,18 @@ fn inspect(dir: &Path) -> Vec<Value> {
                     }
                 });
                 let blocked = blocked.or_else(|| run_block(&manifest));
+                let tools: Vec<Value> = manifest
+                    .tools
+                    .iter()
+                    .map(|tool| {
+                        json!({
+                            "name": tool.name,
+                            "description": tool.description,
+                            "entry": tool.entry,
+                            "inputSchema": tool.input_schema,
+                        })
+                    })
+                    .collect();
                 json!({
                     "id": manifest.id,
                     "name": manifest.name,
@@ -764,6 +886,7 @@ fn inspect(dir: &Path) -> Vec<Value> {
                     "requiresStudio": manifest.requires_studio,
                     "dependencies": manifest.dependencies,
                     "missingDependencies": missing,
+                    "tools": tools,
                     "permissions": manifest.permissions,
                     "valid": true,
                     "compatible": incompatible.is_none(),
@@ -787,10 +910,7 @@ pub(crate) async fn list(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
-pub(crate) async fn install(
-    State(state): State<AppState>,
-    Json(input): Json<Value>,
-) -> Response {
+pub(crate) async fn install(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let Some(path) = input
         .get("path")
         .and_then(Value::as_str)
@@ -813,7 +933,12 @@ pub(crate) async fn remove(
     // folder. The module bytes are already loaded, so the run ends at its next
     // host call rather than reading from a folder that just moved.
     if cancel_run(&id) {
-        crate::oplog::record("info", "extensions", "cancel", format!("{id}: cancelled by uninstall"));
+        crate::oplog::record(
+            "info",
+            "extensions",
+            "cancel",
+            format!("{id}: cancelled by uninstall"),
+        );
     }
     match remove_extension(&extensions_dir(&state), &id) {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
@@ -839,7 +964,12 @@ pub(crate) async fn cancel(AxumPath(id): AxumPath<String>) -> Response {
     }
     let cancelled = cancel_run(&id);
     if cancelled {
-        crate::oplog::record("info", "extensions", "cancel", format!("{id}: stop requested"));
+        crate::oplog::record(
+            "info",
+            "extensions",
+            "cancel",
+            format!("{id}: stop requested"),
+        );
     }
     Json(json!({
         "ok": true,
@@ -853,10 +983,7 @@ pub(crate) async fn cancel(AxumPath(id): AxumPath<String>) -> Response {
     .into_response()
 }
 
-pub(crate) async fn run(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<String>,
-) -> Response {
+pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     if !valid_id(&id) {
         return bad("Invalid extension id.");
     }
@@ -870,11 +997,9 @@ pub(crate) async fn run(
             .into_response();
     };
     if entry["valid"] != Value::Bool(true) {
-        return bad(
-            entry["error"]
-                .as_str()
-                .unwrap_or("The extension is not valid."),
-        );
+        return bad(entry["error"]
+            .as_str()
+            .unwrap_or("The extension is not valid."));
     }
     let reason = entry["blockedReason"].as_str().unwrap_or("");
     if !reason.is_empty() {
@@ -885,23 +1010,10 @@ pub(crate) async fn run(
     };
     let module_path = dir.join(&id).join(entry_file);
     // The grant is a snapshot: the rule list and the open folder are read once,
-    // here, so a rule added mid-run cannot widen it. A missing folder leaves an
-    // empty root, and every host call then reports that nothing is open.
-    let declared: Vec<String> = entry["permissions"]
-        .as_array()
-        .map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect())
-        .unwrap_or_default();
+    // here, so a rule added mid-run cannot widen it.
+    let declared = declared_permissions(entry);
     let project = crate::active_project_id(&state);
-    let grant = crate::extension_run::HostGrant {
-        root: state.workspace.root().unwrap_or_default(),
-        // Its own folder is the only place an extension can persist anything;
-        // the code beside it stays read-only to the module.
-        data_root: Some(dir.join(&id).join("data")),
-        project: project.clone(),
-        rules: crate::permissions::rules(&state),
-        read: declared.iter().any(|permission| permission == "workspace.read"),
-        write: declared.iter().any(|permission| permission == "workspace.write"),
-    };
+    let grant = host_grant(&state, &dir, &id, &declared, &project);
     let Some(ticket) = begin_run(&id) else {
         return (
             StatusCode::CONFLICT,
@@ -917,6 +1029,7 @@ pub(crate) async fn run(
     let options = crate::extension_run::RunOptions {
         cancel: Some(cancel),
         wall: None,
+        arguments: None,
     };
     let started_at = crate::now_seconds();
     let started = std::time::Instant::now();
@@ -990,6 +1103,60 @@ pub(crate) async fn run(
     // Every host call is audited with the extension id. Refusals and asks also
     // reach the permission audit table, where the agent's own refusals live, so
     // Settings → Permissions shows why an extension was stopped.
+    audit_calls(&state, &id, &project, &outcome);
+    Json(json!({
+        "ok": true,
+        "id": id,
+        "run": {
+            "exitCode": outcome.exit_code,
+            "fuelUsed": outcome.fuel_used,
+            "elapsedMs": outcome.elapsed_ms,
+            "hostCalls": outcome.audit.len(),
+        }
+    }))
+    .into_response()
+}
+
+fn declared_permissions(entry: &Value) -> Vec<String> {
+    entry["permissions"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What one run may reach, built once per run. A missing folder leaves an empty
+/// root, and every host call then reports that nothing is open.
+fn host_grant(
+    state: &AppState,
+    dir: &Path,
+    id: &str,
+    declared: &[String],
+    project: &str,
+) -> crate::extension_run::HostGrant {
+    crate::extension_run::HostGrant {
+        root: state.workspace.root().unwrap_or_default(),
+        // Its own folder is the only place an extension can persist anything;
+        // the code beside it stays read-only to the module.
+        data_root: Some(dir.join(id).join("data")),
+        project: project.to_string(),
+        rules: crate::permissions::rules(state),
+        read: declared
+            .iter()
+            .any(|permission| permission == "workspace.read"),
+        write: declared
+            .iter()
+            .any(|permission| permission == "workspace.write"),
+    }
+}
+
+/// Every host call is audited with the extension id. Refusals and asks also
+/// reach the permission audit table, where the agent's own refusals live.
+fn audit_calls(state: &AppState, id: &str, project: &str, outcome: &crate::extension_run::Outcome) {
     for call in &outcome.audit {
         crate::oplog::record(
             if call.decision == crate::permissions::Decision::Allow {
@@ -999,7 +1166,10 @@ pub(crate) async fn run(
             },
             "extensions",
             "host",
-            format!("{id} {} \"{}\": {}", call.capability, call.path, call.detail),
+            format!(
+                "{id} {} \"{}\": {}",
+                call.capability, call.path, call.detail
+            ),
         );
         if call.decision != crate::permissions::Decision::Allow {
             let action = if call.capability == "workspace.write" {
@@ -1008,19 +1178,223 @@ pub(crate) async fn run(
                 crate::permissions::Action::FsRead
             };
             crate::permissions::record(
-                &state,
+                state,
                 action,
                 &call.path,
                 call.decision,
                 call.scope,
-                &project,
+                project,
                 &format!("extension {id} host call"),
             );
         }
     }
+}
+
+/// A tool call is decided before the module is read. `deny` refuses, and so does
+/// `ask`: this route has no approval channel, the same reason an extension's own
+/// host calls cannot prompt.
+fn gate_tool_call(state: &AppState, project: &str, target: &str) -> Option<Response> {
+    let action = crate::permissions::Action::ExtensionTool;
+    let rules = crate::permissions::rules(state);
+    let effective = crate::permissions::resolve(rules.iter(), action, target, project);
+    let (decision, scope) = match effective {
+        Some(effective) => (effective.decision, effective.scope),
+        None => (action.default_decision(), crate::permissions::Scope::Always),
+    };
+    if decision == crate::permissions::Decision::Allow {
+        return None;
+    }
+    crate::permissions::record(
+        state,
+        action,
+        target,
+        decision,
+        scope,
+        project,
+        "extension tool call",
+    );
+    let reason = match decision {
+        crate::permissions::Decision::Deny => {
+            "A saved permission rule denies this tool.".to_string()
+        }
+        _ => "Calling an extension tool asks first, and this route cannot prompt: save an allow rule for extension_tool in Settings → Permissions.".to_string(),
+    };
+    crate::oplog::record("warn", "extensions", "tool", format!("{target}: {reason}"));
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "ok": false, "error": reason })),
+        )
+            .into_response(),
+    )
+}
+
+/// A tool a manifest declares, called on demand. It runs in the same sandbox as
+/// a plain run — same budgets, same workspace grants, same one-run-per-extension
+/// rule — but takes JSON arguments and answers with the module's own result.
+/// A call that never loads is still recorded, like a failed run.
+pub(crate) async fn call_tool(
+    State(state): State<AppState>,
+    AxumPath((id, tool)): AxumPath<(String, String)>,
+    Json(input): Json<Value>,
+) -> Response {
+    if !valid_id(&id) || !valid_id(&tool) {
+        return bad("Invalid extension id or tool name.");
+    }
+    let dir = extensions_dir(&state);
+    let entries = inspect(&dir);
+    let Some(entry) = entries.iter().find(|entry| entry["id"] == id.as_str()) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": "No such extension." })),
+        )
+            .into_response();
+    };
+    if entry["valid"] != Value::Bool(true) {
+        return bad(entry["error"]
+            .as_str()
+            .unwrap_or("The extension is not valid."));
+    }
+    let reason = entry["blockedReason"].as_str().unwrap_or("");
+    if !reason.is_empty() {
+        return bad(reason);
+    }
+    let definition = entry["tools"].as_array().and_then(|tools| {
+        tools
+            .iter()
+            .find(|candidate| candidate["name"] == tool.as_str())
+    });
+    let Some(definition) = definition else {
+        return bad(format!("This extension declares no tool \"{tool}\"."));
+    };
+    let module_entry = definition["entry"]
+        .as_str()
+        .or_else(|| entry["entry"].as_str())
+        .unwrap_or("");
+    if module_entry.is_empty() {
+        return bad("This tool has no module to run.");
+    }
+    let arguments = match input.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(value) => value.clone(),
+    };
+    let arguments_text = match serde_json::to_string(&arguments) {
+        Ok(text) if text.len() <= MAX_TOOL_ARGUMENT_BYTES => text,
+        Ok(_) => {
+            return bad(format!(
+                "The arguments are larger than {MAX_TOOL_ARGUMENT_BYTES} bytes."
+            ))
+        }
+        Err(error) => return bad(format!("The arguments could not be serialized: {error}")),
+    };
+    let project = crate::active_project_id(&state);
+    let target = format!("{id}/{tool}");
+    if let Some(response) = gate_tool_call(&state, &project, &target) {
+        return response;
+    }
+    let declared = declared_permissions(entry);
+    let module_path = dir.join(&id).join(module_entry);
+    let grant = host_grant(&state, &dir, &id, &declared, &project);
+    let Some(ticket) = begin_run(&id) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "error": "This extension is already running. Cancel that run first."
+            })),
+        )
+            .into_response();
+    };
+    let cancel = ticket.cancel.clone();
+    let _ticket = ticket;
+    let options = crate::extension_run::RunOptions {
+        cancel: Some(cancel),
+        wall: None,
+        arguments: Some(arguments_text),
+    };
+    let started_at = crate::now_seconds();
+    let started = std::time::Instant::now();
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::extension_run::run_file_with(&module_path, Some(grant), options)
+    })
+    .await;
+    let outcome = match outcome {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
+            record_run(
+                &state.database_path,
+                &RunRecord {
+                    extension: &id,
+                    project: &project,
+                    started_at,
+                    duration_ms: started.elapsed().as_millis(),
+                    exit_code: None,
+                    fuel_used: 0,
+                    host_calls: 0,
+                    error: &error,
+                },
+            );
+            crate::oplog::record("warn", "extensions", "tool", format!("{target}: {error}"));
+            return bad(error);
+        }
+        Err(error) => {
+            let message = format!("The tool stopped unexpectedly: {error}");
+            record_run(
+                &state.database_path,
+                &RunRecord {
+                    extension: &id,
+                    project: &project,
+                    started_at,
+                    duration_ms: started.elapsed().as_millis(),
+                    exit_code: None,
+                    fuel_used: 0,
+                    host_calls: 0,
+                    error: &message,
+                },
+            );
+            crate::oplog::record("warn", "extensions", "tool", format!("{target}: {message}"));
+            return server_error(message);
+        }
+    };
+    record_run(
+        &state.database_path,
+        &RunRecord {
+            extension: &id,
+            project: &project,
+            started_at,
+            duration_ms: outcome.elapsed_ms,
+            exit_code: Some(outcome.exit_code),
+            fuel_used: outcome.fuel_used,
+            host_calls: outcome.audit.len(),
+            error: "",
+        },
+    );
+    audit_calls(&state, &id, &project, &outcome);
+    let (result, reported) = match outcome.result.as_deref() {
+        Some(text) => (
+            serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.to_string())),
+            true,
+        ),
+        None => (Value::Null, false),
+    };
+    crate::oplog::record(
+        "info",
+        "extensions",
+        "tool",
+        format!(
+            "{target} exited with {} after {} ms ({} result, {} host calls)",
+            outcome.exit_code,
+            outcome.elapsed_ms,
+            if reported { "a" } else { "no" },
+            outcome.audit.len()
+        ),
+    );
     Json(json!({
         "ok": true,
         "id": id,
+        "tool": tool,
+        "result": result,
+        "reported": reported,
         "run": {
             "exitCode": outcome.exit_code,
             "fuelUsed": outcome.fuel_used,
@@ -1058,7 +1432,10 @@ mod tests {
         fs::write(source.join("main.js"), "export default {};\n").expect("entry");
 
         let target = root.join("extensions");
-        assert_eq!(install_into(&source, &target).expect("install"), "hello-tools");
+        assert_eq!(
+            install_into(&source, &target).expect("install"),
+            "hello-tools"
+        );
         assert!(target.join("hello-tools").join("main.js").is_file());
         assert_eq!(inspect(&target)[0]["valid"], true);
 
@@ -1179,9 +1556,11 @@ mod tests {
         )
         .expect("wasm manifest");
         assert_eq!(parsed.runtime.as_deref(), Some("wasm"));
-        assert!(parse_manifest("wasm-tools", &with("runtime", json!("wasm")))
-            .unwrap_err()
-            .contains(".wasm entry"));
+        assert!(
+            parse_manifest("wasm-tools", &with("runtime", json!("wasm")))
+                .unwrap_err()
+                .contains(".wasm entry")
+        );
         let mut js_entry = with("runtime", json!("wasm"));
         js_entry["entry"] = json!("main.js");
         assert!(parse_manifest("wasm-tools", &js_entry)
@@ -1207,6 +1586,7 @@ mod tests {
             api_version: SUPPORTED_API_VERSION,
             requires_studio: None,
             dependencies: Vec::new(),
+            tools: Vec::new(),
             permissions: permissions.into_iter().map(str::to_string).collect(),
         };
         assert!(run_block(&manifest(None, vec![]))
@@ -1220,12 +1600,12 @@ mod tests {
         assert!(run_block(&manifest(Some("wasm"), vec!["network"]))
             .unwrap_or_default()
             .contains("network"));
-        assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"]))
-            .is_none());
-        assert!(
-            run_block(&manifest(Some("wasm"), vec!["workspace.read", "workspace.write"]))
-                .is_none()
-        );
+        assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"])).is_none());
+        assert!(run_block(&manifest(
+            Some("wasm"),
+            vec!["workspace.read", "workspace.write"]
+        ))
+        .is_none());
         assert!(run_block(&manifest(Some("wasm"), vec!["terminal.run"]))
             .unwrap_or_default()
             .contains("terminal.run"));
@@ -1305,15 +1685,21 @@ mod tests {
         assert!(parse_manifest("other-folder", &base)
             .unwrap_err()
             .contains("does not match"));
-        assert!(parse_manifest("hello-tools", &with("version", json!("1.2")))
-            .unwrap_err()
-            .contains("1.2.3"));
-        assert!(parse_manifest("hello-tools", &with("entry", json!("../escape.js")))
-            .unwrap_err()
-            .contains("relative path"));
-        assert!(parse_manifest("hello-tools", &with("entry", json!("/abs.js")))
-            .unwrap_err()
-            .contains("relative path"));
+        assert!(
+            parse_manifest("hello-tools", &with("version", json!("1.2")))
+                .unwrap_err()
+                .contains("1.2.3")
+        );
+        assert!(
+            parse_manifest("hello-tools", &with("entry", json!("../escape.js")))
+                .unwrap_err()
+                .contains("relative path")
+        );
+        assert!(
+            parse_manifest("hello-tools", &with("entry", json!("/abs.js")))
+                .unwrap_err()
+                .contains("relative path")
+        );
         assert!(parse_manifest(
             "hello-tools",
             &with("permissions", json!(["workspace.destroy"]))
@@ -1539,6 +1925,102 @@ mod tests {
         let error = install_into(&source, &target).expect_err("incompatible");
         assert!(error.contains("99.0.0"), "{error}");
         assert!(!target.join("future-tools").exists(), "nothing left behind");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn declared_tools_are_validated_before_the_folder_is_trusted() {
+        let base = json!({
+            "id": "x", "name": "X", "version": "1.0.0",
+            "runtime": "wasm", "entry": "tool.wasm"
+        });
+        let with = |value: Value| {
+            let mut copy = base.clone();
+            copy["tools"] = value;
+            copy
+        };
+        let parsed = parse_manifest(
+            "x",
+            &with(json!([
+                {"name": "count_words", "description": "Counts words.", "inputSchema": {"type": "object"}},
+                {"name": "echo", "description": "Echoes its text.", "entry": "echo.wasm"}
+            ])),
+        )
+        .expect("tools");
+        assert_eq!(parsed.tools.len(), 2);
+        assert_eq!(parsed.tools[1].entry.as_deref(), Some("echo.wasm"));
+        assert!(parsed.tools[0].input_schema.is_some());
+
+        assert!(parse_manifest(
+            "x",
+            &with(json!([{"name":"dup","description":"a"},{"name":"dup","description":"b"}]))
+        )
+        .unwrap_err()
+        .contains("twice"));
+        assert!(
+            parse_manifest("x", &with(json!([{"name":"Bad Name","description":"a"}])))
+                .unwrap_err()
+                .contains("tool name")
+        );
+        assert!(parse_manifest("x", &with(json!([{"name":"ok"}])))
+            .unwrap_err()
+            .contains("description"));
+        assert!(parse_manifest(
+            "x",
+            &with(json!([{"name":"ok","description":"a","entry":"main.js"}]))
+        )
+        .unwrap_err()
+        .contains(".wasm path"));
+        assert!(parse_manifest(
+            "x",
+            &with(json!([{"name":"ok","description":"a","inputSchema":7}]))
+        )
+        .unwrap_err()
+        .contains("object or boolean"));
+        assert!(parse_manifest("x", &with(json!([])))
+            .unwrap_err()
+            .contains("not be empty"));
+        assert!(parse_manifest("x", &with(json!("nope")))
+            .unwrap_err()
+            .contains("list of objects"));
+
+        // A tool without the sandbox runtime would be a promise nothing keeps.
+        let mut no_runtime = base.clone();
+        no_runtime["runtime"] = Value::Null;
+        no_runtime["entry"] = Value::Null;
+        no_runtime["tools"] = json!([{"name": "ok", "description": "a"}]);
+        assert!(parse_manifest("x", &no_runtime)
+            .unwrap_err()
+            .contains("Tools need runtime"));
+    }
+
+    #[test]
+    fn a_tool_module_must_exist_and_inspection_lists_the_tools() {
+        let root = scratch("tools-inspect");
+        let folder = root.join("toolbox");
+        fs::create_dir_all(&folder).expect("folder");
+        fs::write(
+            folder.join("manifest.json"),
+            r#"{"id":"toolbox","name":"Toolbox","version":"1.0.0","runtime":"wasm","entry":"run.wasm","tools":[{"name":"echo","description":"Echoes its text.","entry":"echo.wasm"}]}"#,
+        )
+        .expect("manifest");
+        fs::write(folder.join("run.wasm"), b"\0asm").expect("run module");
+        fs::write(folder.join("echo.wasm"), b"\0asm").expect("echo module");
+
+        let entries = inspect(&root);
+        assert_eq!(entries[0]["valid"], true);
+        assert_eq!(entries[0]["tools"][0]["name"], "echo");
+        assert_eq!(entries[0]["tools"][0]["description"], "Echoes its text.");
+
+        // The tool's own module is checked like the manifest entry.
+        fs::remove_file(folder.join("echo.wasm")).expect("remove tool module");
+        let entries = inspect(&root);
+        assert_eq!(entries[0]["valid"], false);
+        assert!(
+            entries[0]["error"].as_str().unwrap_or("").contains("echo"),
+            "{:?}",
+            entries[0]["error"]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -41,10 +41,14 @@ pub(crate) enum Action {
     Update,
     Settings,
     McpTool,
+    /// Calling a tool an installed extension declares. A different action from
+    /// `McpTool` on purpose: the two are granted separately, because trusting a
+    /// remote server's tool is not the same decision as trusting local code.
+    ExtensionTool,
 }
 
 impl Action {
-    pub(crate) const ALL: [Action; 9] = [
+    pub(crate) const ALL: [Action; 10] = [
         Action::FsRead,
         Action::FsWrite,
         Action::Command,
@@ -54,6 +58,7 @@ impl Action {
         Action::Update,
         Action::Settings,
         Action::McpTool,
+        Action::ExtensionTool,
     ];
 
     pub(crate) fn as_str(self) -> &'static str {
@@ -67,6 +72,7 @@ impl Action {
             Self::Update => "update",
             Self::Settings => "settings",
             Self::McpTool => "mcp_tool",
+            Self::ExtensionTool => "extension_tool",
         }
     }
 
@@ -88,6 +94,7 @@ impl Action {
             Self::Update => "Replace installed software",
             Self::Settings => "Change application settings and keys",
             Self::McpTool => "Call a tool exposed by an MCP server",
+            Self::ExtensionTool => "Call a tool declared by an installed extension",
         }
     }
 

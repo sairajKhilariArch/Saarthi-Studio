@@ -12,8 +12,15 @@
 //! env.write(path_ptr, path_len, data_ptr, data_len) -> i32  0, or < 0
 //! env.data_read(name_ptr, name_len, out_ptr, out_cap) -> i32
 //! env.data_write(name_ptr, name_len, data_ptr, data_len) -> i32
+//! env.arguments(ptr, cap) -> i32                          argument bytes written
+//! env.result(ptr, len) -> i32                             0, or < 0
 //! env.last_error(ptr, cap) -> i32                         message bytes written
 //! ```
+//!
+//! `arguments`/`result` are the tool ABI: a call hands the module the JSON
+//! arguments it was given and expects one JSON-text answer back. They need no
+//! permission of their own — they are the shape of the call, not access to
+//! anything — and a plain run has no arguments, so `arguments` returns 0.
 //!
 //! `read`/`write` work inside the open folder; `data_read`/`data_write` work
 //! inside the extension's own `<extensions>/<id>/data` folder, which is the only
@@ -65,6 +72,9 @@ pub(crate) const WALL_BUDGET: Duration = Duration::from_secs(5);
 pub(crate) struct RunOptions {
     pub cancel: Option<Arc<AtomicBool>>,
     pub wall: Option<Duration>,
+    /// JSON text for a tool call, readable through `env.arguments`. `None` (the
+    /// default) is a plain run.
+    pub arguments: Option<String>,
 }
 
 #[derive(Debug)]
@@ -75,6 +85,9 @@ pub(crate) struct Outcome {
     /// One entry per host call, in order. The caller writes these to the audit
     /// log after the run; the runner never touches the database itself.
     pub audit: Vec<HostCall>,
+    /// What the module reported through `env.result`, if anything. Text, not
+    /// parsed JSON: the caller decides what an unparseable answer means.
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +168,10 @@ struct HostState {
     cancel: Option<Arc<AtomicBool>>,
     deadline: Instant,
     wall: Duration,
+    /// JSON text a tool call was given; empty for a plain run.
+    arguments: String,
+    /// The module's one answer. The first report wins.
+    result: Option<String>,
     /// Set by a host call that saw the run cancelled or out of time. The run is
     /// reported as stopped even if the module swallows the error code.
     stop: Option<String>,
@@ -275,7 +292,10 @@ fn run_bytes(
             ("env", "write") | ("env", "data_write") => {
                 grant.as_ref().map(|grant| grant.write).unwrap_or(false)
             }
-            ("env", "last_error") => true,
+            // The tool ABI is the shape of a call, not access to anything, so
+            // it needs no permission: a module that imports it without a tool
+            // declared simply reads empty arguments.
+            ("env", "last_error") | ("env", "arguments") | ("env", "result") => true,
             _ => false,
         };
         if !allowed {
@@ -298,6 +318,8 @@ fn run_bytes(
             cancel: options.cancel,
             deadline: Instant::now() + wall,
             wall,
+            arguments: options.arguments.unwrap_or_default(),
+            result: None,
             stop: None,
         },
     );
@@ -326,6 +348,24 @@ fn run_bytes(
         .func_wrap("env", "data_write", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, data_ptr: i32, data_len: i32| -> i32 {
             host_data_write(&mut caller, path_ptr, path_len, data_ptr, data_len)
         })
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap(
+            "env",
+            "arguments",
+            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
+                host_arguments(&mut caller, ptr, cap)
+            },
+        )
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap(
+            "env",
+            "result",
+            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> i32 {
+                host_result(&mut caller, ptr, len)
+            },
+        )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
         .func_wrap("env", "last_error", |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
@@ -364,6 +404,7 @@ fn run_bytes(
         fuel_used: store.fuel_consumed().unwrap_or(0),
         elapsed_ms: started.elapsed().as_millis(),
         audit,
+        result: store.data_mut().result.take(),
     })
 }
 
@@ -664,6 +705,69 @@ fn host_last_error(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, cap: i32
         return -1;
     }
     take as i32
+}
+
+/// The JSON arguments of a tool call, written into the module's memory. A plain
+/// run has none, so the answer is 0 bytes rather than an error.
+fn host_arguments(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, cap: i32) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let text = caller.data().arguments.clone();
+    if text.is_empty() {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let limit = (cap.max(0) as usize).min(MAX_HOST_BYTES);
+    if bytes.len() > limit {
+        let message = format!(
+            "The {} argument bytes do not fit the {limit}-byte buffer.",
+            bytes.len()
+        );
+        return caller.data_mut().fail(-4, message);
+    }
+    let Some(memory) = guest_memory(caller) else {
+        return caller
+            .data_mut()
+            .fail(-1, "The module exports no memory for its arguments.");
+    };
+    if memory
+        .write(&mut *caller, ptr.max(0) as usize, bytes)
+        .is_err()
+    {
+        return caller
+            .data_mut()
+            .fail(-4, "The arguments do not fit the module's memory.");
+    }
+    bytes.len() as i32
+}
+
+/// The module's answer to a tool call. One report wins: a second call is refused
+/// instead of replacing the result the caller may already have used.
+fn host_result(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, len: i32) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    if caller.data().result.is_some() {
+        return caller.data_mut().fail(-1, "A result was already reported.");
+    }
+    let Some(bytes) = guest_bytes(caller, ptr, len, MAX_HOST_BYTES) else {
+        return caller.data_mut().fail(
+            -4,
+            format!("A result must be at most {MAX_HOST_BYTES} bytes."),
+        );
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return caller.data_mut().fail(-5, "The result is not UTF-8 text.");
+    };
+    caller.data_mut().result = Some(text);
+    0
 }
 
 /// The root and a label for messages. `&Caller` already borrows the state, so
@@ -1001,6 +1105,7 @@ mod tests {
             RunOptions {
                 cancel: Some(cancel),
                 wall: None,
+                arguments: None,
             },
         )
         .expect_err("a cancelled run is stopped");
@@ -1020,6 +1125,7 @@ mod tests {
             RunOptions {
                 cancel: None,
                 wall: Some(Duration::ZERO),
+                arguments: None,
             },
         )
         .expect_err("the wall budget is enforced");
@@ -1046,5 +1152,58 @@ mod tests {
         assert!(outcome.exit_code > 0, "an error message was written");
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_tool_reads_its_arguments_and_reports_one_result() {
+        let path = module_file(
+            "tool-abi",
+            r#"(module
+                 (import "env" "arguments" (func $args (param i32 i32) (result i32)))
+                 (import "env" "result" (func $result (param i32 i32) (result i32)))
+                 (memory (export "memory") 1)
+                 (data (i32.const 32) "{\"ok\":true}")
+                 (func (export "run") (result i32)
+                   (local $len i32)
+                   (local.set $len (call $args (i32.const 0) (i32.const 64)))
+                   (drop (call $result (i32.const 32) (i32.const 11)))
+                   (local.get $len)))"#,
+        );
+        let outcome = run_file_with(
+            &path,
+            None,
+            RunOptions {
+                cancel: None,
+                wall: None,
+                arguments: Some("{\"text\":\"hi\"}".to_string()),
+            },
+        )
+        .expect("run");
+        assert_eq!(outcome.exit_code, 13, "the thirteen argument bytes arrived");
+        assert_eq!(outcome.result.as_deref(), Some("{\"ok\":true}"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_plain_run_has_no_arguments_and_a_second_result_is_refused() {
+        let path = module_file(
+            "tool-abi-once",
+            r#"(module
+                 (import "env" "arguments" (func $args (param i32 i32) (result i32)))
+                 (import "env" "result" (func $result (param i32 i32) (result i32)))
+                 (memory (export "memory") 1)
+                 (data (i32.const 32) "first")
+                 (func (export "run") (result i32)
+                   (local $len i32)
+                   (local.set $len (call $args (i32.const 0) (i32.const 64)))
+                   (if (i32.ne (local.get $len) (i32.const 0))
+                     (then (return (i32.const 99))))
+                   (drop (call $result (i32.const 32) (i32.const 5)))
+                   (call $result (i32.const 32) (i32.const 5))))"#,
+        );
+        let outcome = run_file(&path, None).expect("run");
+        assert_eq!(outcome.exit_code, -1, "the second report is refused");
+        assert_eq!(outcome.result.as_deref(), Some("first"));
+        let _ = fs::remove_file(&path);
     }
 }

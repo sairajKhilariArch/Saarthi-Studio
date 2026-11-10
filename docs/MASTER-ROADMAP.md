@@ -384,9 +384,19 @@ reads every manifest before judging any, so a dependency is checked against what
 really is installed, and Settings badges an incompatible folder `needs newer
 app` with the requirement in its tooltip.
 
-Remaining: custom tools, provider adapters and UI extensions. Installing still
-grants no capability by itself, and the only reachable surface is the two
-workspace pairs plus `last_error`. A dependency is checked for presence, not for
+Custom tools (2.26.0): a manifest declares `tools` (name, required description,
+optional `.wasm` entry and `inputSchema`; the wasm runtime is required), and the
+sandbox gained the matching ABI — `env.arguments` delivers the call's JSON
+arguments, `env.result` takes exactly one answer. `POST
+/api/extensions/:id/tools/:tool` runs one in the same sandbox as a plain run,
+behind a new `extension_tool` permission action whose `ask` default refuses
+because the route has no prompt, and records the call in `extension_runs`.
+
+Remaining: the agent's tool loop does not offer these tools yet (no catalog block
+and no step kind), `inputSchema` is advertised but not enforced on the arguments,
+and provider adapters and UI extensions do not exist. Installing still grants no
+capability by itself, and the only reachable surface is the two workspace pairs,
+the extension's own data folder, the tool ABI and `last_error`. A dependency is checked for presence, not for
 its own compatibility, and no dependency cycle is detected (a pair that needs
 each other reports each other as installed and both stay runnable).
 

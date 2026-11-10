@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.26.0 (2026-11-10):** Phase 15's custom-tool row moved from Missing to
+Partial: a manifest can declare tools, the sandbox has a tool ABI
+(`env.arguments`/`env.result`), and `POST /api/extensions/:id/tools/:tool` runs
+one behind the new `extension_tool` permission. It is not in the agent's tool
+loop yet and `inputSchema` is not enforced, so the phase is re-derived from its
+now 12 rows (8 working + 1 partial = 8.5/12 = 71%); the overall mean stays 82%.
+
 **Revision 2.25.0 (2026-11-10):** Phase 15 gained a compatibility row —
 `requiresStudio`, `apiVersion` and `dependencies` are declared, reported and
 enforced, so a folder written for a newer build is refused by name instead of
@@ -75,7 +82,7 @@ row below moves, so they cannot drift from the tables.
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
-| 15 | Extension ecosystem | 73% | custom tools, provider adapters, UI extensions |
+| 15 | Extension ecosystem | 71% | agent-visible custom tools, provider adapters, UI extensions |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
@@ -321,7 +328,7 @@ it needs, and both are enforced rather than displayed.
 | Run control | Working (2.23.0) | One run per extension (409 while one is open); `POST /api/extensions/:id/cancel` stops it at the next host call (a pure-compute loop still ends at the fuel limit); a 5-second wall-clock budget is checked at each host boundary; uninstall cancels first; Settings shows `Running…` and `Cancel` |
 | Run history | Working (2.24.0) | `extension_runs` records extension, project, start, duration, exit code, fuel, host calls and error for every run that reached the sandbox, including loader failures and cancellations; `GET /api/extension-runs` returns the newest 50 and Settings lists them |
 | Compatibility and dependencies | Working (2.25.0) | `requiresStudio` (numeric per-part floor against `CARGO_PKG_VERSION`) marks a manifest `valid` but `compatible: false` when this build is older, and both run and install are refused with both versions named; `apiVersion` defaults to 1 and refuses a higher number at parse; `dependencies` (≤16, deduped, validated, no self-reference) are reported as `missingDependencies` and block a run, not an install. Discovery reads every manifest before judging any. Not covered: a dependency's own compatibility, dependency cycles, and an update path that would re-check after the app is upgraded |
-| Custom tools | Missing | — |
+| Custom tools | Partial (2.26.0) | `tools` in the manifest (≤16; name, description, optional `.wasm` entry, optional `inputSchema`; the wasm runtime is required and each module is checked like the entry) and the `env.arguments`/`env.result` ABI; `POST /api/extensions/:id/tools/:tool` runs one in the same sandbox with the same budgets, grants, one-run rule and cancel, answering `{result, reported, run}`. Gated by `extension_tool` (default ask; `ask` refuses with instructions because the route cannot prompt). Not in the agent's tool loop, and `inputSchema` is not enforced on arguments |
 | Provider adapters | Missing | — |
 | UI extensions | Missing | — |
 

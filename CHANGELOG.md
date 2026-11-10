@@ -1,5 +1,47 @@
 # Changelog
 
+## 2.26.0
+
+Extensions can declare tools, and calling one is a real sandboxed run rather
+than a line in a panel.
+
+- `tools` in the manifest: up to 16, each with a name, a description (required,
+  because the model picks tools by it), an optional `.wasm` entry (default: the
+  manifest's own) and an optional `inputSchema`. A manifest declaring tools must
+  declare `runtime: "wasm"`, and a tool's module is checked for existence and
+  containment exactly like the entry file.
+- The sandbox gains a tool ABI: `env.arguments(ptr, cap)` hands the module the
+  JSON arguments of the call and `env.result(ptr, len)` reports exactly one
+  answer (a second report is refused). Neither needs a permission — they are the
+  shape of the call, not access to anything — and a plain run reads no
+  arguments.
+- `POST /api/extensions/:id/tools/:tool` runs the tool with `{arguments}` and
+  answers `{result, reported, run}`; the result is parsed as JSON when it is
+  JSON and returned as text otherwise. Arguments are capped at 64 KiB and the
+  answer at 1 MiB, the same host cap as any other I/O.
+- A call is gated by a new `extension_tool` permission action (default `ask`)
+  with the target `extension/tool`. This route cannot prompt, so `ask` refuses
+  with instructions to save an allow rule and `deny` refuses by rule; a refusal
+  reaches the permission audit, and an allowed call lands in `extension_runs`
+  with its host calls audited like any other run.
+- Tool calls share the run machinery: one run per extension (409 for a second),
+  the same fuel/memory/wall budgets, the same workspace and data grants, and
+  `POST /api/extensions/:id/cancel` stops one at its next host call.
+- Settings → Extensions lists a folder's tools in its row and their descriptions
+  in the row's tooltip.
+- Checks: `cargo test --locked` **493 passed, 1 ignored** (four new: the tool ABI
+  passing arguments and one result, a plain run reading no arguments with a
+  second result refused, the tool declaration rules, and a tool module that must
+  exist); clippy `--all-targets -D warnings` clean; `node --check` clean;
+  frontend 18; version 20; e2e 19.
+- Live headless on a scratch home: the tool was listed with its entry; the call
+  answered 403 before any rule and 200 `{"ok":true}` after an `extension_tool`
+  allow rule, `exitCode 1`, 11 fuel, with a row in `extension-runs`; an unknown
+  tool answered 400 naming it.
+- Not yet: the agent's own tool loop does not offer extension tools (its catalog
+  and a tool step are still to come), `inputSchema` is passed to a model but not
+  enforced on the arguments, and the row's tooltip was not opened in a browser.
+
 ## 2.25.0
 
 An extension can now declare which builds it works on and which other
