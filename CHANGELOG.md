@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.42.0
+
+macOS ships as a real application bundle, and the binary finds its UI inside it.
+
+- `scripts/ci/bundle-macos-app.sh` turns the staged release tree into
+  `Saarthi Studio.app`: the binary in `Contents/MacOS`, the whole UI in
+  `Contents/Resources/static`, an `Info.plist` carrying the staged version, the
+  bundle id `com.saarthi.freeaistudio`, `CFBundleExecutable`, the product name and
+  `APPL` as the package type, plus `PkgInfo`. It is archived as
+  `free-ai-suite_<version>_macos-universal.app.zip` with forward-slash paths, so
+  the archive unpacks the same way everywhere.
+- The packager checks what it assembled before zipping — the executable bit, the
+  UI, and that the plist carries the version and the executable's name — and
+  refuses a stage with no binary, a static tree without `index.html`, or an
+  unusable version. A rebuild replaces the previous bundle instead of merging
+  into it, so no file from an older release rides along.
+- `static_dir_candidates` gained the bundle layout: `<exe>/../Resources/static` is
+  tried after the installed system layout and before a `static/` beside the
+  binary, so one binary serves the .deb/AppImage tree, the portable tarball and
+  the .app. The source tree stays the last resort for `cargo run`.
+- `smoke-package.sh` now accepts the bundle: it unpacks the zip, finds the binary
+  in `Contents/MacOS`, finds the UI in `Contents/Resources/static`, boots it
+  headless against a scratch home, serves `/`, and compares the version it reports
+  with `app/Cargo.toml`.
+- The macOS release job builds the bundle from the same universal tree as the
+  tarball, smokes both, and attaches both to the release; `desktop-ci.yml` runs
+  the packager's regression suite on every push.
+- Checks: `bash scripts/ci/test-bundle.sh` 13 passed (structure, plist keys and
+  values, zip paths, three refusals, rebuild-replaces); `cargo test --locked` 535
+  passed, 1 ignored (1 new: the bundle layout resolves before an adjacent
+  `static/`); clippy `--all-targets -D warnings` clean; frontend 33; version 20;
+  e2e 32. On this machine the bundle was built from the 2.42.0 binary and smoked
+  from its own zip: 6 checks, ready on a free port, HTML UI served, version
+  2.42.0.
+- Not covered: the bundle is unsigned, so Gatekeeper still needs right-click →
+  Open on first launch, and there is still no Windows MSI/EXE. The macOS job's
+  own run of the new steps has not happened yet — this commit is local.
+
 ## 2.41.0
 
 An upgrade can be undone: the build a swap kept can be put back, and a restart

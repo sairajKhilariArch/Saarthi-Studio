@@ -571,4 +571,11 @@ nothing is recorded, the backup is gone, the record names another binary, or the
 backup name is not one this app wrote; the panel says which build is back and where
 the newer one went.
 
-Open: a Windows MSI/EXE, a macOS `.app`/dmg, and a clean uninstall.
+Delivered in 2.42.0: the macOS application bundle. `scripts/ci/bundle-macos-app.sh`
+builds `Saarthi Studio.app` from the staged universal tree — binary in
+`Contents/MacOS`, UI in `Contents/Resources/static`, an `Info.plist` with the
+version, identifier and executable — and `static_dir_candidates` resolves that
+layout, so the bundle runs as an app rather than a binary with no UI. The release
+job smokes the `.app.zip` the same way as a tarball and attaches both.
+
+Open: a Windows MSI/EXE, code signing/notarization, and a clean uninstall.

@@ -71,6 +71,11 @@ jobs:
       - name: Run frontend tests
         run: bash scripts/ci/test-frontend.sh
 
+      # The macOS .app packager decides what a macOS user double-clicks, and it
+      # is plain shell so it runs here on every push, not only in a release.
+      - name: Test the macOS bundle packager
+        run: bash scripts/ci/test-bundle.sh
+
       - name: Build debug binary
         working-directory: app
         run: cargo build --locked

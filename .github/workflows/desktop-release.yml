@@ -317,8 +317,10 @@ jobs:
   macos:
     # macOS ships a portable, UNSIGNED universal (arm64 + x86_64) tarball:
     # binary + full static tree + license, same runtime layout as the Linux
-    # tarball (the binary resolves its UI from static/ next to itself). No
-    # dmg: unsigned .dmg files get worse Gatekeeper treatment than a tarball.
+    # tarball (the binary resolves its UI from static/ next to itself), plus a
+    # `Saarthi Studio.app` bundle built from the same tree, where the binary
+    # lives in Contents/MacOS and the UI in Contents/Resources/static. No dmg:
+    # unsigned .dmg files get worse Gatekeeper treatment than a zip.
     # No codesign or notarization (no available credentials), so Gatekeeper
     # asks the user to right-click -> Open on first launch - documented in
     # README. The headless smoke below proves the merged binary actually
@@ -407,6 +409,14 @@ jobs:
           done
           if [ "$smoke" = "1" ]; then echo "headless server answered the smoke request"; else echo "ERROR: headless server did not answer HTTP"; exit 1; fi
 
+      # A .app is what a macOS user double-clicks; the tarball stays as the
+      # no-bundle fallback. Both are built from the same staged tree.
+      - name: Build the macOS application bundle (.app)
+        run: |
+          set -eu
+          VERSION="${{ steps.meta.outputs.version }}"
+          bash scripts/ci/bundle-macos-app.sh "$(cat dist/stage-name.txt)" "$VERSION" dist
+
       - name: Package portable tarball
         run: |
           set -eu
@@ -417,6 +427,9 @@ jobs:
       - name: Smoke the packaged tarball (unpack, boot, report version)
         run: bash scripts/ci/smoke-package.sh dist/*.tar.gz
 
+      - name: Smoke the app bundle (unpack, boot, report version)
+        run: bash scripts/ci/smoke-package.sh dist/*.app.zip
+
       - name: Validate artifact names
         run: bash scripts/ci/verify-artifacts.sh dist
 
@@ -424,15 +437,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: free-ai-suite-macos-${{ steps.meta.outputs.version }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.app.zip
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach macOS artifact to GitHub release
+      -          name: Attach macOS artifact to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.app.zip
 
   vscode-extension:
     name: Build VS Code extension (.vsix)

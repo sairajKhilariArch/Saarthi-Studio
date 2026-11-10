@@ -283,10 +283,12 @@ fn paths() -> (PathBuf, PathBuf, PathBuf) {
 /// Ordered candidate directories for the static UI. `FREE_AI_STUDIO_STATIC_DIR`
 /// (when set) is authoritative; otherwise the installed system layout
 /// (`<exe dir>/../share/free-ai-suite/static`, used by the .deb and AppImage)
-/// is preferred, then a `static/` directory next to the executable (portable
-/// tarball), and finally the source tree as a `cargo run` development
-/// fallback. Keeping this runtime-resolved is what lets one binary work from
-/// any of those layouts.
+/// is preferred, then a macOS application bundle
+/// (`<exe dir>/../Resources/static`, since the binary sits in
+/// `Contents/MacOS`), then a `static/` directory next to the executable
+/// (portable tarball), and finally the source tree as a `cargo run`
+/// development fallback. Keeping this runtime-resolved is what lets one binary
+/// work from any of those layouts.
 fn static_dir_candidates(exe_dir: Option<&FsPath>, env_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(dir) = env_dir {
@@ -294,6 +296,7 @@ fn static_dir_candidates(exe_dir: Option<&FsPath>, env_dir: Option<PathBuf>) -> 
     }
     if let Some(dir) = exe_dir {
         candidates.push(dir.join("../share/free-ai-suite/static"));
+        candidates.push(dir.join("../Resources/static"));
         candidates.push(dir.join("static"));
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
@@ -5100,17 +5103,42 @@ mod tests {
     }
 
     #[test]
-    fn static_dir_candidates_prefer_env_then_installed_then_adjacent_then_source() {
+    fn static_dir_candidates_prefer_env_then_installed_then_bundle_then_adjacent() {
         let exe_dir = scratch("bin");
         let env_dir = scratch("override");
         let candidates = static_dir_candidates(Some(&exe_dir), Some(env_dir.clone()));
         assert_eq!(candidates[0], env_dir);
         assert_eq!(candidates[1], exe_dir.join("../share/free-ai-suite/static"));
-        assert_eq!(candidates[2], exe_dir.join("static"));
+        // A macOS .app: binary in Contents/MacOS, UI in Contents/Resources.
+        assert_eq!(candidates[2], exe_dir.join("../Resources/static"));
+        assert_eq!(candidates[3], exe_dir.join("static"));
         assert_eq!(
-            candidates[3],
+            candidates[4],
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static")
         );
+    }
+
+    #[test]
+    fn a_bundle_layout_is_resolved_before_the_adjacent_tree() {
+        let root = scratch("macos-bundle");
+        let macos = root.join("Saarthi Studio.app/Contents/MacOS");
+        let resources = root.join("Saarthi Studio.app/Contents/Resources/static");
+        std::fs::create_dir_all(&macos).expect("macos dir");
+        std::fs::create_dir_all(&resources).expect("resources dir");
+        std::fs::write(resources.join("index.html"), "<html></html>").expect("ui");
+
+        let candidates = static_dir_candidates(Some(&macos), None);
+        let found = candidates
+            .into_iter()
+            .find(|dir| dir.join("index.html").is_file())
+            .expect("a candidate resolves in a bundle layout");
+        // The candidate keeps the `..` it was built with; the filesystem is what
+        // decides it is the same folder.
+        assert_eq!(
+            std::fs::canonicalize(&found).expect("the found folder"),
+            std::fs::canonicalize(&resources).expect("the Resources folder")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

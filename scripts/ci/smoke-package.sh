@@ -124,12 +124,17 @@ chmod +x "$binary" 2>/dev/null || true
 pass "artifact contains the binary ($(basename "$search")/$(realpath --relative-to="$search" "$binary" 2>/dev/null || basename "$binary"))"
 
 # The UI is resolved from static/ beside the binary; a package without it boots
-# a server that serves nothing.
+# a server that serves nothing. A macOS .app keeps it one level up instead, in
+# Contents/Resources/static, which the binary resolves as
+# `<exe dir>/../Resources/static`.
 static="$(dirname "$binary")/static"
+bundle_static="$(dirname "$binary")/../Resources/static"
 if [ -f "$static/index.html" ] || [ -f "$static/app.js" ]; then
   pass "the packaged static tree is beside the binary"
+elif [ -f "$bundle_static/index.html" ] || [ -f "$bundle_static/app.js" ]; then
+  pass "the packaged static tree is in the app bundle's Resources"
 else
-  die "no static tree beside the packaged binary ($static)"
+  die "no static tree beside the packaged binary ($static or $bundle_static)"
 fi
 
 # A free port, chosen by binding one and letting go.

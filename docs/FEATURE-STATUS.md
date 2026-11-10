@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.42.0 (2026-11-10):** Phase 18 gained the macOS application bundle:
+`scripts/ci/bundle-macos-app.sh` builds `Saarthi Studio.app` from the staged tree
+and the binary resolves `<exe>/../Resources/static`, so the bundle is a real
+installable app rather than a renamed binary; the release job smokes its zip and
+attaches it. Phase 18's install row moves from Missing to Partial (macOS bundled,
+Windows MSI/EXE and uninstall still absent), so the phase is 10 rows — 9 Working +
+1 Partial = 9.5/10 = 95% — and the overall mean stays 92% (1,659/18, rounded; the
+sum was 1,654 before this row moved).
+
 **Revision 2.41.0 (2026-11-10):** Phase 18 gained the way back: `POST
 /api/update/rollback` restores the backup a swap kept (the copy is hashed first) and
 keeps the build it displaces, refusing without a record, a missing backup, another
