@@ -657,6 +657,26 @@ pub(crate) fn readiness_value(state: &AppState) -> Value {
         Err(error) => check("database", false, true, error.to_string()),
     });
 
+    // The schema version decides whether this build may write here at all, so a
+    // mismatch is reported rather than left to whatever the first query does.
+    let version = open_db(&state.database_path)
+        .and_then(|conn| crate::schema::read_version(&conn));
+    checks.push(match version {
+        Ok(version) if version == crate::schema::SCHEMA_VERSION => {
+            check("schema", true, true, format!("version {version}"))
+        }
+        Ok(version) => check(
+            "schema",
+            false,
+            true,
+            format!(
+                "version {version}; this build expects {}",
+                crate::schema::SCHEMA_VERSION
+            ),
+        ),
+        Err(error) => check("schema", false, true, error.to_string()),
+    });
+
     // A probe file rather than a permission bit: the question is whether a write
     // lands, and only writing answers that.
     let probe = state
@@ -993,7 +1013,14 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["database", "data directory", "provider", "routers", "mcp"]
+            vec![
+                "database",
+                "schema",
+                "data directory",
+                "provider",
+                "routers",
+                "mcp"
+            ]
         );
         assert!(checks
             .iter()

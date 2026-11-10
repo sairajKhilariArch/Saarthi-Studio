@@ -521,5 +521,13 @@ timeline.
 Delivered: Linux `.deb`, AppImage and tarball, a Windows portable zip, an
 unsigned macOS universal tarball, an Android APK/AAB and a VS Code VSIX.
 
-Open: a Windows MSI/EXE, a macOS `.app`/dmg, an update mechanism that preserves
-user data, DB migrations with rollback, and a clean uninstall.
+Delivered in 2.35.0: the data half of an update. `app/src/schema.rs` records the
+schema version in `PRAGMA user_version`; an existing database is copied with
+`VACUUM INTO` and the copy is opened, `quick_check`ed and version-checked before
+a migration runs; a migration that fails restores that copy and leaves the
+version unadvanced so the next boot retries; and a database written by a newer
+build is refused without being touched. Boot logs the outcome to `studio.log`
+and `/api/ready` reports the schema version as a required check.
+
+Open: a Windows MSI/EXE, a macOS `.app`/dmg, the auto-update check itself (and
+the download/verify/swap it needs), and a clean uninstall.

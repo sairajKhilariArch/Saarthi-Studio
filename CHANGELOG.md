@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.35.0
+
+The database now has a version, a copy taken before it is touched, and a way back.
+
+- `PRAGMA user_version` records the schema version (`SCHEMA_VERSION` = 1 in the
+  new `app/src/schema.rs`), so the version travels with the data instead of
+  living in whichever binary happens to open it.
+- A database written by a **newer** build is refused before anything runs, with
+  both versions named: "The database at … was written by a newer Saarthi Studio
+  (schema 2); this build understands schema 1. Update the app instead of opening
+  that database with an older build." The file is left byte for byte untouched,
+  which is the guarantee that makes downgrading safe.
+- An existing database is copied first with `VACUUM INTO` — a consistent
+  snapshot, not a copy of a file that may be mid-write — and the copy is opened,
+  passes `quick_check`, and must still report the version it was taken from
+  before a single migration runs. A copy that fails the check is deleted and the
+  upgrade stops with nothing changed.
+- Migrations no longer discard their errors. Every `let _ = migrate_…` and both
+  `println!("… tables: {error}")` arms became propagated failures with the step
+  named (`conversation projects`, `permissions`, `agent run tables`, …), because
+  a half-migrated database that boots cleanly is the failure mode that loses
+  data quietly.
+- A migration that fails restores the copy — through a staging name, so an
+  interrupted restore cannot leave a truncated file at the real path — drops the
+  `-wal`/`-shm`/`-journal` sidecars that belonged to the replaced file, leaves
+  the version where it was so the next boot retries, and reports both the error
+  and where the copy is. If the restore itself fails, the message says so and
+  names the copy rather than claiming success.
+- Boot records what happened in `studio.log`: `database-created` on a first run,
+  `database-upgraded` with the copy's path on an upgrade. `/api/ready` gained a
+  required `schema` check reporting the version.
+- This is the first version that writes a version at all, so every existing
+  database reports 0, upgrades once, and gets one `history.sqlite3.pre-0.bak`
+  beside it. A no-op boot takes no copy and logs nothing.
+- Checks: `cargo test --locked` 507 passed, 1 ignored (8 new: a fresh database,
+  an upgrade with a verified copy, a newer schema refused byte for byte, a failed
+  upgrade put back, plus four over the copy/restore helpers); clippy
+  `--all-targets -D warnings` clean; `node --check` clean; frontend 21; version
+  20; e2e 32. Live on a scratch home: two boots left exactly one
+  `database-created` line, and `/api/ready` answered `READY True` with
+  `('schema', True, 'version 1')`.
+- Not covered: there is still no auto-update check, installer or uninstaller,
+  and the copy is taken on a schema change only, not before every boot.
+
 ## 2.34.0
 
 The harness now breaks the two things it can break honestly: the database file and

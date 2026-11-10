@@ -67,6 +67,7 @@ mod router_console;
 mod router_env;
 mod router_registry;
 mod runner;
+mod schema;
 mod skills;
 mod terminal;
 mod thinking;
@@ -331,8 +332,114 @@ pub(crate) fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
-    let conn = open_db(path)?;
+/// What an upgrade did, so the boot log can say it happened instead of leaving a
+/// schema change invisible.
+#[derive(Debug)]
+pub(crate) struct SchemaUpgrade {
+    /// The version the database reported before this boot.
+    pub(crate) from: i32,
+    pub(crate) to: i32,
+    /// The verified copy taken before a migration: present only when an existing
+    /// database was actually upgraded.
+    pub(crate) backup: Option<PathBuf>,
+    /// Whether a database file was already there, as opposed to a first run.
+    pub(crate) existed: bool,
+}
+
+impl SchemaUpgrade {
+    /// One line for the process log, or `None` when nothing changed.
+    pub(crate) fn summary(&self) -> Option<String> {
+        if self.from == self.to {
+            return None;
+        }
+        Some(match &self.backup {
+            Some(copy) => format!(
+                "schema {} to {}; a verified copy of the previous database is at {}",
+                self.from,
+                self.to,
+                copy.display()
+            ),
+            None => format!("schema {} to {} (new database)", self.from, self.to),
+        })
+    }
+}
+
+/// Create the schema, or upgrade one that is already there, without risking the
+/// data in it.
+///
+/// Three rules, in order:
+///
+/// 1. A database written by a **newer** build is refused untouched: its schema
+///    holds things this build does not know about, and running older migrations
+///    over it is how data disappears when someone downgrades.
+/// 2. An existing database is copied first — with SQLite's own `VACUUM INTO`, so
+///    the copy is a consistent snapshot — and the copy is opened and checked
+///    before a single migration runs.
+/// 3. A migration that fails puts the copy back and reports both the failure and
+///    where the copy is. Discarding migration errors (`let _ = migrate_…`) left a
+///    half-migrated database and no record that anything had gone wrong.
+fn initialize_database(path: &FsPath) -> Result<SchemaUpgrade, String> {
+    // Checked before `open_db`, which creates the file: a first run has nothing
+    // worth copying, and a copy of an empty database is only noise in the data
+    // directory.
+    let existed = path.exists();
+    let conn = open_db(path)
+        .map_err(|error| format!("Could not open the database {}: {error}", path.display()))?;
+    let from = schema::read_version(&conn).map_err(|error| {
+        format!(
+            "Could not read the schema version of {}: {error}",
+            path.display()
+        )
+    })?;
+    if from > schema::SCHEMA_VERSION {
+        return Err(format!(
+            "The database at {} was written by a newer Saarthi Studio (schema {from}); this build understands schema {}. Update the app instead of opening that database with an older build.",
+            path.display(),
+            schema::SCHEMA_VERSION
+        ));
+    }
+
+    let backup = if existed && from < schema::SCHEMA_VERSION {
+        Some(schema::backup(&conn, path, from)?)
+    } else {
+        None
+    };
+
+    if let Err(error) = apply_schema(&conn) {
+        drop(conn);
+        let restored = match &backup {
+            Some(copy) => match schema::restore(copy, path) {
+                Ok(()) => format!(
+                    "The database was put back as it was from the copy at {}.",
+                    copy.display()
+                ),
+                Err(restore_error) => format!(
+                    "Putting the database back also failed ({restore_error}). The verified copy is still at {}; restore it before starting again.",
+                    copy.display()
+                ),
+            },
+            None => "The file was new, so there was nothing to put back.".to_string(),
+        };
+        return Err(format!(
+            "The database upgrade to schema {} failed: {error}. {restored}",
+            schema::SCHEMA_VERSION
+        ));
+    }
+    schema::write_version(&conn, schema::SCHEMA_VERSION).map_err(|error| {
+        format!("The schema was applied but its version could not be recorded: {error}")
+    })?;
+    Ok(SchemaUpgrade {
+        from,
+        to: schema::SCHEMA_VERSION,
+        backup,
+        existed,
+    })
+}
+
+/// Everything that creates or reshapes a table, with every error propagated: a
+/// migration that silently did nothing is worse than a boot that stops and says
+/// why.
+fn apply_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, folder_path TEXT NOT NULL DEFAULT '',
@@ -353,26 +460,24 @@ fn initialize_database(path: &FsPath) -> rusqlite::Result<()> {
             latency_ms INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER,
             total_tokens INTEGER, fallback_attempts TEXT, error TEXT
         );",
-    )?;
-    let _ = migrate_projects(&conn);
-    let _ = migrate_project_thinking(&conn);
-    let _ = migrate_project_model(&conn);
-    let _ = migrate_request_log_costs(&conn);
-    let _ = migrate_conversation_model(&conn);
-    let _ = permissions::initialize(&conn);
-    let _ = migrate_permission_request_id(&conn);
-    let _ = extensions::initialize(&conn);
-    let _ = skills::initialize(&conn);
-    let _ = memory::initialize(&conn);
-    let _ = embeddings::initialize(&conn);
-    let _ = index::initialize(&conn);
-    if let Err(error) = agent::initialize(&conn) {
-        println!("agent run tables: {error}");
-    }
-    if let Err(error) = workflow::initialize(&conn) {
-        println!("workflow tables: {error}");
-    }
-    migrate_message_attachments(&conn)
+    )
+    .map_err(|error| format!("base tables: {error}"))?;
+    migrate_projects(conn).map_err(|error| format!("conversation projects: {error}"))?;
+    migrate_project_thinking(conn).map_err(|error| format!("project thinking: {error}"))?;
+    migrate_project_model(conn).map_err(|error| format!("project model: {error}"))?;
+    migrate_request_log_costs(conn).map_err(|error| format!("request log costs: {error}"))?;
+    migrate_conversation_model(conn).map_err(|error| format!("conversation model: {error}"))?;
+    permissions::initialize(conn).map_err(|error| format!("permissions: {error}"))?;
+    migrate_permission_request_id(conn)
+        .map_err(|error| format!("permission request ids: {error}"))?;
+    extensions::initialize(conn).map_err(|error| format!("extensions: {error}"))?;
+    skills::initialize(conn).map_err(|error| format!("skills: {error}"))?;
+    memory::initialize(conn).map_err(|error| format!("memory: {error}"))?;
+    embeddings::initialize(conn).map_err(|error| format!("embeddings: {error}"))?;
+    index::initialize(conn).map_err(|error| format!("code index: {error}"))?;
+    agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
+    workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
+    migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))
 }
 
 /// Give an existing messages table its `attachments` column (JSON of {kind,ref}
@@ -647,7 +752,7 @@ fn record_project_folder(state: &AppState, folder: &str) {
     });
 }
 
-fn ensure_setup(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
+fn ensure_setup(state: &AppState) -> Result<SchemaUpgrade, Box<dyn std::error::Error>> {
     if let Some(parent) = state.config_path.parent() {
         fs::create_dir_all(parent)?;
         set_private_permissions(parent, true)?;
@@ -659,14 +764,14 @@ fn ensure_setup(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
     if !state.config_path.exists() {
         save_config_file(&state.config_path, &Config::defaults())?;
     }
-    initialize_database(&state.database_path)?;
+    let upgrade = initialize_database(&state.database_path)?;
     // Warm the active-project pointer (also creates the first project).
     active_project_id(state);
     // Migration, idempotent: any credential still sitting as plaintext in
     // config.json (pre-keychain stores and upgrades) moves into the OS
     // credential store once, and the empty skipped runs cost one file read.
     migrate_secrets_to_keychain(state);
-    Ok(())
+    Ok(upgrade)
 }
 
 /// True when a plaintext secret is still sitting in the config file.
@@ -4202,7 +4307,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         events: events::Hub::new(),
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
-    ensure_setup(&state)?;
+    let upgrade = ensure_setup(&state)?;
     // Scheduled workflows wake on a timer; the first tick is one interval after
     // boot, so starting the app never runs a schedule early.
     workflow::start_scheduler(state.clone());
@@ -4223,6 +4328,16 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             std::env::consts::ARCH
         ),
     );
+    // A schema change is the one upgrade that edits data the user brought from
+    // an older version, so the copy it was taken from is named in the log.
+    if let Some(summary) = upgrade.summary() {
+        let event = if upgrade.existed {
+            "database-upgraded"
+        } else {
+            "database-created"
+        };
+        oplog::record("info", "app", event, summary);
+    }
     // Auto-start runs once the state exists, because it applies the same measured
     // state the Router view shows: only a router that is enabled, installed here
     // and not already answering is started, and one that answers is never adopted.
@@ -5043,5 +5158,189 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
             .unwrap();
         assert_eq!(again, 1);
+    }
+
+    /// A database file plus any copy beside it, cleared before a test runs.
+    fn prepared_database(name: &str) -> PathBuf {
+        let path = scratch(name);
+        let _ = fs::remove_file(&path);
+        if let Some(dir) = path.parent() {
+            let base = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name == base || name.starts_with(&format!("{base}.pre-")) {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+        path
+    }
+
+    #[test]
+    fn a_new_database_records_its_schema_version_and_copies_nothing() {
+        let path = prepared_database("schema-fresh.sqlite3");
+        let upgrade = initialize_database(&path).expect("fresh database");
+        assert_eq!(upgrade.from, 0);
+        assert_eq!(upgrade.to, schema::SCHEMA_VERSION);
+        assert!(!upgrade.existed);
+        assert!(upgrade.backup.is_none(), "a new database needs no copy");
+
+        let conn = open_db(&path).expect("open");
+        assert_eq!(
+            schema::read_version(&conn).expect("version"),
+            schema::SCHEMA_VERSION
+        );
+        drop(conn);
+
+        // A second boot is a no-op: same version, no copy, nothing to report.
+        let again = initialize_database(&path).expect("second boot");
+        assert_eq!(again.from, schema::SCHEMA_VERSION);
+        assert!(again.existed);
+        assert!(again.backup.is_none());
+        assert!(again.summary().is_none(), "a no-op boot says nothing");
+    }
+
+    #[test]
+    fn an_existing_database_is_copied_and_verified_before_it_is_migrated() {
+        let path = prepared_database("schema-upgrade.sqlite3");
+        {
+            // The pre-version shape: conversations and messages, no projects.
+            let conn = open_db(&path).expect("open");
+            conn.execute_batch(
+                "CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL
+                );",
+            )
+            .expect("old schema");
+            conn.execute(
+                "INSERT INTO conversations(id,title,created_at,updated_at) VALUES('kept','Real history',1,1)",
+                [],
+            )
+            .expect("seed");
+        }
+
+        let upgrade = initialize_database(&path).expect("upgrade");
+        assert_eq!(upgrade.from, 0);
+        assert_eq!(upgrade.to, schema::SCHEMA_VERSION);
+        assert!(upgrade.existed);
+        let copy = upgrade.backup.clone().expect("a copy was taken");
+        assert_eq!(copy, schema::backup_path(&path, 0));
+        assert!(copy.exists(), "the copy is on disk");
+
+        // The copy is the database as it was, not a copy of the result: it still
+        // reports the old version and still holds the user's row.
+        let old = open_db(&copy).expect("open copy");
+        assert_eq!(schema::read_version(&old).expect("version"), 0);
+        let kept: String = old
+            .query_row("SELECT title FROM conversations WHERE id='kept'", [], |row| {
+                row.get(0)
+            })
+            .expect("row in the copy");
+        assert_eq!(kept, "Real history");
+        drop(old);
+
+        // The live database was upgraded and kept the row.
+        let conn = open_db(&path).expect("open");
+        assert_eq!(
+            schema::read_version(&conn).expect("version"),
+            schema::SCHEMA_VERSION
+        );
+        let kept: String = conn
+            .query_row("SELECT title FROM conversations WHERE id='kept'", [], |row| {
+                row.get(0)
+            })
+            .expect("row after the upgrade");
+        assert_eq!(kept, "Real history");
+        let project: String = conn
+            .query_row("SELECT project_id FROM conversations WHERE id='kept'", [], |row| {
+                row.get(0)
+            })
+            .expect("backfilled into a project");
+        assert!(!project.is_empty());
+    }
+
+    #[test]
+    fn a_database_from_a_newer_build_is_refused_byte_for_byte() {
+        let path = prepared_database("schema-newer.sqlite3");
+        let future = schema::SCHEMA_VERSION + 1;
+        {
+            let conn = open_db(&path).expect("open");
+            conn.execute_batch("CREATE TABLE marker (id INTEGER PRIMARY KEY, note TEXT);")
+                .expect("table");
+            conn.execute("INSERT INTO marker(note) VALUES('from the future')", [])
+                .expect("seed");
+            schema::write_version(&conn, future).expect("version");
+        }
+        let before = fs::read(&path).expect("read before");
+
+        let error = initialize_database(&path).expect_err("a newer schema is refused");
+        assert!(error.contains("newer Saarthi Studio"), "{error}");
+        assert!(error.contains(&future.to_string()), "{error}");
+        assert!(
+            error.contains(&schema::SCHEMA_VERSION.to_string()),
+            "{error}"
+        );
+        // Nothing happened to it: no migration, no copy, no version bump.
+        assert_eq!(fs::read(&path).expect("read after"), before);
+        assert!(!schema::backup_path(&path, future).exists());
+    }
+
+    #[test]
+    fn a_failed_upgrade_puts_the_database_back() {
+        let path = prepared_database("schema-failed.sqlite3");
+        {
+            // `projects` as a view is enough to make the first migration fail
+            // wherever it fails: the DDL cannot create the table, or the default
+            // project cannot be inserted into the view.
+            let conn = open_db(&path).expect("open");
+            conn.execute_batch(
+                "CREATE VIEW projects AS
+                   SELECT 'p1' AS id, 'Old' AS name, '' AS folder_path,
+                          1.0 AS created_at, 1.0 AS updated_at, NULL AS archived_at;
+                 CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                 );
+                 CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL
+                 );
+                 INSERT INTO conversations(id,title,created_at,updated_at) VALUES('kept','Kept',1,1);",
+            )
+            .expect("damaged schema");
+        }
+
+        let error = initialize_database(&path).expect_err("the upgrade cannot succeed");
+        assert!(error.contains("put back"), "{error}");
+
+        let conn = open_db(&path).expect("open restored");
+        // The version never advanced, so the next boot tries again.
+        assert_eq!(schema::read_version(&conn).expect("version"), 0);
+        // The object the migration could not touch is still what it was...
+        let kind: String = conn
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name='projects'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projects object");
+        assert_eq!(kind, "view");
+        // ...and the row a half-applied migration must not lose is still there.
+        let kept: String = conn
+            .query_row("SELECT title FROM conversations WHERE id='kept'", [], |row| {
+                row.get(0)
+            })
+            .expect("row survived the failed upgrade");
+        assert_eq!(kept, "Kept");
     }
 }
