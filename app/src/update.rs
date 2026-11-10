@@ -508,6 +508,59 @@ pub(crate) async fn stage_from(
     stage_asset(&staged_dir(data_dir), &name, &url, &checksum, &meta).await
 }
 
+/// The `update` gate shared by staging and preparing.
+///
+/// `Ok(scope)` means the attempt may run and the audit row records that scope;
+/// `Err` is the response to send instead. `needs_approval` is what the UI's
+/// `api()` helper looks for before it asks the person and retries once with
+/// `approve: true`.
+enum Gate {
+    Allowed(permissions::Scope),
+    Stop(axum::response::Response),
+}
+
+fn gate_update(state: &AppState, approve: bool, what: &str) -> Gate {
+    let target = "release";
+    let verdict = permissions::check(state, permissions::Action::Update, target, "");
+    if verdict.decision == permissions::Decision::Deny {
+        permissions::record(
+            state,
+            permissions::Action::Update,
+            target,
+            permissions::Decision::Deny,
+            verdict.scope,
+            "",
+            &format!("{what} refused by a saved rule"),
+        );
+        return Gate::Stop(json_error(
+            StatusCode::FORBIDDEN,
+            format!("A saved permission rule denies {what}. Revoke it in Settings → Permissions, then retry."),
+        ));
+    }
+    if verdict.decision == permissions::Decision::Ask && !approve {
+        permissions::record(
+            state,
+            permissions::Action::Update,
+            target,
+            permissions::Decision::Ask,
+            verdict.scope,
+            "",
+            &format!("{what} awaits approval"),
+        );
+        return Gate::Stop(
+            (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!("{what} writes into this app's data directory. Approve it once, or save an allow rule for update."),
+                    "needs_approval": true,
+                })),
+            )
+                .into_response(),
+        );
+    }
+    Gate::Allowed(verdict.scope)
+}
+
 /// `POST /api/update/stage` — download, verify and stage the asset the check
 /// named. Gated on `update`: `ask` needs `{"approve": true}`, `deny` refuses by
 /// rule, and a saved allow lets it run.
@@ -519,44 +572,10 @@ pub(crate) async fn stage_route(
         .get("approve")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let target = "release";
-    let verdict = permissions::check(&state, permissions::Action::Update, target, "");
-    if verdict.decision == permissions::Decision::Deny {
-        permissions::record(
-            &state,
-            permissions::Action::Update,
-            target,
-            permissions::Decision::Deny,
-            verdict.scope,
-            "",
-            "update download refused by a saved rule",
-        );
-        return json_error(
-            StatusCode::FORBIDDEN,
-            "A saved permission rule denies downloading an update. Revoke it in Settings → Permissions, then retry.",
-        );
-    }
-    if verdict.decision == permissions::Decision::Ask && !approve {
-        permissions::record(
-            &state,
-            permissions::Action::Update,
-            target,
-            permissions::Decision::Ask,
-            verdict.scope,
-            "",
-            "update download awaits approval",
-        );
-        // `needs_approval` is what the UI's `api()` helper looks for before it
-        // asks the person and retries once with `approve: true`.
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "Downloading an update writes a release file into the data directory. Approve it once, or save an allow rule for update.",
-                "needs_approval": true,
-            })),
-        )
-            .into_response();
-    }
+    let scope = match gate_update(&state, approve, "downloading an update") {
+        Gate::Allowed(scope) => scope,
+        Gate::Stop(response) => return response,
+    };
 
     let dir = match data_dir(&state) {
         Ok(dir) => dir,
@@ -571,9 +590,9 @@ pub(crate) async fn stage_route(
             permissions::record(
                 &state,
                 permissions::Action::Update,
-                target,
+                "release",
                 permissions::Decision::Allow,
-                verdict.scope,
+                scope,
                 "",
                 "update downloaded, verified and staged",
             );
@@ -601,6 +620,322 @@ pub(crate) async fn discard_route(State(state): State<AppState>) -> axum::respon
         Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     match discard_staged(&dir) {
+        Ok(removed) => Json(json!({"ok": true, "removed": removed})).into_response(),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+/* ---- preparing a staged download ---------------------------------- */
+
+/// Where an unpacked release waits: inside the same `updates` folder as staging,
+/// so it travels with the data directory and never lands in the install tree the
+/// running build was started from.
+pub(crate) fn prepared_dir(data_dir: &FsPath) -> PathBuf {
+    staged_dir(data_dir).join("prepared")
+}
+
+fn prepared_manifest_path(data_dir: &FsPath) -> PathBuf {
+    prepared_dir(data_dir).join("prepared.json")
+}
+
+/// The archive kind an asset name describes. `None` means this build has no
+/// extractor for it, which is refused rather than guessed at.
+fn archive_of(name: &str) -> Option<installer::Archive> {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".zip") {
+        Some(installer::Archive::Zip)
+    } else if lower.ends_with(".tar.gz") {
+        Some(installer::Archive::TarGz)
+    } else if lower.ends_with(".tar.zst") {
+        Some(installer::Archive::TarZst)
+    } else {
+        None
+    }
+}
+
+/// A version becomes a directory name, so only characters that cannot escape or
+/// confuse a path survive.
+fn version_dir_name(version: &str) -> Option<String> {
+    let trimmed = version.trim().trim_start_matches(['v', 'V']);
+    let usable = !trimmed.is_empty()
+        && trimmed.len() <= 40
+        && !trimmed.contains("..")
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        });
+    usable.then(|| trimmed.to_string())
+}
+
+/// How strongly a file name looks like the binary that makes a release runnable.
+/// The crate's own name wins; a bundle named after the product is accepted second.
+fn app_binary_rank(path: &FsPath) -> Option<u8> {
+    let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    match stem {
+        "free-ai-studio" | "saarthi-studio" => Some(0),
+        _ if stem.starts_with("free-ai-studio") => Some(1),
+        _ if stem.starts_with("saarthi") => Some(2),
+        _ => None,
+    }
+}
+
+/// Find the binary inside an unpacked release. Bounded in depth and entries so a
+/// hostile archive cannot make the app walk forever.
+fn find_app_binary(root: &FsPath) -> Option<PathBuf> {
+    let mut best: Option<(u8, PathBuf)> = None;
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 6 || seen > 5_000 {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                stack.push((entry.path(), depth + 1));
+                continue;
+            }
+            let path = entry.path();
+            let Some(rank) = app_binary_rank(&path) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .map(|(best_rank, _)| rank < *best_rank)
+                .unwrap_or(true)
+            {
+                best = Some((rank, path));
+            }
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
+/// Verify a staged download again and unpack it into `updates/prepared/<version>`.
+///
+/// The hash is re-checked because this is the first step that acts on the bytes:
+/// `/api/update/staged` compares sizes only, which notices a deletion and is not
+/// enough to trust the file again. A tree without a runnable binary is removed and
+/// refused — unpacking something that cannot start is not a prepared update.
+pub(crate) fn prepare_from(data_dir: &FsPath, staged: &Value) -> Result<Value, StageError> {
+    let name = staged
+        .get("asset")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let recorded = staged
+        .get("sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let version = staged
+        .get("latest")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(file) = safe_staged_file(data_dir, name) else {
+        return Err(StageError::Refused(
+            "Nothing is staged: download an update first.".to_string(),
+        ));
+    };
+    if !file.is_file() {
+        return Err(StageError::Refused(format!(
+            "The staged file {name} is missing; download the update again."
+        )));
+    }
+    let Some(version) = version_dir_name(version) else {
+        return Err(StageError::Refused(format!(
+            "{version:?} is not a version this app will unpack into a folder."
+        )));
+    };
+    let Some(archive) = archive_of(name) else {
+        return Err(StageError::Refused(format!(
+            "{name} is not an archive this build can unpack (.zip, .tar.gz or .tar.zst)."
+        )));
+    };
+    if recorded.len() != 64
+        || !recorded
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(StageError::Refused(format!(
+            "The staged record has no usable sha256 for {name}; download the update again."
+        )));
+    }
+    let actual = installer::sha256_file(&file).map_err(StageError::Failed)?;
+    if !actual.eq_ignore_ascii_case(recorded) {
+        return Err(StageError::Refused(
+            "The staged file no longer matches the sha256 it was verified at, so it was not unpacked. Discard it and download the update again.".to_string(),
+        ));
+    }
+
+    let root = prepared_dir(data_dir);
+    let target = root.join(&version);
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|error| {
+            StageError::Failed(format!("Could not clear {}: {error}", target.display()))
+        })?;
+    }
+    let files = installer::extract(archive, &file, &target).map_err(|error| {
+        let _ = fs::remove_dir_all(&target);
+        StageError::Failed(error)
+    })?;
+    let Some(binary) = find_app_binary(&target) else {
+        let _ = fs::remove_dir_all(&target);
+        return Err(StageError::Refused(format!(
+            "{name} unpacks to {files} files but none of them is a Saarthi Studio binary, so it was not prepared."
+        )));
+    };
+    let relative = binary
+        .strip_prefix(&target)
+        .unwrap_or(&binary)
+        .to_string_lossy()
+        .to_string();
+    let prepared = json!({
+        "format": "saarthi.update.prepared",
+        "version": 1,
+        "latest": version,
+        "current": env!("CARGO_PKG_VERSION"),
+        "asset": name,
+        "sha256": actual,
+        "bytes": staged.get("bytes").cloned().unwrap_or(Value::Null),
+        "root": target.to_string_lossy(),
+        "binary": relative,
+        "binary_path": binary.to_string_lossy(),
+        "files": files,
+        "prepared_at": now_seconds(),
+        // The running build is untouched on purpose, so the payload says so.
+        "replaces_running_binary": false,
+    });
+    let encoded = serde_json::to_vec_pretty(&prepared).map_err(|error| {
+        StageError::Failed(format!("Could not encode the prepared record: {error}"))
+    })?;
+    fs::write(prepared_manifest_path(data_dir), encoded).map_err(|error| {
+        StageError::Failed(format!(
+            "The release unpacked but its record could not be written: {error}"
+        ))
+    })?;
+    Ok(prepared)
+}
+
+/// What is prepared right now, with whether the unpacked tree and its binary are
+/// still there.
+pub(crate) fn prepared(data_dir: &FsPath) -> Value {
+    let manifest = fs::read(prepared_manifest_path(data_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let Some(manifest) = manifest else {
+        return json!({"ok": true, "prepared": Value::Null, "present": false, "binary_exists": false});
+    };
+    let present = manifest
+        .get("root")
+        .and_then(Value::as_str)
+        .map(|root| !root.is_empty() && FsPath::new(root).is_dir())
+        .unwrap_or(false);
+    let binary_exists = manifest
+        .get("binary_path")
+        .and_then(Value::as_str)
+        .map(|path| FsPath::new(path).is_file())
+        .unwrap_or(false);
+    json!({"ok": true, "prepared": manifest, "present": present, "binary_exists": binary_exists})
+}
+
+/// Remove an unpacked release and its record. Like discarding a staged download,
+/// this only touches files the app wrote itself, so it is never gated.
+pub(crate) fn discard_prepared(data_dir: &FsPath) -> Result<bool, String> {
+    let mut removed = false;
+    let version = fs::read(prepared_manifest_path(data_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|manifest| {
+            manifest
+                .get("latest")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .and_then(|version| version_dir_name(&version));
+    if let Some(version) = version {
+        let target = prepared_dir(data_dir).join(version);
+        if target.is_dir() {
+            fs::remove_dir_all(&target)
+                .map_err(|error| format!("Could not remove {}: {error}", target.display()))?;
+            removed = true;
+        }
+    }
+    let manifest = prepared_manifest_path(data_dir);
+    if manifest.is_file() {
+        fs::remove_file(&manifest)
+            .map_err(|error| format!("Could not remove {}: {error}", manifest.display()))?;
+        removed = true;
+    }
+    Ok(removed)
+}
+
+/// `POST /api/update/prepare` — verify a staged download again, unpack it beside
+/// the data directory and name the binary that makes it runnable. Gated on
+/// `update` exactly like the download, because writing an executable this app made
+/// from a release is the same kind of act.
+pub(crate) async fn prepare_route(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> axum::response::Response {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let scope = match gate_update(&state, approve, "unpacking the staged update") {
+        Gate::Allowed(scope) => scope,
+        Gate::Stop(response) => return response,
+    };
+    let dir = match data_dir(&state) {
+        Ok(dir) => dir,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let staged = read_manifest(&dir);
+    let Some(staged) = staged.filter(|staged| !staged.is_null()) else {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Nothing is staged to prepare. Download an update first.",
+        );
+    };
+    match prepare_from(&dir, &staged) {
+        Ok(prepared) => {
+            permissions::record(
+                &state,
+                permissions::Action::Update,
+                "release",
+                permissions::Decision::Allow,
+                scope,
+                "",
+                "staged update verified and unpacked",
+            );
+            Json(json!({"ok": true, "prepared": prepared})).into_response()
+        }
+        Err(error) => json_error(error.status(), error.message().to_string()),
+    }
+}
+
+/// `GET /api/update/prepared` — what is unpacked and whether its binary is still
+/// there. Read-only over the app's own data directory, so it is not gated.
+pub(crate) async fn prepared_route(State(state): State<AppState>) -> axum::response::Response {
+    match data_dir(&state) {
+        Ok(dir) => Json(prepared(&dir)).into_response(),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+/// `POST /api/update/prepared/discard` — remove an unpacked release.
+pub(crate) async fn discard_prepared_route(
+    State(state): State<AppState>,
+) -> axum::response::Response {
+    let dir = match data_dir(&state) {
+        Ok(dir) => dir,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    match discard_prepared(&dir) {
         Ok(removed) => Json(json!({"ok": true, "removed": removed})).into_response(),
         Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
@@ -900,5 +1235,177 @@ mod tests {
             .expect("list")
             .iter()
             .any(|name| name == "free-ai-suite_2.36.0_windows-x86_64.zip"));
+    }
+
+    fn write_zip(path: &FsPath, entries: &[(&str, &[u8])]) {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(path).expect("zip"));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, body) in entries {
+            writer.start_file(*name, options).expect("entry");
+            writer.write_all(body).expect("write");
+        }
+        writer.finish().expect("finish");
+    }
+
+    fn staged_record(version: &str, asset: &str, sha: &str) -> Value {
+        json!({
+            "format": "saarthi.update.staged",
+            "version": 1,
+            "latest": version,
+            "asset": asset,
+            "sha256": sha,
+            "bytes": 12,
+        })
+    }
+
+    #[test]
+    fn preparing_is_refused_when_nothing_is_staged() {
+        let dir = scratch("prepare-empty");
+        // No asset name at all: there is nothing to point at.
+        let error = prepare_from(&dir, &staged_record("9.9.9", "", &"0".repeat(64)))
+            .expect_err("nothing staged");
+        assert!(
+            error.message().contains("Nothing is staged"),
+            "{}",
+            error.message()
+        );
+        // A record whose file was removed says so instead of unpacking nothing.
+        let error = prepare_from(
+            &dir,
+            &staged_record("9.9.9", "release.zip", &"0".repeat(64)),
+        )
+        .expect_err("missing file");
+        assert!(
+            error.message().contains("is missing"),
+            "{}",
+            error.message()
+        );
+        assert!(!prepared_dir(&dir).exists());
+    }
+
+    #[test]
+    fn preparing_refuses_a_staged_file_whose_bytes_changed() {
+        let dir = scratch("prepare-changed");
+        let staging = staged_dir(&dir);
+        fs::create_dir_all(&staging).expect("staging");
+        let name = "free-ai-suite_9.9.9_windows-x86_64.zip";
+        fs::write(staging.join(name), b"replaced after verification").expect("write");
+        // A well-formed hash that is simply not this file's hash.
+        let error = prepare_from(&dir, &staged_record("9.9.9", name, &"a".repeat(64)))
+            .expect_err("changed bytes");
+        assert!(matches!(error, StageError::Refused(_)), "{error:?}");
+        assert!(
+            error.message().contains("no longer matches"),
+            "{}",
+            error.message()
+        );
+        // Nothing is unpacked from a file that cannot be trusted again.
+        assert!(!prepared_dir(&dir).join("9.9.9").exists());
+    }
+
+    #[test]
+    fn a_verified_zip_is_unpacked_and_its_binary_named() {
+        let dir = scratch("prepare-zip");
+        let staging = staged_dir(&dir);
+        fs::create_dir_all(&staging).expect("staging");
+        let name = "free-ai-suite_9.9.9_windows-x86_64.zip";
+        let archive = staging.join(name);
+        write_zip(
+            &archive,
+            &[
+                ("free-ai-studio.exe", b"binary"),
+                ("static/index.html", b"<html></html>"),
+                ("lib/webview.dll", b"dll"),
+            ],
+        );
+        let sha = installer::sha256_file(&archive).expect("hash");
+        let prepared = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect("prepare");
+
+        assert_eq!(prepared["latest"], "9.9.9");
+        assert_eq!(prepared["binary"], "free-ai-studio.exe");
+        assert_eq!(prepared["files"], 3);
+        assert_eq!(prepared["sha256"], sha);
+        assert_eq!(prepared["replaces_running_binary"], false);
+        assert!(FsPath::new(prepared["binary_path"].as_str().expect("path")).is_file());
+
+        let seen = self::prepared(&dir);
+        assert_eq!(seen["present"], true);
+        assert_eq!(seen["binary_exists"], true);
+        assert_eq!(seen["prepared"]["latest"], "9.9.9");
+
+        assert!(discard_prepared(&dir).expect("discard"));
+        let gone = self::prepared(&dir);
+        assert_eq!(gone["present"], false);
+        assert_eq!(gone["prepared"], Value::Null);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_archive_without_a_binary_is_refused_and_cleaned_up() {
+        let dir = scratch("prepare-no-binary");
+        let staging = staged_dir(&dir);
+        fs::create_dir_all(&staging).expect("staging");
+        let name = "free-ai-suite_9.9.9_windows-x86_64.zip";
+        let archive = staging.join(name);
+        write_zip(&archive, &[("README.txt", b"notes")]);
+        let sha = installer::sha256_file(&archive).expect("hash");
+        let error = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect_err("no binary");
+        assert!(
+            error.message().contains("Saarthi Studio binary"),
+            "{}",
+            error.message()
+        );
+        // A tree that cannot start is not left behind as a "prepared update".
+        assert!(!prepared_dir(&dir).join("9.9.9").exists());
+        assert_eq!(self::prepared(&dir)["present"], false);
+    }
+
+    #[test]
+    fn a_version_used_as_a_folder_name_cannot_escape() {
+        assert_eq!(version_dir_name("v2.38.0").as_deref(), Some("2.38.0"));
+        assert_eq!(
+            version_dir_name("2.38.0-rc.1").as_deref(),
+            Some("2.38.0-rc.1")
+        );
+        assert!(version_dir_name("../../etc").is_none());
+        assert!(version_dir_name("2.38/0").is_none());
+        assert!(version_dir_name("").is_none());
+        assert!(version_dir_name(&"9".repeat(41)).is_none());
+    }
+
+    #[test]
+    fn a_gzipped_tarball_prepares_the_same_way() {
+        let dir = scratch("prepare-gz");
+        let staging = staged_dir(&dir);
+        fs::create_dir_all(&staging).expect("staging");
+        let name = "free-ai-suite_9.9.9_linux-x86_64.tar.gz";
+        let archive = staging.join(name);
+        {
+            let encoder = flate2::write::GzEncoder::new(
+                std::fs::File::create(&archive).expect("gz"),
+                flate2::Compression::fast(),
+            );
+            let mut builder = tar::Builder::new(encoder);
+            let body = b"binary";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "free-ai-studio", body.as_slice())
+                .expect("append");
+            builder.finish().expect("tar finish");
+            builder
+                .into_inner()
+                .expect("inner")
+                .finish()
+                .expect("gz finish");
+        }
+        let sha = installer::sha256_file(&archive).expect("hash");
+        let prepared = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect("prepare");
+        assert_eq!(prepared["binary"], "free-ai-studio");
+        assert_eq!(prepared["files"], 1);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

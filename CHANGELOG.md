@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.38.0
+
+A verified download can now be unpacked and checked, and the panel says exactly
+where the new binary is — while the running build stays untouched.
+
+- The extractor gained gzip. This app's own Linux and macOS artifacts are
+  `.tar.gz`, which no extractor here could read, so `Archive::TarGz` now unpacks
+  through the same escape-proof `untar` that the zstd tarballs already used
+  (`unpack_in` refuses absolute paths and `..`). One new dependency, `flate2`, on
+  its pure-Rust backend so no C toolchain joins the build.
+- `POST /api/update/prepare` re-checks the staged file's sha256 before touching it
+  — the staged view compares sizes only, which notices a deletion and is not
+  enough to trust the bytes again — and refuses a non-archive name, a version that
+  cannot be a folder name, and a file whose bytes changed. It then unpacks into
+  `updates/prepared/<version>/` and records `prepared.json`: version, asset,
+  sha256, root, the binary's relative path, the file count and the time.
+- An archive that unpacks without a `free-ai-studio`/`saarthi` binary is removed
+  and refused, because a tree that cannot start is not a prepared update. The
+  search is bounded (depth 6, 5,000 entries) so a hostile archive cannot make the
+  app walk forever.
+- Gated on `update` exactly like the download — saved `deny` is 403, `ask` is 409
+  with `needs_approval`, allow runs it — and audited. Staging and preparing now
+  share one gate helper, so the two cannot drift apart.
+- `GET /api/update/prepared` reports the record plus `present` and
+  `binary_exists`; `POST /api/update/prepared/discard` removes the unpacked tree
+  and its record and is never gated, because it only deletes files this app wrote.
+- Settings → Privacy & about gained **Prepare update** and **Remove prepared
+  update**, with a line naming the folder and the binary and saying that this
+  running build is unchanged.
+- Checks: `cargo test --locked` 524 passed, 1 ignored (6 new: nothing staged, a
+  changed file, a real zip whose binary is found, an archive with no binary
+  cleaned up, a version used as a folder name refused, and a real `.tar.gz` built
+  inside the test); clippy `--all-targets -D warnings` clean; `node --check`
+  clean; frontend 29 (2 new); version 20; e2e 32.
+- Not covered: nothing swaps the running binary, there is no MSI/EXE/.app and no
+  uninstaller, and an unpacked tree is only removed when the user asks or a new
+  preparation replaces it.
+
 ## 2.37.0
 
 An available update can now be downloaded and verified — and deliberately not

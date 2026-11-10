@@ -26,6 +26,8 @@ pub(crate) enum Archive {
     /// A single file dropped in place, nothing to unpack.
     None,
     Zip,
+    /// The portable Linux and macOS artifacts are gzipped tarballs.
+    TarGz,
     TarZst,
 }
 
@@ -34,6 +36,7 @@ impl Archive {
         match self {
             Archive::None => "none",
             Archive::Zip => "zip",
+            Archive::TarGz => "tar-gz",
             Archive::TarZst => "tar-zst",
         }
     }
@@ -188,6 +191,7 @@ pub(crate) fn extract(archive: Archive, source: &FsPath, dest: &FsPath) -> Resul
     match archive {
         Archive::None => Ok(0),
         Archive::Zip => extract_zip(source, dest),
+        Archive::TarGz => extract_tar_gz(source, dest),
         Archive::TarZst => extract_tar_zst(source, dest),
     }
 }
@@ -245,7 +249,25 @@ fn extract_tar_zst(source: &FsPath, dest: &FsPath) -> Result<usize, String> {
             source.display()
         )
     })?;
-    let mut tar = tar::Archive::new(decoder);
+    untar(tar::Archive::new(decoder), source, dest)
+}
+
+fn extract_tar_gz(source: &FsPath, dest: &FsPath) -> Result<usize, String> {
+    let file = File::open(source)
+        .map_err(|error| format!("Could not open {}: {error}", source.display()))?;
+    // A corrupt gzip frame surfaces as a read error inside `untar`, which names
+    // the archive it came from.
+    let decoder = flate2::read::GzDecoder::new(BufReader::new(file));
+    untar(tar::Archive::new(decoder), source, dest)
+}
+
+/// The tar half both decoders share: `unpack_in` refuses absolute paths and `..`,
+/// and preserves modes, so an entry cannot escape `dest`.
+fn untar<T: Read>(
+    mut tar: tar::Archive<T>,
+    source: &FsPath,
+    dest: &FsPath,
+) -> Result<usize, String> {
     fs::create_dir_all(dest)
         .map_err(|error| format!("Could not create {}: {error}", dest.display()))?;
 

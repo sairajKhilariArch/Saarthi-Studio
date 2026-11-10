@@ -55,6 +55,7 @@ function setSettingsSection(name) {
   if (name === "about") {
     void loadAppVersion();
     void loadStagedUpdate();
+    void loadPreparedUpdate();
   }
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
@@ -132,6 +133,10 @@ function setupSettingsNav() {
   if ($("updateCheck")) $("updateCheck").addEventListener("click", () => void checkForUpdates());
   if ($("updateStage")) $("updateStage").addEventListener("click", () => void stageUpdate());
   if ($("updateDiscard")) $("updateDiscard").addEventListener("click", () => void discardUpdate());
+  if ($("updatePrepare")) $("updatePrepare").addEventListener("click", () => void prepareUpdate());
+  if ($("updatePreparedDiscard")) {
+    $("updatePreparedDiscard").addEventListener("click", () => void discardPreparedUpdate());
+  }
   $("diagArea").addEventListener("change", () => void loadDiagnostics());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
@@ -985,12 +990,27 @@ function stagedStatusText(staged) {
   return `Staged ${staged.asset}${size} for ${staged.latest}.${verified} It is verified but not installed.`;
 }
 
+/* A prepared release is unpacked and verified but not installed: the running
+   copy keeps going, so the sentence names the path to start instead. */
+function preparedStatusText(prepared) {
+  if (!prepared || !prepared.latest) return "";
+  const where = typeof prepared.root === "string" && prepared.root ? prepared.root : "the data directory";
+  const binary = typeof prepared.binary === "string" && prepared.binary ? prepared.binary : "its binary";
+  return `Prepared ${prepared.latest} at ${where} (${binary}). Start that copy yourself; this running build is unchanged.`;
+}
+
 function showUpdateActions(flags) {
   if (flags.stage !== undefined && $("updateStage")) {
     $("updateStage").classList.toggle("hidden", !flags.stage);
   }
   if (flags.discard !== undefined && $("updateDiscard")) {
     $("updateDiscard").classList.toggle("hidden", !flags.discard);
+  }
+  if (flags.prepare !== undefined && $("updatePrepare")) {
+    $("updatePrepare").classList.toggle("hidden", !flags.prepare);
+  }
+  if (flags.preparedDiscard !== undefined && $("updatePreparedDiscard")) {
+    $("updatePreparedDiscard").classList.toggle("hidden", !flags.preparedDiscard);
   }
 }
 
@@ -1004,7 +1024,10 @@ async function loadStagedUpdate() {
     if (staged && data.size_matches === false) {
       host.textContent += " The file is not the size it was verified at; discard it and stage it again.";
     }
-    showUpdateActions({ discard: Boolean(staged && data.present) });
+    showUpdateActions({
+      discard: Boolean(staged && data.present),
+      prepare: Boolean(staged && data.present),
+    });
   } catch {
     host.textContent = "";
   }
@@ -1035,6 +1058,63 @@ async function stageUpdate() {
     status.textContent = `Download failed: ${error && error.message ? error.message : "no answer"}`;
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+async function loadPreparedUpdate() {
+  const host = $("updatePrepared");
+  if (!host) return;
+  try {
+    const { data } = await api("/api/update/prepared");
+    const prepared = data && data.prepared ? data.prepared : null;
+    host.textContent = preparedStatusText(prepared);
+    if (prepared && data.binary_exists === false) {
+      host.textContent += " The unpacked binary is gone; prepare the update again.";
+    }
+    showUpdateActions({ preparedDiscard: Boolean(prepared && data.present) });
+  } catch {
+    host.textContent = "";
+  }
+}
+
+async function prepareUpdate() {
+  const status = $("updateStatus");
+  const button = $("updatePrepare");
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Verifying and unpacking…";
+  try {
+    const { ok, data } = await api("/api/update/prepare", {
+      method: "POST",
+      body: "{}",
+      confirmApproval: true,
+    });
+    if (!ok) {
+      if (status) status.textContent = `Could not prepare the update: ${data.error || "no answer"}`;
+      return;
+    }
+    if (status) status.textContent = `Prepared ${data.prepared.latest}.`;
+    await loadPreparedUpdate();
+  } catch (error) {
+    if (status) status.textContent = `Could not prepare the update: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function discardPreparedUpdate() {
+  const status = $("updateStatus");
+  try {
+    const { ok, data } = await api("/api/update/prepared/discard", {
+      method: "POST",
+      body: "{}",
+    });
+    if (status) {
+      status.textContent =
+        ok && data.removed ? "The prepared update was removed." : "Nothing was prepared.";
+    }
+    await loadPreparedUpdate();
+  } catch (error) {
+    if (status) status.textContent = `Could not remove the prepared update: ${error.message}`;
   }
 }
 
@@ -1078,6 +1158,7 @@ async function checkForUpdates() {
     // Only a newer release with an asset for this machine can be downloaded.
     showUpdateActions({ stage: Boolean(data && data.update_available && data.asset) });
     await loadStagedUpdate();
+    await loadPreparedUpdate();
   } catch (error) {
     status.textContent = `Update check failed: ${error && error.message ? error.message : "no answer"}`;
   } finally {

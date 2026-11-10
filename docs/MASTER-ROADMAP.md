@@ -543,5 +543,13 @@ so only a matching file is ever renamed into place, records it in
 `GET /api/update/staged` and `POST /api/update/staged/discard` manage what is
 waiting, and the About card can download and discard it.
 
-Open: applying a staged update, a Windows MSI/EXE, a macOS `.app`/dmg, and a
-clean uninstall.
+Delivered in 2.38.0: the prepare step, and gzip for the extractor. `POST
+/api/update/prepare` re-checks the staged sha256 (the staged view compares sizes
+only), unpacks `.zip`/`.tar.gz`/`.tar.zst` through escape-proof extraction into
+`updates/prepared/<version>/`, refuses a tree with no runnable binary, and records
+what it unpacked. `GET /api/update/prepared` and its discard route manage the
+result; both the download and the prepare are gated on `update` through one
+helper.
+
+Open: applying a prepared update (swapping the running binary), a Windows
+MSI/EXE, a macOS `.app`/dmg, and a clean uninstall.

@@ -275,3 +275,20 @@ test("stagedStatusText stays empty when nothing is staged", () => {
   assert.equal(call("stagedStatusText(null)"), "");
   assert.equal(call("stagedStatusText({})"), "");
 });
+
+test("preparedStatusText names the folder and says the running build is unchanged", () => {
+  const text = call(`preparedStatusText({
+    latest: "2.38.0", root: "C:/data/updates/prepared/2.38.0", binary: "free-ai-studio.exe"
+  })`);
+  assert.ok(text.includes("2.38.0"), text);
+  assert.ok(text.includes("C:/data/updates/prepared/2.38.0"), text);
+  assert.ok(text.includes("free-ai-studio.exe"), text);
+  assert.ok(text.includes("unchanged"), text);
+  assert.ok(text.includes("Start that copy"), text);
+});
+
+test("preparedStatusText stays empty when nothing is prepared", () => {
+  assert.equal(call("preparedStatusText(null)"), "");
+  assert.equal(call("preparedStatusText({})"), "");
+  assert.equal(call("preparedStatusText({ latest: \"\" })"), "");
+});

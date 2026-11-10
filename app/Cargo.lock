@@ -1072,11 +1072,12 @@ dependencies = [
 
 [[package]]
 name = "free-ai-studio"
-version = "2.37.0"
+version = "2.38.0"
 dependencies = [
  "axum",
  "axum-server",
  "bytes",
+ "flate2",
  "futures-util",
  "getrandom 0.2.15",
  "keyring",
