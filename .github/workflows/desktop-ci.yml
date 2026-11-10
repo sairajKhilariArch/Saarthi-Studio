@@ -88,6 +88,35 @@ jobs:
       - name: Run end-to-end smoke
         run: bash scripts/ci/test-e2e.sh
 
+  windows:
+    # Windows was only ever built on a tag: a source break could reach a release
+    # before any test ran there. WebView2 and the MSVC toolchain ship on the
+    # runner, and `.cargo/config.toml` already scopes mold and `-Z threads` to
+    # Linux, so the default `gui` feature links without extra setup. Linux keeps
+    # clippy and the end-to-end smoke; this job is build + tests.
+    name: Test and build desktop (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up nightly Rust (see rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Build debug binary
+        working-directory: app
+        run: cargo build --locked
+
+      - name: Run desktop tests
+        working-directory: app
+        run: cargo test --locked
+
   macos:
     # Keep macOS compiling: the release pipeline merges a universal binary,
     # and an Intel-only or macOS-only source break fails there rather than

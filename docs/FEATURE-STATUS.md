@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.32.0 (2026-11-10):** Phase 16's Windows row moved from Missing to
+Working — `desktop-ci.yml` now builds and tests the desktop on `windows-latest`
+(2.32.0) — so the phase is 9 of 9 rows = 100%, and the overall mean is 91%
+(1,630/18). Its named caveats are the `ide.js` render smoke and the remaining
+injections, not a missing layer.
+
 **Revision 2.31.0 (2026-11-10):** Phase 16's install-smoke row moved from Missing
 to Working: `scripts/ci/smoke-package.sh` unpacks each release artifact (tarball,
 zip, `.deb`, AppImage), boots the packaged binary and checks its reported version,
@@ -113,11 +119,11 @@ row below moves, so they cannot drift from the tables.
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
-| 16 | Testing and quality | 89% | Windows Rust CI, more injections |
+| 16 | Testing and quality | 100% | named caveats only (`ide.js` render smoke, more injections) |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
-**Overall (mean of the 18 phases): 90%.** Read it as "one reliable core, most
+**Overall (mean of the 18 phases): 91%.** Read it as "one reliable core, most
 phases closed, the remaining work concentrated in 1, 9, 14, 16 and 18". The
 per-row method is the arbiter: a phase moves only when a row here moves.
 
@@ -375,7 +381,7 @@ it needs, and both are enforced rather than displayed.
 | End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
 | Failure-injection matrix | Working (2.30.0) | Two process-level cases in `scripts/ci/test-e2e.sh`: the mock provider is killed and the next run must reach `failed` with an error while `/api/ready` keeps answering; the provider is slowed and the process killed mid-run, and the restarted app must mark that run `interrupted` with a readable step log. Not covered: disk-full, permission-denied and corrupt-database injections |
 | Install smokes in CI | Working (2.31.0) | `scripts/ci/smoke-package.sh` unpacks a tarball, zip, `.deb` (`dpkg-deb -x`) or AppImage (`--appimage-extract`), boots the packaged binary headless against a scratch home, checks `/api/ready`, serves `/`, and compares `/api/diagnostics/bundle`'s `app.version` with `app/Cargo.toml`. `desktop-release.yml` runs it on the `.deb`, the Linux tarball and AppImage, the Windows zip and the macOS tarball. Verified locally on a zip and a tarball; the `.deb` and AppImage paths run only in the Linux release jobs |
-| Windows Rust CI job | Missing | Windows is exercised only by the release build |
+| Windows Rust CI job | Working (2.32.0) | `desktop-ci.yml` builds the default `gui` feature and runs `cargo test --locked` on `windows-latest`; WebView2 and MSVC come with the runner and mold/`-Z threads` are Linux-scoped. Linux still owns clippy and the end-to-end smoke. Verified locally with the same commands on Windows; the GitHub job itself runs on push |
 
 ## Phase 17 — Observability and diagnostics
 

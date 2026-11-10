@@ -467,8 +467,13 @@ binary), boots the packaged binary headless against a scratch home, waits for
 `app/Cargo.toml`. The release workflow runs it on the `.deb`, the Linux tarball
 and AppImage, the Windows zip and the macOS tarball.
 
-Remaining: a render smoke and a harness for `ide.js`, injections for disk-full,
-permission-denied and a corrupt database, and a Windows Rust job.
+Delivered in 2.32.0: Windows in CI. `desktop-ci.yml` builds the default `gui`
+feature and runs the full Rust suite on `windows-latest`, so a Windows-only
+source break fails on the push instead of on a tag; the release pipeline keeps
+building the shipped Windows zip. Linux keeps clippy and the end-to-end smoke.
+
+Remaining: a render smoke and a harness for `ide.js`, and injections for
+disk-full, permission-denied and a corrupt database.
 
 ## Phase 17 — Observability
 

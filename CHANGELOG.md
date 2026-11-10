@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.32.0
+
+Windows is now a first-class CI platform, not only a release target.
+
+- `desktop-ci.yml` gained a `windows` job that builds the desktop binary with its
+  default `gui` feature and runs the full Rust suite on `windows-latest` — the
+  same commands the macOS job uses. The release pipeline already built Windows
+  artifacts, but a source break could reach a tag before any test ran there.
+- No extra system packages: WebView2 and the MSVC toolchain ship on the runner,
+  and `.cargo/config.toml` scopes mold and `-Z threads` to Linux, so the pinned
+  nightly toolchain works unchanged.
+- Linux keeps clippy and the end-to-end smoke; adding the platform costs one job
+  rather than a duplicated matrix.
+
 ## 2.31.0
 
 A release artifact is now proven to run before it is published, not merely to
