@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "2.51.0"
+version = "2.52.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Sarthi Studio — local-first AI chat and coding workspace for FreeLLMAPI"
@@ -92,7 +92,7 @@ assets = [
     # match that ID or validate-tree reports a mismatch.
     ["packaging/io.github.sairajkhilariarch.SarthiStudio.desktop", "usr/share/applications/io.github.sairajkhilariarch.SarthiStudio.desktop", "644"],
     ["packaging/io.github.sairajkhilariarch.SarthiStudio.appdata.xml", "usr/share/metainfo/io.github.sairajkhilariarch.SarthiStudio.appdata.xml", "644"],
-    ["packaging/icons/sarthi-studio.svg", "usr/share/icons/hicolor/scalable/apps/sarthi-studio.svg", "644"],
+    ["static/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/sarthi-studio.svg", "644"],
 ]
 [build-dependencies]
 tauri-build = "2"

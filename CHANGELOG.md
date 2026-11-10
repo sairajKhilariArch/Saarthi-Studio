@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.52.0
+
+The mascot is a tardigrade (water bear), and it is now the application's icon
+everywhere: sidebar, welcome state, favicon, Windows icon and MSI, Linux
+.desktop/AppImage/.deb, macOS bundle and the Android adaptive launcher.
+
+- The mark is the tardigrade's **face**, not its body, drawn flat in exactly
+  three colours — orange `#FF7A1A`, black `#111111`, white `#FFFFFF`. No
+  gradients, so it stays legible at 16 px and reads identically on light and
+  dark surfaces (the tile behind it is solid black).
+- One geometry in `scripts/brand/build-brand-assets.py` generates every SVG:
+  the full-colour face, mono white, mono black, a 24 px mark, a full-bleed app
+  icon, the favicon and a splash/wordmark. `docs/BRAND-ASSETS.md` records the
+  inventory and the three-platform mapping.
+- Raster assets are generated from the canonical `app-icon.svg`, not drawn
+  twice: `app/icons/icon.png` (512), `app/icons/icon.ico` (16–256, seven sizes)
+  and `app/packaging/icons/sarthi-studio-256.png`.
+- The UI uses an inline `#i-tardigrade` symbol with fixed brand colours for the
+  sidebar brand tile and the chat welcome state; feature icons are unchanged.
+  The old spark glyph and the old favicon are gone.
+- Android ships the same face as a `VectorDrawable` inside the 66 dp safe zone,
+  over a `#111111` background, and reuses it for the monochrome (themed) layer.
+- Packaging now points at the canonical SVG: the duplicate
+  `app/packaging/icons/sarthi-studio.svg` is deleted and `Cargo.toml` plus both
+  desktop workflows reference `app/static/brand/app-icon.svg`.
+- Also fixed: the About card claimed the data lived in `~/.local/share/sarthi-studio`
+  and `~/.config/sarthi-studio`; the real paths are `free-ai-studio`, as the
+  rest of the app uses.
+- Verified: 512 px render inspected, sizes 16/24/32/48/64/128/512 checked, the
+  icon seen in the running shell in dark and light, `cargo test --locked` 547
+  passed (1 ignored), clippy clean, frontend 43, version 20, bundle 13,
+  installer 11, e2e 32. Not verified: the MSI's own icon on a clean Windows
+  install, the macOS `.app` icon, and the Android launcher on a device.
+
 ## 2.51.0
 
 Identity: the application is **Sarthi Studio** everywhere a person can see or

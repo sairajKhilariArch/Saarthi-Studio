@@ -191,7 +191,7 @@ jobs:
           cp "app/packaging/$META" "AppDir/usr/share/metainfo/$META"
           cp app/packaging/icons/sarthi-studio-256.png \
             AppDir/usr/share/icons/hicolor/256x256/apps/sarthi-studio.png
-          cp app/packaging/icons/sarthi-studio.svg AppDir/sarthi-studio.svg
+          cp app/static/brand/app-icon.svg AppDir/sarthi-studio.svg
           # appimagetool does not generate AppRun; provide it explicitly so the
           # AppImage has an entry point that resolves usr/ relative to itself.
           ln -s usr/bin/free-ai-studio AppDir/AppRun

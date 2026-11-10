@@ -645,3 +645,7 @@ per-machine MSI choice.
 ## Identity (2.51.0)
 
 The product name is **Sarthi Studio** across the UI, documentation, installers and artifacts. The repository-wide audit, the full old→new map, and every identifier that was deliberately kept (with its migration path) are in `docs/BRANDING-AUDIT.md`. The GitHub repository keeps its own name; the two are not the same thing.
+
+## Mascot (2.52.0)
+
+The product mark is a tardigrade face — orange, black and white, no gradients — generated from one geometry and shipped as the window icon, installer icon, favicon, Linux theme icon, macOS bundle icon and Android adaptive launcher. `docs/BRAND-ASSETS.md` is the inventory.

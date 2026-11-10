@@ -1,13 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Adaptive-icon foreground: a single "spark" glyph centered in the
-     108dp viewport (safe zone is the middle 66dp). Reused by the
-     monochrome layer for Android 13+ themed icons. -->
+<!-- Adaptive-icon foreground: the Sarthi Studio tardigrade face (orange head,
+     white eyes, black features) centred in the 108dp viewport and kept inside
+     the middle 66dp safe zone. Android renders the monochrome layer from this
+     drawable's alpha channel, so reusing it for themed icons is correct.
+     Same geometry as app/static/brand/tardigrade-mark.svg. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M54,26 C57.5,41 61,44.5 76,48 C61,51.5 57.5,55 54,70 C50.5,55 47,51.5 32,48 C47,44.5 50.5,41 54,26 Z" />
+    <group android:scaleX="3" android:scaleY="3"
+        android:translateX="18" android:translateY="18">
+        <path
+            android:fillColor="#FF7A1A"
+            android:strokeColor="#111111"
+            android:strokeWidth="1.3"
+            android:strokeLineJoin="round"
+            android:pathData="M12 2.4c4.6 0 7.7 3.1 7.7 7.6v2c0 1.9-.5 3.5-1.6 4.7-1.2 1.5-3.3 2.4-6.1 2.4s-4.9-.9-6.1-2.4C4.8 15.5 4.3 13.9 4.3 12v-2c0-4.5 3.1-7.6 7.7-7.6Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M11.9 10.3a2.5 2.5 0 1 0-5.0 0a2.5 2.5 0 1 0 5.0 0Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M17.1 10.3a2.5 2.5 0 1 0-5.0 0a2.5 2.5 0 1 0 5.0 0Z" />
+        <path
+            android:fillColor="#111111"
+            android:pathData="M10.85 10.6a1.15 1.15 0 1 0-2.3 0a1.15 1.15 0 1 0 2.3 0Z" />
+        <path
+            android:fillColor="#111111"
+            android:pathData="M15.450000000000001 10.6a1.15 1.15 0 1 0-2.3 0a1.15 1.15 0 1 0 2.3 0Z" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#111111"
+            android:strokeWidth="1.1"
+            android:strokeLineCap="round"
+            android:pathData="M9.6 15.1c.8 1 1.6 1.5 2.4 1.5s1.6-.5 2.4-1.5" />
+    </group>
 </vector>

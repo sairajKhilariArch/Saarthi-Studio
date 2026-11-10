@@ -53,8 +53,8 @@ edited.
 |---|---|
 | `app/packaging/io.github.sairajkhilariarch.SaarthiStudio.desktop` | `…SarthiStudio.desktop` |
 | `app/packaging/io.github.sairajkhilariarch.SaarthiStudio.appdata.xml` | `…SarthiStudio.appdata.xml` |
-| `app/packaging/icons/free-ai-suite.svg` | `app/packaging/icons/sarthi-studio.svg` |
-| `app/packaging/icons/free-ai-suite-256.png` | `app/packaging/icons/sarthi-studio-256.png` |
+| `app/packaging/icons/free-ai-suite.svg` | `app/packaging/icons/sarthi-studio.svg` (deleted in 2.52.0; the canonical asset is now `app/static/brand/app-icon.svg`) |
+| `app/packaging/icons/free-ai-suite-256.png` | `app/packaging/icons/sarthi-studio-256.png` (regenerated from `app-icon.svg` in 2.52.0) |
 
 Renaming the `.desktop` file was also a correctness fix: `Cargo.toml` and both
 desktop workflows already referenced `…SarthiStudio.desktop` after the text
