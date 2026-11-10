@@ -52,7 +52,10 @@ function setSettingsSection(name) {
   if (name === "extensions") void loadExtensions();
   // Read on the visit, not at boot: the About card is the only place that shows
   // the build, and a settings panel that is never opened should cost nothing.
-  if (name === "about") void loadAppVersion();
+  if (name === "about") {
+    void loadAppVersion();
+    void loadStagedUpdate();
+  }
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
 
@@ -127,6 +130,8 @@ function setupSettingsNav() {
   $("diagLogRefresh").addEventListener("click", () => void loadProcessLog());
   $("readyRefresh").addEventListener("click", () => void loadReadiness());
   if ($("updateCheck")) $("updateCheck").addEventListener("click", () => void checkForUpdates());
+  if ($("updateStage")) $("updateStage").addEventListener("click", () => void stageUpdate());
+  if ($("updateDiscard")) $("updateDiscard").addEventListener("click", () => void discardUpdate());
   $("diagArea").addEventListener("change", () => void loadDiagnostics());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
@@ -970,6 +975,86 @@ function updateStatusText(data) {
   return `${head} Download ${data.asset.name}${size}.`;
 }
 
+/* A staged file is downloaded and verified but not installed; the sentence has to
+   say both, or the panel reads like the upgrade already happened. */
+function stagedStatusText(staged) {
+  if (!staged || !staged.asset) return "";
+  const size = typeof staged.bytes === "number" ? ` (${formatBytes(staged.bytes)})` : "";
+  const hash = typeof staged.sha256 === "string" && staged.sha256 ? staged.sha256.slice(0, 12) : "";
+  const verified = hash ? ` Its sha256 starts ${hash}…` : "";
+  return `Staged ${staged.asset}${size} for ${staged.latest}.${verified} It is verified but not installed.`;
+}
+
+function showUpdateActions(flags) {
+  if (flags.stage !== undefined && $("updateStage")) {
+    $("updateStage").classList.toggle("hidden", !flags.stage);
+  }
+  if (flags.discard !== undefined && $("updateDiscard")) {
+    $("updateDiscard").classList.toggle("hidden", !flags.discard);
+  }
+}
+
+async function loadStagedUpdate() {
+  const host = $("updateStaged");
+  if (!host) return;
+  try {
+    const { data } = await api("/api/update/staged");
+    const staged = data && data.staged ? data.staged : null;
+    host.textContent = stagedStatusText(staged);
+    if (staged && data.size_matches === false) {
+      host.textContent += " The file is not the size it was verified at; discard it and stage it again.";
+    }
+    showUpdateActions({ discard: Boolean(staged && data.present) });
+  } catch {
+    host.textContent = "";
+  }
+}
+
+async function stageUpdate() {
+  const button = $("updateStage");
+  const status = $("updateStatus");
+  if (!status) return;
+  if (button) button.disabled = true;
+  status.textContent = "Downloading and verifying…";
+  try {
+    // The server answers 409 with needs_approval while no rule allows `update`;
+    // confirmApproval asks once and retries with approve, and a deny rule still
+    // wins because the server checks it first.
+    const { ok, data } = await api("/api/update/stage", {
+      method: "POST",
+      body: "{}",
+      confirmApproval: true,
+    });
+    if (!ok) {
+      status.textContent = `Download refused: ${data.error || "no answer"}`;
+      return;
+    }
+    status.textContent = "Downloaded and verified against its published checksum.";
+    await loadStagedUpdate();
+  } catch (error) {
+    status.textContent = `Download failed: ${error && error.message ? error.message : "no answer"}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function discardUpdate() {
+  const status = $("updateStatus");
+  try {
+    const { ok, data } = await api("/api/update/staged/discard", {
+      method: "POST",
+      body: "{}",
+    });
+    if (status) {
+      status.textContent =
+        ok && data.removed ? "The staged update was discarded." : "Nothing was staged.";
+    }
+    await loadStagedUpdate();
+  } catch (error) {
+    if (status) status.textContent = `Could not discard the staged update: ${error.message}`;
+  }
+}
+
 async function loadAppVersion() {
   const host = $("aboutVersion");
   if (!host) return;
@@ -990,6 +1075,9 @@ async function checkForUpdates() {
   try {
     const { data } = await api("/api/update/check");
     status.textContent = updateStatusText(data);
+    // Only a newer release with an asset for this machine can be downloaded.
+    showUpdateActions({ stage: Boolean(data && data.update_available && data.asset) });
+    await loadStagedUpdate();
   } catch (error) {
     status.textContent = `Update check failed: ${error && error.message ? error.message : "no answer"}`;
   } finally {

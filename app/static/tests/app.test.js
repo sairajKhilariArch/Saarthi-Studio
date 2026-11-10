@@ -258,3 +258,20 @@ test("updateStatusText passes a failed check through as a failure", () => {
   );
   assert.equal(call("updateStatusText(null)"), "The update check returned no answer.");
 });
+
+test("stagedStatusText describes a verified file that is not installed", () => {
+  const text = call(`stagedStatusText({
+    asset: "free-ai-suite_2.37.0_windows-x86_64.zip", bytes: 2048,
+    latest: "2.37.0", sha256: "abcdef0123456789abcdef"
+  })`);
+  assert.ok(text.includes("free-ai-suite_2.37.0_windows-x86_64.zip"), text);
+  assert.ok(text.includes("2.37.0"), text);
+  assert.ok(text.includes("abcdef012345"), text);
+  assert.ok(text.includes("not installed"), text);
+  assert.ok(/KB/.test(text), `size was not formatted: ${text}`);
+});
+
+test("stagedStatusText stays empty when nothing is staged", () => {
+  assert.equal(call("stagedStatusText(null)"), "");
+  assert.equal(call("stagedStatusText({})"), "");
+});

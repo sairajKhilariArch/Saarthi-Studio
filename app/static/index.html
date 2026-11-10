@@ -1089,6 +1089,9 @@
             <p>This build is <code id="aboutVersion">unknown</code>. A check reads the public release page and changes nothing on this computer: it downloads no file and installs nothing. Applying an upgrade copies the database first and puts it back if the migration fails.</p>
             <p id="updateStatus" class="muted">Not checked yet.</p>
             <button type="button" id="updateCheck" class="btn btn-small">Check for updates</button>
+            <button type="button" id="updateStage" class="btn btn-small hidden">Download and stage</button>
+            <button type="button" id="updateDiscard" class="btn btn-quiet btn-small hidden">Discard staged update</button>
+            <p id="updateStaged" class="muted"></p>
           </div>
           <div class="card info-card">
             <h2>About</h2>

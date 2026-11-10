@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.37.0
+
+An available update can now be downloaded and verified — and deliberately not
+installed, because replacing a running binary belongs to the installer work.
+
+- `POST /api/update/stage` re-reads the newest release and refuses when this
+  build is already newest (409), when the platform has no asset (409), or when
+  the download URL is not `https` (409). Nothing is guessed from a redirect.
+- The expected hash comes from the release itself: GitHub's own asset `digest`
+  when it is a valid sha256, otherwise the entry for that asset in the release's
+  `SHA256SUMS.txt`. A release that publishes neither is refused — an
+  unverifiable download is never staged.
+- The bytes go through the existing `installer::download_verified`, which writes a
+  `.part` file, hashes it while streaming, and only renames it once the hash
+  matches. A failed attempt therefore leaves the previously staged copy and its
+  manifest exactly as they were instead of replacing a good file with a broken
+  one; a successful one removes the stale candidate first and writes
+  `updates/staged.json` (version, asset, sha256, bytes, time, release URL).
+- Gated on the `update` action the way a router install is: a saved `deny` is
+  403, `ask` answers 409 with `needs_approval` so the panel asks once and retries
+  with `approve: true`, and a saved allow runs it. Allowances and refusals land in
+  the permission audit.
+- `GET /api/update/staged` reports what is waiting plus whether the file is
+  still present and still the size it was verified at (it does not re-hash a
+  100 MB archive on every read). `POST /api/update/staged/discard` removes the
+  file and its record — a file this app wrote itself, so it stays possible even
+  when `update` is denied.
+- Settings → Privacy & about gained **Download and stage** (shown only when the
+  check found a newer release with an asset for this machine) and **Discard
+  staged update**, with a line that says the file is verified but not installed.
+- Checks: `cargo test --locked` 518 passed, 1 ignored (5 new, including a local
+  HTTP server proving a verified download stages and a hash mismatch leaves the
+  previous copy untouched); clippy `--all-targets -D warnings` clean; `node
+  --check` clean; frontend 27 (2 new); version 20; e2e 32.
+- Not covered: nothing applies a staged update, there is no MSI/EXE/.app and no
+  uninstaller, and the staging folder is only cleaned when a new download
+  succeeds or the user discards it.
+
 ## 2.36.0
 
 Studio can now say whether a newer release exists, without downloading or

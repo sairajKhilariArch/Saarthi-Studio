@@ -535,5 +535,13 @@ platform would download (or says there is none for this target). It writes and
 installs nothing, so it is not permission-gated; `/api/health` now reports the
 running version and Settings → Privacy & about shows it with a Check button.
 
-Open: the download/verify/swap path that check would feed, a Windows MSI/EXE, a
-macOS `.app`/dmg, and a clean uninstall.
+Delivered in 2.37.0: the verified download. `POST /api/update/stage` resolves the
+published sha256 from the release's asset digest or `SHA256SUMS.txt` (refusing a
+release that publishes neither), downloads through `installer::download_verified`
+so only a matching file is ever renamed into place, records it in
+`updates/staged.json`, and is gated on `update` with an explicit approval.
+`GET /api/update/staged` and `POST /api/update/staged/discard` manage what is
+waiting, and the About card can download and discard it.
+
+Open: applying a staged update, a Windows MSI/EXE, a macOS `.app`/dmg, and a
+clean uninstall.
