@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.34.0
+
+The harness now breaks the two things it can break honestly: the database file and
+the data directory.
+
+- Corrupt database: the real database is replaced with garbage. The process must
+  exit rather than boot a half-working server, its log must name the failure
+  (`file is not a database`), and nothing may answer on the port. Restoring a
+  saved copy must bring the studio back ready — the failure is loud, not silent,
+  and recovery is a copy away.
+- Unwritable data directory (POSIX only): the data directory is made read-only and
+  the `data directory` readiness check must report not-ok, then recover when the
+  permission is restored. Windows Git Bash ignores `chmod`, so there the case
+  prints `skip` instead of pretending to pass.
+- `scripts/ci/test-e2e.sh` is 32 checks on Windows and 34 on a POSIX runner.
+- Not covered, and named as such in the docs: a genuinely full disk. Producing
+  ENOSPC portably needs a privileged loop/tmpfs mount; the read-only directory
+  exercises the same write-failure path but is not the same proof.
+
 ## 2.33.0
 
 The two views that build their own DOM now have a render smoke, so a canvas or

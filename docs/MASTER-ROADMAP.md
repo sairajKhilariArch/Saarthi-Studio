@@ -479,7 +479,13 @@ on top of `app.js` to prove the shell builds its chrome and wraps the app rather
 than replacing it. The frontend suite is 21 cases. This is still not a layout or
 pixel check — that needs a browser.
 
-Remaining: injections for disk-full, permission-denied and a corrupt database,
+Delivered in 2.34.0: two more injections. A corrupt database must stop the
+process with the failure named in its log and nothing on the port, and restoring
+a saved copy must bring it back ready; a read-only data directory must make the
+`data directory` readiness check go false and recover (POSIX only, skipped where
+`chmod` is not enforced).
+
+Remaining: a privileged ENOSPC case (a real full disk needs a loop/tmpfs mount),
 and browser-level layout checks for the canvas and IDE.
 
 ## Phase 17 — Observability

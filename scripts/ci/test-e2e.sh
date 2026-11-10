@@ -30,6 +30,27 @@ die() {
   failed=$((failed + 1))
   printf 'FAIL %s\n' "$1" >&2
 }
+# A case a platform cannot enforce is skipped out loud, never counted as a pass.
+skip() { printf 'skip %s\n' "$1"; }
+
+# The state of one readiness check by name ("yes", "no" or "missing") from the
+# body of the last /api/ready call.
+ready_check() { # check name
+  "$py" - "$work/body" "$1" <<'EOF'
+import json, sys
+try:
+    payload = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    print("unknown")
+    raise SystemExit
+for check in payload.get("checks") or []:
+    if check.get("name") == sys.argv[2]:
+        print("yes" if check.get("ok") else "no")
+        break
+else:
+    print("missing")
+EOF
+}
 
 work="$(mktemp -d)"
 studio_pid=""
@@ -538,6 +559,84 @@ if [ -n "$(field stepList.0.action)" ]; then
 else
   die "the interrupted run came back with no steps"
 fi
+
+# 3. Corrupt database. A broken file must stop the process with a reason, not
+#    boot a half-working server; restoring a saved copy must bring it back.
+stop_studio
+data_dir="$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio"
+db_file="$data_dir/history.sqlite3"
+cp "$db_file" "$work/history-good.sqlite3"
+printf 'this is not a sqlite database' >"$db_file"
+start_studio
+exited="no"
+tries=0
+while [ "$tries" -lt 40 ]; do
+  if ! kill -0 "$studio_pid" 2>/dev/null; then
+    exited="yes"
+    break
+  fi
+  tries=$((tries + 1))
+  sleep 0.25
+done
+if [ "$exited" = "yes" ]; then
+  pass "a corrupt database stops the process instead of booting a half-working server"
+else
+  die "the studio kept running on a corrupt database"
+fi
+if grep -qi 'not a database' "$log"; then
+  pass "the boot log names the corrupt database"
+else
+  die "the boot log does not name the database failure"
+fi
+if [ "$(http GET "$base/api/health")" != "200" ]; then
+  pass "nothing answers on the port while the database is corrupt"
+else
+  die "a server answered on a corrupt database"
+fi
+studio_pid=""
+cp "$work/history-good.sqlite3" "$db_file"
+start_studio
+if wait_ready; then
+  pass "restoring the database brings the studio back ready"
+else
+  die "the studio did not recover after the database was restored"
+  tail -20 "$log" >&2
+fi
+
+# 4. Unwritable data directory. This is the write failure a full disk produces,
+#    made portable: readiness has to say the directory is not usable, then
+#    recover when the permission is put back. Windows Git Bash ignores chmod, so
+#    there the case is skipped rather than reported as a pass.
+chmod -w "$data_dir" 2>/dev/null || true
+enforced="no"
+if ! : >"$data_dir/.write-probe" 2>/dev/null; then
+  enforced="yes"
+else
+  rm -f "$data_dir/.write-probe"
+fi
+if [ "$enforced" = "yes" ]; then
+  http GET "$base/api/ready" >/dev/null
+  state_of_dir="$(ready_check "data directory")"
+  if [ "$state_of_dir" = "no" ]; then
+    pass "readiness reports an unwritable data directory"
+  else
+    die "readiness said '$state_of_dir' about an unwritable data directory"
+  fi
+  chmod +w "$data_dir" 2>/dev/null || true
+  http GET "$base/api/ready" >/dev/null
+  if [ "$(ready_check "data directory")" = "yes" ]; then
+    pass "readiness recovers when the directory is writable again"
+  else
+    die "readiness did not recover after the directory was made writable"
+  fi
+else
+  chmod +w "$data_dir" 2>/dev/null || true
+  skip "an unwritable data directory (chmod is not enforced on this platform)"
+fi
+
+# Not injected, and named so the gap is visible: a genuinely full disk. ENOSPC
+# needs a privileged loop or tmpfs mount; the read-only directory above exercises
+# the same write-failure path, but that is not the same proof.
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ] || exit 1
