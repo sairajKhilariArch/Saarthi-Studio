@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.46.0
+
+macOS CI failed at `git::tests::creates_lists_and_removes_a_worktree`. The test was
+right and the code was wrong: worktree paths were compared as strings.
+
+- The temporary directory on macOS is reached as `/var/folders/...`, while git
+  reports `/private/var/folders/...` — one folder under an alias. Removal compared
+  the two spellings with nothing but slash normalisation (plus case folding on
+  Windows), decided the worktree belonged to another repository and refused.
+  `same_worktree_path` now resolves both sides through the filesystem and falls
+  back to the normalised spelling only when a path does not exist, so an alias, a
+  verbatim Windows path, a trailing separator and a different case compare equal
+  while a sibling folder still does not.
+- `remove_worktree` keeps the ownership check and now hands git its own spelling of
+  the validated path, so the alias that validated the target is the alias git
+  removes. A path this repository does not report — another repository's worktree,
+  or one that does not exist — is still refused before git is called.
+- Three regression tests: alias, trailing-separator and case comparison (a
+  symlinked alias asserted where the platform allows creating one), another
+  repository's worktree refused and left on disk then removed by its owner through
+  the resolved path, and a nonexistent worktree refused. The failing lifecycle
+  test is unchanged and still runs.
+- Version 2.46.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Verified: `cargo test --locked` 543 passed, 1 ignored (3 new); clippy
+  `--all-targets -D warnings` clean; rustfmt clean on `git.rs`; frontend 36;
+  version 20; e2e 32. Not verified: macOS itself. The alias it exercises cannot be
+  reproduced on this Windows machine, so the fix is unit-tested against a
+  filesystem alias here and the macOS job has not been observed — it needs a push.
+
 ## 2.45.0
 
 An agent run and the editor could write the same file at the same time, and the

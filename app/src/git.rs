@@ -757,16 +757,42 @@ fn add_worktree(root: &Path, branch: &str) -> Result<Value, String> {
     Ok(json!({ "ok": true, "path": dest_arg, "branch": branch }))
 }
 
-/// git reports worktree paths with forward slashes while the app builds them with
-/// the platform separator, so compare the two forms instead of raw strings.
-fn same_worktree_path(left: &str, right: &str) -> bool {
-    let norm = |value: &str| value.trim().replace('\\', "/");
-    let (left, right) = (norm(left), norm(right));
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(&right)
+/// A comparable key for a worktree path.
+///
+/// Git prints a path in the spelling it was handed, and that spelling can be an
+/// alias of where the folder really is: macOS reports the temporary directory as
+/// `/var/folders/...` while `git worktree list` prints `/private/var/folders/...`,
+/// and Windows mixes `\\?\C:\...` verbatim paths with plain ones and differing
+/// case. Resolving both sides through the filesystem is what makes them
+/// comparable. A path that does not exist has nothing to resolve, so its
+/// normalised spelling is used and it simply never matches a listed worktree.
+fn path_key(path: &str) -> String {
+    let raw = path.trim().replace('\\', "/");
+    let resolved = std::fs::canonicalize(&raw)
+        .map(|target| plain_path(&target))
+        .unwrap_or_else(|_| match raw.strip_prefix("//?/") {
+            Some(rest) => rest.to_string(),
+            None => raw,
+        });
+    // One spelling of a folder may carry a trailing separator, the other not; a
+    // bare root keeps its single slash.
+    let key = if resolved.len() > 1 {
+        resolved.trim_end_matches('/').to_string()
     } else {
-        left == right
+        resolved
+    };
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key
     }
+}
+
+/// Whether two spellings name the same worktree folder. Both are resolved first,
+/// so an alias (a symlinked temporary directory, a verbatim Windows path, a
+/// different case) compares equal to the real location git reports.
+fn same_worktree_path(left: &str, right: &str) -> bool {
+    path_key(left) == path_key(right)
 }
 
 fn remove_worktree(root: &Path, path: &str) -> Result<Value, String> {
@@ -774,19 +800,25 @@ fn remove_worktree(root: &Path, path: &str) -> Result<Value, String> {
     if target.is_empty() {
         return Err("Which worktree should be removed?".to_string());
     }
-    let known = worktree_list(root)?.iter().any(|entry| {
+    // Only a path this repository itself reports may be removed. Ownership is
+    // decided on resolved paths, and what is handed to git is git's own spelling
+    // of the match rather than the caller's — an alias is accepted, an unknown
+    // folder or another repository's worktree is not.
+    let key = path_key(target);
+    let validated = worktree_list(root)?.iter().find_map(|entry| {
         entry["path"]
             .as_str()
-            .is_some_and(|known| same_worktree_path(known, target))
+            .filter(|known| path_key(known) == key)
+            .map(str::to_string)
     });
-    if !known {
+    let Some(validated) = validated else {
         return Err(format!("{target} is not a worktree of this repository."));
-    }
-    let output = git(root, &["worktree", "remove", target])?;
+    };
+    let output = git(root, &["worktree", "remove", &validated])?;
     if !output.ok {
         return Err(git_error(&output, "git worktree remove failed"));
     }
-    Ok(json!({ "ok": true, "removed": target }))
+    Ok(json!({ "ok": true, "removed": validated }))
 }
 
 fn remote_list(root: &Path) -> Result<Vec<Value>, String> {
@@ -3940,6 +3972,112 @@ two
         assert!(add_worktree(&root, "  ").is_err());
         assert!(add_worktree(&root, "bad name..").is_err());
         assert!(remove_worktree(&root, &path).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The macOS CI failure this regression covers: the temporary directory is
+    /// reached as `/var/folders/...` while git reports `/private/var/folders/...`,
+    /// so one worktree looked like another repository's and removal refused.
+    #[test]
+    fn an_alias_of_a_worktree_path_compares_equal() {
+        let Some(root) = temp_repo("alias-paths") else {
+            return;
+        };
+        let plain = plain_path(&root);
+        assert!(same_worktree_path(&plain, &plain), "a path equals itself");
+        assert!(
+            same_worktree_path(&format!("{plain}/"), &plain),
+            "a trailing separator names the same folder"
+        );
+        let alias = root.join("alias");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&root, &alias).is_ok();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&root, &alias).is_ok();
+        if linked {
+            assert!(
+                same_worktree_path(&alias.to_string_lossy(), &plain),
+                "a symlinked alias is the same folder"
+            );
+            if let Ok(canonical) = std::fs::canonicalize(&alias) {
+                assert!(
+                    same_worktree_path(&canonical.to_string_lossy(), &plain),
+                    "the resolved alias keeps matching"
+                );
+            }
+        }
+        if cfg!(windows) {
+            assert!(
+                same_worktree_path(&plain.to_uppercase(), &plain),
+                "Windows paths are case-insensitive"
+            );
+            assert!(
+                same_worktree_path(&root.to_string_lossy().replace('/', "\\"), &plain),
+                "backslashes and slashes name one folder"
+            );
+        }
+        let sibling = root.with_file_name(format!(
+            "{}-sibling",
+            root.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        assert!(
+            !same_worktree_path(&sibling.to_string_lossy(), &plain),
+            "a sibling folder is not the worktree"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A worktree belongs to the repository that created it: another repository
+    /// must refuse it and leave it on disk.
+    #[test]
+    fn a_worktree_of_another_repository_is_refused() {
+        let Some(root) = temp_repo("owner-a") else {
+            return;
+        };
+        let Some(other) = temp_repo("owner-b") else {
+            return;
+        };
+        for repo in [&root, &other] {
+            std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+            run_git(repo, &["add", "a.txt"]);
+            run_git(repo, &["commit", "-q", "-m", "base"]);
+        }
+        let added = add_worktree(&root, "mine").unwrap();
+        let path = added["path"].as_str().unwrap().to_string();
+        let error = remove_worktree(&other, &path).unwrap_err();
+        assert!(
+            error.contains("not a worktree of this repository"),
+            "{error}"
+        );
+        assert!(
+            Path::new(&path).exists(),
+            "the refusal must leave the worktree alone"
+        );
+        // The owner removes it through the resolved path, which on macOS is the
+        // `/private/var/...` spelling git itself reports.
+        let resolved = std::fs::canonicalize(&path).unwrap();
+        let removed = remove_worktree(&root, &resolved.to_string_lossy()).unwrap();
+        assert_eq!(removed["ok"], true);
+        assert!(!Path::new(&path).exists());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    /// A folder that does not exist cannot be removed, and the message says why.
+    #[test]
+    fn a_missing_worktree_is_refused() {
+        let Some(root) = temp_repo("missing-worktree") else {
+            return;
+        };
+        let ghost = root.with_file_name(format!(
+            "{}-no-such-worktree",
+            root.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let error = remove_worktree(&root, &ghost.to_string_lossy()).unwrap_err();
+        assert!(
+            error.contains("not a worktree of this repository"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

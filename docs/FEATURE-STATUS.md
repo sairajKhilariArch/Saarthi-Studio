@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.46.0 (2026-11-10):** a CI fix, not a feature. Worktree removal
+compared paths as strings, so on macOS a worktree reached through `/var/folders`
+never matched the `/private/var/folders` path git reports and was refused as
+another repository's. The comparison now resolves both sides through the
+filesystem, and git is handed its own spelling of the validated path. Phase counts
+are unchanged; the overall mean stays 92% (1,659/18).
+
 **Revision 2.45.0 (2026-11-10):** the editor now saves through the run lease:
 `filelock::claimed_by`/`command_claim` let a save, create, rename or delete ask
 which live run holds the path or the folder, and refuse with `409` naming it

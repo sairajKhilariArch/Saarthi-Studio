@@ -585,6 +585,13 @@ and proves the payload with an administrative install, `smoke-package.sh` boots 
 installed binary, and the release job attaches the MSI beside the portable zip.
 The toolchain is WiX 5 (MIT) because WiX 7 gates builds behind a paid fee.
 
+Delivered in 2.46.0: worktree paths compared the way the filesystem does. macOS
+reaches its temporary directory as `/var/folders/...` while git prints
+`/private/var/folders/...`, so a worktree of the repository was refused as
+another's and macOS CI failed. Both sides are resolved with `fs::canonicalize`
+(falling back to the normalised spelling for a path that does not exist), and git
+is handed its own spelling of the validated match.
+
 Delivered in 2.45.0: the editor saves through the run lease. A save, create,
 rename or delete asks `filelock` which live run holds the path — or the folder,
 while that run is running a command there — and answers 409 naming the run rather

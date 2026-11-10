@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "free-ai-studio"
-version = "2.45.0"
+version = "2.46.0"
 dependencies = [
  "axum",
  "axum-server",
