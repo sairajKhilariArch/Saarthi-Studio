@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.48.0 (2026-11-10):** scheduled windows are now arbitrated
+between processes — the claim lives in SQLite and only moves forward, so a desktop
+app and the headless server over one home start one run per due time. The Phase 13
+row stays Working and no row was added, so the phase and overall figures are
+unchanged at 92% (1,659/18).
+
 **Revision 2.47.0 (2026-11-10):** Phase 13's visual editor gains free
 positioning — a node may carry `x`/`y`, honoured by the layout and persisted through
 save-time validation — so the canvas is no longer limited to dependency columns.
@@ -443,7 +449,7 @@ persisted execution of it.
 | Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph (a child agent run in flight is not forcibly stopped) |
 | Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas has not been browser-verified |
 | Graph import/export | Working (2.13.0) | export is a versioned `saarthi.workflow` document; import runs the save-time validation before writing, assigns a new id and a unique name, and starts a fresh schedule window |
-| Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, and a live run is not stacked |
+| Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, a live run is not stacked, and the window is claimed in SQLite (2.48.0) so two processes sharing one home cannot both start it |
 | Resume an interrupted run | Working (2.11.0) | `POST /api/workflow-runs/:id/resume` keeps finished steps, reopens the rest, refuses an edited or deleted workflow; a resumed agent node starts a fresh agent run |
 
 ## Phase 14 — Cross-platform integration

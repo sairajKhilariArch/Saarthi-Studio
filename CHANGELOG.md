@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.48.0
+
+Scheduled workflows were guarded against stacking inside one process, but every
+process runs its own timer. A desktop app and the headless server over the same
+home would both see a workflow as due and start two runs for one window.
+
+- A due time is now claimed in SQLite, the one place every process writes, with a
+  single conditional upsert that succeeds only when it moves the stored window
+  forward. The first process to reach a window owns it; the others skip it. Because
+  the predicate is "later than what is stored", a clock that goes backwards cannot
+  reopen an already-served window, and workflows claim independently.
+- A run that fails to start hands the window back, so a transient error retries on
+  the next tick instead of skipping a whole interval. A release for a window that
+  has since moved on is ignored, so a late failure cannot free a served window.
+- Deleting a workflow drops its claim; a claim only moves forward, so one left
+  behind could otherwise suppress a later workflow that reuses the id.
+- A process that cannot open the database starts no scheduled work at all: there is
+  nothing to arbitrate with and nowhere to record the run.
+- Tests: two Rust tests at the claim layer (one window claimed once across
+  processes, forward-only; a released window is retryable and a stale release is
+  ignored) and the schema's idempotent-creation test now covers the new table.
+- Version 2.48.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Verified: `cargo test --locked` 546 passed, 1 ignored; clippy `--all-targets
+  -D warnings` clean; frontend 39; version 20; e2e 32. Not verified: two real
+  binaries racing over one home — the arbitration is tested at the claim layer, and
+  the end-to-end harness runs a single process.
+
 ## 2.47.0
 
 The workflow canvas placed every node in dependency columns. A graph with two

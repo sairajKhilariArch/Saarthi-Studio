@@ -76,6 +76,9 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
             output TEXT NOT NULL DEFAULT '', agent_run_id TEXT NOT NULL DEFAULT '',
             started_at REAL NOT NULL DEFAULT 0, ended_at REAL NOT NULL DEFAULT 0,
             PRIMARY KEY(run_id, node_id)
+        );
+        CREATE TABLE IF NOT EXISTS workflow_schedule_claims (
+            workflow_id TEXT PRIMARY KEY, window_at REAL NOT NULL
         );",
     )
 }
@@ -1364,6 +1367,14 @@ pub(crate) async fn delete(
     if let Err(error) = store(&state, &workflows) {
         return server_error(error);
     }
+    // A claim would otherwise outlive its workflow, and because a claim only moves
+    // forward it could suppress a later workflow that reuses the id.
+    if let Ok(conn) = crate::open_db(&state.database_path) {
+        let _ = conn.execute(
+            "DELETE FROM workflow_schedule_claims WHERE workflow_id=?1",
+            [id.as_str()],
+        );
+    }
     ok(json!({ "ok": true }))
 }
 
@@ -1402,6 +1413,35 @@ fn begin_run(
     Ok(run_id)
 }
 
+/// Claim a due time for a workflow, across processes.
+///
+/// Every process runs its own timer, so a desktop app and a headless server would
+/// otherwise both see the same workflow as due and start two runs for one window.
+/// The database is the only place both write, so the claim is one conditional
+/// upsert: it succeeds only when it moves the stored window forward, which means
+/// exactly one process can own a given due time. A clock running backwards cannot
+/// reopen a window either, because an older due time never satisfies the predicate.
+fn claim_window(conn: &Connection, workflow_id: &str, window: f64) -> bool {
+    matches!(
+        conn.execute(
+            "INSERT INTO workflow_schedule_claims(workflow_id, window_at) VALUES(?1, ?2) \
+             ON CONFLICT(workflow_id) DO UPDATE SET window_at=excluded.window_at \
+             WHERE excluded.window_at > workflow_schedule_claims.window_at",
+            rusqlite::params![workflow_id, window],
+        ),
+        Ok(1)
+    )
+}
+
+/// Hand a claimed window back when the run could not start, so the next tick
+/// retries instead of waiting out the whole interval.
+fn release_window(conn: &Connection, workflow_id: &str, window: f64) {
+    let _ = conn.execute(
+        "DELETE FROM workflow_schedule_claims WHERE workflow_id=?1 AND window_at<=?2",
+        rusqlite::params![workflow_id, window],
+    );
+}
+
 /// Scheduled workflows wake on a timer. The first tick is one interval after
 /// boot, so a restart never runs a schedule early; a due workflow with a live
 /// run is skipped rather than stacked.
@@ -1416,6 +1456,11 @@ pub(crate) fn start_scheduler(state: AppState) {
 
 async fn tick(state: &AppState) {
     let mut workflows = load(state);
+    // Without the database there is nothing to arbitrate with and nothing to
+    // record a run in, so this process does not start scheduled work at all.
+    let Ok(conn) = crate::open_db(&state.database_path) else {
+        return;
+    };
     let mut changed = false;
     for workflow in workflows.iter_mut() {
         if workflow.every_minutes <= 0 || live_run(state, &workflow.id) {
@@ -1434,6 +1479,11 @@ async fn tick(state: &AppState) {
         if nodes.is_empty() {
             continue;
         }
+        // One due time, one run: another process ticking at the same moment wins
+        // the claim first and this one leaves the window alone.
+        if !claim_window(&conn, &workflow.id, next) {
+            continue;
+        }
         match begin_run(state, workflow, &nodes) {
             Ok(run_id) => {
                 // The new row is already on disk; moving the window keeps this
@@ -1449,6 +1499,9 @@ async fn tick(state: &AppState) {
                 );
             }
             Err(error) => {
+                // Nothing started, so the window goes back and the next tick can
+                // try again rather than waiting out the interval.
+                release_window(&conn, &workflow.id, next);
                 crate::oplog::record(
                     "error",
                     "workflow",
@@ -1936,11 +1989,44 @@ mod tests {
         initialize(&conn).expect("second");
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('workflow_runs','workflow_steps')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('workflow_runs','workflow_steps','workflow_schedule_claims')",
                 [],
                 |row| row.get(0),
             )
             .expect("count");
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn a_due_time_is_claimed_once_and_only_forward() {
+        let conn = Connection::open_in_memory().expect("db");
+        initialize(&conn).expect("schema");
+        // The first process to see the window owns it.
+        assert!(claim_window(&conn, "nightly", 1_700.0));
+        // A second process computing the same due time loses, which is the whole
+        // point: one window starts one run, not one per process.
+        assert!(!claim_window(&conn, "nightly", 1_700.0));
+        // A later window is a new claim.
+        assert!(claim_window(&conn, "nightly", 2_000.0));
+        // An older due time — a clock that went backwards — cannot reopen one.
+        assert!(!claim_window(&conn, "nightly", 1_800.0));
+        // Workflows claim independently of each other.
+        assert!(claim_window(&conn, "weekly", 1_700.0));
+        assert!(!claim_window(&conn, "weekly", 1_700.0));
+    }
+
+    #[test]
+    fn a_window_that_could_not_start_is_released_for_the_next_tick() {
+        let conn = Connection::open_in_memory().expect("db");
+        initialize(&conn).expect("schema");
+        assert!(claim_window(&conn, "nightly", 1_700.0));
+        release_window(&conn, "nightly", 1_700.0);
+        // A failed start is not a skipped interval: the same window is available to
+        // the next tick.
+        assert!(claim_window(&conn, "nightly", 1_700.0));
+        // Releasing a window that is no longer current changes nothing, so a late
+        // failure cannot free a window another tick already moved past.
+        release_window(&conn, "nightly", 1_500.0);
+        assert!(!claim_window(&conn, "nightly", 1_700.0));
     }
 }

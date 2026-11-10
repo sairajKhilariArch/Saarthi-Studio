@@ -276,6 +276,13 @@ Remaining: reordering beyond a numeric priority.
 Started in 2.9.0. `workflows.json` now carries an optional `nodes` array, so a
 saved prompt is still valid and a graph is a first-class workflow.
 
+Delivered in 2.48.0: cross-process schedule arbitration. A due time is
+claimed in SQLite with one conditional upsert that only moves forward, so a desktop
+app and the headless server sharing a home start one run per window instead of one
+each. A failed start releases its window for the next tick, a stale release is
+ignored, deleting a workflow drops its claim, and a process that cannot open the
+database schedules nothing.
+
 Delivered in 2.47.0: free positioning on the canvas. A node may carry
 `x`/`y`; the layout honours it and falls back to dependency columns for a node that
 was never moved. Cards drag with the pointer — edges follow and the canvas grows to
