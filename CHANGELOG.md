@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.50.0
+
+P0: in the IDE shell a fresh install opened a thread into a **zero-width** panel —
+a blank workspace, an 8 px composer, nothing typeable. It was not the thread code:
+threads were created, opened and stored correctly the whole time.
+
+- Root cause: `app.js` defaults `panelShow.right = false`, because in the legacy
+  shell that panel is only the router/usage rail. `ide.js` moves the chat view into
+  the AI dock, which occupies the grid column sized by `--right-w`; `body.no-right`
+  sets that to `0px`. So the conversation loaded into a 0 px column. A second bug
+  hid it: `applyPanels()` ran before `buildDock()`, so the dock never received its
+  `hidden` class and sat visible at 1 px.
+- Fix: the default is now one testable rule (`defaultPanelShow(stored, hasDock)`) —
+  the docked shell opens the dock on a first run, an explicit choice (closed
+  included) still wins — and the IDE init re-applies the panels once the dock
+  exists. Measured: chat `0 → 299px`, composer `8 → 253px`, and the whole app's
+  `-224px` offset went to `0` once the column was sized.
+- Opening or creating a thread now reveals the dock, so a thread never loads into a
+  closed panel.
+- The open thread is remembered (`freeai-current-thread`) and restored on reload,
+  falling back to the newest thread when it no longer exists.
+- The status bar's connection label now updates with its dot; it previously said
+  "Router connected" while the dot was `bad`.
+- Fixed `/api/usage` answering 500 on every fresh home: Rust string continuations
+  swallow the next line's indentation, so two clauses had run together
+  (`END)FROM request_log`, `conversation_idLEFT JOIN`). The query is now a named
+  constant with a regression test that prepares and runs it.
+- Tests: 1 Rust (the usage query parses and runs against its schema) and 4 frontend
+  (thread restore, remember/forget, the panel default, the connection label).
+- Verified in Chromium against a headless build with the mock router: new thread
+  opens with the composer focused; a message sends and the mock replies; three
+  threads keep separate histories and switching between them (by function and by
+  row click) shows the right one; a reload restored the selected thread with its
+  messages; an empty thread shows the welcome state; a long thread (3 turns, 6
+  rows) matches storage exactly and scrolls; with the provider stopped the reply row
+  reads "Could not reach router…", the dot turns `bad` and the status says "Last
+  request failed"; `Problems` shows 0.
+- Version 2.50.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Not verified: the Tauri desktop window itself — this was the headless server plus
+  Chromium, which is the same static UI and the same routes.
+
 ## 2.49.0
 
 The canvas was unit-tested but never driven. This release drove it in Chromium,

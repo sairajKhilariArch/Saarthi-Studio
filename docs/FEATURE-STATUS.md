@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.50.0 (2026-11-10):** a P0 in the IDE shell, not in the thread
+code: the conversation lived in the AI dock's column, which the legacy "right panel
+closed" default collapsed to zero width, so a fresh install showed a blank workspace
+with an 8 px composer. The panel default is now one rule (docked shell opens the
+dock), panels are applied after the dock exists, opening a thread reveals it, the
+open thread survives a reload, and the status-bar connection label follows its dot.
+`/api/usage`, which every fresh home answered with 500, is fixed. Figures are
+unchanged at 92% (1,659/18); this repaired existing rows rather than adding any.
+
 **Revision 2.49.0 (2026-11-10):** the canvas was driven in a real browser
 for the first time, closing Phase 13's last verification gap. The check found one
 real defect (an unguarded pointer capture that aborted the drag) and confirmed the

@@ -1730,7 +1730,7 @@
     if ($("statusModel")) $("statusModel").textContent = model;
     if ($("aiDockModel")) $("aiDockModel").textContent = model;
     const connText = ($("connText") && $("connText").textContent) || "";
-    if ($("statusConn")) $("statusConn").textContent = connText.replace(/…/g, "").trim() || "router";
+    if ($("statusConn")) $("statusConn").textContent = connectionStatusLabel(connText);
     if ($("statusConnDot")) {
       const ok = /ready|connected|online/i.test(connText);
       const bad = /fail|error|offline|unreachable/i.test(connText);
@@ -2342,6 +2342,24 @@
     setupResizer();
     regroupSettings();
     patchGlobals();
+
+    // The Assistant is this shell's main surface, so a first run opens the dock.
+    // An explicit choice (closed included) is honoured — only the default changes.
+    state.panelShow = defaultPanelShow((() => {
+      try {
+        return JSON.parse(localStorage.getItem("freeai-panel-show") || "{}") || {};
+      } catch {
+        return {};
+      }
+    })(), true);
+    try {
+      localStorage.setItem("freeai-panel-show", JSON.stringify(state.panelShow));
+    } catch {
+      /* private mode: the dock is shown for this session */
+    }
+    // The dock is built after app.js first applied the panels, so apply them again
+    // now that it exists: a closed dock must be hidden, not laid out at 0 px.
+    applyPanels();
 
     const workbench = el("div", "workbench-empty hidden");
     workbench.id = "workbenchEmpty";

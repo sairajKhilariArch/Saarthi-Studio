@@ -1409,6 +1409,13 @@ function parentPath(path) {
   return index <= 0 ? "" : clean.slice(0, index);
 }
 
+/* The status bar's short connection label. The IDE shell builds that bar after
+   the footer, so without this the dot could turn bad while the label still said
+   "Router connected" — a status line contradicting itself. */
+function connectionStatusLabel(text) {
+  return String(text || "").replace(/…/g, "").trim() || "router";
+}
+
 function setConnection(kind, text) {
   const dot = $("connDot");
   const pillDot = $("connPill").querySelector(".conn-dot");
@@ -1418,6 +1425,10 @@ function setConnection(kind, text) {
   pillDot.classList.toggle("bad", kind === "bad");
   $("connText").textContent = text;
   $("connPillText").textContent = text;
+  if ($("statusConn")) $("statusConn").textContent = connectionStatusLabel(text);
+  if ($("statusConnDot")) {
+    $("statusConnDot").className = "dot" + (kind === "ok" ? " ok" : kind === "bad" ? " bad" : "");
+  }
 }
 
 function autoGrow(textarea) {
@@ -1882,6 +1893,7 @@ function renderConversations() {
       if (state.currentId === conversation.id) {
         state.currentId = null;
         state.currentTitle = "New thread";
+        rememberThread(null);
         $("messages").replaceChildren();
         $("welcome").classList.remove("hidden");
         renderTabs();
@@ -1936,6 +1948,43 @@ function setupMirroring() {
   });
 }
 
+/* The thread a refresh should come back to. `state.currentId` only lives as long
+   as the page, so the open thread's id is kept beside the other preferences. */
+const THREAD_KEY = "freeai-current-thread";
+
+function rememberedThreadId() {
+  try {
+    return localStorage.getItem(THREAD_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberThread(id) {
+  try {
+    if (id) localStorage.setItem(THREAD_KEY, String(id));
+    else localStorage.removeItem(THREAD_KEY);
+  } catch {
+    /* private mode: the thread still opens, it just will not survive a reload */
+  }
+}
+
+/* Which thread a fresh page reopens: the remembered one, but only while the
+   server still lists it — a thread deleted elsewhere must not strand the view. */
+function threadToRestore(conversations, storedId = rememberedThreadId()) {
+  if (!storedId) return null;
+  const list = Array.isArray(conversations) ? conversations : [];
+  return list.some((entry) => entry.id === storedId) ? storedId : null;
+}
+
+/* The IDE shell puts the conversation inside the AI dock, whose column is sized
+   by the right panel's width. Opening or creating a thread has to bring that
+   surface back; the legacy shell has no dock, so this does nothing there. */
+function revealChatDock() {
+  if (!$("aiDock")) return;
+  if (state.panelShow && state.panelShow.right === false) togglePanel("right");
+}
+
 async function openConversation(id) {
   const result = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
   if (!result.ok) {
@@ -1943,6 +1992,8 @@ async function openConversation(id) {
     return;
   }
   state.currentId = id;
+  rememberThread(id);
+  revealChatDock();
   const match = state.conversations.find((entry) => entry.id === id);
   state.currentTitle = match ? match.title : "Thread";
   // The thread stores the model that answered it, so reopening it restores that
@@ -1978,6 +2029,8 @@ async function newConversation() {
   }
   state.currentId = result.data.id;
   state.currentTitle = result.data.title || "New thread";
+  rememberThread(state.currentId);
+  revealChatDock();
   $("messages").replaceChildren();
   $("welcome").classList.remove("hidden");
   await loadConversations();
@@ -2462,6 +2515,19 @@ function writePanelVars() {
   }
   PANEL_MIN = PANEL_MIN || { left: 212, right: 240, bottom: 120 };
   PANEL_MAX = PANEL_MAX || { left: 560, right: 640, bottom: 520 };
+}
+
+/* Which panels start open. The legacy shell's right panel is the router/usage
+   rail, so a first run leaves it closed. The IDE shell docks the conversation in
+   that column, so a first run there must open it — inheriting the legacy default
+   is what put the chat in a zero-width column. `hasDock` says which shell asked. */
+function defaultPanelShow(stored, hasDock) {
+  const show = stored && typeof stored === "object" ? stored : {};
+  return {
+    left: show.left == null ? true : Boolean(show.left),
+    right: show.right == null ? Boolean(hasDock) : Boolean(show.right),
+    bottom: show.bottom == null ? false : Boolean(show.bottom),
+  };
 }
 
 function applyPanels() {
@@ -7323,10 +7389,12 @@ function bindEvents() {
   /* Sizes and visibility live in localStorage with the same pattern as the
      theme, and drive :root custom properties — no re-render involved. */
   state.panelSize = JSON.parse(localStorage.getItem("freeai-panel-size") || "{}") || {};
-  state.panelShow = JSON.parse(localStorage.getItem("freeai-panel-show") || "{}") || {};
-  if (state.panelShow.left == null) { state.panelShow.left = true; }
-  if (state.panelShow.right == null) { state.panelShow.right = false; }
-  if (state.panelShow.bottom == null) { state.panelShow.bottom = false; }
+  // No dock exists yet (ide.js builds it), so this is the legacy default; the IDE
+  // shell recomputes it with hasDock once the dock is in place.
+  state.panelShow = defaultPanelShow(
+    JSON.parse(localStorage.getItem("freeai-panel-show") || "{}") || {},
+    Boolean(document.getElementById("aiDock")),
+  );
   PANEL_MIN = { left: 212, right: 240, bottom: 120 };
   PANEL_MAX = { left: 560, right: 640, bottom: 520 };
   writePanelVars();
@@ -8687,7 +8755,12 @@ async function cancelAgentRun(runId) {
   await Promise.all([  loadUsage(), loadSkills(), loadCrewTemplates()]);
   probeRouter();
   setupMirroring();
-  if (state.conversations.length) {
+  // Reopen the thread the user was reading; a first visit (or a thread deleted
+  // since) falls back to the newest, which is what this always did.
+  const restore = threadToRestore(state.conversations);
+  if (restore) {
+    await openConversation(restore);
+  } else if (state.conversations.length) {
     await openConversation(state.conversations[0].id);
   }
   if (state.workspace) setSidebarMode("files");

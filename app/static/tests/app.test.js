@@ -189,6 +189,48 @@ test("a dragged node's position is written into the graph", () => {
   assert.equal(node.note, "keep me");
 });
 
+test("a refresh restores the remembered thread, and only while it still exists", () => {
+  assert.equal(call(`threadToRestore([{ id: "a" }, { id: "b" }], "b")`), "b");
+  // A thread deleted elsewhere (or from another project) is not restored.
+  assert.equal(call(`threadToRestore([{ id: "a" }], "gone")`), null);
+  assert.equal(call(`threadToRestore([{ id: "a" }], "")`), null);
+  assert.equal(call(`threadToRestore(null, "a")`), null);
+});
+
+test("the open thread is remembered and forgotten", () => {
+  call(`rememberThread("abc")`);
+  assert.equal(call(`rememberedThreadId()`), "abc");
+  call(`rememberThread(null)`);
+  assert.equal(call(`rememberedThreadId()`), "");
+  // A remembered id the server no longer lists resolves to nothing, so the page
+  // falls back to the newest thread instead of opening a dead one.
+  call(`rememberThread("stale")`);
+  assert.equal(call(`threadToRestore([{ id: "x" }])`), null);
+  call(`rememberThread(null)`);
+});
+
+test("the status bar label mirrors the connection text", () => {
+  assert.equal(call(`connectionStatusLabel("Router connected")`), "Router connected");
+  assert.equal(call(`connectionStatusLabel("Checking…")`), "Checking");
+  // An empty label falls back rather than leaving a blank status item.
+  assert.equal(call(`connectionStatusLabel("")`), "router");
+  assert.equal(call(`connectionStatusLabel(null)`), "router");
+});
+
+test("a first run in the IDE shell opens the docked conversation", () => {
+  // The P0: the chat lives in the dock column, so the legacy default (closed)
+  // left it at 0px wide — a blank workspace with an 8px composer.
+  assert.equal(call(`defaultPanelShow({}, true).right`), true);
+  assert.equal(call(`defaultPanelShow({}, false).right`), false);
+  // An explicit choice wins over both defaults.
+  assert.equal(call(`defaultPanelShow({ right: false }, true).right`), false);
+  assert.equal(call(`defaultPanelShow({ right: true }, false).right`), true);
+  // The other panels keep their own defaults.
+  assert.equal(call(`defaultPanelShow(null, true).left`), true);
+  assert.equal(call(`defaultPanelShow(null, true).bottom`), false);
+  assert.equal(call(`defaultPanelShow({ left: false, bottom: true }, true).left`), false);
+});
+
 test("a cyclic graph still lays out and terminates", () => {
   const size = call(`(() => {
     const layout = graphLayout([

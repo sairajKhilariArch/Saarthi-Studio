@@ -276,6 +276,15 @@ Remaining: reordering beyond a numeric priority.
 Started in 2.9.0. `workflows.json` now carries an optional `nodes` array, so a
 saved prompt is still valid and a graph is a first-class workflow.
 
+Delivered in 2.50.0: a P0 repair to the IDE shell. The chat view lives in
+the AI dock's grid column, which the legacy "right panel closed" default collapsed
+to zero width — a fresh install opened threads into a blank 0 px panel with an 8 px
+composer. The panel default is now one testable rule (the docked shell opens the
+dock), panels are applied again after the dock is built, opening a thread reveals
+it, the open thread is remembered across reloads, and the status bar's connection
+label follows its dot. `/api/usage`, which every fresh home answered with 500
+because its SQL continuations swallowed their spaces, is fixed and tested.
+
 Delivered in 2.49.0: the canvas verified in a browser. A headless build on
 a scratch home, driven in Chromium at 1440×900 through the app's own pointer
 listeners. The check found a real defect — an unguarded `setPointerCapture` threw

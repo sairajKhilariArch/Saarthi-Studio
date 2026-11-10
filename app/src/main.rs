@@ -2937,13 +2937,7 @@ async fn usage(
                     ))
                 })?;
         let by_project = {
-            let mut stmt = conn.prepare(
-                "SELECT COALESCE(p.name,'(no project)') AS name, COUNT(*), COALESCE(SUM(r.cost_usd),0),\
-                 SUM(CASE WHEN r.cost_usd IS NULL AND r.status='ok' THEN 1 ELSE 0 END)\
-                 FROM request_log r LEFT JOIN conversations c ON c.id=r.conversation_id\
-                 LEFT JOIN projects p ON p.id=c.project_id\
-                 WHERE r.created_at>=?1 GROUP BY p.name ORDER BY COUNT(*) DESC LIMIT 20",
-            )?;
+            let mut stmt = conn.prepare(USAGE_BY_PROJECT_SQL)?;
             let rows = stmt.query_map([window_start], |r| {
                 Ok(json!({
                     "project": r.get::<_, String>(0)?, "requests": r.get::<_, i64>(1)?,
@@ -4698,6 +4692,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The usage page's per-project rollup. It is a named constant so a test can
+/// prepare it: a `\` at the end of a Rust string line swallows the next line's
+/// indentation, and this query once shipped as `END)FROM` / `idLEFT JOIN`, which
+/// made every `/api/usage` request answer 500 instead of the page it draws.
+const USAGE_BY_PROJECT_SQL: &str =
+    "SELECT COALESCE(p.name,'(no project)') AS name, COUNT(*), COALESCE(SUM(r.cost_usd),0), \
+     SUM(CASE WHEN r.cost_usd IS NULL AND r.status='ok' THEN 1 ELSE 0 END) \
+     FROM request_log r LEFT JOIN conversations c ON c.id=r.conversation_id \
+     LEFT JOIN projects p ON p.id=c.project_id \
+     WHERE r.created_at>=?1 GROUP BY p.name ORDER BY COUNT(*) DESC LIMIT 20";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5273,6 +5278,39 @@ mod tests {
         assert!(again.existed);
         assert!(again.backup.is_none());
         assert!(again.summary().is_none(), "a no-op boot says nothing");
+    }
+
+    #[test]
+    fn the_usage_by_project_query_parses_and_runs() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE request_log (
+                id INTEGER PRIMARY KEY, created_at REAL NOT NULL, cost_usd REAL,
+                status TEXT NOT NULL, conversation_id TEXT
+             );
+             CREATE TABLE conversations (id TEXT PRIMARY KEY, project_id TEXT);
+             CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT);",
+        )
+        .expect("schema");
+        conn.execute(
+            "INSERT INTO request_log(id,created_at,cost_usd,status,conversation_id) \
+             VALUES(1,10,0.5,'ok',NULL)",
+            [],
+        )
+        .expect("row");
+        // Preparing is the assertion: a missing space between clauses used to be
+        // invisible until a request arrived, and then every call answered 500.
+        let mut stmt = conn
+            .prepare(USAGE_BY_PROJECT_SQL)
+            .expect("the per-project query must parse");
+        let rows = stmt
+            .query_map([0.0], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("run")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect");
+        assert_eq!(rows, vec![("(no project)".to_string(), 1)]);
     }
 
     #[test]
