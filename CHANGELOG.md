@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.27.0
+
+The agent can call an installed extension's tools, and the progress checklist
+finally describes the tree it lives in.
+
+- Extension tools reach the tool loop: when a run's prompt is built, the declared
+  tools of every valid, runnable extension are read from disk and advertised in a
+  labelled system message (`extension.tool — description`), capped like the MCP
+  catalogue. With nothing installed, no `extension` action is advertised at all,
+  so the model is never offered a call that would fail.
+- New step `{"action":"extension","extension":"<id>","tool":"<name>","arguments":{}}`
+  (`extension-tool` is accepted too, and missing arguments mean `{}`).
+- Each call is a real sandboxed run, not a shortcut: the same fuel/memory/wall
+  budgets, the same declared grants for the workspace and the extension's own
+  data folder, the same one-run-per-extension rule and cancellation boundary, a
+  row in `extension_runs` and an audit row for every host call. The module's
+  `env.result` becomes the step output, and a tool that reports nothing yields
+  `null`.
+- Approval: the step is gated by the `extension_tool` action on the target
+  `extension/tool` — the same target the HTTP route uses, so one saved rule
+  covers both ways of calling the tool. Without `autoApprove` the call waits for
+  approval like a write, and a saved `deny` refuses it.
+- Docs reconciled: `PROGRESS.md`'s "Next up" was rewritten against the tree (it
+  still called the Phase 17 remainder "the next slice" and Phase 13
+  unimplemented), with a note recording what was stale, and `FEATURE-STATUS.md`,
+  `MASTER-ROADMAP.md` and `KNOWN-ISSUES.md` now agree with it on what Phase 15
+  has left.
+
 ## 2.26.0
 
 Extensions can declare tools, and calling one is a real sandboxed run rather

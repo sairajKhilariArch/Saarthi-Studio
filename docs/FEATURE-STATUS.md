@@ -9,13 +9,21 @@ implementation), **Broken** (exists and fails).
 
 | Check | Command | Result |
 |---|---|---|
-| Rust suite | `cd app && cargo test --locked` | see the count recorded in `PROGRESS.md` for this version (test functions in tree: 435) |
+| Rust suite | `cd app && cargo test --locked` | see the count recorded in `PROGRESS.md` for this version (test functions in tree: 504) |
 | Route registrations | `grep -c '\.route(' app/src/{main,agent,host_api,git}.rs` | 44 / 15 / 8 / 28 |
-| Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 435 |
+| Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 504 |
 | Last green release | run `41884439627` (`v1.26.6`) | all six jobs success, 9 assets |
-| Release line | `8ff7c5e` … `2.1.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
+| Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
 The counts above are what the tree contains today, not a projection.
+
+**Revision 2.27.0 (2026-11-10):** Phase 15's custom-tool row moved from Partial to
+Working — the agent's tool loop now offers installed tools (2.27.0) — so the phase
+is 9 of its 11 rows = 82%. Re-deriving it exposed two arithmetic slips, corrected
+here: the 2.26.0 note counted 12 rows and 71% where the table has 11 rows and the
+figure then was 77% (8 working + 1 partial = 8.5/11), and the stated overall mean
+of 82% did not match the mean of this table's own phase percentages, which is 88%
+(1,592/18). The method is unchanged; only the arithmetic was re-run.
 
 **Revision 2.26.0 (2026-11-10):** Phase 15's custom-tool row moved from Missing to
 Partial: a manifest can declare tools, the sandbox has a tool ABI
@@ -54,7 +62,7 @@ capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs on a
 schedule, resumes an interrupted one, edits them on a canvas and moves them
 between installs; what remains is free positioning and browser verification of
-the canvas, and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, but has no custom tools, provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
+the canvas, and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, and now offers its custom tools to the agent's tool loop, but still has no provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
 the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 has no installer or update path.
 Phase 17 closed in 2.4.0.
 
@@ -82,13 +90,13 @@ row below moves, so they cannot drift from the tables.
 | 12 | Live monitoring | 90% | live step view while a model call is in flight |
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
-| 15 | Extension ecosystem | 71% | agent-visible custom tools, provider adapters, UI extensions |
+| 15 | Extension ecosystem | 82% | enforced tool argument schemas, provider adapters, UI extensions |
 | 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
-**Overall (mean of the 18 phases): 82%.** Read it as "one reliable core, most
-phases closed, the remaining work concentrated in 13, 15, 16 and 18". The
+**Overall (mean of the 18 phases): 88%.** Read it as "one reliable core, most
+phases closed, the remaining work concentrated in 1, 9, 14, 16 and 18". The
 per-row method is the arbiter: a phase moves only when a row here moves.
 
 ## Phase 1 — CI/CD and error diagnosis
@@ -328,7 +336,7 @@ it needs, and both are enforced rather than displayed.
 | Run control | Working (2.23.0) | One run per extension (409 while one is open); `POST /api/extensions/:id/cancel` stops it at the next host call (a pure-compute loop still ends at the fuel limit); a 5-second wall-clock budget is checked at each host boundary; uninstall cancels first; Settings shows `Running…` and `Cancel` |
 | Run history | Working (2.24.0) | `extension_runs` records extension, project, start, duration, exit code, fuel, host calls and error for every run that reached the sandbox, including loader failures and cancellations; `GET /api/extension-runs` returns the newest 50 and Settings lists them |
 | Compatibility and dependencies | Working (2.25.0) | `requiresStudio` (numeric per-part floor against `CARGO_PKG_VERSION`) marks a manifest `valid` but `compatible: false` when this build is older, and both run and install are refused with both versions named; `apiVersion` defaults to 1 and refuses a higher number at parse; `dependencies` (≤16, deduped, validated, no self-reference) are reported as `missingDependencies` and block a run, not an install. Discovery reads every manifest before judging any. Not covered: a dependency's own compatibility, dependency cycles, and an update path that would re-check after the app is upgraded |
-| Custom tools | Partial (2.26.0) | `tools` in the manifest (≤16; name, description, optional `.wasm` entry, optional `inputSchema`; the wasm runtime is required and each module is checked like the entry) and the `env.arguments`/`env.result` ABI; `POST /api/extensions/:id/tools/:tool` runs one in the same sandbox with the same budgets, grants, one-run rule and cancel, answering `{result, reported, run}`. Gated by `extension_tool` (default ask; `ask` refuses with instructions because the route cannot prompt). Not in the agent's tool loop, and `inputSchema` is not enforced on arguments |
+| Custom tools | Working (2.27.0) | `tools` in the manifest (≤16; name, description, optional `.wasm` entry, optional `inputSchema`; the wasm runtime is required and each module is checked like the entry) and the `env.arguments`/`env.result` ABI; `POST /api/extensions/:id/tools/:tool` runs one in the same sandbox with the same budgets, grants, one-run rule and cancel, answering `{result, reported, run}`, gated by `extension_tool` (default ask; `ask` refuses with instructions because the route cannot prompt). Since 2.27.0 the agent's tool loop offers them too: the prompt carries a labelled catalogue of every valid, runnable folder's tools (none when nothing is installed), the `extension` step is gated by the same `extension_tool` permission on the same `extension/tool` target, and the call runs through the same sandbox, budgets, grants, one-run rule, cancel boundary, `extension_runs` row and host-call audit, with `env.result` becoming the step output. Not covered: `inputSchema` is advertised to the model but never enforced on the arguments |
 | Provider adapters | Missing | — |
 | UI extensions | Missing | — |
 

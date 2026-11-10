@@ -107,6 +107,12 @@ enum Action {
         tool: String,
         arguments: Value,
     },
+    /// A tool declared by an installed extension, run in the wasm sandbox.
+    Extension {
+        extension: String,
+        tool: String,
+        arguments: Value,
+    },
     Done {
         summary: String,
     },
@@ -124,6 +130,7 @@ impl Action {
             Action::Write { .. } => "write",
             Action::Command { .. } => "command",
             Action::Mcp { .. } => "mcp",
+            Action::Extension { .. } => "extension",
             Action::Done { .. } => "done",
             Action::Fail { .. } => "fail",
         }
@@ -144,6 +151,14 @@ impl Action {
                 arguments,
             } => json!({
                 "action": "mcp", "server": server, "tool": tool, "arguments": arguments
+            }),
+            Action::Extension {
+                extension,
+                tool,
+                arguments,
+            } => json!({
+                "action": "extension", "extension": extension, "tool": tool,
+                "arguments": arguments
             }),
             Action::Done { summary } => json!({ "action": "done", "summary": summary }),
             Action::Fail { reason } => json!({ "action": "fail", "reason": reason }),
@@ -196,6 +211,16 @@ impl Action {
             // model can read instead of an unparseable reply.
             "mcp" | "mcp-call" | "mcp_call" => Ok(Action::Mcp {
                 server: field("server", value)?,
+                tool: field("tool", value)?,
+                arguments: match value.get("arguments") {
+                    None | Some(Value::Null) => json!({}),
+                    Some(arguments) => arguments.clone(),
+                },
+            }),
+            // Same argument rule as an MCP call: the tool decides what its own
+            // arguments mean, and a non-object is a step error it can read.
+            "extension" | "extension-tool" => Ok(Action::Extension {
+                extension: field("extension", value)?,
                 tool: field("tool", value)?,
                 arguments: match value.get("arguments") {
                     None | Some(Value::Null) => json!({}),
@@ -1159,6 +1184,21 @@ fn pending_summary(action: &Action) -> String {
                 )
             }
         }
+        Action::Extension {
+            extension,
+            tool,
+            arguments,
+        } => {
+            let rendered = arguments.to_string();
+            if rendered == "{}" {
+                format!("call extension tool {extension}.{tool}")
+            } else {
+                format!(
+                    "call extension tool {extension}.{tool} with {}",
+                    cap_chars(&rendered, 200)
+                )
+            }
+        }
         Action::Read { path } => format!("read {path}"),
         Action::List { path } => format!("list {}", if path.is_empty() { "." } else { path }),
         _ => String::new(),
@@ -1318,6 +1358,9 @@ async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, Strin
         Action::Mcp { .. } => {
             Err("MCP actions run through the MCP path, not this one.".to_string())
         }
+        Action::Extension { .. } => {
+            Err("Extension tools run through the dispatch path, not this one.".to_string())
+        }
         _ => Err("Only list, read, write and command actions execute.".to_string()),
     }
 }
@@ -1327,6 +1370,17 @@ async fn dispatch_action(root: &FsPath, action: &Action) -> Result<String, Strin
 /// route uses, so validation, argument checks and the audit trail are shared.
 async fn dispatch_step(state: &AppState, root: &FsPath, action: &Action) -> Result<String, String> {
     match action {
+        Action::Extension {
+            extension,
+            tool,
+            arguments,
+        } => match crate::extensions::invoke_for_run(state, extension, tool, arguments).await {
+            Ok(payload) => Ok(format!(
+                "via extension {extension}.{tool}\n---\n{}",
+                cap_chars(&payload.to_string(), STEP_OUTPUT_CAP)
+            )),
+            Err(error) => Err(error),
+        },
         Action::Mcp {
             server,
             tool,
@@ -1434,7 +1488,13 @@ impl PermissionGate {
             // exactly like a command. A deny rule on `server.tool` is applied
             // before this gate ever runs.
             Action::Mcp { .. } if !run.allow_mcp => GateDecision::Denied("MCP tool calls"),
-            Action::Write { .. } | Action::Command { .. } | Action::Mcp { .. }
+            // An extension tool runs sandboxed with its own declared grants, so
+            // it needs no run-level opt-in — but it does pause for approval,
+            // exactly like a write, unless the run auto-approves.
+            Action::Write { .. }
+            | Action::Command { .. }
+            | Action::Mcp { .. }
+            | Action::Extension { .. }
                 if !run.auto_approve =>
             {
                 GateDecision::NeedsApproval
@@ -1449,7 +1509,18 @@ impl PermissionGate {
 
 /// The standing instruction: what one JSON action looks like and which tools
 /// this particular run may use.
+/// Test-only convenience: the same builder with no extension tools installed.
+#[cfg(test)]
 fn build_messages(run: &RunRow, history: &str, background: &str) -> Vec<Value> {
+    build_messages_with(run, history, background, &[])
+}
+
+fn build_messages_with(
+    run: &RunRow,
+    history: &str,
+    background: &str,
+    extension_tools: &[Value],
+) -> Vec<Value> {
     // Profile rules override what the checkboxes say: the gate backs the
     // prompt up, so a denied tool is both forbidden in text and refused.
     let write_rule = if !profile_rule(&run.profile, true).is_empty() {
@@ -1484,6 +1555,22 @@ fn build_messages(run: &RunRow, history: &str, background: &str) -> Vec<Value> {
         (None, true) => "mcp (no tool was discovered — do not emit it)",
         (None, false) => "mcp FORBIDDEN — never emit it",
     };
+    // Installed extension tools need no run-level flag: the sandbox and the
+    // saved rules protect the call, so the only thing a run needs is to know
+    // the tool exists. Nothing is advertised when none is installed.
+    let tool_block = extension_tool_block(extension_tools);
+    let tool_rule = match (&tool_block, run.auto_approve) {
+        (Some(_), true) => "extension tools (enabled for this run)".to_string(),
+        (Some(_), false) => "extension tools (each call first waits for user approval)".to_string(),
+        (None, _) => {
+            "extension tools (none installed — do not emit the extension action)".to_string()
+        }
+    };
+    let tool_action_line = if tool_block.is_some() {
+        "{\"action\":\"extension\",\"extension\":\"<id>\",\"tool\":\"<name>\",\"arguments\":{}} call one installed extension tool from the list below\n"
+    } else {
+        ""
+    };
     let mcp_action_line = if mcp_block.is_some() {
         "{\"action\":\"mcp\",\"server\":\"<server>\",\"tool\":\"<tool>\",\"arguments\":{}} call one MCP tool from the list below (arguments follow its schema)\n"
     } else {
@@ -1502,9 +1589,10 @@ fn build_messages(run: &RunRow, history: &str, background: &str) -> Vec<Value> {
                  {{\"action\":\"write\",\"path\":\"relative/path\",\"content\":\"full file text\"}} create or overwrite a file\n\
                  {{\"action\":\"command\",\"command\":\"echo ready\"}} run a shell command in the workspace\n\
                  {mcp_action_line}\
+                 {tool_action_line}\
                  {{\"action\":\"done\",\"summary\":\"...\"}} the goal is met and you verified it\n\
                  {{\"action\":\"fail\",\"reason\":\"...\"}} you cannot meet the goal\n\n\
-                 Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}; mcp: {mcp_rule}.",
+                 Permitted tools for this run: read: always; write: {write_rule}; command: {command_rule}; mcp: {mcp_rule}; extension tools: {tool_rule}.",
                 profile_role(&run.profile)
             )
         }),
@@ -1529,7 +1617,50 @@ fn build_messages(run: &RunRow, history: &str, background: &str) -> Vec<Value> {
     if let Some(catalog) = mcp_block {
         messages.push(json!({ "role": "system", "content": catalog }));
     }
+    // Extension tools ride along the same way: their own labelled message so the
+    // action list stays readable.
+    if let Some(catalog) = tool_block {
+        messages.push(json!({ "role": "system", "content": catalog }));
+    }
     messages
+}
+
+/// The catalogue block for installed extension tools, or `None` when there are
+/// none: telling the model about an action that cannot run is worse than saying
+/// nothing.
+fn extension_tool_block(tools: &[Value]) -> Option<String> {
+    if tools.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "Extension tools this run may call (extension.tool — arguments are passed as JSON to the module):"
+            .to_string(),
+    ];
+    for tool in tools.iter().take(MCP_PROMPT_TOOLS) {
+        let Some(extension) = tool.get("extension").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = tool.get("tool").and_then(Value::as_str) else {
+            continue;
+        };
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let mut line = format!("- {extension}.{name}");
+        if !description.is_empty() {
+            line.push_str(&format!(": {}", cap_chars(description, 160)));
+        }
+        lines.push(line);
+    }
+    if tools.len() > MCP_PROMPT_TOOLS {
+        lines.push(format!(
+            "({} more tool(s) are installed but not listed here)",
+            tools.len() - MCP_PROMPT_TOOLS
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 /// What a run was handed before its first step: the block the model is given
@@ -2256,10 +2387,11 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         crew.get(crew_stage_index(handoffs, crew.len()))
             .unwrap_or(&run.profile),
     );
-    let mut messages = build_messages(
+    let mut messages = build_messages_with(
         &staged_run,
         &build_history(state, &run.id)?,
         &stored_background(state, run),
+        &crate::extensions::catalog(state),
     );
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
@@ -2364,10 +2496,11 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                     "Tier call failed; retrying on the base model.",
                     &cap_chars(&tier_error, 600),
                 )?;
-                let base_messages = build_messages(
+                let base_messages = build_messages_with(
                     run,
                     &build_history(state, &run.id)?,
                     &stored_background(state, run),
+                    &crate::extensions::catalog(state),
                 );
                 let (reply, _) = crate::call_model(state, base_messages, None).await?;
                 (reply, None)
@@ -2577,6 +2710,14 @@ async fn execute_action_step(
         Action::Mcp { server, tool, .. } => (
             crate::permissions::Action::McpTool,
             crate::mcp::tool_target(server, tool),
+        ),
+        // The target is the same `extension/tool` the HTTP route uses, so one
+        // saved rule covers both ways of calling the tool.
+        Action::Extension {
+            extension, tool, ..
+        } => (
+            crate::permissions::Action::ExtensionTool,
+            format!("{extension}/{tool}"),
         ),
         _ => (crate::permissions::Action::FsRead, String::new()),
     };
@@ -5615,6 +5756,124 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             .await
             .unwrap();
         (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    #[test]
+    fn an_extension_action_parses_and_summarises() {
+        let parsed = Action::from_json(&json!({
+            "action": "extension", "extension": "toolbox", "tool": "echo",
+            "arguments": {"text": "hi"}
+        }))
+        .expect("parses");
+        match parsed {
+            Action::Extension {
+                extension,
+                tool,
+                arguments,
+            } => {
+                assert_eq!(extension, "toolbox");
+                assert_eq!(tool, "echo");
+                assert_eq!(arguments, json!({ "text": "hi" }));
+            }
+            other => panic!("wrong action: {other:?}"),
+        }
+        // A call with no arguments is a call, not a malformed reply.
+        let bare = Action::from_json(&json!({
+            "action": "extension", "extension": "toolbox", "tool": "echo"
+        }))
+        .expect("defaults to no arguments");
+        assert_eq!(bare.to_json()["arguments"], json!({}));
+        assert_eq!(bare.tag(), "extension");
+        assert!(pending_summary(&bare).contains("toolbox.echo"));
+        assert!(Action::from_json(&json!({"action":"extension","extension":"toolbox"})).is_err());
+    }
+
+    #[test]
+    fn the_extension_catalogue_block_lists_tools_and_is_absent_when_empty() {
+        assert!(extension_tool_block(&[]).is_none());
+        let block = extension_tool_block(&[json!({
+            "extension": "toolbox", "tool": "echo", "description": "Echoes its text."
+        })])
+        .expect("block");
+        assert!(block.contains("toolbox.echo"), "{block}");
+        assert!(block.contains("Echoes its text."), "{block}");
+    }
+
+    #[test]
+    fn the_extension_catalogue_reaches_the_prompt() {
+        let run = mcp_run(false, "(no MCP servers)");
+        let tools = vec![json!({
+            "extension": "toolbox", "tool": "echo", "description": "Echoes."
+        })];
+        let messages = build_messages_with(&run, "(no steps yet)", "", &tools);
+        assert!(
+            messages.iter().any(|message| message["content"]
+                .as_str()
+                .unwrap_or("")
+                .contains("toolbox.echo")),
+            "{messages:#?}"
+        );
+        // The action list lives in the system prompt, which is the first message.
+        let prompt = messages[0]["content"].as_str().unwrap_or("");
+        assert!(prompt.contains("\"action\":\"extension\""), "{prompt}");
+        // A run with nothing installed must not advertise a dead action.
+        let bare = build_messages_with(&run, "(no steps yet)", "", &[]);
+        let bare_prompt = bare[0]["content"].as_str().unwrap_or("");
+        assert!(!bare_prompt.contains("\"action\":\"extension\""), "{bare_prompt}");
+    }
+
+    #[tokio::test]
+    async fn an_agent_run_calls_an_extension_tool() {
+        let base = scripted_router(&[
+            r#"{"action":"extension","extension":"toolbox","tool":"echo","arguments":{"text":"hi"}}"#,
+            r#"{"action":"done","summary":"the tool answered"}"#,
+        ])
+        .await;
+        let fixture = run_fixture("extension-tool", &base);
+        let dir = fixture
+            .state
+            .database_path
+            .parent()
+            .expect("data dir")
+            .join("extensions/toolbox");
+        std::fs::create_dir_all(&dir).expect("extension folder");
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"id":"toolbox","name":"Toolbox","version":"1.0.0","runtime":"wasm","entry":"run.wasm","tools":[{"name":"echo","description":"Reports a fixed ok."}]}"#,
+        )
+        .expect("manifest");
+        let module = wat::parse_str(
+            r#"(module
+                 (import "env" "arguments" (func $args (param i32 i32) (result i32)))
+                 (import "env" "result" (func $result (param i32 i32) (result i32)))
+                 (memory (export "memory") 1)
+                 (data (i32.const 32) "{\"ok\":true}")
+                 (func (export "run") (result i32)
+                   (drop (call $args (i32.const 0) (i32.const 128)))
+                   (drop (call $result (i32.const 32) (i32.const 11)))
+                   (i32.const 0)))"#,
+        )
+        .expect("wat compiles");
+        std::fs::write(dir.join("run.wasm"), module).expect("module");
+
+        let id = start_run(
+            &fixture.app,
+            json!({ "goal": "call the extension tool", "autoApprove": true }),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        assert_eq!(actions, ["extension", "done"], "actions: {actions:?}");
+        let conn = db(&fixture.state).unwrap();
+        let output: String = conn
+            .query_row(
+                "SELECT output FROM agent_steps WHERE run_id=?1 AND action='extension'",
+                [&id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(output.contains("ok\":true"), "{output}");
+        assert!(output.contains("toolbox.echo"), "{output}");
     }
 
     #[tokio::test]

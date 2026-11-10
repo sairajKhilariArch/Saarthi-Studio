@@ -400,6 +400,21 @@ the extension's own data folder, the tool ABI and `last_error`. A dependency is 
 its own compatibility, and no dependency cycle is detected (a pair that needs
 each other reports each other as installed and both stay runnable).
 
+Custom tools in the agent loop (2.27.0): building a run's prompt reads every
+valid, runnable folder's declared tools from disk and pushes them as a labelled
+`system` catalogue (nothing is advertised when none is installed), so the model
+can emit `{"action":"extension","extension":...,"tool":...,"arguments":...}`.
+The step is gated by `extension_tool` on the same `extension/tool` target the HTTP
+route uses — approval unless the run auto-approves, a saved `deny` refuses — and
+runs through the same sandbox with the same budgets, grants, one-run rule, cancel
+boundary, `extension_runs` row and host-call audit; `env.result` becomes the step
+output.
+
+What remains in this phase: `inputSchema` is advertised but never enforced on the
+arguments, there are no provider adapters and no UI extensions, and a dependency
+cycle or an update path that re-checks a folder after the app is upgraded is still
+missing.
+
 ## Phase 16 — Testing
 
 Frontend unit tests, end-to-end runs (launch → chat → agent → approve →

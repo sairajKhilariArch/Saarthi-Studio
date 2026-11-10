@@ -1117,6 +1117,176 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
     .into_response()
 }
 
+/// Every tool a run may call: only folders that are valid and runnable, so the
+/// model is never told about a tool that would be refused. Read from disk each
+/// time because a manifest is a few small files — unlike MCP discovery, this
+/// spawns nothing and needs no snapshot.
+pub(crate) fn catalog(state: &AppState) -> Vec<Value> {
+    let dir = extensions_dir(state);
+    let mut tools = Vec::new();
+    for entry in inspect(&dir) {
+        if entry["valid"] != Value::Bool(true) {
+            continue;
+        }
+        if !entry["blockedReason"].as_str().unwrap_or("").is_empty() {
+            continue;
+        }
+        let id = entry["id"].as_str().unwrap_or("");
+        let Some(list) = entry["tools"].as_array() else {
+            continue;
+        };
+        for definition in list {
+            let Some(name) = definition["name"].as_str() else {
+                continue;
+            };
+            tools.push(json!({
+                "extension": id,
+                "tool": name,
+                "description": definition["description"].clone(),
+                "inputSchema": definition["inputSchema"].clone(),
+            }));
+        }
+    }
+    tools
+}
+
+/// Run one declared tool for an agent step. The step has already applied the
+/// saved rules — an `ask` was answered by the approval flow and a `deny` never
+/// reaches here — so this runs the module and records the run, and decides
+/// nothing itself.
+pub(crate) async fn invoke_for_run(
+    state: &AppState,
+    extension: &str,
+    tool: &str,
+    arguments: &Value,
+) -> Result<Value, String> {
+    if !valid_id(extension) || !valid_id(tool) {
+        return Err("Invalid extension id or tool name.".to_string());
+    }
+    let dir = extensions_dir(state);
+    let entries = inspect(&dir);
+    let Some(entry) = entries.iter().find(|entry| entry["id"] == extension) else {
+        return Err(format!("No extension \"{extension}\" is installed."));
+    };
+    if entry["valid"] != Value::Bool(true) {
+        return Err(entry["error"]
+            .as_str()
+            .unwrap_or("The extension is not valid.")
+            .to_string());
+    }
+    let reason = entry["blockedReason"].as_str().unwrap_or("");
+    if !reason.is_empty() {
+        return Err(reason.to_string());
+    }
+    let definition = entry["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|candidate| candidate["name"] == tool));
+    let Some(definition) = definition else {
+        return Err(format!(
+            "Extension \"{extension}\" declares no tool \"{tool}\"."
+        ));
+    };
+    let module_entry = definition["entry"]
+        .as_str()
+        .or_else(|| entry["entry"].as_str())
+        .unwrap_or("");
+    if module_entry.is_empty() {
+        return Err("This tool has no module to run.".to_string());
+    }
+    let arguments_text = serde_json::to_string(arguments)
+        .map_err(|error| format!("The arguments could not be serialized: {error}"))?;
+    if arguments_text.len() > MAX_TOOL_ARGUMENT_BYTES {
+        return Err(format!(
+            "The arguments are larger than {MAX_TOOL_ARGUMENT_BYTES} bytes."
+        ));
+    }
+    let project = crate::active_project_id(state);
+    let declared = declared_permissions(entry);
+    let module_path = dir.join(extension).join(module_entry);
+    let grant = host_grant(state, &dir, extension, &declared, &project);
+    let target = format!("{extension}/{tool}");
+    let Some(ticket) = begin_run(extension) else {
+        return Err("This extension is already running; wait for it to finish.".to_string());
+    };
+    let cancel = ticket.cancel.clone();
+    let _ticket = ticket;
+    let options = crate::extension_run::RunOptions {
+        cancel: Some(cancel),
+        wall: None,
+        arguments: Some(arguments_text),
+    };
+    let started_at = crate::now_seconds();
+    let started = std::time::Instant::now();
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::extension_run::run_file_with(&module_path, Some(grant), options)
+    })
+    .await;
+    let outcome = match outcome {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
+            record_run(
+                &state.database_path,
+                &RunRecord {
+                    extension,
+                    project: &project,
+                    started_at,
+                    duration_ms: started.elapsed().as_millis(),
+                    exit_code: None,
+                    fuel_used: 0,
+                    host_calls: 0,
+                    error: &error,
+                },
+            );
+            return Err(error);
+        }
+        Err(error) => {
+            let message = format!("The tool stopped unexpectedly: {error}");
+            record_run(
+                &state.database_path,
+                &RunRecord {
+                    extension,
+                    project: &project,
+                    started_at,
+                    duration_ms: started.elapsed().as_millis(),
+                    exit_code: None,
+                    fuel_used: 0,
+                    host_calls: 0,
+                    error: &message,
+                },
+            );
+            return Err(message);
+        }
+    };
+    record_run(
+        &state.database_path,
+        &RunRecord {
+            extension,
+            project: &project,
+            started_at,
+            duration_ms: outcome.elapsed_ms,
+            exit_code: Some(outcome.exit_code),
+            fuel_used: outcome.fuel_used,
+            host_calls: outcome.audit.len(),
+            error: "",
+        },
+    );
+    audit_calls(state, extension, &project, &outcome);
+    crate::oplog::record(
+        "info",
+        "extensions",
+        "tool",
+        format!(
+            "agent called {target}: exit {} after {} ms ({} fuel)",
+            outcome.exit_code, outcome.elapsed_ms, outcome.fuel_used
+        ),
+    );
+    match outcome.result.as_deref() {
+        Some(text) => Ok(serde_json::from_str::<Value>(text)
+            .unwrap_or_else(|_| Value::String(text.to_string()))),
+        None => Ok(Value::Null),
+    }
+}
+
 fn declared_permissions(entry: &Value) -> Vec<String> {
     entry["permissions"]
         .as_array()
