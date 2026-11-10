@@ -46,12 +46,15 @@ Pillow:
 # 2. downsample + build the ICO
 python - <<'PY'
 from PIL import Image
-icon = Image.open("app-icons-512.png").convert("RGB")
+# Tauri rejects a non-RGBA app icon, so keep an alpha channel even though
+# the tile is full-bleed opaque.
+icon = Image.open("app-icons-512.png").convert("RGBA")
 icon.save("app/icons/icon.png", optimize=True)
 icon.resize((256, 256), Image.LANCZOS).save(
     "app/packaging/icons/sarthi-studio-256.png", optimize=True)
 icon.save("app/icons/icon.ico", sizes=[
     (256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)])
+# icon.png must stay RGBA (512x512); the ICO frames inherit the alpha channel
 PY
 ```
 

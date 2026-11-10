@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.0.2
+
+The 3.0.1 indentation fix did its job: run `42905065692` on `5e5b76e` parsed,
+all six jobs started and two finished green (Android APK/AAB, Windows MSI). It
+also exposed the two real defects that had been failing every release build.
+
+- **App icon was not RGBA.** Linux, macOS and the deb job died in
+  `tauri::generate_context!()` with `icon app/icons/icon.png is not RGBA`, so
+  no desktop package could be produced. The 2.52.0 raster step saved RGB PNGs
+  (`docs/BRAND-ASSETS.md` even told you to `.convert("RGB")`).
+  `app/icons/icon.png` and `app/icons/icon.ico` are now RGBA and the documented
+  recipe converts to RGBA, so regenerating cannot strip the alpha channel again.
+- **The extension lockfile pinned versions that do not exist.**
+  `Build VS Code extension (.vsix)` failed in `npm ci` with
+  `No matching version found for dom-serializer@2.1.0` (npm only ever published
+  2.0.0; `boundary@2.1.0` was fabricated the same way).
+  `vscode-extension/package-lock.json` is regenerated from `package.json`, so
+  every pin is a published version.
+- Verified locally: `cargo build --locked` succeeds with the new icons;
+  `npm ci`, `npm test` (26 passing) and `npm run package` all exit 0.
+  Version 3.0.2 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+
 ## 3.0.1
 
 CI fix: `.github/workflows/desktop-release.yml` did not parse, so any push that
