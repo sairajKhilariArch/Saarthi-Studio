@@ -472,8 +472,15 @@ feature and runs the full Rust suite on `windows-latest`, so a Windows-only
 source break fails on the push instead of on a tag; the release pipeline keeps
 building the shipped Windows zip. Linux keeps clippy and the end-to-end smoke.
 
-Remaining: a render smoke and a harness for `ide.js`, and injections for
-disk-full, permission-denied and a corrupt database.
+Delivered in 2.33.0: the render smoke. The harness now returns stable element
+stubs and records creations, so `renderWorkflowCanvas` can be executed and its
+cards, dependency edges and empty-graph note inspected, and `ide.js` is evaluated
+on top of `app.js` to prove the shell builds its chrome and wraps the app rather
+than replacing it. The frontend suite is 21 cases. This is still not a layout or
+pixel check — that needs a browser.
+
+Remaining: injections for disk-full, permission-denied and a corrupt database,
+and browser-level layout checks for the canvas and IDE.
 
 ## Phase 17 — Observability
 

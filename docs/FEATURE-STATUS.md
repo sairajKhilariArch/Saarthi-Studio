@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.33.0 (2026-11-10):** Phase 16's frontend row gained a render smoke
+(2.33.0): the workflow canvas and the `ide.js` shell are now executed in the
+harness and their elements inspected, so the "no render smoke, no `ide.js`
+harness" caveat is gone and the frontend suite is 21 cases. No row changed
+status, so Phase 16 stays 100% and the overall mean stays 91%.
+
 **Revision 2.32.0 (2026-11-10):** Phase 16's Windows row moved from Missing to
 Working — `desktop-ci.yml` now builds and tests the desktop on `windows-latest`
 (2.32.0) — so the phase is 9 of 9 rows = 100%, and the overall mean is 91%
@@ -119,7 +125,7 @@ row below moves, so they cannot drift from the tables.
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
-| 16 | Testing and quality | 100% | named caveats only (`ide.js` render smoke, more injections) |
+| 16 | Testing and quality | 100% | named caveats only (layout/pixel checks need a browser, more injections) |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
@@ -377,7 +383,7 @@ it needs, and both are enforced rather than displayed.
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
-| Frontend | Working (2.5.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 18 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys, the icon fallback, and the workflow graph helpers (layout by dependency depth, add/rename/delete with edge rewriting, per-edge conditions). Wired into `desktop-ci.yml`. Scope is pure helpers only — no render smoke, and `ide.js` has no harness |
+| Frontend | Working (2.33.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 21 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys, the icon fallback, the workflow graph helpers (layout by dependency depth, add/rename/delete with edge rewriting, per-edge conditions), and a render smoke (2.33.0) that runs `renderWorkflowCanvas` (a card per node, an edge per dependency, an empty-graph note) and evaluates `ide.js` on top of `app.js` (chrome built, `api` wrapped, workbench inside the main pane). Wired into `desktop-ci.yml`. Still not a layout or pixel check — that needs a browser |
 | End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
 | Failure-injection matrix | Working (2.30.0) | Two process-level cases in `scripts/ci/test-e2e.sh`: the mock provider is killed and the next run must reach `failed` with an error while `/api/ready` keeps answering; the provider is slowed and the process killed mid-run, and the restarted app must mark that run `interrupted` with a readable step log. Not covered: disk-full, permission-denied and corrupt-database injections |
 | Install smokes in CI | Working (2.31.0) | `scripts/ci/smoke-package.sh` unpacks a tarball, zip, `.deb` (`dpkg-deb -x`) or AppImage (`--appimage-extract`), boots the packaged binary headless against a scratch home, checks `/api/ready`, serves `/`, and compares `/api/diagnostics/bundle`'s `app.version` with `app/Cargo.toml`. `desktop-release.yml` runs it on the `.deb`, the Linux tarball and AppImage, the Windows zip and the macOS tarball. Verified locally on a zip and a tarball; the `.deb` and AppImage paths run only in the Linux release jobs |

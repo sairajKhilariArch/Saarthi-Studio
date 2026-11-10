@@ -84,6 +84,20 @@ function stubElement(id) {
     append(...nodes) {
       this.children.push(...nodes);
     },
+    // The IDE chrome inserts beside an existing node rather than at the end.
+    insertBefore(child, reference) {
+      const at = reference ? this.children.indexOf(reference) : -1;
+      if (at < 0) this.children.push(child);
+      else this.children.splice(at, 0, child);
+      return child;
+    },
+    insertAdjacentElement(_position, child) {
+      this.children.push(child);
+      return child;
+    },
+    insertAdjacentHTML(_position, html) {
+      this.innerHTML = String(this.innerHTML || "") + String(html);
+    },
     replaceChildren(...nodes) {
       this.children = nodes;
     },
@@ -122,20 +136,33 @@ function stubElement(id) {
 /** The smallest DOM the file touches at load time. */
 function stubGlobals() {
   const listeners = [];
+  // A browser returns the same element for the same id or selector, and the
+  // render smoke needs that to be true: a fresh stub per lookup would lose the
+  // children a render just appended.
+  const byId = new Map();
+  const bySelector = new Map();
+  const created = [];
   const document = {
     documentElement: stubElement("html"),
     body: stubElement("body"),
     getElementById(id) {
-      return stubElement(id);
+      const key = String(id);
+      if (!byId.has(key)) byId.set(key, stubElement(key));
+      return byId.get(key);
     },
-    querySelector() {
-      return stubElement(null);
+    querySelector(selector) {
+      const key = String(selector);
+      if (!bySelector.has(key)) bySelector.set(key, stubElement(null));
+      return bySelector.get(key);
     },
     querySelectorAll() {
       return [];
     },
     createElement(tag) {
-      return stubElement(tag);
+      const element = stubElement(null);
+      element.tag = tag;
+      created.push(element);
+      return element;
     },
     // The workflow canvas draws its edges with SVG nodes. Recorded like every
     // other element: the tests assert the graph model, never the drawing.
@@ -214,6 +241,12 @@ function stubGlobals() {
 
   const context = {
     document,
+    created,
+    // ide.js reads a CSS custom property through this to restore the sidebar
+    // width; undefined would throw during its boot rather than read nothing.
+    getComputedStyle() {
+      return { getPropertyValue: () => "" };
+    },
     window,
     localStorage,
     navigator: window.navigator,
@@ -318,9 +351,18 @@ function loadApp() {
   return context;
 }
 
+/** `ide.js` runs in the same context as `app.js`, exactly as it does after it
+ * in the browser: it wraps the app's globals instead of replacing them. */
+function loadIde(context) {
+  const file = path.join(__dirname, "..", "ide.js");
+  const source = fs.readFileSync(file, "utf8");
+  vm.runInContext(source, context, { filename: file });
+  return context;
+}
+
 /** Call one of the script's functions or read one of its top-level bindings. */
 function evaluate(context, expression) {
   return vm.runInContext(expression, context);
 }
 
-module.exports = { loadApp, evaluate };
+module.exports = { loadApp, loadIde, evaluate };

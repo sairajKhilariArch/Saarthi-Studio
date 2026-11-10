@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.33.0
+
+The two views that build their own DOM now have a render smoke, so a canvas or
+IDE shell that throws on load, renders nothing, or loses its children fails in
+`test-frontend.sh` instead of in front of a user.
+
+- The harness returns the same stub element for the same id or selector, the way
+a browser does, and records every element created; without that a render's
+children landed on a throwaway stub.- Workflow canvas: a graph of three nodes renders three cards in dependency
+  columns, each node's `title` reaches its card (an untitled node falls back to
+  its id), the SVG holds one edge per dependency plus the arrow defs, the canvas
+  gets a height, and an empty graph says "No nodes yet" rather than rendering a
+  blank box.
+- IDE shell: `ide.js` is evaluated in the same context after `app.js`, exactly as
+the browser loads it. The smoke asserts it builds its chrome, wraps the app's
+`api`, and puts the "No file open" workbench inside the main pane — 2,375 lines
+of chrome that previously had no harness at all.
+- The harness gained `insertBefore`, `insertAdjacentElement`, `insertAdjacentHTML`
+and `getComputedStyle` because the real code paths use them; nothing is stubbed
+that a test asserts.
+- `test-frontend.sh` is 21 cases, up from 18. This is a render smoke, not a layout
+test: no rectangles or pixels are checked, because only a browser can answer
+those.
+
 ## 2.32.0
 
 Windows is now a first-class CI platform, not only a release target.

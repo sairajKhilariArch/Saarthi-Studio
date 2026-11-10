@@ -5529,6 +5529,8 @@ function graphNodeCard(node, position) {
   kind.className = "graph-node-kind";
   kind.textContent = String(node.kind || "task");
   const title = document.createElement("strong");
+  // A workflow node's human name is `title` (the parser and rename path both use
+  // it); the id is the fallback for a node that was never given one.
   title.textContent = node.title || id || "(unnamed)";
   const code = document.createElement("code");
   code.textContent = id;
