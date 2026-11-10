@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.30.0 (2026-11-10):** Phase 16's failure-injection row moved from
+Missing to Working — the process-level harness now kills the provider and kills
+the process mid-run and asserts what the restart says (2.30.0) — so the phase is
+7 of its 9 rows = 78%, and the overall mean stays 89% (1,608/18).
+
 **Revision 2.29.0 (2026-11-10):** Phase 12's named gap — a live step view while a
 model call is in flight — closed in 2.29.0: the loop writes a `thinking`
 placeholder with `status: "running"` before each call and the step that resolves
@@ -102,7 +107,7 @@ row below moves, so they cannot drift from the tables.
 | 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
 | 14 | Cross-platform | 80% | client subsets, capability-driven gating |
 | 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
-| 16 | Testing and quality | 67% | failure matrix, install smokes, Windows Rust CI |
+| 16 | Testing and quality | 78% | install smokes, Windows Rust CI, more injections |
 | 17 | Observability | 100% | — |
 | 18 | Installation and updates | 75% | installer, update path, migration rollback |
 
@@ -361,8 +366,8 @@ it needs, and both are enforced rather than displayed.
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
 | Frontend | Working (2.5.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 18 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys, the icon fallback, and the workflow graph helpers (layout by dependency depth, add/rename/delete with edge rewriting, per-edge conditions). Wired into `desktop-ci.yml`. Scope is pure helpers only — no render smoke, and `ide.js` has no harness |
-| End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; 19 checks. A provider-failure case inside the flow is still open |
-| Failure-injection matrix | Missing | — |
+| End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
+| Failure-injection matrix | Working (2.30.0) | Two process-level cases in `scripts/ci/test-e2e.sh`: the mock provider is killed and the next run must reach `failed` with an error while `/api/ready` keeps answering; the provider is slowed and the process killed mid-run, and the restarted app must mark that run `interrupted` with a readable step log. Not covered: disk-full, permission-denied and corrupt-database injections |
 | Install smokes in CI | Missing | — |
 | Windows Rust CI job | Missing | Windows is exercised only by the release build |
 

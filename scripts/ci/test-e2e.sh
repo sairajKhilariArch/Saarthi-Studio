@@ -130,7 +130,16 @@ field() { # dotted-path
 import json, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
 for part in sys.argv[2].split("."):
-    value = value[int(part)] if isinstance(value, list) else value.get(part)
+    if isinstance(value, list):
+        # A missing index is an empty field, not a traceback: the checks above
+        # use this to ask "is there a first step yet?".
+        index = int(part)
+        if index >= len(value):
+            value = None
+            break
+        value = value[index]
+    else:
+        value = value.get(part)
     if value is None:
         break
 print("" if value is None else value)
@@ -399,6 +408,135 @@ if [ "$(http GET "$base/api/runs/$run_id")" = "200" ] && [ "$(field status)" = "
   fi
 else
   die "the agent run did not survive the restart"
+fi
+
+# -- failure injection ------------------------------------------------------
+# The happy path above proves the app works when everything does. These two
+# cases prove it ends honestly when it does not: a provider that is not
+# answering, and a process killed with a run genuinely in flight.
+
+# 1. Provider outage. The mock is killed, so the run's model call cannot
+#    connect; the run must fail with a reason and the studio must stay up.
+kill "$router_pid" 2>/dev/null || true
+wait "$router_pid" 2>/dev/null || true
+router_pid=""
+tries=0
+while [ "$tries" -lt 20 ]; do
+  if [ "$(http GET "http://127.0.0.1:$mock_port/api/ping")" != "200" ]; then break; fi
+  tries=$((tries + 1))
+  sleep 0.1
+done
+
+code="$(http POST "$base/api/runs" '{"goal":"e2e-outage: say hello","maxSteps":3}')"
+outage_id="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$outage_id" ]; then
+  pass "a run can be started while the provider is down"
+else
+  die "could not start a run during the outage (HTTP $code: $(cat "$work/body"))"
+fi
+
+outage_state=""
+tries=0
+while [ "$tries" -lt 120 ]; do
+  outage_state="$(run_state "$outage_id")"
+  case "$outage_state" in
+    failed | cancelled | interrupted | succeeded) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+if [ "$outage_state" = "failed" ]; then
+  pass "a run with no provider fails instead of hanging"
+else
+  die "the run during the outage ended $outage_state"
+fi
+http GET "$base/api/runs/$outage_id" >/dev/null
+case "$(field error)" in
+  "") die "the failed run records no error message" ;;
+  *) pass "the failed run records the provider error" ;;
+esac
+if [ "$(http GET "$base/api/ready")" = "200" ]; then
+  pass "the studio still answers after a provider outage"
+else
+  die "the studio stopped answering after the provider went down"
+fi
+
+# 2. Killed mid-run. A slow provider keeps the model call in flight, so the
+#    kill lands while the run really is working; after the restart the boot
+#    sweep must mark it interrupted rather than leave it "running" forever.
+"$py" "$root/scripts/mock-router.py" --port "$mock_port" --chat-delay 1.2 >>"$work/mock.log" 2>&1 &
+router_pid=$!
+tries=0
+until [ "$(http GET "http://127.0.0.1:$mock_port/api/ping")" = "200" ]; do
+  tries=$((tries + 1))
+  if [ "$tries" -gt 40 ]; then break; fi
+  sleep 0.25
+done
+
+code="$(http POST "$base/api/runs" '{"goal":"e2e-kill: write the marker","allowWrites":true,"autoApprove":true,"maxSteps":6}')"
+kill_id="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$kill_id" ]; then
+  pass "a slow-provider run was started for the kill case"
+else
+  die "could not start the kill-case run (HTTP $code: $(cat "$work/body"))"
+fi
+
+# Wait for one real step to land and for the next model call to be in flight:
+# killing before the first step would leave an empty log, which proves less.
+killed_in_flight="no"
+tries=0
+while [ "$tries" -lt 80 ]; do
+  state="$(run_state "$kill_id")"
+  case "$state" in
+    failed | cancelled | interrupted | succeeded) break ;;
+  esac
+  if [ "$state" = "running" ]; then
+    http GET "$base/api/runs/$kill_id" >/dev/null
+    if [ -n "$(field stepList.0.action)" ]; then
+      killed_in_flight="yes"
+      break
+    fi
+  fi
+  tries=$((tries + 1))
+  sleep 0.2
+done
+if [ "$killed_in_flight" = "yes" ]; then
+  pass "the kill lands while the run is working, after its first step"
+else
+  die "the kill-case run never recorded a step (state $state)"
+fi
+
+stop_studio
+start_studio
+if wait_ready; then
+  pass "the studio restarts after being killed mid-run"
+else
+  die "the studio did not come back after the mid-run kill"
+  tail -20 "$log" >&2
+  exit 1
+fi
+
+killed_state=""
+tries=0
+while [ "$tries" -lt 80 ]; do
+  killed_state="$(run_state "$kill_id")"
+  case "$killed_state" in
+    interrupted) break ;;
+    failed | cancelled | succeeded) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+if [ "$killed_state" = "interrupted" ]; then
+  pass "a run killed mid-flight comes back marked interrupted"
+else
+  die "the killed run came back as $killed_state"
+fi
+http GET "$base/api/runs/$kill_id" >/dev/null
+if [ -n "$(field stepList.0.action)" ]; then
+  pass "the interrupted run's step log is readable after the restart"
+else
+  die "the interrupted run came back with no steps"
 fi
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

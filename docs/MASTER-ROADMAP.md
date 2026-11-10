@@ -452,9 +452,17 @@ re-read after the restart (19 checks, gated in CI). The first attempt failed on
 a Git Bash `/tmp` path the native binary cannot resolve; the workspace call now
 passes a `cygpath -m` path.
 
-Remaining: a provider-failure case inside that flow, a render smoke and a
-harness for `ide.js`, the failure-injection matrix, install smokes in CI, and a
-Windows Rust job.
+Delivered in 2.30.0: the first failure-injection cases, both process-level and
+both asserted through the public routes. The mock provider is killed and a run
+started anyway must reach `failed` with a recorded error while `/api/ready` keeps
+answering; the mock answers slowly (`--chat-delay`) so the harness can wait for a
+recorded step and the next model call in flight, kill the process, and require
+the restarted app to report that run `interrupted` with a readable step log. The
+harness is 28 checks, up from 19.
+
+Remaining: a render smoke and a harness for `ide.js`, injections for disk-full,
+permission-denied and a corrupt database, install smokes in CI, and a Windows
+Rust job.
 
 ## Phase 17 — Observability
 

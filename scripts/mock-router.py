@@ -49,7 +49,7 @@ STATE = {
     ],
 }
 
-ARGS = argparse.Namespace(require_login=False)
+ARGS = argparse.Namespace(require_login=False, chat_delay=0.0)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -197,6 +197,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if path == "/v1/chat/completions":
             body = self.read_json()
+            # A slow answer is the only way to observe a run that is genuinely
+            # in flight; the failure-injection e2e case sets this deliberately.
+            if ARGS.chat_delay:
+                time.sleep(ARGS.chat_delay)
             model = body.get("model", "auto")
             messages = body.get("messages", [])
             system = "\n".join(
@@ -278,8 +282,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=3101)
     parser.add_argument("--require-login", action="store_true")
+    parser.add_argument("--chat-delay", type=float, default=0.0)
     parsed = parser.parse_args()
     ARGS.require_login = parsed.require_login
+    ARGS.chat_delay = parsed.chat_delay
     server = ThreadingHTTPServer(("127.0.0.1", parsed.port), Handler)
     print(f"mock FreeLLMAPI listening on http://127.0.0.1:{parsed.port} (login required: {ARGS.require_login})")
     try:

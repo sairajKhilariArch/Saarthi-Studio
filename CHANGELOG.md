@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.30.0
+
+The end-to-end harness now proves that the two failures a user actually hits end
+honestly, instead of proving only that the happy path works.
+
+- Provider outage: the mock provider is killed mid-flow, a run is started anyway,
+  and the harness asserts the run reaches `failed` with a recorded error while
+  `/api/ready` keeps answering — the studio survives a provider that is gone.
+- Killed mid-run: the mock answers slowly, so the harness waits until the run has
+  a recorded step and its next model call is in flight, then kills the process.
+  After the restart the run must come back `interrupted` with its step log
+  readable — the boot sweep, not an in-memory flag, is what marks it.
+- `scripts/mock-router.py` gained `--chat-delay SECONDS` (default 0) so a run can
+  be observed mid-call, and the harness's `field` helper returns an empty value
+  for a missing list index instead of raising.
+- `scripts/ci/test-e2e.sh` is 28 checks, up from 19.
+
 ## 2.29.0
 
 A run's step log now shows the model call while it is happening, instead of
