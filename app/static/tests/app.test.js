@@ -313,6 +313,54 @@ test("rollbackStatusText names the restored build, the one it replaced and where
   assert.ok(text.includes("free-ai-studio.old-2.41.0.exe"), text);
 });
 
+test("uninstallSummary names every path and count before anything is offered", () => {
+  const text = call(`uninstallSummary({
+    confirmation: "C:/Users/me/AppData/Roaming/free-ai-studio",
+    targets: {
+      install: { path: "C:/apps/studio", exists: true, files: 120, bytes: 4096, removable: true, reason: "" },
+      data: { path: "C:/Users/me/AppData/Roaming/free-ai-studio", exists: true, files: 9, bytes: 2048 },
+      config: { path: "C:/Users/me/AppData/Roaming/free-ai-studio", exists: false, files: 0, bytes: 0 }
+    }
+  })`);
+  assert.ok(text.includes("program folder: C:/apps/studio"), text);
+  assert.ok(text.includes("120 files"), text);
+  assert.ok(text.includes("data: C:/Users/me/AppData/Roaming/free-ai-studio"), text);
+  assert.ok(text.includes("settings:"), text);
+  assert.ok(text.includes("nothing there"), text);
+});
+
+test("uninstallSummary says why the program folder cannot be removed", () => {
+  const text = call(`uninstallSummary({
+    targets: { install: { path: "C:/repo", exists: true, files: 3, bytes: 10, removable: false, reason: "it is a source checkout" } }
+  })`);
+  assert.ok(text.includes("cannot be removed"), text);
+  assert.ok(text.includes("it is a source checkout"), text);
+  assert.equal(call("uninstallSummary(null)"), "");
+});
+
+test("uninstallReportText distinguishes removed, kept and scheduled", () => {
+  const removed = call(`uninstallReportText({ targets: {
+    install: { path: "C:/apps/studio", removed: true },
+    data: { path: "C:/data", removed: true },
+    config: { path: "C:/config", kept: true }
+  } })`);
+  assert.ok(removed.includes("Program folder removed."), removed);
+  assert.ok(removed.includes("Data removed."), removed);
+  assert.ok(removed.includes("Settings kept"), removed);
+
+  // Windows cannot delete a running program, so the folder is named as pending
+  // rather than claimed removed.
+  const pending = call(`uninstallReportText({ targets: {
+    install: { path: "C:/apps/studio", removed: false, pending: "C:/apps/studio" },
+    data: { path: "C:/data", removed: false, kept: false, error: "busy" }
+  } })`);
+  assert.ok(pending.includes("stays until you delete it"), pending);
+  assert.ok(pending.includes("C:/apps/studio"), pending);
+  assert.ok(pending.includes("busy"), pending);
+
+  assert.equal(call("uninstallReportText(null)"), "Nothing to remove.");
+});
+
 test("rollbackStatusText stays empty before any rollback", () => {
   assert.equal(call("rollbackStatusText(null)"), "");
   assert.equal(call("rollbackStatusText({})"), "");

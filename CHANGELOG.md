@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.44.0
+
+A portable install — the tarball and the zip — had no way off a computer. Studio
+can now remove itself: the program folder, the settings and the data, each named
+before anything is touched.
+
+- `app/src/uninstall.rs` (`GET /api/uninstall/preview`, `POST /api/uninstall`)
+  reports what would go — program folder, settings folder and data folder, each
+  with file and byte counts — and removes it on request.
+- Guarded three ways, because this is the one operation that destroys data: the
+  call has to carry `approve: true`, it has to echo the data folder's own path as
+  its confirmation, and it answers to an `uninstall` permission action of its own
+  (separate from `update`, so a rule saved to make upgrades painless is never a
+  standing grant to delete projects; default `ask`, deny answers 403).
+- It refuses to touch anything that does not look like a portable install: the
+  binary beside its static tree, and no `Cargo.toml`, `.git` or `target/` — a
+  source checkout or a `cargo build` output is never deleted, and a refusal
+  changes nothing. The program folder goes first, so a refusal can never leave a
+  working install without its data.
+- Either tree can be kept: "keep my chats, projects and extensions" and "keep my
+  settings and keys" map to `keepData`/`keepConfig`, and the reply says per tree
+  whether it was removed, kept or already absent.
+- Windows cannot delete a running program, so the binary is renamed aside
+  (`<stem>.uninstalling-<pid>`), everything beside it goes, and the folder is
+  reported as `pending` with its exact path rather than claimed removed; the
+  reply also carries `complete`, so a partial result is never dressed up.
+- Settings → About gained an Uninstall card: it prints the paths and counts, the
+  two keep boxes, and a confirmation dialog naming the data folder. The button is
+  disabled when the program folder is not removable (a checkout, a
+  package-managed install).
+- Version 2.44.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Verified: `cargo test --locked` 539 passed, 1 ignored (4 new); clippy
+  `--all-targets -D warnings` clean; `rustfmt --check` clean on the new file;
+  frontend 36 (3 new); version 20; e2e 32; and a live run against a staged
+  portable copy: the preview named 13 program files, 4 data files and 1 settings
+  file, a wrong confirmation answered 400, the right one without approval
+  answered 409 with every file still in place, and the approved call removed the
+  data and settings folders while reporting the program folder as pending with
+  only the renamed binary left in it.
+- Not covered: the pending folder's deletion after the window closes (Windows
+  holds the file until the process exits, and this does not pretend to schedule
+  that), and a run on Linux/macOS, where the program folder is removed directly.
+
 ## 2.43.0
 
 Windows gets an installer: one product in Add/Remove Programs with a version, a

@@ -56,6 +56,9 @@ function setSettingsSection(name) {
     void loadAppVersion();
     void loadStagedUpdate();
     void loadPreparedUpdate();
+    // The uninstall card names every path before its button is offered, so the
+    // preview is read on the visit rather than kept from a previous one.
+    void loadUninstallPreview();
   }
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
@@ -137,6 +140,9 @@ function setupSettingsNav() {
   if ($("updateSwap")) $("updateSwap").addEventListener("click", () => void swapUpdate());
   if ($("updateRollback")) {
     $("updateRollback").addEventListener("click", () => void rollbackUpdate());
+  }
+  if ($("uninstallGo")) {
+    $("uninstallGo").addEventListener("click", () => void uninstallStudio());
   }
   if ($("updatePreparedDiscard")) {
     $("updatePreparedDiscard").addEventListener("click", () => void discardPreparedUpdate());
@@ -1022,6 +1028,44 @@ function rollbackStatusText(rollback) {
   return ` ${rollback.restored} was restored${replaced}; restart to run it.${kept}`;
 }
 
+/* What an uninstall would remove, spelled out per tree: a panel that offers to
+   delete data has to name the data. `removable: false` is the program folder
+   declining (a source checkout, a package-managed install). */
+function uninstallSummary(preview) {
+  if (!preview || !preview.targets) return "";
+  const parts = [];
+  for (const key of ["install", "data", "config"]) {
+    const part = preview.targets[key];
+    if (!part) continue;
+    const label = key === "install" ? "program folder" : key === "data" ? "data" : "settings";
+    const what = part.exists ? `${part.files} files, ${part.bytes} bytes` : "nothing there";
+    parts.push(`${label}: ${part.path} (${what})`);
+  }
+  const blocked =
+    preview.targets.install && preview.targets.install.removable === false
+      ? ` The program folder cannot be removed from here (${preview.targets.install.reason}), so this panel will not offer it.`
+      : "";
+  return `${parts.join("; ")}.${blocked}`;
+}
+
+/* What happened, per tree: removed, kept, scheduled for when the window closes,
+   already absent, or failed with its reason. */
+function uninstallReportText(report) {
+  if (!report || !report.targets) return "Nothing to remove.";
+  const lines = [];
+  for (const key of ["install", "data", "config"]) {
+    const part = report.targets[key];
+    if (!part) continue;
+    const label = key === "install" ? "Program folder" : key === "data" ? "Data" : "Settings";
+    if (part.kept) lines.push(`${label} kept at ${part.path}.`);
+    else if (part.removed) lines.push(`${label} removed.`);
+    else if (part.pending) lines.push(`${label} is emptied; ${part.pending} stays until you delete it after closing this window.`);
+    else if (part.existed === false) lines.push(`${label} was not there.`);
+    else lines.push(`${label} could not be removed${part.error ? `: ${part.error}` : ""}.`);
+  }
+  return lines.join(" ");
+}
+
 function showUpdateActions(flags) {
   if (flags.stage !== undefined && $("updateStage")) {
     $("updateStage").classList.toggle("hidden", !flags.stage);
@@ -1226,6 +1270,64 @@ async function discardUpdate() {
     await loadStagedUpdate();
   } catch (error) {
     if (status) status.textContent = `Could not discard the staged update: ${error.message}`;
+  }
+}
+
+async function loadUninstallPreview() {
+  const host = $("uninstallTargets");
+  if (!host) return;
+  const button = $("uninstallGo");
+  try {
+    const { ok, data } = await api("/api/uninstall/preview");
+    if (!ok) {
+      host.textContent = data.error || "Could not read what would be removed.";
+      if (button) button.disabled = true;
+      return;
+    }
+    host.textContent = uninstallSummary(data);
+    state.uninstallConfirmation = data.confirmation || "";
+    const install = data.targets && data.targets.install;
+    if (button) button.disabled = Boolean(install && install.removable === false);
+  } catch {
+    host.textContent = "Could not read what would be removed.";
+  }
+}
+
+async function uninstallStudio() {
+  const status = $("uninstallStatus");
+  const button = $("uninstallGo");
+  const confirmation = (state && state.uninstallConfirmation) || "";
+  if (!confirmation) {
+    if (status) status.textContent = "Open this panel again so it can read the paths first.";
+    return;
+  }
+  const keepData = Boolean($("uninstallKeepData") && $("uninstallKeepData").checked);
+  const keepConfig = Boolean($("uninstallKeepConfig") && $("uninstallKeepConfig").checked);
+  const data = keepData ? "Your chats, projects and extensions stay." : "Your chats, projects and extensions are deleted.";
+  const settings = keepConfig ? "Your settings and keys stay." : "Your settings and keys are deleted.";
+  if (!window.confirm(`Uninstall Saarthi Studio from this computer?\n\nData folder: ${confirmation}\n${data}\n${settings}\n\nThis cannot be undone.`)) {
+    return;
+  }
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Removing…";
+  try {
+    const result = await api("/api/uninstall", {
+      method: "POST",
+      // The confirmation token is the data folder's own path: a saved allow rule
+      // for `uninstall` is not enough to delete anything on its own.
+      body: JSON.stringify({ confirm: confirmation, keepData, keepConfig }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      if (status) status.textContent = `Nothing was removed: ${result.data.error || "no answer"}`;
+      return;
+    }
+    if (status) status.textContent = uninstallReportText(result.data.uninstall);
+    await loadUninstallPreview();
+  } catch (error) {
+    if (status) status.textContent = `Uninstall failed: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 

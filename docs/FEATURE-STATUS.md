@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.44.0 (2026-11-10):** a portable (tarball/zip) install can now be
+uninstalled from Settings → About: `POST /api/uninstall` removes the program
+folder, the settings folder and the data folder after an `approve` plus a
+confirmation that is the data folder's path, keeps either tree on request, and
+refuses a source checkout outright. On Windows the running binary is renamed
+aside and the folder is reported as pending, because a running program cannot be
+deleted. Phase 18 stays 10 rows — 9 Working + 1 Partial = 95% — because signing
+is still missing, and the overall mean stays 92% (1,659/18).
+
 **Revision 2.43.0 (2026-11-10):** Phase 18's installer row is now Working for both
 Windows and macOS: a per-user MSI (`app/packaging/windows/installer.wxs` built by
 `scripts/ci/build-windows-msi.sh`, payload proven by an administrative install)

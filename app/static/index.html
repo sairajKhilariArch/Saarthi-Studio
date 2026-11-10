@@ -1099,6 +1099,15 @@
             <p id="updatePrepared" class="muted"></p>
           </div>
           <div class="card info-card">
+            <h2>Uninstall</h2>
+            <p>A package manager removes a .deb, AppImage, MSI or .app install. A portable copy is removed here: it deletes the program folder, your settings and this computer's Studio data, after naming every path.</p>
+            <p id="uninstallTargets" class="muted">Checking what would be removed…</p>
+            <p><label><input type="checkbox" id="uninstallKeepData"> Keep my chats, projects and extensions</label></p>
+            <p><label><input type="checkbox" id="uninstallKeepConfig"> Keep my settings and keys</label></p>
+            <button type="button" id="uninstallGo" class="btn btn-quiet btn-small">Uninstall Studio from this computer</button>
+            <p id="uninstallStatus" class="muted"></p>
+          </div>
+          <div class="card info-card">
             <h2>About</h2>
             <p><strong id="aboutAppName">Saarthi Studio</strong> — a local-first coding assistant. Threads, projects and settings stay in <code>~/.local/share/saarthi-studio</code> and <code>~/.config/saarthi-studio</code>. The interface server is the same one that opens in your browser at <code>http://127.0.0.1:8666</code>.</p>
           </div>

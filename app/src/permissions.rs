@@ -39,6 +39,10 @@ pub(crate) enum Action {
     Git,
     RouterInstall,
     Update,
+    /// Removing the app itself: its program folder, settings and data. A separate
+    /// action from `Update` on purpose — a rule saved to make upgrades painless
+    /// must never be a standing grant to delete someone's projects.
+    Uninstall,
     Settings,
     McpTool,
     /// Calling a tool an installed extension declares. A different action from
@@ -48,7 +52,7 @@ pub(crate) enum Action {
 }
 
 impl Action {
-    pub(crate) const ALL: [Action; 10] = [
+    pub(crate) const ALL: [Action; 11] = [
         Action::FsRead,
         Action::FsWrite,
         Action::Command,
@@ -56,6 +60,7 @@ impl Action {
         Action::Git,
         Action::RouterInstall,
         Action::Update,
+        Action::Uninstall,
         Action::Settings,
         Action::McpTool,
         Action::ExtensionTool,
@@ -70,6 +75,7 @@ impl Action {
             Self::Git => "git",
             Self::RouterInstall => "router_install",
             Self::Update => "update",
+            Self::Uninstall => "uninstall",
             Self::Settings => "settings",
             Self::McpTool => "mcp_tool",
             Self::ExtensionTool => "extension_tool",
@@ -92,6 +98,7 @@ impl Action {
             Self::Git => "Stage, commit, revert or branch",
             Self::RouterInstall => "Install, update or remove a router",
             Self::Update => "Replace installed software",
+            Self::Uninstall => "Remove Studio, deleting its program folder, settings and data",
             Self::Settings => "Change application settings and keys",
             Self::McpTool => "Call a tool exposed by an MCP server",
             Self::ExtensionTool => "Call a tool declared by an installed extension",

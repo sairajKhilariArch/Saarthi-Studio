@@ -585,5 +585,14 @@ and proves the payload with an administrative install, `smoke-package.sh` boots 
 installed binary, and the release job attaches the MSI beside the portable zip.
 The toolchain is WiX 5 (MIT) because WiX 7 gates builds behind a paid fee.
 
+Delivered in 2.44.0: the way off a computer for a portable install. Settings →
+About names the program folder, the settings folder and the data folder with
+their counts, offers to keep chats/projects and settings, and removes the rest
+only after `approve: true` and a confirmation that is the data folder's path,
+under its own `uninstall` permission action. A source checkout is refused, the
+program folder is removed first so a refusal cannot orphan a working install, and
+a Windows binary is renamed aside with the folder reported as pending, because a
+running program cannot be deleted.
+
 Open: code signing/notarization, an uninstall for a portable install, and a
 per-machine MSI choice.

@@ -61,6 +61,7 @@ mod openai;
 mod oplog;
 mod permissions;
 mod trace;
+mod uninstall;
 mod privacy;
 mod router;
 mod router_console;
@@ -4451,6 +4452,8 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/update/prepared/discard", post(update::discard_prepared_route))
         .route("/api/update/swap", post(update::swap_route))
         .route("/api/update/rollback", post(update::rollback_route))
+        .route("/api/uninstall/preview", get(uninstall::preview_route))
+        .route("/api/uninstall", post(uninstall::uninstall_route))
         .route("/api/test", post(test_router))
         .route("/api/models", get(models))
         .route("/api/thinking/levels", get(thinking_levels))
