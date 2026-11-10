@@ -1128,7 +1128,9 @@ kbd {
 .graph-node {
   position: absolute; display: flex; flex-direction: column; gap: 3px;
   padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line-strong);
-  background: var(--panel); color: var(--text); text-align: left; cursor: pointer;
+  background: var(--panel); color: var(--text); text-align: left; cursor: grab;
+  /* A drag owns the pointer, so the canvas must not scroll or select under it. */
+  touch-action: none;
 }
 .graph-node:hover { border-color: var(--accent-border); }
 .graph-node strong {
@@ -1137,6 +1139,7 @@ kbd {
 }
 .graph-node code { font-family: var(--mono); font-size: 10.5px; color: var(--mute); }
 .graph-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-border); }
+.graph-node.dragging { cursor: grabbing; z-index: 3; }
 .graph-node-kind {
   font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--mute);

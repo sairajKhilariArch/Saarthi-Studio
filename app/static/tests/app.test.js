@@ -150,6 +150,45 @@ test("the workflow canvas lays nodes out by dependency depth", () => {
   assert.equal(call(`graphLayout(${graph}).get("a").y`), 24);
 });
 
+test("a stored position wins over the dependency layout", () => {
+  assert.equal(
+    call(`(() => {
+      const p = graphLayout([
+        { id: "a", kind: "task", x: 300, y: 120 },
+        { id: "b", kind: "task", dependsOn: ["a"] }
+      ]);
+      return p.get("a").x === 300 && p.get("a").y === 120 && p.get("b").x === 264;
+    })()`),
+    true,
+  );
+  // Half a position is not a position, and neither is a non-numeric one: both
+  // nodes lay out by depth instead of landing on an axis they were never dragged along.
+  assert.equal(call(`graphLayout([{ id: "a", kind: "task", x: 300 }]).get("a").x`), 24);
+  assert.equal(call(`graphLayout([{ id: "a", kind: "task", x: "left", y: 5 }]).get("a").x`), 24);
+  assert.equal(call(`graphStoredPosition({ id: "a", x: -8, y: 12.6 }).x`), 0);
+});
+
+test("dragging clamps to the canvas and commits whole pixels", () => {
+  // Compared as text: an object built inside the sandbox has a different
+  // Object.prototype, which assert.deepEqual (strict) treats as a mismatch.
+  const drag = (call_) => call(`JSON.stringify(graphDragPosition(${call_}))`);
+  assert.equal(drag(`{ x: 40, y: 60 }, 12.4, -100, { width: 500, height: 300 }`), '{"x":52,"y":0}');
+  assert.equal(drag(`{ x: 40, y: 60 }, 1000, 1000, { width: 500, height: 300 }`), '{"x":500,"y":300}');
+  // A zero or missing bound cannot push a card off the top-left corner.
+  assert.equal(drag(`{ x: -5, y: 0 }, -50, 0, { width: 0, height: 0 }`), '{"x":0,"y":0}');
+  assert.equal(drag(`{ x: 10, y: 10 }, 5, 5, null`), '{"x":0,"y":0}');
+});
+
+test("a dragged node's position is written into the graph", () => {
+  call(`workflowGraph = [{ id: "a", kind: "task", note: "keep me" }]`);
+  call(`updateWorkflowNode("a", { x: 250, y: 90 })`);
+  const node = JSON.parse(call("JSON.stringify(workflowGraph[0])"));
+  assert.equal(node.x, 250);
+  assert.equal(node.y, 90);
+  // Dragging changes where the card is, never what the node does.
+  assert.equal(node.note, "keep me");
+});
+
 test("a cyclic graph still lays out and terminates", () => {
   const size = call(`(() => {
     const layout = graphLayout([

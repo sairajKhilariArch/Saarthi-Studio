@@ -5705,6 +5705,9 @@ async function runWorkflow(workflow) {
    textarea holds, so the server stays the only validator, and a workflow saved
    before graphs existed simply renders an empty canvas. */
 let workflowGraph = [];
+// The positions the current canvas rendered, so a drag can move one card and redraw
+// the edges that touch it without rebuilding the layer under the pointer.
+let graphPositions = new Map();
 let selectedWorkflowNode = "";
 const GRAPH_NODE_WIDTH = 190;
 const GRAPH_NODE_HEIGHT = 84;
@@ -5766,7 +5769,33 @@ function graphLayout(nodes) {
       positions.set(id, { x: 24 + depth * GRAPH_COLUMN, y: 24 + index * GRAPH_ROW });
     });
   });
+  // A card the user dragged keeps where they put it; the dependency columns are
+  // only the starting layout for a node that was never moved.
+  nodes.forEach((node) => {
+    const id = String(node.id || "");
+    const stored = graphStoredPosition(node);
+    if (id && stored) positions.set(id, stored);
+  });
   return positions;
+}
+
+// A dragged node's own coordinates, or null when the canvas should place it.
+function graphStoredPosition(node) {
+  if (!node || node.x == null || node.y == null) return null;
+  const x = Number(node.x);
+  const y = Number(node.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) };
+}
+
+// Where a drag ends: inside the canvas, in whole pixels.
+function graphDragPosition(origin, dx, dy, bounds) {
+  const maxX = Math.max(0, Number(bounds && bounds.width) || 0);
+  const maxY = Math.max(0, Number(bounds && bounds.height) || 0);
+  return {
+    x: Math.round(Math.min(maxX, Math.max(0, origin.x + dx))),
+    y: Math.round(Math.min(maxY, Math.max(0, origin.y + dy))),
+  };
 }
 
 function graphTextInput(value, onCommit) {
@@ -5949,6 +5978,49 @@ function graphNodeCard(node, position) {
   const code = document.createElement("code");
   code.textContent = id;
   card.append(kind, title, code);
+  // Dragging is a pointer gesture on the card itself: the node moves with the
+  // pointer, the edges that touch it follow, and the position is written into the
+  // graph on release so saving the workflow returns the card to the same place.
+  card.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = { x: position.x, y: position.y };
+    const canvas = $("workflowCanvas");
+    const bounds = {
+      width: Math.max((canvas ? canvas.clientWidth : 640) - GRAPH_NODE_WIDTH - 24, 0),
+      // Height grows to fit whatever the user drags to, so the limit is generous
+      // rather than the canvas's current height.
+      height: 4000,
+    };
+    let moved = false;
+    card.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+      moved = true;
+      card.classList.add("dragging");
+      const next = graphDragPosition(origin, dx, dy, bounds);
+      position.x = next.x;
+      position.y = next.y;
+      card.style.left = `${next.x}px`;
+      card.style.top = `${next.y}px`;
+      graphPositions.set(id, next);
+      drawWorkflowEdges($("workflowEdges"), graphPositions);
+    };
+    const finish = () => {
+      card.removeEventListener("pointermove", onMove);
+      card.removeEventListener("pointerup", finish);
+      card.removeEventListener("pointercancel", finish);
+      card.classList.remove("dragging");
+      // A press without movement is a click: it selects, and moves nothing.
+      if (moved) updateWorkflowNode(id, { x: position.x, y: position.y });
+    };
+    card.addEventListener("pointermove", onMove);
+    card.addEventListener("pointerup", finish);
+    card.addEventListener("pointercancel", finish);
+  });
   card.addEventListener("click", () => {
     selectedWorkflowNode = id;
     renderWorkflowCanvas();
@@ -6036,6 +6108,20 @@ function graphDependencies(node) {
   return wrap;
 }
 
+function drawWorkflowEdges(svg, positions) {
+  if (!svg) return;
+  svg.replaceChildren();
+  svg.appendChild(graphArrowDefs());
+  workflowGraph.forEach((node) => {
+    const target = positions.get(String(node.id || ""));
+    if (!target) return;
+    graphDependencyIds(node).forEach((dependency) => {
+      const source = positions.get(dependency);
+      if (source) svg.appendChild(graphEdgePath(source, target, graphEdgeWhen(node, dependency)));
+    });
+  });
+}
+
 function renderWorkflowNodeEditor() {
   const host = $("workflowNodeEditor");
   if (!host) return;
@@ -6102,30 +6188,24 @@ function renderWorkflowCanvas() {
   layer.replaceChildren();
   svg.replaceChildren();
   const positions = graphLayout(workflowGraph);
+  graphPositions = positions;
   let height = 0;
+  let width = Math.max(canvas.clientWidth || 640, 640);
   workflowGraph.forEach((node) => {
     const position = positions.get(String(node.id || ""));
     if (!position) return;
     height = Math.max(height, position.y + GRAPH_NODE_HEIGHT + 20);
+    width = Math.max(width, position.x + GRAPH_NODE_WIDTH + 24);
     layer.appendChild(graphNodeCard(node, position));
   });
   if (!workflowGraph.length) {
     layer.appendChild(pageNote("No nodes yet. Add one above, or write the graph JSON below."));
   }
-  const width = Math.max(canvas.clientWidth || 640, 640);
   const canvasHeight = Math.max(150, height);
   canvas.style.height = `${canvasHeight}px`;
   svg.setAttribute("width", String(width));
   svg.setAttribute("height", String(canvasHeight));
-  svg.appendChild(graphArrowDefs());
-  workflowGraph.forEach((node) => {
-    const target = positions.get(String(node.id || ""));
-    if (!target) return;
-    graphDependencyIds(node).forEach((dependency) => {
-      const source = positions.get(dependency);
-      if (source) svg.appendChild(graphEdgePath(source, target, graphEdgeWhen(node, dependency)));
-    });
-  });
+  drawWorkflowEdges(svg, positions);
   renderWorkflowNodeEditor();
 }
 

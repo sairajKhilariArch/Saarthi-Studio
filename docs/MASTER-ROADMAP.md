@@ -276,6 +276,15 @@ Remaining: reordering beyond a numeric priority.
 Started in 2.9.0. `workflows.json` now carries an optional `nodes` array, so a
 saved prompt is still valid and a graph is a first-class workflow.
 
+Delivered in 2.47.0: free positioning on the canvas. A node may carry
+`x`/`y`; the layout honours it and falls back to dependency columns for a node that
+was never moved. Cards drag with the pointer — edges follow and the canvas grows to
+fit — and the position is written back through the editor's normal path, so the
+synced graph JSON and the saved workflow carry it. The backend validates it like
+every other field: the pair is stored, a half or non-numeric coordinate is absent,
+out-of-range values are clamped, and a graph saved before positioning keeps its
+canonical form.
+
 Delivered in 2.9.0:
 
 - Node kinds that execute against real state: `agent` (a real agent run, waited

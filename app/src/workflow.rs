@@ -212,11 +212,15 @@ struct ValidNode {
     expect: When,
     note: String,
     model: String,
+    /// Canvas coordinates, when the user has dragged the card. Absent means the
+    /// editor lays the node out by dependency depth.
+    x: Option<i64>,
+    y: Option<i64>,
 }
 
 impl ValidNode {
     fn to_json(&self) -> Value {
-        json!({
+        let mut stored = json!({
             "id": self.id,
             "kind": self.kind.as_str(),
             "title": self.title,
@@ -234,7 +238,16 @@ impl ValidNode {
             "expect": self.expect.as_str(),
             "note": self.note,
             "model": self.model,
-        })
+        });
+        // A position is written only when the canvas gave the node one, so a graph
+        // saved before positioning existed keeps its canonical form.
+        if let (Some(x), Some(y)) = (self.x, self.y) {
+            if let Some(object) = stored.as_object_mut() {
+                object.insert("x".to_string(), json!(x));
+                object.insert("y".to_string(), json!(y));
+            }
+        }
+        stored
     }
 
     fn title_or_id(&self) -> String {
@@ -333,6 +346,18 @@ fn parse_edges(node_id: &str, raw: Option<&Value>) -> Result<Vec<Edge>, String> 
 
 /// Validate and normalise a stored or submitted graph. Every error names the
 /// node so the editor can point at it rather than at the array.
+/// A node's canvas position, when it carries one. Only a drag writes these, so a
+/// value that is missing or not a number means "lay this node out by dependency
+/// depth" rather than an error — a graph written before positioning still loads.
+/// Out-of-range values are clamped instead of rejected; the editor bounds a drag.
+fn position_field(entry: &Value, name: &str) -> Option<i64> {
+    let value = entry.get(name)?.as_f64()?;
+    if !value.is_finite() {
+        return None;
+    }
+    Some(value.round().clamp(0.0, 20_000.0) as i64)
+}
+
 fn validate_nodes(raw: &Value) -> Result<Vec<ValidNode>, String> {
     let list = match raw {
         Value::Null => return Ok(Vec::new()),
@@ -401,6 +426,12 @@ fn validate_nodes(raw: &Value) -> Result<Vec<ValidNode>, String> {
                 ))
             }
         };
+        // A position is a pair: one coordinate without the other would pin the node
+        // to an axis it was never dragged along, so a half position counts as none.
+        let (x, y) = match (position_field(entry, "x"), position_field(entry, "y")) {
+            (Some(x), Some(y)) => (Some(x), Some(y)),
+            _ => (None, None),
+        };
         nodes.push(ValidNode {
             id,
             kind,
@@ -416,6 +447,8 @@ fn validate_nodes(raw: &Value) -> Result<Vec<ValidNode>, String> {
             expect,
             note,
             model: cap(&string_field(entry, "model"), 200),
+            x,
+            y,
         });
     }
     // Dependencies must exist and cannot point at the node itself.
@@ -1682,6 +1715,33 @@ mod tests {
         let stored = nodes[2].to_json();
         assert_eq!(stored["kind"], json!("agent"));
         assert_eq!(stored["dependsOn"][0]["id"], json!("gate"));
+    }
+
+    #[test]
+    fn a_node_keeps_its_canvas_position_and_old_graphs_still_load() {
+        let nodes = graph(json!([
+            { "id": "a", "kind": "task", "note": "x", "x": 240, "y": 96 },
+            { "id": "b", "kind": "task", "note": "y" },
+            { "id": "c", "kind": "task", "note": "z", "x": -40, "y": 99999 },
+            { "id": "d", "kind": "task", "note": "w", "x": "left" }
+        ]));
+        let stored = nodes[0].to_json();
+        assert_eq!(stored["x"], json!(240));
+        assert_eq!(stored["y"], json!(96));
+        // A graph saved before positioning existed has no coordinates and its
+        // canonical form does not invent them.
+        assert!(nodes[1].to_json().get("x").is_none());
+        // Out-of-range coordinates are clamped to the canvas, not rejected.
+        assert_eq!(nodes[2].to_json()["x"], json!(0));
+        assert_eq!(nodes[2].to_json()["y"], json!(20_000));
+        // A non-numeric coordinate is treated as absent.
+        assert!(nodes[3].to_json().get("x").is_none());
+        // A half position is dropped as a pair.
+        let partial = graph(json!([{ "id": "e", "kind": "task", "note": "n", "x": 40 }]));
+        assert!(partial[0].to_json().get("x").is_none());
+        // What is stored validates again, so a reload keeps the card in place.
+        let reloaded = graph(json!([stored]));
+        assert_eq!(reloaded[0].to_json()["x"], json!(240));
     }
 
     #[test]

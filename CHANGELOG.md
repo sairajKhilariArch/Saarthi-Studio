@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.47.0
+
+The workflow canvas placed every node in dependency columns. A graph with two
+unrelated branches had no way to say which one belongs where, and anything the
+user rearranged would have been lost on save.
+
+- A node can now carry a canvas position (`x`, `y`). `<code>graphLayout</code>`
+  uses it when present and falls back to the dependency columns for a node that was
+  never moved, so an existing graph opens exactly as before.
+- Cards are dragged with the pointer: a card follows the pointer, the edges that
+  touch it redraw as it moves, and on release the position is written back through
+  the same path the rest of the editor uses, so the synced graph JSON — and the
+  saved workflow — carries it. A press without movement still only selects.
+- The position is validated server-side like every other node field: the pair is
+  stored, a half or non-numeric coordinate counts as absent, out-of-range values are
+  clamped to the canvas, and a graph saved before positions existed keeps its
+  canonical form without invented coordinates.
+- The canvas grows to fit a card dragged past its edge instead of clipping it.
+- Tests: one Rust test (round-trip through save-time validation, clamping, a half
+  position, a reload keeping the position) and three frontend tests (a stored
+  position beats the layout, drag clamping and rounding, and a drag writing into the
+  graph without changing the node's meaning).
+- Version 2.47.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Verified: `cargo test --locked` 544 passed, 1 ignored; clippy `--all-targets
+  -D warnings` clean; rustfmt clean on `workflow.rs`; frontend 39; version 20; e2e 32.
+  Not verified: the drag itself has not been driven in a browser — pointer events
+  are not exercised by the frontend layer, so the interaction is reasoned and
+  unit-tested at the position level only.
+
 ## 2.46.0
 
 macOS CI failed at `git::tests::creates_lists_and_removes_a_worktree`. The test was
