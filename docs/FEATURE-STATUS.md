@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.41.0 (2026-11-10):** Phase 18 gained the way back: `POST
+/api/update/rollback` restores the backup a swap kept (the copy is hashed first) and
+keeps the build it displaces, refusing without a record, a missing backup, another
+binary's record or a backup name this app did not write. Phase 18 stays 10 rows at
+90% — the install row is still Missing because there is no MSI/EXE/.app or
+uninstaller — and the overall mean stays 92%.
+
 **Revision 2.40.0 (2026-11-10):** the backups a swap leaves behind are cleared at
 startup: only `<name>.old-<version>` names whose version is older than the running
 build, never the file being executed and never a newer one. Phase 18 stays 10 rows

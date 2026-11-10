@@ -135,6 +135,9 @@ function setupSettingsNav() {
   if ($("updateDiscard")) $("updateDiscard").addEventListener("click", () => void discardUpdate());
   if ($("updatePrepare")) $("updatePrepare").addEventListener("click", () => void prepareUpdate());
   if ($("updateSwap")) $("updateSwap").addEventListener("click", () => void swapUpdate());
+  if ($("updateRollback")) {
+    $("updateRollback").addEventListener("click", () => void rollbackUpdate());
+  }
   if ($("updatePreparedDiscard")) {
     $("updatePreparedDiscard").addEventListener("click", () => void discardPreparedUpdate());
   }
@@ -1009,6 +1012,16 @@ function appliedStatusText(applied) {
   return ` ${applied.latest} now replaces this build; restart to run it. It replaced ${previous}${backup}.`;
 }
 
+/* A rollback puts the backup a swap kept back in place. Like the swap it only
+   takes effect on the next start, so the sentence says restart and names where the
+   newer build went. */
+function rollbackStatusText(rollback) {
+  if (!rollback || !rollback.restored) return "";
+  const replaced = rollback.replaced ? ` over ${rollback.replaced}` : "";
+  const kept = rollback.superseded ? ` The build it displaced is at ${rollback.superseded}.` : "";
+  return ` ${rollback.restored} was restored${replaced}; restart to run it.${kept}`;
+}
+
 function showUpdateActions(flags) {
   if (flags.stage !== undefined && $("updateStage")) {
     $("updateStage").classList.toggle("hidden", !flags.stage);
@@ -1024,6 +1037,9 @@ function showUpdateActions(flags) {
   }
   if (flags.swap !== undefined && $("updateSwap")) {
     $("updateSwap").classList.toggle("hidden", !flags.swap);
+  }
+  if (flags.rollback !== undefined && $("updateRollback")) {
+    $("updateRollback").classList.toggle("hidden", !flags.rollback);
   }
 }
 
@@ -1084,10 +1100,21 @@ async function loadPreparedUpdate() {
     if (prepared && data.binary_exists === false) {
       host.textContent += " The unpacked binary is gone; prepare the update again.";
     }
-    host.textContent += appliedStatusText(data && data.applied);
+    const applied = data && data.applied;
+    const rollback = data && data.rollback;
+    // A rollback of the swap in the record replaces what that swap said: the
+    // server clears the record on the next swap, so a mismatch means one of the
+    // two files is stale and neither sentence is repeated.
+    const undid =
+      Boolean(rollback && rollback.restored) &&
+      (!applied || !applied.latest || rollback.replaced === applied.latest);
+    host.textContent += undid ? rollbackStatusText(rollback) : appliedStatusText(applied);
     showUpdateActions({
       preparedDiscard: Boolean(prepared && data.present),
       swap: Boolean(prepared && data.binary_exists),
+      // The backup only exists until the next start clears it, so the action is
+      // offered exactly while the record and an installed swap make it real.
+      rollback: Boolean(!undid && applied && applied.latest),
     });
   } catch {
     host.textContent = "";
@@ -1139,6 +1166,30 @@ async function swapUpdate() {
     await loadPreparedUpdate();
   } catch (error) {
     if (status) status.textContent = `Not replaced: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function rollbackUpdate() {
+  const status = $("updateStatus");
+  const button = $("updateRollback");
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Putting the previous build back…";
+  try {
+    const { ok, data } = await api("/api/update/rollback", {
+      method: "POST",
+      body: "{}",
+      confirmApproval: true,
+    });
+    if (!ok) {
+      if (status) status.textContent = `Not restored: ${data.error || "no answer"}`;
+      return;
+    }
+    if (status) status.textContent = rollbackStatusText(data.rollback).trim();
+    await loadPreparedUpdate();
+  } catch (error) {
+    if (status) status.textContent = `Not restored: ${error.message}`;
   } finally {
     if (button) button.disabled = false;
   }

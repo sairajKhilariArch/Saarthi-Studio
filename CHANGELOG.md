@@ -1,5 +1,47 @@
 # Changelog
 
+## 2.41.0
+
+An upgrade can be undone: the build a swap kept can be put back, and a restart
+runs it.
+
+- `POST /api/update/rollback` copies the backup recorded in `applied.json` back
+  over the installed binary and keeps the build it displaces at
+  `<name>.old-<version>`, so a rollback can be rolled forward again without
+  downloading anything. The copy is hashed before anything moves, through the same
+  `swap_using` path the swap uses, so a restore that lands wrong leaves the
+  installed binary exactly as it was.
+- It refuses rather than guesses, and every refusal changes nothing: no swap
+  recorded, a backup that is gone, a record naming a different binary than the one
+  the process runs from (canonical paths compared), and a backup whose name this
+  app did not write (`<stem>.old-<version>` in the install folder) all answer 409
+  with the reason. `applied.json` is a file on disk, so it is never trusted to
+  point a restore at an arbitrary path.
+- One case the swap could not have: a rollback before the swap's restart means the
+  name the displaced build would take is the very file being restored, so that
+  build goes to a timestamped name instead of the restore consuming its own source.
+- Gated on `update` like the swap — a saved `deny` is 403, `ask` is 409 with
+  `needs_approval`, allow runs it — and the audit records the restore. A later swap
+  clears the rollback record, so the panel can never report a restored build and a
+  replaced one at the same time.
+- `updates/prepared/rollback.json` records the restored and replaced versions, both
+  paths and the time; `GET /api/update/prepared` returns it as `rollback`.
+  Settings → Privacy & about gained **Restore the previous build** and a line naming
+  the build that is back, the one it replaced and where that copy is.
+- Checks: `cargo test --locked` 534 passed, 1 ignored (4 new: the previous bytes
+  restored with the displaced build kept, a refusal without a record / with a
+  missing backup / naming another binary, a foreign name and a backup outside the
+  install folder refused with the target untouched, and the record read back through
+  the prepared view); clippy `--all-targets -D warnings` clean; `node --check`
+  clean; frontend 33 (2 new); version 20; e2e 32.
+- Live headless on a scratch home: the prepared view carried `"rollback": null`,
+  the restore answered 409 `needs_approval` under the default rule, and with an
+  allow rule in force it refused with "No swap is recorded for this build, so there
+  is no previous build to restore." and changed nothing.
+- Not covered: no MSI/EXE/.app and no uninstaller; the restore itself ran on
+  temporary directories, because rolling this repo's own dev binary back would
+  replace a dev build.
+
 ## 2.40.0
 
 An upgrade no longer leaves the file it replaced lying next to the new one.

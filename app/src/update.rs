@@ -838,6 +838,7 @@ pub(crate) fn prepared(data_dir: &FsPath) -> Value {
             "present": false,
             "binary_exists": false,
             "applied": applied(data_dir),
+            "rollback": rollback(data_dir),
         });
     };
     let present = manifest
@@ -856,6 +857,7 @@ pub(crate) fn prepared(data_dir: &FsPath) -> Value {
         "present": present,
         "binary_exists": binary_exists,
         "applied": applied(data_dir),
+        "rollback": rollback(data_dir),
     })
 }
 
@@ -1188,6 +1190,9 @@ pub(crate) async fn swap_route(
                         .map_err(|error| error.to_string())
                 })
                 .is_ok();
+            // A new swap supersedes an earlier rollback, so the panel cannot report
+            // both a restored build and a replaced one.
+            let _ = fs::remove_file(rollback_manifest_path(&dir));
             permissions::record(
                 &state,
                 permissions::Action::Update,
@@ -1200,6 +1205,226 @@ pub(crate) async fn swap_route(
             Json(json!({
                 "ok": true,
                 "applied": record,
+                "recorded": recorded,
+                "restart_required": true,
+            }))
+            .into_response()
+        }
+        Err(error) => json_error(StatusCode::CONFLICT, error),
+    }
+}
+
+/* ---- going back to the build a swap replaced ----------------------- */
+
+fn rollback_manifest_path(data_dir: &FsPath) -> PathBuf {
+    prepared_dir(data_dir).join("rollback.json")
+}
+
+/// The version a swap put in a backup's file name, if `backup` really is a backup
+/// written beside `target`.
+///
+/// `applied.json` is a file on disk, so a record edited by hand must not be able to
+/// point a restore at an arbitrary file: the name has to be `<stem>.old-<version>`
+/// in the same folder as the binary, with a version-shaped token.
+fn backup_version(backup: &FsPath, target: &FsPath) -> Option<String> {
+    if backup == target || backup.parent()? != target.parent()? {
+        return None;
+    }
+    let target_name = target.file_name()?.to_str()?;
+    let (stem, extension) = match target_name.rsplit_once('.') {
+        Some((stem, "exe")) => (stem, ".exe"),
+        _ => (target_name, ""),
+    };
+    let name = backup.file_name()?.to_str()?;
+    let token = name
+        .strip_prefix(&format!("{stem}.old-"))?
+        .strip_suffix(extension)?;
+    let shaped = !token.is_empty()
+        && token.len() <= 48
+        && token.starts_with(|character: char| character.is_ascii_digit())
+        && token.contains('.')
+        && token.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        });
+    shaped.then(|| token.to_string())
+}
+
+/// Is `recorded` the binary this process is running from? Canonical paths are
+/// compared, so the same file reached by two spellings is not refused.
+fn same_binary(recorded: &str, target: &FsPath) -> bool {
+    if recorded.is_empty() {
+        return false;
+    }
+    let recorded = FsPath::new(recorded);
+    if recorded == target {
+        return true;
+    }
+    match (fs::canonicalize(recorded), fs::canonicalize(target)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Where the build a rollback displaces goes: the backup name a swap would have
+/// used for it, or a timestamped one when that name is the very file being
+/// restored (a rollback before the swap's restart) or is still held open.
+fn displaced_path(target: &FsPath, version: &str, restoring: &FsPath) -> PathBuf {
+    let wanted = backup_path(target, version);
+    if wanted != restoring && (!wanted.exists() || fs::remove_file(&wanted).is_ok()) {
+        return wanted;
+    }
+    let stamp = now_seconds() as i64;
+    let name = wanted
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "free-ai-studio.old".to_string());
+    target.with_file_name(format!("{name}-{stamp}"))
+}
+
+/// What a rollback left on disk.
+#[derive(Debug)]
+pub(crate) struct Rollback {
+    pub target: PathBuf,
+    /// The backup that was copied back into place.
+    pub restored_from: PathBuf,
+    /// Where the build the rollback displaced was moved.
+    pub superseded: PathBuf,
+    pub restored_version: String,
+    pub replaced_version: String,
+    pub bytes: u64,
+}
+
+/// Put the build a swap kept back in place, keeping the one it displaces.
+///
+/// The copy is hashed before anything moves, through the same `swap_using` the swap
+/// uses, so a restore that lands wrong leaves the installed binary alone. Every
+/// refusal names what is missing instead of guessing at a path.
+pub(crate) fn rollback_from(applied: &Value, target: &FsPath) -> Result<Rollback, String> {
+    let latest = applied
+        .get("latest")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let recorded_backup = applied
+        .get("backup")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if latest.is_empty() || recorded_backup.is_empty() {
+        return Err(
+            "No swap is recorded for this build, so there is no previous build to restore."
+                .to_string(),
+        );
+    }
+    let recorded_target = applied
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !same_binary(recorded_target, target) {
+        return Err(format!(
+            "The recorded swap replaced {recorded_target}, not {}, so nothing was changed.",
+            target.display()
+        ));
+    }
+    let backup = PathBuf::from(recorded_backup);
+    if !backup.is_file() {
+        return Err(format!(
+            "The previous build is no longer at {}, so nothing was restored.",
+            backup.display()
+        ));
+    }
+    let Some(restored_version) = backup_version(&backup, target) else {
+        return Err(format!(
+            "{} is not a backup this app wrote beside {}, so it was not restored.",
+            backup.display(),
+            target.display()
+        ));
+    };
+    let superseded = displaced_path(target, latest, &backup);
+    let bytes = swap_using(target, &backup, &superseded, |from, to| fs::copy(from, to))?;
+    Ok(Rollback {
+        target: target.to_path_buf(),
+        restored_from: backup,
+        superseded,
+        restored_version,
+        replaced_version: latest.to_string(),
+        bytes,
+    })
+}
+
+/// The last rollback this app performed, if any.
+pub(crate) fn rollback(data_dir: &FsPath) -> Value {
+    fs::read(rollback_manifest_path(data_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn write_rollback_record(data_dir: &FsPath, record: &Value) -> bool {
+    let root = prepared_dir(data_dir);
+    fs::create_dir_all(&root)
+        .map_err(|error| error.to_string())
+        .and_then(|()| serde_json::to_vec_pretty(record).map_err(|error| error.to_string()))
+        .and_then(|encoded| {
+            fs::write(root.join("rollback.json"), encoded).map_err(|error| error.to_string())
+        })
+        .is_ok()
+}
+
+/// `POST /api/update/rollback` — put the build a swap kept back in place. Gated on
+/// `update` like the swap, because it writes over the installed binary.
+pub(crate) async fn rollback_route(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> axum::response::Response {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let scope = match gate_update(&state, approve, "restoring the previous build") {
+        Gate::Allowed(scope) => scope,
+        Gate::Stop(response) => return response,
+    };
+    let dir = match data_dir(&state) {
+        Ok(dir) => dir,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let target = match std::env::current_exe() {
+        Ok(target) => target,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("This build cannot name its own binary, so nothing was restored: {error}"),
+            )
+        }
+    };
+    match rollback_from(&applied(&dir), &target) {
+        Ok(rolled) => {
+            let record = json!({
+                "format": "saarthi.update.rollback",
+                "version": 1,
+                "restored": rolled.restored_version,
+                "replaced": rolled.replaced_version,
+                "target": rolled.target.to_string_lossy(),
+                "restored_from": rolled.restored_from.to_string_lossy(),
+                "superseded": rolled.superseded.to_string_lossy(),
+                "bytes": rolled.bytes,
+                "rolled_back_at": now_seconds(),
+                "restart_required": true,
+            });
+            // The binary is already back; an unwritable record is reported instead of
+            // turning a completed restore into a failure.
+            let recorded = write_rollback_record(&dir, &record);
+            permissions::record(
+                &state,
+                permissions::Action::Update,
+                "release",
+                permissions::Decision::Allow,
+                scope,
+                "",
+                "installed binary restored from the backup a swap kept",
+            );
+            Json(json!({
+                "ok": true,
+                "rollback": record,
                 "recorded": recorded,
                 "restart_required": true,
             }))
@@ -1773,6 +1998,135 @@ mod tests {
         let removed = cleanup_backups(&exe, "2.40.0").expect("cleanup");
         assert!(removed.is_empty(), "{removed:?}");
         assert!(exe.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollback_restores_the_previous_build_and_keeps_the_new_one() {
+        let dir = scratch("rollback-ok");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio.exe");
+        fs::write(&target, b"new build").expect("new");
+        let backup = dir.join("free-ai-studio.old-9.8.0.exe");
+        fs::write(&backup, b"old build").expect("old");
+        let applied = json!({
+            "latest": "9.9.9",
+            "previous": "9.8.0",
+            "target": target.to_string_lossy(),
+            "backup": backup.to_string_lossy(),
+        });
+
+        let rolled = rollback_from(&applied, &target).expect("rollback");
+        assert_eq!(rolled.restored_version, "9.8.0");
+        assert_eq!(rolled.replaced_version, "9.9.9");
+        assert_eq!(rolled.bytes, 9);
+        assert_eq!(fs::read(&target).expect("target"), b"old build");
+        // The build the rollback displaced is kept, so the person can go forward
+        // again without downloading anything.
+        assert_eq!(
+            fs::read(&rolled.superseded).expect("superseded"),
+            b"new build"
+        );
+        assert!(rolled
+            .superseded
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(".old-9.9.9"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollback_is_refused_without_a_record_a_backup_or_the_same_binary() {
+        let dir = scratch("rollback-refused");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio.exe");
+        fs::write(&target, b"new build").expect("new");
+
+        let error = rollback_from(&Value::Null, &target).expect_err("no record");
+        assert!(error.contains("No swap is recorded"), "{error}");
+
+        // A record whose backup was removed says so instead of restoring nothing.
+        let missing = json!({
+            "latest": "9.9.9",
+            "target": target.to_string_lossy(),
+            "backup": dir.join("free-ai-studio.old-9.8.0.exe").to_string_lossy(),
+        });
+        let error = rollback_from(&missing, &target).expect_err("no backup");
+        assert!(error.contains("no longer at"), "{error}");
+
+        // The record has to name the binary this process is running from.
+        let elsewhere = dir.join("other").join("free-ai-studio.exe");
+        fs::create_dir_all(elsewhere.parent().expect("parent")).expect("other");
+        let backup = dir.join("free-ai-studio.old-9.8.0.exe");
+        fs::write(&backup, b"old build").expect("old");
+        let wrong = json!({
+            "latest": "9.9.9",
+            "target": elsewhere.to_string_lossy(),
+            "backup": backup.to_string_lossy(),
+        });
+        let error = rollback_from(&wrong, &target).expect_err("another binary");
+        assert!(error.contains("so nothing was changed"), "{error}");
+        assert_eq!(fs::read(&target).expect("target"), b"new build");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rollback_refuses_a_backup_name_this_app_did_not_write() {
+        let dir = scratch("rollback-foreign");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio.exe");
+        fs::write(&target, b"new build").expect("new");
+
+        // Right folder, plausible name, but not `<stem>.old-<version>`.
+        let foreign = dir.join("notes.old-1.0.0.exe");
+        fs::write(&foreign, b"not a build").expect("foreign");
+        let applied = json!({
+            "latest": "9.9.9",
+            "target": target.to_string_lossy(),
+            "backup": foreign.to_string_lossy(),
+        });
+        let error = rollback_from(&applied, &target).expect_err("foreign");
+        assert!(error.contains("not a backup this app wrote"), "{error}");
+        assert_eq!(fs::read(&target).expect("target"), b"new build");
+        assert!(foreign.is_file());
+
+        // A backup-shaped name outside the install directory is refused too, even
+        // though its bytes are real: containment is part of being one of ours.
+        let outside = scratch("rollback-outside").join("free-ai-studio.old-1.0.0.exe");
+        let outside_dir = outside.parent().expect("parent").to_path_buf();
+        fs::create_dir_all(&outside_dir).expect("outside");
+        fs::write(&outside, b"old build").expect("write");
+        let applied = json!({
+            "latest": "9.9.9",
+            "target": target.to_string_lossy(),
+            "backup": outside.to_string_lossy(),
+        });
+        assert!(rollback_from(&applied, &target).is_err());
+        assert_eq!(fs::read(&target).expect("target"), b"new build");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&outside_dir);
+    }
+
+    #[test]
+    fn a_rollback_is_recorded_beside_the_prepared_update() {
+        let dir = scratch("rollback-record");
+        let record = json!({
+            "format": "saarthi.update.rollback",
+            "restored": "9.8.0",
+            "replaced": "9.9.9",
+            "superseded": "free-ai-studio.old-9.9.9.exe",
+            "restart_required": true,
+        });
+        assert_eq!(self::rollback(&dir), Value::Null);
+        assert!(write_rollback_record(&dir, &record));
+        let seen = self::rollback(&dir);
+        assert_eq!(seen["restored"], "9.8.0");
+        assert_eq!(seen["replaced"], "9.9.9");
+        assert_eq!(seen["restart_required"], true);
+        // One read of the prepared view tells the panel everything it shows.
+        assert_eq!(prepared(&dir)["rollback"]["restored"], "9.8.0");
+        assert_eq!(prepared(&dir)["prepared"], Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
 

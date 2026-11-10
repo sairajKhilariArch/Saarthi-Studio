@@ -563,4 +563,12 @@ Delivered in 2.40.0: the cleanup after a swap. At startup the app removes
 the running build, never touching the file being executed or a newer backup, and
 logs the outcome instead of failing to start.
 
+Delivered in 2.41.0: the way back. `POST /api/update/rollback` copies the backup
+`applied.json` records back over the installed binary through the same hashed copy
+path the swap uses, and keeps the build it displaces at `<name>.old-<version>` so a
+rollback can be rolled forward by hand. It refuses with a reason and no change when
+nothing is recorded, the backup is gone, the record names another binary, or the
+backup name is not one this app wrote; the panel says which build is back and where
+the newer one went.
+
 Open: a Windows MSI/EXE, a macOS `.app`/dmg, and a clean uninstall.

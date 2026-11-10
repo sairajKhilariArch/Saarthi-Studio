@@ -303,6 +303,22 @@ test("appliedStatusText says restart, what it replaced and where the copy is", (
   assert.ok(text.includes("free-ai-studio.old-2.38.0.exe"), text);
 });
 
+test("rollbackStatusText names the restored build, the one it replaced and where that is", () => {
+  const text = call(`rollbackStatusText({
+    restored: "2.40.0", replaced: "2.41.0", superseded: "C:/app/free-ai-studio.old-2.41.0.exe"
+  })`);
+  assert.ok(text.includes("2.40.0"), text);
+  assert.ok(text.includes("2.41.0"), text);
+  assert.ok(text.includes("restart"), text);
+  assert.ok(text.includes("free-ai-studio.old-2.41.0.exe"), text);
+});
+
+test("rollbackStatusText stays empty before any rollback", () => {
+  assert.equal(call("rollbackStatusText(null)"), "");
+  assert.equal(call("rollbackStatusText({})"), "");
+  assert.equal(call('rollbackStatusText({ restored: "" })'), "");
+});
+
 test("appliedStatusText stays empty before any swap", () => {
   assert.equal(call("appliedStatusText(null)"), "");
   assert.equal(call("appliedStatusText({})"), "");

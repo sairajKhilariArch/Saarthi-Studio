@@ -1086,13 +1086,14 @@
           </div>
           <div class="card info-card">
             <h2>Updates</h2>
-            <p>This build is <code id="aboutVersion">unknown</code>. A check reads the public release page and changes nothing on this computer: it downloads no file and installs nothing. Applying an upgrade copies the database first and puts it back if the migration fails.</p>
+            <p>This build is <code id="aboutVersion">unknown</code>. A check reads the public release page and changes nothing on this computer: it downloads no file and installs nothing. Applying an upgrade copies the database first and puts it back if the migration fails. Replacing the binary keeps the build it replaced beside it, so the previous build can be restored and a restart runs it.</p>
             <p id="updateStatus" class="muted">Not checked yet.</p>
             <button type="button" id="updateCheck" class="btn btn-small">Check for updates</button>
             <button type="button" id="updateStage" class="btn btn-small hidden">Download and stage</button>
             <button type="button" id="updateDiscard" class="btn btn-quiet btn-small hidden">Discard staged update</button>
             <button type="button" id="updatePrepare" class="btn btn-small hidden">Prepare update</button>
             <button type="button" id="updateSwap" class="btn btn-small hidden">Replace this build</button>
+            <button type="button" id="updateRollback" class="btn btn-quiet btn-small hidden">Restore the previous build</button>
             <button type="button" id="updatePreparedDiscard" class="btn btn-quiet btn-small hidden">Remove prepared update</button>
             <p id="updateStaged" class="muted"></p>
             <p id="updatePrepared" class="muted"></p>
