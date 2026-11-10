@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.39.0
+
+A prepared release can now replace the installed binary, with the old one kept
+beside it — the first version of this app that can upgrade itself on disk.
+
+- `POST /api/update/swap` copies the prepared binary into the install directory
+  under a dot name, hashes the copy against the prepared file, and only then moves
+  anything: the installed binary is renamed to `<name>.old-<version>`, the copy
+  takes its name, and a failure at that last step restores the backup. A copy that
+  lands wrong never reaches the rename, so a mismatch leaves the build exactly as
+  it was.
+- Renaming is what makes this possible while the app runs: Windows and POSIX both
+  allow a running executable to be renamed but not overwritten, so the process
+  keeps its image until it restarts. The reply and the panel both say
+  `restart_required` and name the backup, because claiming the upgrade is live
+  would be false.
+- One backup is kept per version: a leftover from an earlier swap is cleared first,
+  and if it cannot be removed (still held open) the new backup takes a timestamped
+  name instead of the swap failing.
+- Gated on `update` through the same helper as the download and the unpack, so a
+  saved `deny` is 403, `ask` is 409 with `needs_approval`, and an allow runs it;
+  the audit records the swap.
+- `updates/prepared/applied.json` records what was replaced, from which version, to
+  which, the backup path and the time; `GET /api/update/prepared` returns it as
+  `applied`, so a restarted app still says what happened. A record that cannot be
+  written is reported as `recorded: false` rather than turning a completed swap into
+  an error.
+- Settings → Privacy & about gained **Replace this build** and a line that reads
+  "…now replaces this build; restart to run it. It replaced … kept at …".
+- Checks: `cargo test --locked` 528 passed, 1 ignored (4 new: a swap that keeps the
+  previous bytes, a copy that lands wrong and is rolled back with the target
+  untouched, a missing prepared binary that changes nothing, and a second swap that
+  clears the previous backup); clippy `--all-targets -D warnings` clean; `node
+  --check` clean; frontend 31 (2 new); version 20; e2e 32.
+- Not covered: the swap is exercised on temporary directories, never on this repo's
+  own `target/debug` binary — a live run against the running artifact would replace
+  a dev build. There is still no MSI/EXE/.app and no uninstaller, and a failed
+  restart leaves the old binary only as the backup file.
+
 ## 2.38.0
 
 A verified download can now be unpacked and checked, and the panel says exactly

@@ -551,5 +551,11 @@ what it unpacked. `GET /api/update/prepared` and its discard route manage the
 result; both the download and the prepare are gated on `update` through one
 helper.
 
-Open: applying a prepared update (swapping the running binary), a Windows
-MSI/EXE, a macOS `.app`/dmg, and a clean uninstall.
+Delivered in 2.39.0: the swap. `POST /api/update/swap` copies the prepared binary
+beside the target, hashes the copy, renames the installed binary to
+`<name>.old-<version>` and restores it if the new one cannot take its place, so a
+copy that lands wrong never reaches the rename. Renaming is what makes it possible
+while the app runs; the reply and the panel say a restart is required rather than
+claiming the upgrade is already live.
+
+Open: a Windows MSI/EXE, a macOS `.app`/dmg, and a clean uninstall.

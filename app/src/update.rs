@@ -638,6 +638,10 @@ fn prepared_manifest_path(data_dir: &FsPath) -> PathBuf {
     prepared_dir(data_dir).join("prepared.json")
 }
 
+fn applied_manifest_path(data_dir: &FsPath) -> PathBuf {
+    prepared_dir(data_dir).join("applied.json")
+}
+
 /// The archive kind an asset name describes. `None` means this build has no
 /// extractor for it, which is refused rather than guessed at.
 fn archive_of(name: &str) -> Option<installer::Archive> {
@@ -828,7 +832,13 @@ pub(crate) fn prepared(data_dir: &FsPath) -> Value {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
     let Some(manifest) = manifest else {
-        return json!({"ok": true, "prepared": Value::Null, "present": false, "binary_exists": false});
+        return json!({
+            "ok": true,
+            "prepared": Value::Null,
+            "present": false,
+            "binary_exists": false,
+            "applied": applied(data_dir),
+        });
     };
     let present = manifest
         .get("root")
@@ -840,7 +850,22 @@ pub(crate) fn prepared(data_dir: &FsPath) -> Value {
         .and_then(Value::as_str)
         .map(|path| FsPath::new(path).is_file())
         .unwrap_or(false);
-    json!({"ok": true, "prepared": manifest, "present": present, "binary_exists": binary_exists})
+    json!({
+        "ok": true,
+        "prepared": manifest,
+        "present": present,
+        "binary_exists": binary_exists,
+        "applied": applied(data_dir),
+    })
+}
+
+/// The last swap this app performed, if any. Kept beside the prepared record so a
+/// restart can say what the installed binary now is.
+pub(crate) fn applied(data_dir: &FsPath) -> Value {
+    fs::read(applied_manifest_path(data_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// Remove an unpacked release and its record. Like discarding a staged download,
@@ -915,6 +940,227 @@ pub(crate) async fn prepare_route(
             Json(json!({"ok": true, "prepared": prepared})).into_response()
         }
         Err(error) => json_error(error.status(), error.message().to_string()),
+    }
+}
+
+/* ---- replacing the installed binary ------------------------------- */
+
+/// What a completed swap left on disk.
+#[derive(Debug)]
+pub(crate) struct Swap {
+    pub target: PathBuf,
+    pub backup: PathBuf,
+    pub version: String,
+    pub bytes: u64,
+}
+
+/// Where the binary being replaced is moved to. The version in the name makes it
+/// obvious after a restart which build the backup came from.
+fn backup_path(target: &FsPath, current: &str) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "free-ai-studio".to_string());
+    let named = match name.strip_suffix(".exe") {
+        Some(stem) => format!("{stem}.old-{current}.exe"),
+        None => format!("{name}.old-{current}"),
+    };
+    target.with_file_name(named)
+}
+
+/// Copy the prepared binary beside `target` and prove the copy is byte-identical
+/// before anything moves. `copy` is a parameter so a test can simulate a write that
+/// lands wrong and check the rollback path.
+fn swap_using<C>(
+    target: &FsPath,
+    prepared: &FsPath,
+    backup: &FsPath,
+    copy: C,
+) -> Result<u64, String>
+where
+    C: Fn(&FsPath, &FsPath) -> std::io::Result<u64>,
+{
+    if !target.is_file() {
+        return Err(format!(
+            "{} is not a binary this app can replace, so nothing changed.",
+            target.display()
+        ));
+    }
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let incoming = target.with_file_name(format!(".{name}.incoming"));
+    let _ = fs::remove_file(&incoming);
+    let bytes = copy(prepared, &incoming).map_err(|error| {
+        let _ = fs::remove_file(&incoming);
+        format!(
+            "Could not write the new binary beside {}: {error}. This build was left alone.",
+            target.display()
+        )
+    })?;
+
+    // The copy is checked before anything is moved: a truncated or altered file is
+    // not worth a swap that might not start.
+    let expected = installer::sha256_file(prepared).map_err(|error| {
+        let _ = fs::remove_file(&incoming);
+        format!("Could not hash the prepared binary: {error}. This build was left alone.")
+    })?;
+    let actual = installer::sha256_file(&incoming).map_err(|error| {
+        let _ = fs::remove_file(&incoming);
+        format!("Could not hash the copy: {error}. This build was left alone.")
+    })?;
+    if !expected.eq_ignore_ascii_case(&actual) {
+        let _ = fs::remove_file(&incoming);
+        return Err(
+            "The copy did not match the prepared binary, so nothing was replaced.".to_string(),
+        );
+    }
+
+    // Renaming a running executable is allowed on Windows and POSIX; overwriting it
+    // is not, which is why the old file moves aside first and the new one takes the
+    // name. The process keeps running from the renamed image until it restarts.
+    fs::rename(target, backup).map_err(|error| {
+        let _ = fs::remove_file(&incoming);
+        format!("Could not move the installed binary aside: {error}. Nothing was replaced.")
+    })?;
+    if let Err(error) = fs::rename(&incoming, target) {
+        let restored = fs::rename(backup, target).is_ok();
+        let _ = fs::remove_file(&incoming);
+        return Err(if restored {
+            format!(
+                "Could not move the new binary into place ({error}); the previous binary was restored."
+            )
+        } else {
+            format!(
+                "Could not move the new binary into place ({error}) and the previous binary could not be restored; it is at {}.",
+                backup.display()
+            )
+        });
+    }
+    Ok(bytes)
+}
+
+/// Replace `target` with the prepared binary, keeping the previous one beside it.
+pub(crate) fn swap_binary(
+    target: &FsPath,
+    prepared: &FsPath,
+    version: &str,
+) -> Result<Swap, String> {
+    if !prepared.is_file() {
+        return Err(format!(
+            "The prepared binary {} is not there, so nothing was replaced.",
+            prepared.display()
+        ));
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let wanted = backup_path(target, current);
+    // One backup is enough: a leftover from an earlier swap is cleared first, and if
+    // it is still held open the swap uses a timestamped name instead of failing.
+    let backup = match fs::remove_file(&wanted) {
+        _ if !wanted.exists() => wanted,
+        Ok(()) => wanted,
+        Err(_) => {
+            let stamp = now_seconds() as i64;
+            let name = wanted
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "free-ai-studio.old".to_string());
+            target.with_file_name(format!("{name}-{stamp}"))
+        }
+    };
+    let bytes = swap_using(target, prepared, &backup, |from, to| fs::copy(from, to))?;
+    Ok(Swap {
+        target: target.to_path_buf(),
+        backup,
+        version: version.to_string(),
+        bytes,
+    })
+}
+
+/// `POST /api/update/swap` — write the prepared binary over this build and keep the
+/// old one as a backup. Gated on `update`; the running process keeps its image until
+/// it restarts, which the reply says.
+pub(crate) async fn swap_route(
+    State(state): State<AppState>,
+    Json(input): Json<Value>,
+) -> axum::response::Response {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let scope = match gate_update(
+        &state,
+        approve,
+        "replacing this build with a downloaded one",
+    ) {
+        Gate::Allowed(scope) => scope,
+        Gate::Stop(response) => return response,
+    };
+    let dir = match data_dir(&state) {
+        Ok(dir) => dir,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    let prepared = prepared(&dir);
+    let binary = prepared["prepared"]["binary_path"]
+        .as_str()
+        .map(str::to_string);
+    let version = prepared["prepared"]["latest"].as_str().map(str::to_string);
+    let (Some(binary), Some(version)) = (binary, version) else {
+        return json_error(
+            StatusCode::CONFLICT,
+            "Nothing is prepared to replace this build. Prepare an update first.",
+        );
+    };
+    let target = match std::env::current_exe() {
+        Ok(target) => target,
+        Err(error) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("This build cannot name its own binary, so nothing was replaced: {error}"),
+            )
+        }
+    };
+    match swap_binary(&target, FsPath::new(&binary), &version) {
+        Ok(swap) => {
+            let record = json!({
+                "format": "saarthi.update.applied",
+                "version": 1,
+                "latest": swap.version,
+                "previous": env!("CARGO_PKG_VERSION"),
+                "target": swap.target.to_string_lossy(),
+                "backup": swap.backup.to_string_lossy(),
+                "bytes": swap.bytes,
+                "applied_at": now_seconds(),
+                "restart_required": true,
+            });
+            // The swap already happened; a record that cannot be written is reported
+            // rather than turning a success into a failure.
+            let recorded = serde_json::to_vec_pretty(&record)
+                .map_err(|error| error.to_string())
+                .and_then(|encoded| {
+                    fs::write(applied_manifest_path(&dir), encoded)
+                        .map_err(|error| error.to_string())
+                })
+                .is_ok();
+            permissions::record(
+                &state,
+                permissions::Action::Update,
+                "release",
+                permissions::Decision::Allow,
+                scope,
+                "",
+                "installed binary replaced with the prepared release",
+            );
+            Json(json!({
+                "ok": true,
+                "applied": record,
+                "recorded": recorded,
+                "restart_required": true,
+            }))
+            .into_response()
+        }
+        Err(error) => json_error(StatusCode::CONFLICT, error),
     }
 }
 
@@ -1359,6 +1605,89 @@ mod tests {
         // A tree that cannot start is not left behind as a "prepared update".
         assert!(!prepared_dir(&dir).join("9.9.9").exists());
         assert_eq!(self::prepared(&dir)["present"], false);
+    }
+
+    #[test]
+    fn a_swap_replaces_the_binary_and_keeps_the_previous_one() {
+        let dir = scratch("swap-ok");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio.exe");
+        fs::write(&target, b"old build").expect("old");
+        let prepared = dir.join("free-ai-studio-new.exe");
+        fs::write(&prepared, b"new build").expect("new");
+
+        let swap = swap_binary(&target, &prepared, "9.9.9").expect("swap");
+        assert_eq!(swap.version, "9.9.9");
+        assert_eq!(swap.bytes, 9);
+        assert_eq!(fs::read(&target).expect("target"), b"new build");
+        // The replaced build is still on disk under a name that says what it was.
+        assert_eq!(fs::read(&swap.backup).expect("backup"), b"old build");
+        assert!(swap
+            .backup
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(".old-"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_copy_that_does_not_match_is_rolled_back() {
+        let dir = scratch("swap-mismatch");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio");
+        fs::write(&target, b"old build").expect("old");
+        let prepared = dir.join("prepared");
+        fs::write(&prepared, b"new build").expect("new");
+        let backup = dir.join("free-ai-studio.old-test");
+
+        // A copy that lands wrong must stop the swap before anything is renamed.
+        let error = swap_using(&target, &prepared, &backup, |_, to| {
+            fs::write(to, b"garbled")?;
+            Ok(6u64)
+        })
+        .expect_err("mismatch");
+        assert!(error.contains("did not match"), "{error}");
+        assert_eq!(fs::read(&target).expect("target"), b"old build");
+        assert!(!backup.exists());
+        // The half-written copy is not left behind either.
+        assert!(!dir.join(".free-ai-studio.incoming").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_prepared_binary_changes_nothing() {
+        let dir = scratch("swap-missing");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio.exe");
+        fs::write(&target, b"old build").expect("old");
+
+        let error = swap_binary(&target, &dir.join("absent.exe"), "9.9.9").expect_err("missing");
+        assert!(error.contains("nothing was replaced"), "{error}");
+        assert_eq!(fs::read(&target).expect("target"), b"old build");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_swap_replaces_the_previous_backup() {
+        let dir = scratch("swap-twice");
+        fs::create_dir_all(&dir).expect("dir");
+        let target = dir.join("free-ai-studio.exe");
+        fs::write(&target, b"build one").expect("one");
+        let first = dir.join("first.exe");
+        fs::write(&first, b"build two").expect("two");
+        let second = dir.join("second.exe");
+        fs::write(&second, b"build three").expect("three");
+
+        let swap = swap_binary(&target, &first, "2.0.0").expect("first swap");
+        assert_eq!(fs::read(&target).expect("target"), b"build two");
+        assert_eq!(fs::read(&swap.backup).expect("backup"), b"build one");
+
+        // The second swap clears the first backup instead of failing on it.
+        let swap = swap_binary(&target, &second, "3.0.0").expect("second swap");
+        assert_eq!(fs::read(&target).expect("target"), b"build three");
+        assert_eq!(fs::read(&swap.backup).expect("backup"), b"build two");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.39.0 (2026-11-10):** Phase 18 gained the swap: `POST
+/api/update/swap` copies the prepared binary beside the target, hash-checks the
+copy, renames the old binary to `<name>.old-<version>` and restores it if the new
+one cannot take its place. The running process keeps its image until a restart,
+which the reply says. Phase 18 is 10 rows — 9 Working + 1 Missing = 9/10 = 90% — and
+the overall mean stays 92%.
+
 **Revision 2.38.0 (2026-11-10):** Phase 18 gained the prepare step: the extractor
 reads gzip tarballs (this app's own Linux/macOS artifacts), `POST
 /api/update/prepare` re-verifies the staged sha256, unpacks into
@@ -136,8 +143,9 @@ between installs; what remains is free positioning and browser verification of
 the canvas, and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, and now offers its custom tools to the agent's tool loop, but still has no provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
 the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 ships every artifact, protects the database across an upgrade
 (2.35.0), reports whether a newer release exists (2.36.0) and downloads and
-verifies one into staging (2.37.0) and unpacks it beside the data directory
-(2.38.0), but applies nothing and there is no installer or uninstaller.
+verifies one into staging (2.37.0), unpacks it beside the data directory (2.38.0)
+and swaps it in keeping the replaced binary as a backup (2.39.0), but there is no
+MSI/EXE/.app and no uninstaller.
 Phase 17 closed in 2.4.0.
 
 ## Completion by phase (derived, not a release gate)
@@ -167,7 +175,7 @@ row below moves, so they cannot drift from the tables.
 | 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
 | 16 | Testing and quality | 100% | named caveats only (browser layout checks, a privileged ENOSPC case) |
 | 17 | Observability | 100% | — |
-| 18 | Installation and updates | 89% | applying a prepared update, Windows MSI/EXE, macOS `.app`, uninstall |
+| 18 | Installation and updates | 90% | Windows MSI/EXE, macOS `.app`, uninstall |
 
 **Overall (mean of the 18 phases): 92%.** Read it as "one reliable core, most
 phases closed, the remaining work concentrated in 1, 9, 14 and 18". The
@@ -459,7 +467,8 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Update check (read-only) | Working | 2.36.0: `GET /api/update/check` reads the newest release, compares versions numerically, names this platform's asset; About card renders it |
 | Download and verify into staging | Working | 2.37.0: `POST /api/update/stage` downloads the named asset through the verified-download path, refuses an unverifiable or non-https one, records it in `updates/staged.json` |
 | Unpack and check a staged update | Working | 2.38.0: re-verifies the sha256, unpacks an escape-proof `.zip`/`.tar.gz` into `updates/prepared/<version>`, refuses a tree with no binary |
-| Apply the update, installer, uninstaller | **Missing** | nothing replaces the installed binary; no MSI/EXE/.app and no uninstaller |
+| Replace the installed binary | Working | 2.39.0: copies the prepared binary beside the target, hash-checks the copy, keeps `<name>.old-<version>` and restores it if the new one cannot take its place; a restart runs it |
+| Installer and uninstaller | **Missing** | no MSI/EXE/.app and no uninstaller |
 
 ## What to build next (spec order, 2.1.0)
 
@@ -474,9 +483,9 @@ table and no second log pipeline, so it cannot disagree with the panels:
    depends on the Phase 5 lifecycle, which is now complete.
 4. **Phase 18 installers and update** — the data and download halves are done
    (2.35.0 copy-and-rollback before an upgrade, 2.36.0 the read-only check, 2.37.0
-   the verified download into staging, 2.38.0 the verified unpack beside the data
-   directory), so what remains is applying a prepared update, the Windows MSI/EXE
-   and macOS `.app`, and a clean uninstall.
+   the verified download into staging, 2.38.0 the verified unpack, 2.39.0 the swap
+   with a backup and rollback), so what remains is the Windows MSI/EXE, the macOS
+   `.app` and a clean uninstall.
 5. **Phase 15 extension manifest** — name, version, compatibility, permissions,
    entry point and source, plus a boundary for untrusted extensions.
 

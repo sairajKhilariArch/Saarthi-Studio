@@ -134,6 +134,7 @@ function setupSettingsNav() {
   if ($("updateStage")) $("updateStage").addEventListener("click", () => void stageUpdate());
   if ($("updateDiscard")) $("updateDiscard").addEventListener("click", () => void discardUpdate());
   if ($("updatePrepare")) $("updatePrepare").addEventListener("click", () => void prepareUpdate());
+  if ($("updateSwap")) $("updateSwap").addEventListener("click", () => void swapUpdate());
   if ($("updatePreparedDiscard")) {
     $("updatePreparedDiscard").addEventListener("click", () => void discardPreparedUpdate());
   }
@@ -999,6 +1000,15 @@ function preparedStatusText(prepared) {
   return `Prepared ${prepared.latest} at ${where} (${binary}). Start that copy yourself; this running build is unchanged.`;
 }
 
+/* After a swap the installed file is the new build but the running process is still
+   the old image, so the sentence has to say restart and where the old copy went. */
+function appliedStatusText(applied) {
+  if (!applied || !applied.latest) return "";
+  const previous = applied.previous ? `the one it replaced was ${applied.previous}` : "the one it replaced";
+  const backup = applied.backup ? `, kept at ${applied.backup}` : "";
+  return ` ${applied.latest} now replaces this build; restart to run it. It replaced ${previous}${backup}.`;
+}
+
 function showUpdateActions(flags) {
   if (flags.stage !== undefined && $("updateStage")) {
     $("updateStage").classList.toggle("hidden", !flags.stage);
@@ -1011,6 +1021,9 @@ function showUpdateActions(flags) {
   }
   if (flags.preparedDiscard !== undefined && $("updatePreparedDiscard")) {
     $("updatePreparedDiscard").classList.toggle("hidden", !flags.preparedDiscard);
+  }
+  if (flags.swap !== undefined && $("updateSwap")) {
+    $("updateSwap").classList.toggle("hidden", !flags.swap);
   }
 }
 
@@ -1071,7 +1084,11 @@ async function loadPreparedUpdate() {
     if (prepared && data.binary_exists === false) {
       host.textContent += " The unpacked binary is gone; prepare the update again.";
     }
-    showUpdateActions({ preparedDiscard: Boolean(prepared && data.present) });
+    host.textContent += appliedStatusText(data && data.applied);
+    showUpdateActions({
+      preparedDiscard: Boolean(prepared && data.present),
+      swap: Boolean(prepared && data.binary_exists),
+    });
   } catch {
     host.textContent = "";
   }
@@ -1096,6 +1113,32 @@ async function prepareUpdate() {
     await loadPreparedUpdate();
   } catch (error) {
     if (status) status.textContent = `Could not prepare the update: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function swapUpdate() {
+  const status = $("updateStatus");
+  const button = $("updateSwap");
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Replacing this build's binary…";
+  try {
+    const { ok, data } = await api("/api/update/swap", {
+      method: "POST",
+      body: "{}",
+      confirmApproval: true,
+    });
+    if (!ok) {
+      if (status) status.textContent = `Not replaced: ${data.error || "no answer"}`;
+      return;
+    }
+    if (status) {
+      status.textContent = `This build's binary is now ${data.applied.latest}. Restart to run it.`;
+    }
+    await loadPreparedUpdate();
+  } catch (error) {
+    if (status) status.textContent = `Not replaced: ${error.message}`;
   } finally {
     if (button) button.disabled = false;
   }

@@ -292,3 +292,18 @@ test("preparedStatusText stays empty when nothing is prepared", () => {
   assert.equal(call("preparedStatusText({})"), "");
   assert.equal(call("preparedStatusText({ latest: \"\" })"), "");
 });
+
+test("appliedStatusText says restart, what it replaced and where the copy is", () => {
+  const text = call(`appliedStatusText({
+    latest: "2.39.0", previous: "2.38.0", backup: "C:/app/free-ai-studio.old-2.38.0.exe"
+  })`);
+  assert.ok(text.includes("2.39.0"), text);
+  assert.ok(text.includes("restart"), text);
+  assert.ok(text.includes("2.38.0"), text);
+  assert.ok(text.includes("free-ai-studio.old-2.38.0.exe"), text);
+});
+
+test("appliedStatusText stays empty before any swap", () => {
+  assert.equal(call("appliedStatusText(null)"), "");
+  assert.equal(call("appliedStatusText({})"), "");
+});
