@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.40.0 (2026-11-10):** the backups a swap leaves behind are cleared at
+startup: only `<name>.old-<version>` names whose version is older than the running
+build, never the file being executed and never a newer one. Phase 18 stays 10 rows
+at 90% and the overall mean stays 92%.
+
 **Revision 2.39.0 (2026-11-10):** Phase 18 gained the swap: `POST
 /api/update/swap` copies the prepared binary beside the target, hash-checks the
 copy, renames the old binary to `<name>.old-<version>` and restores it if the new
@@ -467,7 +472,7 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Update check (read-only) | Working | 2.36.0: `GET /api/update/check` reads the newest release, compares versions numerically, names this platform's asset; About card renders it |
 | Download and verify into staging | Working | 2.37.0: `POST /api/update/stage` downloads the named asset through the verified-download path, refuses an unverifiable or non-https one, records it in `updates/staged.json` |
 | Unpack and check a staged update | Working | 2.38.0: re-verifies the sha256, unpacks an escape-proof `.zip`/`.tar.gz` into `updates/prepared/<version>`, refuses a tree with no binary |
-| Replace the installed binary | Working | 2.39.0: copies the prepared binary beside the target, hash-checks the copy, keeps `<name>.old-<version>` and restores it if the new one cannot take its place; a restart runs it |
+| Replace the installed binary | Working | 2.39.0: copies the prepared binary beside the target, hash-checks the copy, keeps `<name>.old-<version>` and restores it if the new one cannot take its place; a restart runs it, and 2.40.0 removes the leftover backup at the next start |
 | Installer and uninstaller | **Missing** | no MSI/EXE/.app and no uninstaller |
 
 ## What to build next (spec order, 2.1.0)

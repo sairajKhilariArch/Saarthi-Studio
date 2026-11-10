@@ -558,4 +558,9 @@ copy that lands wrong never reaches the rename. Renaming is what makes it possib
 while the app runs; the reply and the panel say a restart is required rather than
 claiming the upgrade is already live.
 
+Delivered in 2.40.0: the cleanup after a swap. At startup the app removes
+`<name>.old-<version>` files beside its own binary when their version is older than
+the running build, never touching the file being executed or a newer backup, and
+logs the outcome instead of failing to start.
+
 Open: a Windows MSI/EXE, a macOS `.app`/dmg, and a clean uninstall.

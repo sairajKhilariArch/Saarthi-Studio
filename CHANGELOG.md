@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.40.0
+
+An upgrade no longer leaves the file it replaced lying next to the new one.
+
+- At startup the app looks beside its own binary for `<name>.old-<version>` files
+  and removes the ones it wrote, so the install directory does not accumulate a copy
+  of every version ever replaced. The version in the name has to be older than the
+  build that is running, which means a backup of a *newer* build is kept — someone
+  may have rolled forward and kept it deliberately.
+- Two things are never touched: the file the process is actually executing (someone
+  can roll back by hand and start the backup directly, and deleting it underneath
+  them would be the worst possible surprise) and any name that does not parse as a
+  version. Keeping a few stray megabytes is cheaper than deleting something this app
+  cannot account for.
+- A failure is logged as `update-backups-removed` / `update-backups-failed` in
+  `studio.log` and never fatal: not being able to tidy a folder is no reason to
+  refuse to start, and on Windows a file still held by another process simply stays
+  for the next start to try again.
+- Checks: `cargo test --locked` 530 passed, 1 ignored (2 new: an older backup removed
+  while a newer one, a foreign file and an unparseable name are kept, and the running
+  binary never removed even when its own name looks like a backup); clippy
+  `--all-targets -D warnings` clean; `node --check` clean; frontend 31; version 20;
+  e2e 32.
+- Not covered: the cleanup ran against temporary directories, not a real swap-and-
+  restart cycle; there is still no MSI/EXE/.app and no uninstaller.
+
 ## 2.39.0
 
 A prepared release can now replace the installed binary, with the old one kept

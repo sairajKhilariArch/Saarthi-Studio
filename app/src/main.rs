@@ -4342,6 +4342,32 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         };
         oplog::record("info", "app", event, summary);
     }
+    // A completed swap leaves the replaced binary beside the running one. By this
+    // point this build is the file being executed, so those leftovers can go.
+    // Failures are logged, never fatal: not being able to tidy a folder is no reason
+    // to refuse to start.
+    match env::current_exe() {
+        Ok(exe) => match update::cleanup_backups(&exe, env!("CARGO_PKG_VERSION")) {
+            Ok(removed) if !removed.is_empty() => oplog::record(
+                "info",
+                "app",
+                "update-backups-removed",
+                format!(
+                    "{} replaced {} removed from the install directory",
+                    removed.len(),
+                    if removed.len() == 1 { "binary" } else { "binaries" }
+                ),
+            ),
+            Ok(_) => {}
+            Err(error) => oplog::record("warn", "app", "update-backups-failed", error),
+        },
+        Err(error) => oplog::record(
+            "warn",
+            "app",
+            "update-backups-failed",
+            format!("the running binary could not be named: {error}"),
+        ),
+    }
     // Auto-start runs once the state exists, because it applies the same measured
     // state the Router view shows: only a router that is enabled, installed here
     // and not already answering is started, and one that answers is never adopted.

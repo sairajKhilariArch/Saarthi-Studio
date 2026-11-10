@@ -1078,6 +1078,51 @@ pub(crate) fn swap_binary(
     })
 }
 
+/// Remove the binaries this app replaced, e.g. `free-ai-studio.old-2.38.0.exe`.
+///
+/// By the time this runs the app is executing from the swapped-in file, so a backup
+/// is a leftover rather than something anyone is running. Two things are never
+/// touched: the file we are running from (a person can roll back by hand and start
+/// the backup directly) and a backup whose version is not older than this build. A
+/// name that is not a version is left alone too, because deleting something this app
+/// cannot account for is worse than keeping a few megabytes around.
+pub(crate) fn cleanup_backups(exe: &FsPath, current: &str) -> Result<Vec<PathBuf>, String> {
+    let mut removed = Vec::new();
+    let Some(dir) = exe.parent() else {
+        return Ok(removed);
+    };
+    let Some(name) = exe.file_name().and_then(|name| name.to_str()) else {
+        return Ok(removed);
+    };
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, "exe")) => (stem.to_string(), ".exe"),
+        _ => (name.to_string(), ""),
+    };
+    let prefix = format!("{stem}.old-");
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(removed);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(file) = path.file_name().and_then(|file| file.to_str()) else {
+            continue;
+        };
+        if file == name || !file.starts_with(&prefix) || !file.ends_with(extension) {
+            continue;
+        }
+        let token = &file[prefix.len()..file.len() - extension.len()];
+        if !token.starts_with(|character: char| character.is_ascii_digit())
+            || compare_versions(token, current) != Ordering::Less
+        {
+            continue;
+        }
+        if fs::remove_file(&path).is_ok() {
+            removed.push(path);
+        }
+    }
+    Ok(removed)
+}
+
 /// `POST /api/update/swap` — write the prepared binary over this build and keep the
 /// old one as a backup. Gated on `update`; the running process keeps its image until
 /// it restarts, which the reply says.
@@ -1687,6 +1732,47 @@ mod tests {
         let swap = swap_binary(&target, &second, "3.0.0").expect("second swap");
         assert_eq!(fs::read(&target).expect("target"), b"build three");
         assert_eq!(fs::read(&swap.backup).expect("backup"), b"build two");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn leftover_backups_are_removed_but_newer_and_unknown_files_are_kept() {
+        let dir = scratch("backup-cleanup");
+        fs::create_dir_all(&dir).expect("dir");
+        let exe = dir.join("free-ai-studio.exe");
+        fs::write(&exe, b"running").expect("running");
+        let stale = dir.join("free-ai-studio.old-2.38.0.exe");
+        fs::write(&stale, b"old").expect("stale");
+        // A backup of a newer build is somebody's roll-forward, not litter.
+        let newer = dir.join("free-ai-studio.old-9.9.9.exe");
+        fs::write(&newer, b"newer").expect("newer");
+        // Not one of ours, so not ours to delete.
+        let other = dir.join("notes.txt");
+        fs::write(&other, b"notes").expect("notes");
+        let unparseable = dir.join("free-ai-studio.old-notaversion.exe");
+        fs::write(&unparseable, b"?").expect("unknown");
+
+        let removed = cleanup_backups(&exe, "2.40.0").expect("cleanup");
+        assert_eq!(removed.len(), 1, "{removed:?}");
+        assert!(!stale.exists());
+        assert!(newer.exists());
+        assert!(other.exists());
+        assert!(unparseable.exists());
+        assert!(exe.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_running_binary_is_never_removed_even_if_it_looks_like_a_backup() {
+        let dir = scratch("backup-running");
+        fs::create_dir_all(&dir).expect("dir");
+        // What a by-hand rollback looks like: the app started from the backup itself.
+        let exe = dir.join("free-ai-studio.old-1.0.0.exe");
+        fs::write(&exe, b"rolled back").expect("running");
+
+        let removed = cleanup_backups(&exe, "2.40.0").expect("cleanup");
+        assert!(removed.is_empty(), "{removed:?}");
+        assert!(exe.exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
