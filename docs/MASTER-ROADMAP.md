@@ -276,6 +276,13 @@ Remaining: reordering beyond a numeric priority.
 Started in 2.9.0. `workflows.json` now carries an optional `nodes` array, so a
 saved prompt is still valid and a graph is a first-class workflow.
 
+Delivered in 2.49.0: the canvas verified in a browser. A headless build on
+a scratch home, driven in Chromium at 1440×900 through the app's own pointer
+listeners. The check found a real defect — an unguarded `setPointerCapture` threw
+and aborted the drag handler, so a card could not move — now guarded. It confirmed
+the drag itself, live edge redraw, clamping to the canvas width with the canvas
+growing, and a position that survives save-time validation and a full reload.
+
 Delivered in 2.48.0: cross-process schedule arbitration. A due time is
 claimed in SQLite with one conditional upsert that only moves forward, so a desktop
 app and the headless server sharing a home start one run per window instead of one

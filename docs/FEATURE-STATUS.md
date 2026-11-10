@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.49.0 (2026-11-10):** the canvas was driven in a real browser
+for the first time, closing Phase 13's last verification gap. The check found one
+real defect (an unguarded pointer capture that aborted the drag) and confirmed the
+gesture, the clamping, the live edges and the round trip through save and reload.
+Phase 13 rows stay Working and no row was added, so the figures are unchanged at
+92% (1,659/18).
+
 **Revision 2.48.0 (2026-11-10):** scheduled windows are now arbitrated
 between processes — the claim lives in SQLite and only moves forward, so a desktop
 app and the headless server over one home start one run per due time. The Phase 13
@@ -203,8 +210,8 @@ an editor that bypasses the run lease, live
 capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
 Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs on a
 schedule, resumes an interrupted one, edits them on a canvas and moves them
-between installs, now including placing cards by hand (2.47.0); what remains is
-browser verification of the canvas, and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, and now offers its custom tools to the agent's tool loop, but still has no provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
+between installs, now including placing cards by hand (2.47.0); and the canvas was driven in Chromium once
+(2.49.0), and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, and now offers its custom tools to the agent's tool loop, but still has no provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
 the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 ships every artifact, protects the database across an upgrade
 (2.35.0), reports whether a newer release exists (2.36.0) and downloads and
 verifies one into staging (2.37.0), unpacks it beside the data directory (2.38.0)
@@ -447,7 +454,7 @@ persisted execution of it.
 | Validation before execution | Working (2.9.0) | ids, kinds, profiles, missing deps, self references, cycles, per-kind requirements, a 50-node cap — each error names the node |
 | Persisted run history | Working (2.9.0) | `workflow_runs`/`workflow_steps` carry status, output, timing and the agent run id; a boot sweep marks a run the process abandoned as `interrupted` |
 | Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph (a child agent run in flight is not forcibly stopped) |
-| Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas has not been browser-verified |
+| Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas was driven in Chromium once (2.49.0) — drag, live edges, clamping and a position restored after reload — though no automated browser test exists |
 | Graph import/export | Working (2.13.0) | export is a versioned `saarthi.workflow` document; import runs the save-time validation before writing, assigns a new id and a unique name, and starts a fresh schedule window |
 | Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, a live run is not stacked, and the window is claimed in SQLite (2.48.0) so two processes sharing one home cannot both start it |
 | Resume an interrupted run | Working (2.11.0) | `POST /api/workflow-runs/:id/resume` keeps finished steps, reopens the rest, refuses an edited or deleted workflow; a resumed agent node starts a fresh agent run |

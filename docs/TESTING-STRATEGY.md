@@ -80,3 +80,15 @@ cd android && gradle --no-daemon testDebugUnitTest
 
 Record the command, exit status and the artifact/run id in the report. Pending
 or skipped checks are listed as gaps, never as passing.
+
+## Browser checks (manual)
+
+The frontend layer above runs without a document, so layout-dependent behaviour is
+not covered by it. 2.49.0 added the first recorded browser check: a headless build
+on a scratch `FREE_AI_STUDIO_HOME`, Chromium at 1440×900, and pointer events
+dispatched through the app's own listeners. It drove the workflow canvas — drag,
+live edge redraw, clamping to the canvas width, and a saved position restored after
+reload — and found a real defect in the drag handler that the unit layer could not
+see. It is manual and repeatable by hand, not automated; the checks a browser run
+cannot replace (a real OS pointer, touch, and cross-platform rendering) remain
+listed in `KNOWN-ISSUES`.

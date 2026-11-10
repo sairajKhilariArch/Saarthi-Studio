@@ -5994,7 +5994,14 @@ function graphNodeCard(node, position) {
       height: 4000,
     };
     let moved = false;
-    card.setPointerCapture?.(event.pointerId);
+    // Capture keeps the moves coming while the pointer is outside the card, but it
+    // throws when the browser no longer has that pointer active (a tap that ended
+    // before this handler ran, or a synthetic event). That must not abort the drag.
+    try {
+      card.setPointerCapture?.(event.pointerId);
+    } catch (_error) {
+      // No capture: the drag still follows moves that land on the card itself.
+    }
     const onMove = (moveEvent) => {
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;

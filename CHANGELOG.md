@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.49.0
+
+The canvas was unit-tested but never driven. This release drove it in Chromium,
+which found one real defect and confirmed the rest.
+
+- **Defect found and fixed:** a card's `pointerdown` called
+  `setPointerCapture` unguarded. When the browser no longer had that pointer active
+  — a tap that ended before the handler ran, or any synthetic event — the call
+  threw and aborted the handler before a single move listener was attached, so the
+  card did not move at all. The call is now guarded; without capture the drag still
+  follows moves that land on the card.
+- **Verified in a real browser** (headless binary, scratch home, Chromium at
+  1440×900, pointer events dispatched through the same listeners a user's pointer
+  reaches): dragging `build` moved it 264,24 → 344,74 with the card carrying
+  `dragging` and the two connected edges redrawing during the move; dragging
+  `repair` far past the edge clamped x to 553 (canvas width 767 − card 190 − 24)
+  and grew the canvas to 4104 px instead of clipping it; releasing wrote the
+  position into the synced graph JSON without touching the node's note.
+- **Persistence checked end to end:** saving through the form put `build 344,74`
+  and `repair 553,4000` into `workflows.json` (read back from disk and from the API
+  with a cache-busting query), and after a full page reload, opening that workflow
+  rendered the cards at exactly those offsets with the canvas at 4104 px, so the
+  position survives save-time validation and drives the layout again.
+- A workflow saved before the drag was fixed renders in dependency columns, as it
+  should: positions are opt-in per node.
+- Also observed, unrelated to this change: a fresh home answered
+  `GET /api/usage` with 500 on first load. Recorded in `KNOWN-ISSUES`, not
+  diagnosed here.
+- Version 2.49.0 across `Cargo.toml`, `Cargo.lock` and `tauri.conf.json`.
+- Verified: `node --check` clean; frontend 39; version 20. Rust unchanged since
+  2.48.0, so its 546-test run was not repeated. Not verified: an OS-level drag
+  (these were pointer events dispatched in the page, not a mouse moving across the
+  screen) and any automated browser test — there still is none.
+
 ## 2.48.0
 
 Scheduled workflows were guarded against stacking inside one process, but every
