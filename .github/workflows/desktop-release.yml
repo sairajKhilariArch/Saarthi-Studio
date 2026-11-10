@@ -1,7 +1,8 @@
 name: Desktop Release
 
 # Builds every release artifact: Linux x86_64 (portable tarball, .deb package
-# via cargo-deb, AppImage), Windows x86_64 (portable zip), macOS universal
+# via cargo-deb, AppImage), Windows x86_64 (portable zip and MSI installer),
+# macOS universal
 # arm64+x86_64 (portable tarball, unsigned, headless-smoked), the unsigned
 # Android release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to
 # build and attach all of them to one GitHub release; workflow_dispatch builds
@@ -289,13 +290,32 @@ jobs:
           Copy-Item app/static/* "$stage/static/" -Recurse -Force
           Copy-Item README.md, app/LICENSE "$stage/"
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/free-ai-suite_${version}_windows-x86_64.zip" -Force
-          Remove-Item -Recurse -Force $stage
+          # The staged tree stays: the MSI below installs the same payload.
 
       # Git Bash ships on every Windows runner, so the same smoke script runs
       # here and on Linux/macOS instead of a PowerShell second implementation.
       - name: Smoke the packaged zip (unpack, boot, report version)
         shell: bash
         run: bash scripts/ci/smoke-package.sh dist/*.zip
+
+      # A zip asks the user to unpack files; an MSI is one product in
+      # Add/Remove Programs with a version and an uninstall.
+      - name: Install the WiX packager
+        run: dotnet tool install wix --version 5.* --tool-path .tmp/wix5
+
+      - name: Build the MSI installer
+        shell: bash
+        run: |
+          set -eu
+          version="${{ steps.meta.outputs.version }}"
+          bash scripts/ci/build-windows-msi.sh "dist/free-ai-suite_${version}_windows-x86_64" "$version" dist
+
+      - name: Smoke the MSI (administrative install, boot, report version)
+        shell: bash
+        run: bash scripts/ci/smoke-package.sh dist/*.msi
+
+      - name: Drop the staging tree
+        run: Remove-Item -Recurse -Force "dist/free-ai-suite_${{ steps.meta.outputs.version }}_windows-x86_64"
 
       - name: Validate artifact names
         run: bash scripts/ci/verify-artifacts.sh dist
@@ -304,7 +324,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: free-ai-suite-windows-${{ steps.meta.outputs.version }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.msi
           if-no-files-found: error
           retention-days: 30
 
@@ -312,7 +334,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/*.msi
 
   macos:
     # macOS ships a portable, UNSIGNED universal (arm64 + x86_64) tarball:

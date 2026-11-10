@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.43.0
+
+Windows gets an installer: one product in Add/Remove Programs with a version, a
+Start Menu entry and an uninstall.
+
+- `app/packaging/windows/installer.wxs` is a per-user WiX package — the app writes
+  only under the user's own profile, so asking for elevation would buy nothing —
+  that harvests the staged release tree (binary, the whole `static` tree, readme,
+  license), adds a Start Menu shortcut and registers a major upgrade, so a newer
+  version replaces the installed one instead of sitting beside it.
+- `scripts/ci/build-windows-msi.sh` validates the stage (a `free-ai-studio.exe`,
+  `static/index.html`, a usable version), builds
+  `free-ai-suite_<version>_windows-x86_64.msi` against a stable UpgradeCode, and
+  proves the payload with an administrative install before anyone runs it.
+- WiX 7 refuses to build without accepting a paid maintenance-fee EULA, so the
+  toolchain is pinned to WiX 5 (MIT) from NuGet; the packager finds it under
+  `.tmp/wix5` or takes `WIX_EXE`. Nothing in the repo accepts a licence on the
+  user's behalf.
+- `smoke-package.sh` gained a `.msi` branch: it administrative-installs the
+  package, finds the binary where the package put it, boots it headless against a
+  scratch home, serves `/`, and compares the version it reports with
+  `app/Cargo.toml`. The Windows release job builds and smokes the MSI beside the
+  portable zip and attaches both.
+- Two real failures were found while doing this and fixed at the cause: WiX
+  resolves a bind path against the `.wxs` file's directory, not the working
+  directory (the stage is now passed as an absolute Windows path), and Git Bash
+  rewrites `/a` and `/qn` into paths, which makes msiexec answer 103 and write no
+  log at all (the scripts now run it with `MSYS_NO_PATHCONV=1`). `msiexec`'s own
+  verbose log is printed on failure instead of "could not unpack".
+- `scripts/ci/test-installer.sh` covers the payload (binary, UI beside it, a
+  nested skill file), the product name, three refusals and a rebuild; it runs in
+  `desktop-ci.yml`'s Windows job with WiX installed from NuGet.
+- Checks: `cargo test --locked` 535 passed, 1 ignored; clippy `--all-targets -D
+  warnings` clean; `test-installer.sh` 11 passed against real WiX 5.0.2 on this
+  machine; `test-bundle.sh` 13; `test-version.sh` 20; frontend 33; e2e 32. The
+  2.43.0 MSI built from a release tree was smoked here: administrative install,
+  binary at `LocalApp\Programs\Saarthi Studio`, UI beside it, ready on a free
+  port, HTML served, version 2.43.0.
+- Not covered: a real interactive install (double-click through the wizard, Start
+  Menu launch, uninstall from Add/Remove Programs) was not performed; nothing is
+  code-signed, so SmartScreen warns on first run; the macOS bundle is unsigned
+  too.
+
 ## 2.42.0
 
 macOS ships as a real application bundle, and the binary finds its UI inside it.

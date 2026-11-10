@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.43.0 (2026-11-10):** Phase 18's installer row is now Working for both
+Windows and macOS: a per-user MSI (`app/packaging/windows/installer.wxs` built by
+`scripts/ci/build-windows-msi.sh`, payload proven by an administrative install)
+sits beside the macOS `.app`, and the release job smokes both packaged results.
+What keeps the row Partial is signing: nothing is code-signed or notarized, and a
+portable (tarball/zip) install still has no uninstall of its own. Phase 18 is 10
+rows — 9 Working + 1 Partial = 95% — and the overall mean stays 92% (1,659/18).
+
 **Revision 2.42.0 (2026-11-10):** Phase 18 gained the macOS application bundle:
 `scripts/ci/bundle-macos-app.sh` builds `Saarthi Studio.app` from the staged tree
 and the binary resolves `<exe>/../Resources/static`, so the bundle is a real

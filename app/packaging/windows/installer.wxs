@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Windows installer: a per-user MSI built from the staged release tree.
+
+  Per-user rather than per-machine on purpose — the app writes only under the
+  user's own profile, so asking for elevation to install it would be a prompt
+  that buys nothing. The payload is whatever the release staging step produced
+  (the binary plus the whole `static` tree), harvested from the `stage` bind
+  path, so a file added to the release is installed without editing this file.
+
+  `-d Version=<x.y.z>` must be supplied by scripts/ci/build-windows-msi.sh; the
+  UpgradeCode is a fixed identifier for this product and must never change, or
+  an upgrade lands beside the old install instead of replacing it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Saarthi Studio"
+      Manufacturer="Saarthi Studio"
+      Version="$(var.Version)"
+      UpgradeCode="8f2c7c1e-6b2a-4a83-9d0e-3b6b1f5c9a41"
+      Scope="perUser"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="Saarthi Studio - local-first AI development environment" />
+    <!-- An upgrade replaces the previous version instead of sitting beside it. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Saarthi Studio is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- %LOCALAPPDATA%\Programs\Saarthi Studio -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Saarthi Studio" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="Saarthi Studio" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Saarthi Studio" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+
+  <!-- Every file the release tree carries, subdirectories included (the UI, the
+       bundled skills, the readme and the license). -->
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="!(bindpath.stage)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- A Start Menu entry, and the component's key path so it can be removed on
+       uninstall: an MSI that installs files nobody can find is not installed. -->
+  <Fragment>
+    <Component Id="StartMenuShortcut" Directory="AppMenuFolder" Guid="3a6f9c24-5d1e-4b7f-9c02-6e8a1d4f7b13">
+      <Shortcut Id="AppShortcut"
+                Name="Saarthi Studio"
+                Description="Local-first AI development environment"
+                Target="[INSTALLFOLDER]free-ai-studio.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveAppMenuFolder" Directory="AppMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Saarthi\Studio" Name="installed"
+                     Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

@@ -101,6 +101,21 @@ EOF
     [ -d "$work/squashfs-root" ] || die "$base has no squashfs-root"
     [ "$failed" -eq 0 ] && pass "extracted $base with --appimage-extract"
     ;;
+  *.msi)
+    # An administrative install unpacks the package without touching the
+    # machine, so the smoke exercises the payload a real install would write.
+    command -v msiexec >/dev/null 2>&1 || {
+      die "msiexec is needed to smoke a .msi"
+      exit 1
+    }
+    win_msi="$(cygpath -w -a "$artifact" 2>/dev/null || printf '%s' "$artifact")"
+    win_target="$(cygpath -w -a "$(native "$unpacked")" 2>/dev/null || native "$unpacked")"
+    # `MSYS_NO_PATHCONV` stops Git Bash rewriting `/a` and `/qn` into paths,
+    # which makes msiexec answer 103 without installing anything.
+    MSYS_NO_PATHCONV=1 msiexec /a "$win_msi" /qn TARGETDIR="$win_target" ||
+      die "could not administrative-install $base"
+    [ "$failed" -eq 0 ] && pass "unpacked $base with msiexec /a"
+    ;;
   *)
     # A bare binary is the local case: no packaging, same checks.
     mkdir -p "$work/bare"

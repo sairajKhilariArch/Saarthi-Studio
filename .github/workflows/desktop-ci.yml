@@ -60,6 +60,7 @@ jobs:
           test -f app/packaging/io.github.sairajkhilariarch.SaarthiStudio.desktop
           test -f app/packaging/io.github.sairajkhilariarch.SaarthiStudio.appdata.xml
           test -f app/packaging/icons/free-ai-suite.svg
+          test -f app/packaging/windows/installer.wxs
 
       # Pipeline regressions (v1.26.0/v1.26.1 shipped no assets because of a CR
       # in an artifact filename) are caught here on every push, not only on a tag.
@@ -121,6 +122,16 @@ jobs:
       - name: Run desktop tests
         working-directory: app
         run: cargo test --locked
+
+      # The MSI packager is what a Windows user installs and uninstalls, so its
+      # payload and refusals are checked here. WiX comes from nuget as a dotnet
+      # tool; the packager finds it under .tmp/wix without touching PATH.
+      - name: Install the WiX packager
+        run: dotnet tool install wix --version 5.* --tool-path .tmp/wix5
+
+      - name: Test the Windows MSI packager
+        shell: bash
+        run: bash scripts/ci/test-installer.sh
 
   macos:
     # Keep macOS compiling: the release pipeline merges a universal binary,

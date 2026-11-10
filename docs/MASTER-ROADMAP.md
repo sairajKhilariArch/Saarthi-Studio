@@ -578,4 +578,12 @@ version, identifier and executable — and `static_dir_candidates` resolves that
 layout, so the bundle runs as an app rather than a binary with no UI. The release
 job smokes the `.app.zip` the same way as a tarball and attaches both.
 
-Open: a Windows MSI/EXE, code signing/notarization, and a clean uninstall.
+Delivered in 2.43.0: the Windows installer. `app/packaging/windows/installer.wxs`
+is a per-user WiX package that harvests the staged tree, adds a Start Menu
+shortcut and registers a major upgrade; `scripts/ci/build-windows-msi.sh` builds it
+and proves the payload with an administrative install, `smoke-package.sh` boots the
+installed binary, and the release job attaches the MSI beside the portable zip.
+The toolchain is WiX 5 (MIT) because WiX 7 gates builds behind a paid fee.
+
+Open: code signing/notarization, an uninstall for a portable install, and a
+per-machine MSI choice.
