@@ -12,7 +12,7 @@
 #              staging step's output)
 #   version    the version from scripts/ci/version.sh; re-validated here
 #   out-dir    where the bundle and its zip are written
-#   app-name   bundle name, default "Saarthi Studio"
+#   app-name   bundle name, default "Sarthi Studio"
 #
 # It refuses rather than guessing: a missing binary, a static tree without
 # `index.html`, or an unusable version fails with the reason instead of
@@ -25,7 +25,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 stage="${1:-}"
 version="${2:-}"
 out="${3:-}"
-app_name="${4:-Saarthi Studio}"
+app_name="${4:-Sarthi Studio}"
 bundle_id="com.saarthi.freeaistudio"
 minimum_macos="10.15"
 
@@ -92,7 +92,7 @@ grep -q "<string>$executable</string>" "$app/Contents/Info.plist" ||
   die "Info.plist does not name the bundled executable"
 
 mkdir -p "$out"
-zip_path="$out/free-ai-suite_${version}_macos-universal.app.zip"
+zip_path="$out/sarthi-studio_${version}_macos-universal.app.zip"
 rm -f "$zip_path"
 
 # Python's zipfile keeps the archive names portable (forward slashes) and exists

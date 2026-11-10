@@ -37,7 +37,7 @@ public class ConnectionTransportTest {
 
     @Test public void desktopHostRequiresHttpsAndAHostToken() {
         ConnectionTransport host = new DesktopHostTransport();
-        assertNull(host.configurationError("https://saarthi.example.test", "host-token"));
+        assertNull(host.configurationError("https://sarthi.example.test", "host-token"));
         assertNull(host.configurationError("https://100.100.2.4:8766/", "host-token"));
         assertNotNull(host.configurationError("http://192.168.1.10:8766", "host-token"));
         assertNotNull(host.configurationError("https://example.test/api/host/v1", "host-token"));

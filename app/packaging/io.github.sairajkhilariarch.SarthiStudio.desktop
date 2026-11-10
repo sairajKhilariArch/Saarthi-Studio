@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=Saarthi Studio
+Name=Sarthi Studio
 GenericName=AI Chat and Coding Workspace
 Comment=Local-first AI chat and coding workspace — runs a private browser UI on this machine
 Exec=free-ai-studio --browser
-Icon=free-ai-suite
+Icon=sarthi-studio
 Terminal=false
 Categories=Development;
 Keywords=AI;LLM;chat;code;assistant;

@@ -1,6 +1,6 @@
 "use strict";
 
-/* Saarthi Studio — local-first coding agent UI. */
+/* Sarthi Studio — local-first coding agent UI. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -1305,7 +1305,7 @@ async function uninstallStudio() {
   const keepConfig = Boolean($("uninstallKeepConfig") && $("uninstallKeepConfig").checked);
   const data = keepData ? "Your chats, projects and extensions stay." : "Your chats, projects and extensions are deleted.";
   const settings = keepConfig ? "Your settings and keys stay." : "Your settings and keys are deleted.";
-  if (!window.confirm(`Uninstall Saarthi Studio from this computer?\n\nData folder: ${confirmation}\n${data}\n${settings}\n\nThis cannot be undone.`)) {
+  if (!window.confirm(`Uninstall Sarthi Studio from this computer?\n\nData folder: ${confirmation}\n${data}\n${settings}\n\nThis cannot be undone.`)) {
     return;
   }
   if (button) button.disabled = true;
@@ -1680,7 +1680,7 @@ function addMessage(role, content, options = {}) {
   head.className = "msg-head";
   head.innerHTML = `<span class="msg-avatar ${role === "assistant" ? "assistant" : ""}">` +
     `${role === "assistant" ? icon("spark") : icon("user")}</span>` +
-    `<span class="msg-author">${role === "assistant" ? "Saarthi Studio" : "You"}</span>` +
+    `<span class="msg-author">${role === "assistant" ? "Sarthi Studio" : "You"}</span>` +
     `<span class="msg-meta"></span>`;
   if (meta) {
     const parts = [];
@@ -4491,7 +4491,7 @@ async function downloadDiagnosticsBundle() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `saarthi-studio-support-${stamp}.json`;
+  link.download = `sarthi-studio-support-${stamp}.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();

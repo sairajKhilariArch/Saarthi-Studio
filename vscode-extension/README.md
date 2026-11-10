@@ -1,4 +1,4 @@
-# Free AI Studio for VS Code
+# Sarthi Studio for VS Code
 
 The same local-first AI workspace as the desktop app, inside VS Code.
 
@@ -19,13 +19,13 @@ router.
 
 | Command | What it does |
 | --- | --- |
-| `Free AI Studio: Open chat` | Opens the panel in a side column |
-| `Free AI Studio: Ask about the selection` | Sends the selection (or the file) with your question |
-| `Free AI Studio: Attach the active file` | Attaches the whole file (up to 50,000 characters) |
-| `Free AI Studio: Set router API key` | Stores the router key in VS Code's secret storage |
-| `Free AI Studio: Show server status` | Backend, router URL, model, budget, workspace |
-| `Free AI Studio: Restart the built-in server` | Restarts the embedded server |
-| `Free AI Studio: Open the desktop app` | Opens the desktop app in a browser window |
+| `Sarthi Studio: Open chat` | Opens the panel in a side column |
+| `Sarthi Studio: Ask about the selection` | Sends the selection (or the file) with your question |
+| `Sarthi Studio: Attach the active file` | Attaches the whole file (up to 50,000 characters) |
+| `Sarthi Studio: Set router API key` | Stores the router key in VS Code's secret storage |
+| `Sarthi Studio: Show server status` | Backend, router URL, model, budget, workspace |
+| `Sarthi Studio: Restart the built-in server` | Restarts the embedded server |
+| `Sarthi Studio: Open the desktop app` | Opens the desktop app in a browser window |
 
 ## Settings
 

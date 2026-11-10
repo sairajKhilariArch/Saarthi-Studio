@@ -1,4 +1,4 @@
-# Saarthi Studio — Feature Inventory (audited 2026-10-29)
+# Sarthi Studio — Feature Inventory (audited 2026-10-29)
 
 Statuses: Working / Partial / Missing / Broken / Unverified / Blocked.
 Evidence = files, tests, or live checks. Updated every milestone close.

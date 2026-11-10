@@ -75,7 +75,7 @@ mod thinking;
 mod update;
 mod workspace;
 
-const APP_NAME: &str = "Saarthi Studio";
+const APP_NAME: &str = "Sarthi Studio";
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8765;
 const SYSTEM_PROMPT: &str = "You are a concise, helpful AI coding assistant. Be accurate and safe; never claim to run code unless you did.";
@@ -283,7 +283,7 @@ fn paths() -> (PathBuf, PathBuf, PathBuf) {
 
 /// Ordered candidate directories for the static UI. `FREE_AI_STUDIO_STATIC_DIR`
 /// (when set) is authoritative; otherwise the installed system layout
-/// (`<exe dir>/../share/free-ai-suite/static`, used by the .deb and AppImage)
+/// (`<exe dir>/../share/sarthi-studio/static`, used by the .deb and AppImage)
 /// is preferred, then a macOS application bundle
 /// (`<exe dir>/../Resources/static`, since the binary sits in
 /// `Contents/MacOS`), then a `static/` directory next to the executable
@@ -296,6 +296,8 @@ fn static_dir_candidates(exe_dir: Option<&FsPath>, env_dir: Option<PathBuf>) -> 
         candidates.push(dir);
     }
     if let Some(dir) = exe_dir {
+        candidates.push(dir.join("../share/sarthi-studio/static"));
+        // Pre-2.51 installs put the same tree under the legacy name.
         candidates.push(dir.join("../share/free-ai-suite/static"));
         candidates.push(dir.join("../Resources/static"));
         candidates.push(dir.join("static"));
@@ -398,7 +400,7 @@ fn initialize_database(path: &FsPath) -> Result<SchemaUpgrade, String> {
     })?;
     if from > schema::SCHEMA_VERSION {
         return Err(format!(
-            "The database at {} was written by a newer Saarthi Studio (schema {from}); this build understands schema {}. Update the app instead of opening that database with an older build.",
+            "The database at {} was written by a newer Sarthi Studio (schema {from}); this build understands schema {}. Update the app instead of opening that database with an older build.",
             path.display(),
             schema::SCHEMA_VERSION
         ));
@@ -5116,12 +5118,14 @@ mod tests {
         let env_dir = scratch("override");
         let candidates = static_dir_candidates(Some(&exe_dir), Some(env_dir.clone()));
         assert_eq!(candidates[0], env_dir);
-        assert_eq!(candidates[1], exe_dir.join("../share/free-ai-suite/static"));
+        assert_eq!(candidates[1], exe_dir.join("../share/sarthi-studio/static"));
+        // Installs from before 2.51 unpacked the same tree under the old name.
+        assert_eq!(candidates[2], exe_dir.join("../share/free-ai-suite/static"));
         // A macOS .app: binary in Contents/MacOS, UI in Contents/Resources.
-        assert_eq!(candidates[2], exe_dir.join("../Resources/static"));
-        assert_eq!(candidates[3], exe_dir.join("static"));
+        assert_eq!(candidates[3], exe_dir.join("../Resources/static"));
+        assert_eq!(candidates[4], exe_dir.join("static"));
         assert_eq!(
-            candidates[4],
+            candidates[5],
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static")
         );
     }
@@ -5129,8 +5133,8 @@ mod tests {
     #[test]
     fn a_bundle_layout_is_resolved_before_the_adjacent_tree() {
         let root = scratch("macos-bundle");
-        let macos = root.join("Saarthi Studio.app/Contents/MacOS");
-        let resources = root.join("Saarthi Studio.app/Contents/Resources/static");
+        let macos = root.join("Sarthi Studio.app/Contents/MacOS");
+        let resources = root.join("Sarthi Studio.app/Contents/Resources/static");
         std::fs::create_dir_all(&macos).expect("macos dir");
         std::fs::create_dir_all(&resources).expect("resources dir");
         std::fs::write(resources.join("index.html"), "<html></html>").expect("ui");
@@ -5392,7 +5396,7 @@ mod tests {
         let before = fs::read(&path).expect("read before");
 
         let error = initialize_database(&path).expect_err("a newer schema is refused");
-        assert!(error.contains("newer Saarthi Studio"), "{error}");
+        assert!(error.contains("newer Sarthi Studio"), "{error}");
         assert!(error.contains(&future.to_string()), "{error}");
         assert!(
             error.contains(&schema::SCHEMA_VERSION.to_string()),

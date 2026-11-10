@@ -1,9 +1,9 @@
 {
   "name": "free-ai-studio",
-  "displayName": "Saarthi Studio",
+  "displayName": "Sarthi Studio",
   "description": "Chat with your FreeLLMAPI router from VS Code. Uses the desktop app when it is running and starts a built-in local server when it is not.",
   "version": "2.6.0",
-  "publisher": "saarthi",
+  "publisher": "sarthi",
   "license": "MIT",
   "engines": {
     "vscode": "^1.92.0"
@@ -14,21 +14,21 @@
   "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [
-      { "command": "freeAiStudio.openChat", "title": "Saarthi Studio: Open chat" },
-      { "command": "freeAiStudio.askSelection", "title": "Saarthi Studio: Ask about the selection" },
-      { "command": "freeAiStudio.attachFile", "title": "Saarthi Studio: Attach the active file" },
-      { "command": "freeAiStudio.setApiKey", "title": "Saarthi Studio: Set router API key" },
-      { "command": "freeAiStudio.showStatus", "title": "Saarthi Studio: Show server status" },
-      { "command": "freeAiStudio.restartServer", "title": "Saarthi Studio: Restart the built-in server" },
-      { "command": "freeAiStudio.openInDesktop", "title": "Saarthi Studio: Open the desktop app" }
+      { "command": "freeAiStudio.openChat", "title": "Sarthi Studio: Open chat" },
+      { "command": "freeAiStudio.askSelection", "title": "Sarthi Studio: Ask about the selection" },
+      { "command": "freeAiStudio.attachFile", "title": "Sarthi Studio: Attach the active file" },
+      { "command": "freeAiStudio.setApiKey", "title": "Sarthi Studio: Set router API key" },
+      { "command": "freeAiStudio.showStatus", "title": "Sarthi Studio: Show server status" },
+      { "command": "freeAiStudio.restartServer", "title": "Sarthi Studio: Restart the built-in server" },
+      { "command": "freeAiStudio.openInDesktop", "title": "Sarthi Studio: Open the desktop app" }
     ],
     "configuration": {
-      "title": "Saarthi Studio",
+      "title": "Sarthi Studio",
       "properties": {
         "freeAiStudio.desktopUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8765",
-          "description": "Loopback address of a running Saarthi Studio desktop app."
+          "description": "Loopback address of a running Sarthi Studio desktop app."
         },
         "freeAiStudio.routerBaseUrl": {
           "type": "string",

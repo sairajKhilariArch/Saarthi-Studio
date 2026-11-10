@@ -17,8 +17,8 @@ use std::{
 };
 
 const OWNERSHIP_FILE: &str = ".config/free-ai-studio/router-owned.json";
-const INSTALLER_DIR_FILE: &str = ".config/free-ai-suite/freellmapi-dir";
-const INSTALLER_PORT_FILE: &str = ".config/free-ai-suite/freellmapi-port";
+const INSTALLER_DIR_FILE: &str = ".config/sarthi-studio/freellmapi-dir";
+const INSTALLER_PORT_FILE: &str = ".config/sarthi-studio/freellmapi-port";
 const COMPOSE_FILES: [&str; 4] = [
     "docker-compose.yml",
     "docker-compose.yaml",

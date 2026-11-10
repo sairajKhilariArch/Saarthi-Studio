@@ -39,7 +39,7 @@ fi
 stage_tree() { # dir
   mkdir -p "$1/static"
   printf 'MZ-not-a-real-binary\n' >"$1/free-ai-studio.exe"
-  printf '<html><title>Saarthi Studio</title></html>\n' >"$1/static/index.html"
+  printf '<html><title>Sarthi Studio</title></html>\n' >"$1/static/index.html"
   printf 'console.log("ui");\n' >"$1/static/app.js"
   mkdir -p "$1/static/skills/debug"
   printf '# Debug\n' >"$1/static/skills/debug/SKILL.md"
@@ -56,9 +56,9 @@ else
     cat "$tmp/build.log" >&2
   fi
 
-  msi="$tmp/out/free-ai-suite_${version}_windows-x86_64.msi"
+  msi="$tmp/out/sarthi-studio_${version}_windows-x86_64.msi"
   if [ -f "$msi" ]; then
-    pass "the package is named free-ai-suite_${version}_windows-x86_64.msi"
+    pass "the package is named sarthi-studio_${version}_windows-x86_64.msi"
   else
     die "no MSI was written to $tmp/out"
   fi
@@ -97,7 +97,7 @@ else
     if command -v strings >/dev/null 2>&1; then
       strings "$msi" >"$strings_file" 2>/dev/null || true
     fi
-    if [ -s "$strings_file" ] && grep -qi "Saarthi Studio" "$strings_file"; then
+    if [ -s "$strings_file" ] && grep -qi "Sarthi Studio" "$strings_file"; then
       pass "the package carries the product name"
     else
       skip "product name readout (no strings command)"

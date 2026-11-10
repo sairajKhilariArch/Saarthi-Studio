@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const SCHEMA_VERSION: u32 = 1;
-const TOKEN_PREFIX: &str = "saarthi_host_v1_";
+const TOKEN_PREFIX: &str = "sarthi_host_v1_";
 const TOKEN_BYTES: usize = 32;
 const MAX_VERIFIER_FILE_BYTES: u64 = 4096;
 
@@ -428,7 +428,7 @@ mod tests {
     impl TestStore {
         fn new() -> Self {
             let directory =
-                std::env::temp_dir().join(format!("saarthi-host-auth-{}", Uuid::new_v4()));
+                std::env::temp_dir().join(format!("sarthi-host-auth-{}", Uuid::new_v4()));
             fs::create_dir_all(&directory).expect("create test directory");
             enforce_directory_permissions(&directory).expect("secure test directory");
             let store = HostTokenStore::new(directory.join("host-auth.json"));

@@ -31,11 +31,11 @@ let apiKeyCache = "";
 
 export function activate(context: vscode.ExtensionContext): void {
   contextRef = context;
-  output = vscode.window.createOutputChannel("Free AI Studio");
+  output = vscode.window.createOutputChannel("Sarthi Studio");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   statusBar.command = "freeAiStudio.showStatus";
   statusBar.text = "$(sparkle) Studio";
-  statusBar.tooltip = "Free AI Studio";
+  statusBar.tooltip = "Sarthi Studio";
   statusBar.show();
   context.subscriptions.push(statusBar, output);
 
@@ -154,7 +154,7 @@ async function refreshStatus(): Promise<void> {
   try {
     const chosen = await resolveBackend();
     statusBar.text = chosen.kind === "desktop" ? "$(sparkle) Studio · desktop" : "$(sparkle) Studio · built-in";
-    statusBar.tooltip = `Free AI Studio (${chosen.kind}) — ${chosen.url}`;
+    statusBar.tooltip = `Sarthi Studio (${chosen.kind}) — ${chosen.url}`;
   } catch (error) {
     statusBar.text = "$(sparkle) Studio · error";
     statusBar.tooltip = (error as Error).message;
@@ -171,7 +171,7 @@ async function openChat(prefill?: { prompt?: string; code?: string; language?: s
   if (!panel) {
     panel = vscode.window.createWebviewPanel(
       "freeAiStudio.chat",
-      "Free AI Studio",
+      "Sarthi Studio",
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
       {
         enableScripts: true,
@@ -257,7 +257,7 @@ function renderPanelHtml(chosen: Backend): string {
     <span class="note">${escapeAttribute(chosen.note || frameUrl)}</span>
     <button id="reload">Reload</button>
   </div>
-  <iframe id="studio" src="${frameUrl}" title="Free AI Studio"></iframe>
+  <iframe id="studio" src="${frameUrl}" title="Sarthi Studio"></iframe>
   <script nonce="${nonce}">
     const frame = document.getElementById("studio");
     const vscode = acquireVsCodeApi();
@@ -301,7 +301,7 @@ async function askSelection(): Promise<void> {
   const code = (selected || editor.document.getText()).slice(0, MAX_ATTACHMENT_CHARS);
   const truncated = (selected || editor.document.getText()).length > MAX_ATTACHMENT_CHARS;
   const prompt = await vscode.window.showInputBox({
-    prompt: "What should Free AI Studio do with this code?",
+    prompt: "What should Sarthi Studio do with this code?",
     value: "Explain what this code does and point out anything risky.",
   });
   if (prompt === undefined) return;
@@ -337,12 +337,12 @@ async function setApiKey(): Promise<void> {
   if (!value.trim()) {
     apiKeyCache = "";
     await contextRef.secrets.delete(API_KEY_SECRET);
-    void vscode.window.showInformationMessage("Free AI Studio: router API key cleared.");
+    void vscode.window.showInformationMessage("Sarthi Studio: router API key cleared.");
     return;
   }
   apiKeyCache = value.trim();
   await contextRef.secrets.store(API_KEY_SECRET, apiKeyCache);
-  void vscode.window.showInformationMessage("Free AI Studio: router API key saved.");
+  void vscode.window.showInformationMessage("Sarthi Studio: router API key saved.");
 }
 
 async function showStatus(): Promise<void> {
@@ -353,7 +353,7 @@ async function showStatus(): Promise<void> {
     `Router: ${config.routerBaseUrl}`,
     `Model: ${config.model}`,
     `Context budget: ${config.contextBudgetTokens} tokens · ${config.historyMessages} messages`,
-    `API key: ${config.apiKey ? "saved" : "not set (run “Free AI Studio: Set router API key”)"}`,
+    `API key: ${config.apiKey ? "saved" : "not set (run “Sarthi Studio: Set router API key”)"}`,
     `Workspace: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "no folder open"}`,
   ];
   const action = await vscode.window.showInformationMessage(lines.join("\n"), "Open chat", "Restart server");
@@ -366,5 +366,5 @@ async function restartServer(): Promise<void> {
   backend = undefined;
   await refreshStatus();
   if (panel) await reloadPanel();
-  void vscode.window.showInformationMessage("Free AI Studio: server restarted.");
+  void vscode.window.showInformationMessage("Sarthi Studio: server restarted.");
 }

@@ -1,4 +1,4 @@
-# Install Saarthi Studio Android 1.11.1 onto the `android` branch
+# Install Sarthi Studio Android 1.11.1 onto the `android` branch
 
 This archive is a complete Android source project for version **1.11.1 / versionCode 14**. It keeps `minSdk = 26`, uses Java 17, and includes the release stabilization refactor and regression tests. It is a source package, not a prebuilt or device-verified APK.
 

@@ -608,7 +608,7 @@ mod tests {
 
     fn transcript() -> Vec<Value> {
         vec![
-            json!({ "role": "system", "content": "You are Saarthi." }),
+            json!({ "role": "system", "content": "You are Sarthi." }),
             json!({ "role": "user", "content": "Add a test." }),
             json!({ "role": "assistant", "content": "Which file?" }),
             json!({ "role": "user", "content": "lib.rs" }),
@@ -628,7 +628,7 @@ mod tests {
     fn the_request_moves_the_system_prompt_into_instructions() {
         let body = request_body("gpt-5", &transcript(), None, false);
         assert_eq!(body["model"], "gpt-5");
-        assert_eq!(body["instructions"], "You are Saarthi.");
+        assert_eq!(body["instructions"], "You are Sarthi.");
         let input = body["input"].as_array().unwrap();
         assert_eq!(input.len(), 3);
         assert_eq!(input[0]["role"], "user");

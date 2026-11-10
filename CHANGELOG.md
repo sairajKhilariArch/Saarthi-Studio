@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.51.0
+
+Identity: the application is **Sarthi Studio** everywhere a person can see or
+install it, and the old names are gone from the source, the installers and the
+docs.
+
+- Renamed 346 brand occurrences across 98 files: `Saarthi Studio` → `Sarthi
+  Studio`, `Free AI Studio` → `Sarthi Studio`, and the identifier shapes
+  (`SaarthiStudio`/`saarthi-studio`/`SAARTHI` → `SarthiStudio`/`sarthi-studio`/
+  `SARTHI`). The audit that preceded it found 391 `saarthi*` tokens in 113 files
+  and 31 `Free AI Studio`; `docs/BRANDING-AUDIT.md` records the result.
+- Product metadata: `productName` is `Sarthi Studio`, the crate description names
+  it, and the Windows installer's product/shortcut/uninstaller names, the
+  AppStream `<name>`, the Android `android:label` and the VS Code `displayName`
+  all read Sarthi Studio. Artifacts are `sarthi-studio_<version>_<platform>`.
+- Packaging files renamed: `io.github.sairajkhilariarch.SarthiStudio.{desktop,
+  appdata.xml}` and `icons/sarthi-studio{,-256}.{svg,png}`. The `.desktop` rename
+  also fixed a real mismatch — `Cargo.toml` and both desktop workflows already
+  referenced the new filename.
+- The Linux UI tree now installs under `usr/share/sarthi-studio/static`. The
+  runtime still resolves `usr/share/free-ai-suite/static` last, so a package
+  installed before 2.51 keeps starting; a unit test asserts that order.
+- Deliberately unchanged, because changing them breaks installs or stored data:
+  the `free-ai-studio` crate/binary and `FREE_AI_STUDIO_*` variables, the config
+  path `~/.config/free-ai-studio/`, the data directory
+  `~/.local/share/free-ai-studio/`, the Tauri identifier
+  `com.saarthi.freeaistudio`, the Android package `com.saarthi.studio`, the
+  `[[SAARTHI_IMAGE:…]]` marker stored in conversations, the `freeAiStudio.*`
+  VS Code command/setting ids, and the GitHub repository slug. Each has its
+  reason and a migration path in `docs/BRANDING-AUDIT.md`.
+- Workflow export writes `"format": "sarthi.workflow"`; import never read the
+  field (it validates name/prompt/nodes only), so documents exported under the
+  old value still import.
+- No data migration is needed or performed: no path holding user data moved.
+- Verified: `cargo test --locked` 547 passed (1 ignored), clippy
+  `--all-targets -D warnings` clean, frontend 43, version 20, bundle 13,
+  installer 11, e2e 32, and a second `git grep` audit leaving only the listed
+  identifiers.
+
 ## 2.50.0
 
 P0: in the IDE shell a fresh install opened a thread into a **zero-width** panel —
@@ -266,7 +305,7 @@ Start Menu entry and an uninstall.
   warnings` clean; `test-installer.sh` 11 passed against real WiX 5.0.2 on this
   machine; `test-bundle.sh` 13; `test-version.sh` 20; frontend 33; e2e 32. The
   2.43.0 MSI built from a release tree was smoked here: administrative install,
-  binary at `LocalApp\Programs\Saarthi Studio`, UI beside it, ready on a free
+  binary at `LocalApp\Programs\Sarthi Studio`, UI beside it, ready on a free
   port, HTML served, version 2.43.0.
 - Not covered: a real interactive install (double-click through the wizard, Start
   Menu launch, uninstall from Add/Remove Programs) was not performed; nothing is
@@ -278,7 +317,7 @@ Start Menu entry and an uninstall.
 macOS ships as a real application bundle, and the binary finds its UI inside it.
 
 - `scripts/ci/bundle-macos-app.sh` turns the staged release tree into
-  `Saarthi Studio.app`: the binary in `Contents/MacOS`, the whole UI in
+  `Sarthi Studio.app`: the binary in `Contents/MacOS`, the whole UI in
   `Contents/Resources/static`, an `Info.plist` carrying the staged version, the
   bundle id `com.saarthi.freeaistudio`, `CFBundleExecutable`, the product name and
   `APPL` as the package type, plus `PkgInfo`. It is archived as
@@ -434,7 +473,7 @@ where the new binary is — while the running build stays untouched.
   cannot be a folder name, and a file whose bytes changed. It then unpacks into
   `updates/prepared/<version>/` and records `prepared.json`: version, asset,
   sha256, root, the binary's relative path, the file count and the time.
-- An archive that unpacks without a `free-ai-studio`/`saarthi` binary is removed
+- An archive that unpacks without a `free-ai-studio`/`sarthi` binary is removed
   and refused, because a tree that cannot start is not a prepared update. The
   search is bounded (depth 6, 5,000 entries) so a hostile archive cannot make the
   app walk forever.
@@ -539,7 +578,7 @@ The database now has a version, a copy taken before it is touched, and a way bac
   new `app/src/schema.rs`), so the version travels with the data instead of
   living in whichever binary happens to open it.
 - A database written by a **newer** build is refused before anything runs, with
-  both versions named: "The database at … was written by a newer Saarthi Studio
+  both versions named: "The database at … was written by a newer Sarthi Studio
   (schema 2); this build understands schema 1. Update the app instead of opening
   that database with an older build." The file is left byte for byte untouched,
   which is the guarantee that makes downgrading safe.
@@ -782,7 +821,7 @@ extensions it needs, and the app refuses it by name instead of half-reading it.
 
 - `requiresStudio` is the oldest app version the extension works on (`1.2.3`).
   A manifest naming a newer build stays `valid` — it is a real extension — but
-  reports `compatible: false` and a `blockedReason` of "Requires Saarthi Studio
+  reports `compatible: false` and a `blockedReason` of "Requires Sarthi Studio
   99.0.0 or newer; this build is 2.25.0." It is neither run nor installed.
   Comparison is numeric per part, so `2.9.0` is older than `2.25.0`.
 - `apiVersion` names the manifest schema. Missing means 1, the only version this
@@ -1094,7 +1133,7 @@ honestly check.
 Workflows can leave the machine: a graph exports to a portable JSON document and
 imports back as a new workflow.
 
-- `GET /api/workflows/:id/export` returns `{format: "saarthi.workflow", version:
+- `GET /api/workflows/:id/export` returns `{format: "sarthi.workflow", version:
   1, name, prompt, skill, everyMinutes, nodes}` as a download named after the
   workflow (lowercase ascii, single dashes).
 - `POST /api/workflows/import` accepts that document (or `{workflow: …}`) and
@@ -3116,7 +3155,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   real default browser, the mock logged the full query including `state` and
   the S256 challenge, redirected to `/api/mcp/oauth/callback`, and start
   returned `authorized:true expires_at:… has_refresh:true`; Credential Manager
-  showed `LegacyGeneric:target=mcp_oauth/auth.SaarthiStudio-mcp-smoke144`; an
+  showed `LegacyGeneric:target=mcp_oauth/auth.SarthiStudio-mcp-smoke144`; an
   approved `tools/call` answered and the mock's header log recorded
   `POST / -> Bearer access-smoke-1`; a saved `network` deny on the server URL
   then refused a new sign-in with 403 naming the rule; a stdio server's start
@@ -3176,7 +3215,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   of `config.json`. New `app/src/keychain.rs` on the `keyring` 3 crate — Windows
   Credential Manager (`windows-native`), macOS Keychain (`apple-native`), Linux
   Secret Service (`sync-secret-service`). Service
-  `io.github.sairajkhilariarch.SaarthiStudio` (the AppStream id), one entry per
+  `io.github.sairajkhilariarch.SarthiStudio` (the AppStream id), one entry per
   field (`api_key`, `search_api_key`, `openai_api_key`).
 - `save_config_file` splits secrets out before writing: each non-empty one is
   stored and blanked from the JSON. `load_config` merges stored values over
@@ -3969,7 +4008,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   validate-tree`, which appimagetool now treats as fatal and which fails on
   warnings as well as errors: `cid-desktopapp-is-not-rdns` and
   `content-rating-missing`. The desktop entry, the AppStream file and the
-  component ID now all use `io.github.sairajkhilariarch.SaarthiStudio`, and an
+  component ID now all use `io.github.sairajkhilariarch.SarthiStudio`, and an
   OARS 1.1 age rating is declared, so the tree validates clean.
 - The .deb now installs the AppStream metadata as well
   (`usr/share/metainfo/...`), so software centres can show the app.
@@ -4074,7 +4113,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   turns with "token repeat limit reached" on CPU.
 - Verified end to end on the machine: a broken `greet.py` diagnosed by the
   local executor from the exit code, rewritten, verified (`python3 greet.py`
-  → `Hello, Saarthi!`, exit 0), reviewer APPROVE, run succeeded in team mode.
+  → `Hello, Sarthi!`, exit 0), reviewer APPROVE, run succeeded in team mode.
 
 ## 1.25.0
 
@@ -4153,7 +4192,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
 
 ### Branding
 
-- Every user-facing string says **Saarthi Studio** (window title, page title,
+- Every user-facing string says **Sarthi Studio** (window title, page title,
   folder pickers, VS Code display name and command titles, README). Internal
   identifiers (`free-ai-studio`, `free-ai-suite`) stay unchanged so existing
   installs and data keep working.

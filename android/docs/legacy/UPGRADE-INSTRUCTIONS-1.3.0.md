@@ -1,4 +1,4 @@
-# Upgrade Saarthi Studio Android from 1.2.0 to 1.3.0
+# Upgrade Sarthi Studio Android from 1.2.0 to 1.3.0
 
 Version 1.3.0 adds a model chooser to Router settings. Tap **Load available models** to request IDs from FreeLLMAPI's OpenAI-compatible `GET /v1/models` endpoint. Choose `auto` for router-managed selection or pick an ID returned by FreeLLMAPI. The text field remains editable for manual entry.
 
@@ -8,7 +8,7 @@ Version 1.3.0 adds a model chooser to Router settings. Tap **Load available mode
 2. Open Terminal and switch the local repository to the Android branch:
 
    ```bash
-   cd ~/Projects/Saarthi-Studio
+   cd ~/Projects/Sarthi-Studio
    git switch android
    git pull --ff-only origin android
    ```
@@ -16,21 +16,21 @@ Version 1.3.0 adds a model chooser to Router settings. Tap **Load available mode
 3. From this archive's extracted project directory, run:
 
    ```bash
-   ./apply-model-picker-upgrade.sh ~/Projects/Saarthi-Studio
+   ./apply-model-picker-upgrade.sh ~/Projects/Sarthi-Studio
    ```
 
 4. Review and push:
 
    ```bash
-   cd ~/Projects/Saarthi-Studio
+   cd ~/Projects/Sarthi-Studio
    git diff --check
-   git diff -- app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
-   git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
+   git diff -- app/src/main/java/com/sarthi/studio/MainActivity.java app/build.gradle.kts
+   git add app/src/main/java/com/sarthi/studio/MainActivity.java app/build.gradle.kts
    git commit -m "Add FreeLLMAPI model picker"
    git push origin android
    ```
 
-5. Open the repository's **Actions** tab. Once the **Build Saarthi Studio Android APK** workflow succeeds, download the `saarthi-studio-android-debug-apk` artifact and extract `app-debug.apk`.
+5. Open the repository's **Actions** tab. Once the **Build Sarthi Studio Android APK** workflow succeeds, download the `sarthi-studio-android-debug-apk` artifact and extract `app-debug.apk`.
 
 ## Notes
 

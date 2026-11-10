@@ -1,5 +1,5 @@
 "use strict";
-/* Saarthi Studio — IDE workbench shell.
+/* Sarthi Studio — IDE workbench shell.
  *
  * Runs after app.js and wraps it, never replaces it: the views, tabs, editor,
  * chat, terminal, settings and every backend call stay exactly as they were.

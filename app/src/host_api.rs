@@ -31,7 +31,7 @@ const MAX_CONVERSATION_PAGE_SIZE: usize = 100;
 const DEFAULT_CONVERSATION_PAGE_SIZE: usize = 50;
 const MAX_MESSAGE_PAGE_SIZE: usize = 150;
 const DEFAULT_MESSAGE_PAGE_SIZE: usize = 100;
-const INTERNAL_ERROR_MARKER: &str = "x-saarthi-internal-host-error";
+const INTERNAL_ERROR_MARKER: &str = "x-sarthi-internal-host-error";
 
 /// Construct the remote-only router. Step 4 will mount this router on a separately
 /// configured listener; do not merge it into the local UI router.
@@ -203,7 +203,7 @@ async fn host_health(State(state): State<AppState>) -> Response<Body> {
     match load_or_create_host_id(&state.config_path) {
         Ok(host_id) => Json(json!({
             "ok": true,
-            "product": "Saarthi Studio",
+            "product": "Sarthi Studio",
             "api_version": API_VERSION,
             "host_id": host_id.to_string()
         }))
@@ -1028,7 +1028,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("saarthi-host-api-{}", Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("sarthi-host-api-{}", Uuid::new_v4()));
             fs::create_dir_all(&root).expect("create fixture directory");
             super::super::set_private_permissions(&root, true).expect("secure fixture directory");
             let config_path = root.join("config.json");
@@ -1183,7 +1183,7 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
         let first_body = Fixture::response_json(first).await;
         assert_eq!(first_body["api_version"], API_VERSION);
-        assert_eq!(first_body["product"], "Saarthi Studio");
+        assert_eq!(first_body["product"], "Sarthi Studio");
         assert!(first_body.get("router").is_none());
         assert!(first_body.get("base_url").is_none());
         assert!(first_body.get("api_key").is_none());

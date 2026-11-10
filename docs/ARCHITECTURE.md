@@ -90,7 +90,7 @@ Tables created by `main.rs`/`agent.rs`:
 - `agent_steps(run_id, seq, action, summary, output, at, checkpoint)`
 
 Config lives in `~/.config/free-ai-studio/config.json` (never moved — brand
-string is "Saarthi Studio", internal `free-ai-studio` paths stay).
+string is "Sarthi Studio", internal `free-ai-studio` paths stay).
 
 ## 5. Platform clients
 

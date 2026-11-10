@@ -482,7 +482,7 @@ pub(crate) fn write_text_file(
     }
     // Write through a sibling temp file and rename, so an interrupted save
     // never leaves a half-written source file behind.
-    let temp = parent.join(format!(".saarthi-save-{}", Uuid::new_v4()));
+    let temp = parent.join(format!(".sarthi-save-{}", Uuid::new_v4()));
     fs::write(&temp, content.as_bytes()).map_err(internal)?;
     if let Err(error) = fs::rename(&temp, &path) {
         let _ = fs::remove_file(&temp);
@@ -698,7 +698,7 @@ fn run_folder_picker() -> PickerResult {
         .args([
             "--file-selection",
             "--directory",
-            "--title=Open a folder in Saarthi Studio",
+            "--title=Open a folder in Sarthi Studio",
         ])
         .output();
     match zenity {
@@ -1399,7 +1399,7 @@ fn run_folder_picker() -> PickerResult {
     const SCRIPT: &str = concat!(
         "Add-Type -AssemblyName System.Windows.Forms; ",
         "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; ",
-        "$dialog.Description = 'Open a folder in Saarthi Studio'; ",
+        "$dialog.Description = 'Open a folder in Sarthi Studio'; ",
         "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { ",
         "[Console]::Out.Write($dialog.SelectedPath) }"
     );
@@ -1426,7 +1426,7 @@ fn run_folder_picker() -> PickerResult {
     match Command::new("osascript")
         .args([
             "-e",
-            "POSIX path of (choose folder with prompt \"Open a folder in Saarthi Studio\")",
+            "POSIX path of (choose folder with prompt \"Open a folder in Sarthi Studio\")",
         ])
         .output()
     {
@@ -1511,7 +1511,7 @@ mod tests {
     impl Fixture {
         fn new(name: &str) -> Self {
             let root =
-                std::env::temp_dir().join(format!("saarthi-workspace-{name}-{}", Uuid::new_v4()));
+                std::env::temp_dir().join(format!("sarthi-workspace-{name}-{}", Uuid::new_v4()));
             fs::create_dir_all(&root).expect("create fixture workspace");
             Self { root }
         }

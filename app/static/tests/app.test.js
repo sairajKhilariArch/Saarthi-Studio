@@ -314,12 +314,12 @@ test("updateStatusText reports an up-to-date build with its own version", () => 
 test("updateStatusText names the newer release, its asset and its size", () => {
   const text = call(`updateStatusText({
     ok: true, current: "2.35.0", latest: "2.36.0", update_available: true,
-    asset: { name: "free-ai-suite_2.36.0_windows-x86_64.zip", size: 2048 },
+    asset: { name: "sarthi-studio_2.36.0_windows-x86_64.zip", size: 2048 },
     platform: "windows/x86_64"
   })`);
   assert.ok(text.includes("Version 2.36.0 is available"), text);
   assert.ok(text.includes("this build is 2.35.0"), text);
-  assert.ok(text.includes("Download free-ai-suite_2.36.0_windows-x86_64.zip"), text);
+  assert.ok(text.includes("Download sarthi-studio_2.36.0_windows-x86_64.zip"), text);
   assert.ok(/\(.*(KB|kB|kb).*\)/.test(text), `size was not formatted: ${text}`);
 });
 
@@ -342,10 +342,10 @@ test("updateStatusText passes a failed check through as a failure", () => {
 
 test("stagedStatusText describes a verified file that is not installed", () => {
   const text = call(`stagedStatusText({
-    asset: "free-ai-suite_2.37.0_windows-x86_64.zip", bytes: 2048,
+    asset: "sarthi-studio_2.37.0_windows-x86_64.zip", bytes: 2048,
     latest: "2.37.0", sha256: "abcdef0123456789abcdef"
   })`);
-  assert.ok(text.includes("free-ai-suite_2.37.0_windows-x86_64.zip"), text);
+  assert.ok(text.includes("sarthi-studio_2.37.0_windows-x86_64.zip"), text);
   assert.ok(text.includes("2.37.0"), text);
   assert.ok(text.includes("abcdef012345"), text);
   assert.ok(text.includes("not installed"), text);

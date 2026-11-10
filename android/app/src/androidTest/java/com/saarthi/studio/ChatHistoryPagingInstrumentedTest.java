@@ -9,7 +9,7 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class ChatHistoryPagingInstrumentedTest {
-    private static final String TEST_DATABASE_NAME = "saarthi_history_test_paging.sqlite3";
+    private static final String TEST_DATABASE_NAME = "sarthi_history_test_paging.sqlite3";
     @Test public void messageCountAndBoundedHistoryReturnLatestMessagesInChronologicalOrder() {
         Context context = ApplicationProvider.getApplicationContext();
         context.deleteDatabase(TEST_DATABASE_NAME);

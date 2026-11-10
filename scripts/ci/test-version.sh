@@ -80,17 +80,17 @@ expect_failure "non-numeric version" "$tmp/garbage.toml"
 expect_failure "missing manifest file" "$tmp/does-not-exist.toml"
 
 # --- artifact names --------------------------------------------------------
-expect_name_ok "windows zip name" "free-ai-suite_1.26.4_windows-x86_64.zip"
+expect_name_ok "windows zip name" "sarthi-studio_1.26.4_windows-x86_64.zip"
 expect_name_ok "deb name" "free-ai-studio_1.26.4-1_amd64.deb"
 expect_name_ok "checksums file" "SHA256SUMS.txt"
-expect_name_bad "name with CR" "$(printf 'free-ai-suite_1.26.4\r_windows-x86_64.zip')"
+expect_name_bad "name with CR" "$(printf 'sarthi-studio_1.26.4\r_windows-x86_64.zip')"
 expect_name_bad "name with space" "free ai suite.zip"
 expect_name_bad "empty name" ""
 expect_name_bad "name with path separator" "dist/x.zip"
 
 # --- artifact gate ---------------------------------------------------------
 mkdir -p "$tmp/good"
-printf 'payload\n' >"$tmp/good/free-ai-suite_1.26.4_windows-x86_64.zip"
+printf 'payload\n' >"$tmp/good/sarthi-studio_1.26.4_windows-x86_64.zip"
 (cd "$tmp/good" && sha256sum ./* >SHA256SUMS.txt)
 
 if bash "$gate" "$tmp/good" >/dev/null 2>&1; then
@@ -100,7 +100,7 @@ else
 fi
 
 # Corrupt a checksummed file: the gate must catch it before upload.
-printf 'corrupted\n' >"$tmp/good/free-ai-suite_1.26.4_windows-x86_64.zip"
+printf 'corrupted\n' >"$tmp/good/sarthi-studio_1.26.4_windows-x86_64.zip"
 if bash "$gate" "$tmp/good" >/dev/null 2>&1; then
   die "artifact gate missed a checksum mismatch"
 else

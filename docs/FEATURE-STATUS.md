@@ -77,7 +77,7 @@ portable (tarball/zip) install still has no uninstall of its own. Phase 18 is 10
 rows — 9 Working + 1 Partial = 95% — and the overall mean stays 92% (1,659/18).
 
 **Revision 2.42.0 (2026-11-10):** Phase 18 gained the macOS application bundle:
-`scripts/ci/bundle-macos-app.sh` builds `Saarthi Studio.app` from the staged tree
+`scripts/ci/bundle-macos-app.sh` builds `Sarthi Studio.app` from the staged tree
 and the binary resolves `<exe>/../Resources/static`, so the bundle is a real
 installable app rather than a renamed binary; the release job smokes its zip and
 attaches it. Phase 18's install row moves from Missing to Partial (macOS bundled,
@@ -345,7 +345,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Conflict detection before a write | Working (1.54.0) | `app/src/filelock.rs`: a `write` is refused as a non-fatal `write-conflict` step when another live run has claimed the path or the file on disk is not what this run last read; the run re-reads and continues. Claims are dropped for any run no longer `running`/`awaiting_approval` and released by `finish` |
 | Parallel execution + worktree isolation / file locks | Working (2.1.0) | each writing run works in its own worktree, a command claims its checkout while it runs, and the lease ledger lives in the database so more than one process sees it. An editor save or another program still writes behind the lease, caught on the run's next write |
 | Verification step before `succeeded` | Working (1.56.0) | a run that wrote, ran a command or called a tool goes to the verifier, which must answer `APPROVE`; ISSUES hands the findings back for one repair round and a second ISSUES ends the run `failed` with the findings kept. Read-only runs and `team` mode are not verified twice. No human sign-off step: the verifier is a model on the same router |
-| Ruflo | Not integrated (spec says optional) | Saarthi Core keeps ownership |
+| Ruflo | Not integrated (spec says optional) | Sarthi Core keeps ownership |
 | Live-run checkout hand-back | Working (2.0.0) | a finished run's `run/<id>` branch is committed, the shared checkout is fast-forwarded and the worktree removed; nothing is applied automatically and an unapplied worktree stays on disk |
 
 ## Phase 6 — Skills
@@ -464,7 +464,7 @@ persisted execution of it.
 | Persisted run history | Working (2.9.0) | `workflow_runs`/`workflow_steps` carry status, output, timing and the agent run id; a boot sweep marks a run the process abandoned as `interrupted` |
 | Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph (a child agent run in flight is not forcibly stopped) |
 | Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas was driven in Chromium once (2.49.0) — drag, live edges, clamping and a position restored after reload — though no automated browser test exists |
-| Graph import/export | Working (2.13.0) | export is a versioned `saarthi.workflow` document; import runs the save-time validation before writing, assigns a new id and a unique name, and starts a fresh schedule window |
+| Graph import/export | Working (2.13.0) | export is a versioned `sarthi.workflow` document; import runs the save-time validation before writing, assigns a new id and a unique name, and starts a fresh schedule window |
 | Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, a live run is not stacked, and the window is claimed in SQLite (2.48.0) so two processes sharing one home cannot both start it |
 | Resume an interrupted run | Working (2.11.0) | `POST /api/workflow-runs/:id/resume` keeps finished steps, reopens the rest, refuses an edited or deleted workflow; a resumed agent node starts a fresh agent run |
 
@@ -573,3 +573,11 @@ Deliberately not next, though open: per-skill permissions (a skill is prompt
 text and never executes), a price table for native OpenAI picks (the app mirrors
 no prices rather than inventing them), and an editor engine or debugger (both
 are a product decision, not a missing route).
+
+## Identity and branding
+
+| Area | State | Detail |
+|---|---|---|
+| Display name | Working (2.51.0) | `Sarthi Studio` in the window/tab title, About, settings, empty states, toasts and docs; no `Free AI Studio` or `Saarthi Studio` remains in tracked text |
+| Package and installer metadata | Working (2.51.0) | `productName`, crate description, MSI product/shortcut/uninstaller names, AppStream name and desktop entry, Android `android:label`, VS Code `displayName`, artifacts `sarthi-studio_<version>_<platform>`; AppStream validation is still outstanding (KNOWN-ISSUES 33) |
+| Technical identity | Deliberately retained (2.51.0) | crate/binary, env vars, config/data paths, bundle and Android ids, conversation image marker, VS Code ids and repo slug keep old names so installs and stored data survive; reasons and migrations in `docs/BRANDING-AUDIT.md` |

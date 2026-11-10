@@ -57,9 +57,9 @@ jobs:
           test -f app/static/index.html
           test -f app/static/app.js
           test -f app/static/styles.css
-          test -f app/packaging/io.github.sairajkhilariarch.SaarthiStudio.desktop
-          test -f app/packaging/io.github.sairajkhilariarch.SaarthiStudio.appdata.xml
-          test -f app/packaging/icons/free-ai-suite.svg
+          test -f app/packaging/io.github.sairajkhilariarch.SarthiStudio.desktop
+          test -f app/packaging/io.github.sairajkhilariarch.SarthiStudio.appdata.xml
+          test -f app/packaging/icons/sarthi-studio.svg
           test -f app/packaging/windows/installer.wxs
 
       # Pipeline regressions (v1.26.0/v1.26.1 shipped no assets because of a CR

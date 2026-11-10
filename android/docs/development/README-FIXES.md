@@ -1,4 +1,4 @@
-# Saarthi Studio CI repair notes — follow-up
+# Sarthi Studio CI repair notes — follow-up
 
 This patch is intended for the `android` branch.
 
@@ -22,7 +22,7 @@ Run 17: https://github.com/sairajKhilariArch/Saarthi-Studio/actions/runs/3914449
 2. `VALIDATION-REPORT.md`
    - Removes the trailing space from the first heading, the exact whitespace defect in run 17.
 
-3. `app/src/androidTest/java/com/saarthi/studio/AppLaunchInstrumentedTest.java`
+3. `app/src/androidTest/java/com/sarthi/studio/AppLaunchInstrumentedTest.java`
    - Preserves the already-updated composer-hint assertion. It is included for convenience; run 17 did not execute any tests, so this file is not being changed to guess at the process crash.
 
 4. `CHANGELOG.md`
@@ -30,4 +30,4 @@ Run 17: https://github.com/sairajKhilariArch/Saarthi-Studio/actions/runs/3914449
 
 ## Important verification note
 
-I cannot claim the process crash is fixed until a new workflow run passes. The new instrumentation invocation should at least expose the runner's actual failure or the Android logcat crash trace. If the runner still exits before starting tests, download `saarthi-studio-android-failure-diagnostics` and inspect `instrumentation.log` and `logcat.txt`; do not disable the final gate.
+I cannot claim the process crash is fixed until a new workflow run passes. The new instrumentation invocation should at least expose the runner's actual failure or the Android logcat crash trace. If the runner still exits before starting tests, download `sarthi-studio-android-failure-diagnostics` and inspect `instrumentation.log` and `logcat.txt`; do not disable the final gate.

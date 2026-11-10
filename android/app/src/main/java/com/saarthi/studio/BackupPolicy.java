@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 
 /** Limits, schema checks and exact-file fingerprints for JSON backups. */
 final class BackupPolicy {
-    static final String FORMAT = "saarthi-studio-backup";
+    static final String FORMAT = "sarthi-studio-backup";
     static final int CURRENT_SCHEMA_VERSION = 3;
     static final int MAX_BACKUP_BYTES = 10 * 1024 * 1024;
     static final int MAX_CONVERSATIONS = 500;

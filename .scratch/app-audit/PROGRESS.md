@@ -83,7 +83,7 @@ fallback beyond the existing tier failover.
 - Release: push the round and tag (needs an explicit ask). Android/gradle unit tests can’t run on the current machine (no gradle/wrapper).
 
 ## Step 1 close-out (release pipeline repair)
-- Release failure diagnosis from the v1.25.0 workflow run 41007439650: deb job failed in the headless build (`build.rs` ran `tauri_build::build()` unconditionally — panic "missing cargo:dev" without the `gui` feature); Linux `release` job failed at `cargo deb`; vscode job failed at `npx tsc --noEmit` (2 real type errors). Also: every version in tree still said 1.22.0 while the tag said v1.25.0 (Windows zip asset was literally `free-ai-suite_1.22.0_windows-x86_64.zip`).
+- Release failure diagnosis from the v1.25.0 workflow run 41007439650: deb job failed in the headless build (`build.rs` ran `tauri_build::build()` unconditionally — panic "missing cargo:dev" without the `gui` feature); Linux `release` job failed at `cargo deb`; vscode job failed at `npx tsc --noEmit` (2 real type errors). Also: every version in tree still said 1.22.0 while the tag said v1.25.0 (Windows zip asset was literally `sarthi-studio_1.22.0_windows-x86_64.zip`).
 - Fixes: `build.rs` gates tauri-build on `CARGO_FEATURE_GUI`; `agent.ts`/`lib.ts` type errors fixed (tsc clean, 22/22 tests, vsix packages); versions bumped to 1.25.0 in app Cargo.toml+lock, extension package.json, android versionName 1.21.1→1.25.0 (versionCode 18).
 
 ## Step 2 (master plan) — message-flow trace (B1)

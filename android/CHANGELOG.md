@@ -28,7 +28,7 @@
 - Production `release` build type with R8 code shrinking/obfuscation and resource shrinking (`proguard-android-optimize.txt` plus an intentionally empty `proguard-rules.pro`; the app uses no reflection, JNI, or runtime serialization, so no keep rules are required).
 - Scoped network security configuration replacing app-wide `android:usesCleartextTraffic="true"`: plaintext HTTP is now allowed only for loopback and private/link-local ranges (`localhost`, `127.0.0.1`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fd00::/8`). Every other router host must use HTTPS, matching the transport rule in `PLATFORM-ARCHITECTURE.md`.
 - Adaptive launcher icon (vector background/foreground with a monochrome layer for Android 13+ themed icons), replacing the default system icon. minSdk 26 covers every adaptive-icon-capable device, so no density PNG fallbacks are needed.
-- CI now assembles the unsigned release APK and AAB alongside the existing debug gates and uploads them as the `saarthi-studio-android-release-unsigned` artifact; the release build is part of the required validation gate.
+- CI now assembles the unsigned release APK and AAB alongside the existing debug gates and uploads them as the `sarthi-studio-android-release-unsigned` artifact; the release build is part of the required validation gate.
 
 ### Changed
 - `targetSdk` raised from 34 to 35 to match `compileSdk` (Google Play has required API 35 since August 31, 2025).
@@ -55,7 +55,7 @@
 - Keep whitespace validation strict while allowing tests and build diagnostics to run before the final CI gate.
 - Separate application APK assembly from instrumentation APK assembly so a test APK failure does not hide an otherwise buildable debug APK.
 - Correct the app-launch smoke test to verify the visible message composer `EditText` hint without relying on `View.isShown()`.
-- Add a package-private database-name constructor for isolated instrumentation fixtures while preserving `saarthi_history.sqlite3` as the production default.
+- Add a package-private database-name constructor for isolated instrumentation fixtures while preserving `sarthi_history.sqlite3` as the production default.
 - Move backup/restore and history-paging instrumentation tests to unique test-only databases. Their setup and cleanup no longer delete the user's production chat-history database.
 - Keep the production database schema and installed app version unchanged; the patch corrects validation and test-data safety without changing user-facing features.
 

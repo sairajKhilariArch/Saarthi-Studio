@@ -1,10 +1,10 @@
-# Saarthi Studio 1.5.0 — Backup & Export Upgrade
+# Sarthi Studio 1.5.0 — Backup & Export Upgrade
 
 ## Features
 
 - Export the current chat as Markdown (`.md`).
 - Export all chats as a portable JSON backup (`.json`). The backup contains conversation titles, message roles, message contents, and display metadata. It deliberately excludes the FreeLLMAPI URL, API key, and other settings.
-- Restore a Saarthi Studio JSON backup. Restored conversations are appended; existing chats are not deleted. Importing the same backup more than once creates duplicates in this historical version.
+- Restore a Sarthi Studio JSON backup. Restored conversations are appended; existing chats are not deleted. Importing the same backup more than once creates duplicates in this historical version.
 - Backup restore validates the format, limits the selected file to 10 MB, and keeps import in a database transaction to avoid partial imports.
 
 ## Historical upgrade instructions

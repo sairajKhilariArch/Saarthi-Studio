@@ -13,7 +13,7 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class BackupRestoreInstrumentedTest {
-    private static final String TEST_DATABASE_NAME = "saarthi_history_test_backup_restore.sqlite3";
+    private static final String TEST_DATABASE_NAME = "sarthi_history_test_backup_restore.sqlite3";
     @Test public void malformedOversizedUtf8AndImageMetadataAreRejected() throws Exception {
         try {
             BackupPolicy.parseObject("{ not-json".getBytes(StandardCharsets.UTF_8));
@@ -30,7 +30,7 @@ public class BackupRestoreInstrumentedTest {
             fail("Malformed UTF-8 should be rejected.");
         } catch (JSONException expected) { }
 
-        JSONObject parsed = BackupPolicy.parseObject("{\"format\":\"saarthi-studio-backup\",\"schema_version\":1}".getBytes(StandardCharsets.UTF_8));
+        JSONObject parsed = BackupPolicy.parseObject("{\"format\":\"sarthi-studio-backup\",\"schema_version\":1}".getBytes(StandardCharsets.UTF_8));
         assertTrue(BackupPolicy.isSupportedBackup(parsed.optString("format"), parsed.optInt("schema_version", -1)));
         assertFalse(BackupPolicy.containsMalformedImageMarkers("text [[SAARTHI_IMAGE:image/png:iVBORw0KGgo=]]"));
         assertTrue(BackupPolicy.containsMalformedImageMarkers("[[SAARTHI_IMAGE:image/png:not-base64?!]]"));

@@ -86,7 +86,7 @@ public class MainActivity extends Activity {
     private static final int DANGER = Color.rgb(255, 107, 107);
     private static final int USER_BUBBLE = Color.rgb(32, 26, 20);
     private static final String SYSTEM_PROMPT = "You are a concise, helpful coding assistant. Be accurate and safe; never claim to run code unless you did.";
-    private static final String KEY_ALIAS = "SaarthiStudioSettingsKeyV1";
+    private static final String KEY_ALIAS = "SarthiStudioSettingsKeyV1";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -112,7 +112,7 @@ public class MainActivity extends Activity {
     private static final int MAX_VISIBLE_MESSAGES = 1500;
     /** The desktop host API caps chat messages (its own limit, shared with the desktop UI). */
     private static final int HOST_MESSAGE_CHARS = 50_000;
-    private static final String STATE_PREFS = "saarthi_chat_state";
+    private static final String STATE_PREFS = "sarthi_chat_state";
     private static final String CURRENT_CONVERSATION_KEY = "current_conversation_id";
     private static final int REQUEST_EXPORT_MARKDOWN = 6101;
     private static final int REQUEST_EXPORT_BACKUP = 6102;
@@ -225,7 +225,7 @@ public class MainActivity extends Activity {
         LinearLayout brand = new LinearLayout(this);
         brand.setOrientation(LinearLayout.VERTICAL);
         brand.setPadding(dp(11), 0, 0, 0);
-        brand.addView(label("Saarthi Studio", 19, TEXT, true));
+        brand.addView(label("Sarthi Studio", 19, TEXT, true));
         TextView tagline = label("local coding agent", 11, MUTED, false);
         brand.addView(tagline);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
@@ -309,7 +309,7 @@ public class MainActivity extends Activity {
         composer.setGravity(Gravity.BOTTOM);
         promptInput = new EditText(this);
         promptInput.setTextColor(TEXT); promptInput.setHintTextColor(MUTED);
-        promptInput.setHint("Message Saarthi…"); promptInput.setTextSize(15);
+        promptInput.setHint("Message Sarthi…"); promptInput.setTextSize(15);
         promptInput.setMinLines(1); promptInput.setMaxLines(4);
         promptInput.setGravity(Gravity.TOP | Gravity.START);
         promptInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
@@ -349,7 +349,7 @@ public class MainActivity extends Activity {
             welcome.setOrientation(LinearLayout.VERTICAL);
             welcome.setPadding(dp(18), dp(18), dp(18), dp(18));
             welcome.setBackground(round(PANEL, 18));
-            TextView title = label("Welcome to Saarthi Studio", 20, TEXT, true);
+            TextView title = label("Welcome to Sarthi Studio", 20, TEXT, true);
             welcome.addView(title);
             TextView body = label("This is a separate conversation. Connect FreeLLMAPI in Settings, then ask questions, debug code, or explore ideas. Your chats stay on this phone.", 14, MUTED, false);
             body.setPadding(0, dp(9), 0, 0); welcome.addView(body);
@@ -405,7 +405,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(-1, -2);
         wrapLp.bottomMargin = dp(13);
         messageList.addView(wrap, wrapLp);
-        TextView who = label(user ? "YOU" : "SAARTHI", 10, user ? MUTED : ACCENT, true);
+        TextView who = label(user ? "YOU" : "SARTHI", 10, user ? MUTED : ACCENT, true);
         who.setPadding(dp(4), 0, dp(4), dp(5));
         wrap.addView(who);
         if (user) {
@@ -472,7 +472,7 @@ public class MainActivity extends Activity {
         if (prose.length() > 0) flushMarkdownProse(parent, prose.toString());
 
         Button copyResponse = smallButton("Copy response");
-        copyResponse.setOnClickListener(v -> copyToClipboard("Saarthi response", content));
+        copyResponse.setOnClickListener(v -> copyToClipboard("Sarthi response", content));
         LinearLayout.LayoutParams copyLp = new LinearLayout.LayoutParams(-2, dp(38));
         copyLp.topMargin = dp(5);
         parent.addView(copyResponse, copyLp);
@@ -599,7 +599,7 @@ public class MainActivity extends Activity {
         if (sending) return;
         if (!attachedImages.isEmpty() && !visionConfirmed && !isKnownVisionModel(config.model)) {
             new AlertDialog.Builder(this).setTitle("Try image with this model?")
-                    .setMessage("Saarthi cannot verify that this model supports image input. The request will send the selected image to your configured FreeLLMAPI server. It may fail if the model or router does not support vision.")
+                    .setMessage("Sarthi cannot verify that this model supports image input. The request will send the selected image to your configured FreeLLMAPI server. It may fail if the model or router does not support vision.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Try anyway", (d, w) -> sendMessage(true)).show();
             return;
@@ -849,7 +849,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(-1, -2);
         wrapLp.bottomMargin = dp(13);
         messageList.addView(wrap, wrapLp);
-        TextView who = label("SAARTHI · STREAMING", 10, MUTED, true);
+        TextView who = label("SARTHI · STREAMING", 10, MUTED, true);
         who.setPadding(dp(4), 0, dp(4), dp(5));
         wrap.addView(who);
         streamingTextView = label("", 15, TEXT, false);
@@ -1004,7 +1004,7 @@ public class MainActivity extends Activity {
         try {
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your message to Saarthi Studio");
+            intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your message to Sarthi Studio");
             startActivityForResult(intent, REQUEST_VOICE_INPUT);
         } catch (Exception e) {
             toast("Speech recognition is unavailable on this device. Install or enable a speech-recognition service.");
@@ -1196,7 +1196,7 @@ public class MainActivity extends Activity {
     private void showToolsMenu() {
         String[] items = {"Attach text/code file", "Attach image (vision models)", "Manage attachments",
                 "Dictate message", "Read last answer aloud", "Stop speech", "Prompt presets", "Model preferences", "Free-tier budget", "Usage diagnostics", "Agent runs"};
-        new AlertDialog.Builder(this).setTitle("Saarthi tools").setItems(items, (dialog, which) -> {
+        new AlertDialog.Builder(this).setTitle("Sarthi tools").setItems(items, (dialog, which) -> {
             if (which == 0) pickTextFile();
             else if (which == 1) pickImage();
             else if (which == 2) showAttachmentManager();
@@ -1233,7 +1233,7 @@ public class MainActivity extends Activity {
                         && features != null && features.optBoolean("agent_runs", false);
                 main.post(() -> {
                     if (supported) showAgentRunsList();
-                    else toast("This desktop host does not expose agent runs. Update Saarthi Studio on the desktop.");
+                    else toast("This desktop host does not expose agent runs. Update Sarthi Studio on the desktop.");
                 });
             } catch (Exception e) {
                 main.post(() -> toast("Could not check the desktop host: " + friendlyError(e.getMessage())));
@@ -1843,7 +1843,7 @@ public class MainActivity extends Activity {
             String[] items = actions.toArray(new String[0]);
             new AlertDialog.Builder(this).setTitle("Assistant message").setItems(items, (d, which) -> {
                 String chosen = items[which];
-                if ("Copy response".equals(chosen)) copyToClipboard("Saarthi response", displayMessageContent(message.content));
+                if ("Copy response".equals(chosen)) copyToClipboard("Sarthi response", displayMessageContent(message.content));
                 else if ("Read aloud".equals(chosen)) speakText(displayMessageContent(message.content));
                 else if ("Regenerate response".equals(chosen)) regenerateResponse(messageId);
                 else if ("Retry failed request".equals(chosen)) retryFailedResponse(messageId);
@@ -1927,11 +1927,11 @@ public class MainActivity extends Activity {
         List<Message> messages = store.allMessages(currentConversationId, 10000);
         StringBuilder markdown = new StringBuilder();
         markdown.append("# ").append(conversation.title.replace("\n", " ").replace("\r", " "))
-                .append("\n\nExported from Saarthi Studio on ")
+                .append("\n\nExported from Sarthi Studio on ")
                 .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(new Date()))
                 .append(".\n\n");
         for (Message message : messages) {
-            String heading = "user".equals(message.role) ? "You" : ("assistant".equals(message.role) ? "Saarthi" : message.role);
+            String heading = "user".equals(message.role) ? "You" : ("assistant".equals(message.role) ? "Sarthi" : message.role);
             markdown.append("## ").append(heading).append("\n\n")
                     .append(displayMessageContent(message.content)).append("\n\n");
             if (message.meta != null && !message.meta.trim().isEmpty()) {
@@ -1982,7 +1982,7 @@ public class MainActivity extends Activity {
                 presetsJson.put(new JSONObject().put("name", preset.name).put("content", preset.content));
             }
             backup.put("prompt_presets", presetsJson);
-            String filename = "saarthi-studio-backup-" + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".json";
+            String filename = "sarthi-studio-backup-" + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".json";
             String jsonText = backup.toString(2);
             if (jsonText.getBytes(StandardCharsets.UTF_8).length > MAX_BACKUP_BYTES) {
                 throw new Exception("Backup would exceed 10 MB. Export individual conversations instead.");
@@ -1996,7 +1996,7 @@ public class MainActivity extends Activity {
     private void confirmRestoreBackup() {
         new AlertDialog.Builder(this)
                 .setTitle("Restore chat backup?")
-                .setMessage("Choose a Saarthi Studio JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. The exact same backup file will only be imported once to avoid accidental duplicates.")
+                .setMessage("Choose a Sarthi Studio JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. The exact same backup file will only be imported once to avoid accidental duplicates.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Choose backup", (dialog, which) -> {
                     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -2040,7 +2040,7 @@ public class MainActivity extends Activity {
                 JSONObject backup = BackupPolicy.parseObject(bytes);
                 int backupSchema = backup.optInt("schema_version", -1);
                 if (!BackupPolicy.isSupportedBackup(backup.optString("format"), backupSchema)) {
-                    throw new Exception("This is not a supported Saarthi Studio backup (schemas 1, 2, and 3 are supported).");
+                    throw new Exception("This is not a supported Sarthi Studio backup (schemas 1, 2, and 3 are supported).");
                 }
                 JSONArray inputConversations = backup.optJSONArray("conversations");
                 if (inputConversations == null || inputConversations.length() == 0) {
@@ -2412,7 +2412,7 @@ public class MainActivity extends Activity {
         directSection.setOrientation(LinearLayout.VERTICAL);
         LinearLayout hostSection = new LinearLayout(this);
         hostSection.setOrientation(LinearLayout.VERTICAL);
-        TextView help = label("Choose how Saarthi connects. Direct Router sends requests to your configured OpenAI-compatible router. Desktop Host uses the authenticated HTTPS API on your Saarthi desktop.", 13, MUTED, false);
+        TextView help = label("Choose how Sarthi connects. Direct Router sends requests to your configured OpenAI-compatible router. Desktop Host uses the authenticated HTTPS API on your Sarthi desktop.", 13, MUTED, false);
         help.setPadding(0, 0, 0, dp(12)); form.addView(help);
         form.addView(modeButton);
         form.addView(directSection);

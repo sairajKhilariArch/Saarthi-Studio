@@ -1,4 +1,4 @@
-# Saarthi Studio v1.11.1 — Full Project Package Notes
+# Sarthi Studio v1.11.1 — Full Project Package Notes
 
 This archive contains the complete Android project source and the tracked top-level files from the `android` branch snapshot at commit `98609b38b3a6e08b7c258ac11d52d983d51bb2da` (v1.11.1). It does not include Git history (`.git`) or a built APK.
 
@@ -7,7 +7,7 @@ This archive contains the complete Android project source and the tracked top-le
 - Android application source, resources, manifest, Gradle configuration, unit tests, and instrumentation tests.
 - GitHub Actions workflow for Android test/lint/build validation and APK artifact upload.
 - Build and upgrade documentation, changelog, license, and historical migration notes/scripts that remain tracked in the repository.
-- One whitespace-only correction in `app/src/main/java/com/saarthi/studio/ChatDatabase.java` removes the extra blank line at EOF that caused the latest remote CI run to fail its `git show --check` step.
+- One whitespace-only correction in `app/src/main/java/com/sarthi/studio/ChatDatabase.java` removes the extra blank line at EOF that caused the latest remote CI run to fail its `git show --check` step.
 
 ## Important notes
 

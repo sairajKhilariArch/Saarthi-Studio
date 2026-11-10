@@ -1,4 +1,4 @@
-# Upgrade Saarthi Studio Android to 1.2.0
+# Upgrade Sarthi Studio Android to 1.2.0
 
 This update adds basic Markdown formatting, fenced code cards, and one-tap copy actions. It does not change SQLite or FreeLLMAPI settings.
 
@@ -8,27 +8,27 @@ This update adds basic Markdown formatting, fenced code cards, and one-tap copy 
 2. Ensure your local repository clone is on `android`:
 
    ```bash
-   git -C ~/Projects/Saarthi-Studio switch android
+   git -C ~/Projects/Sarthi-Studio switch android
    ```
 
 3. From this extracted project directory, run:
 
    ```bash
-   ./apply-markdown-code-upgrade.sh ~/Projects/Saarthi-Studio
+   ./apply-markdown-code-upgrade.sh ~/Projects/Sarthi-Studio
    ```
 
 4. Review and push:
 
    ```bash
-   cd ~/Projects/Saarthi-Studio
+   cd ~/Projects/Sarthi-Studio
    git diff --check
-   git diff -- app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
-   git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
+   git diff -- app/src/main/java/com/sarthi/studio/MainActivity.java app/build.gradle.kts
+   git add app/src/main/java/com/sarthi/studio/MainActivity.java app/build.gradle.kts
    git commit -m "Improve Markdown and code copying in Android chat"
    git push origin android
    ```
 
-5. Go to the repository Actions tab and run **Build Saarthi Studio Android APK** on `android`, or wait for the push trigger. Download `saarthi-studio-android-debug-apk` after it succeeds.
+5. Go to the repository Actions tab and run **Build Sarthi Studio Android APK** on `android`, or wait for the push trigger. Download `sarthi-studio-android-debug-apk` after it succeeds.
 
 ## What's changed
 

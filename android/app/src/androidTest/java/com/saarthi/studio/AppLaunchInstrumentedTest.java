@@ -19,10 +19,10 @@ public class AppLaunchInstrumentedTest {
             scenario.onActivity(activity -> {
                 View root = activity.findViewById(android.R.id.content);
                 assertNotNull("Activity content root should exist", root);
-                assertTrue("Saarthi Studio heading should exist", containsText(root, "Saarthi Studio"));
+                assertTrue("Sarthi Studio heading should exist", containsText(root, "Sarthi Studio"));
                 assertTrue(
                     "Message composer EditText with expected hint should exist",
-                    containsEditTextWithHint(root, "Message Saarthi…")
+                    containsEditTextWithHint(root, "Message Sarthi…")
                 );
             });
         } finally {

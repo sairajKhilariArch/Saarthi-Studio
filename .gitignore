@@ -29,7 +29,7 @@ rustc-ice-*.txt
 /dist/
 *.vsix
 
-# Saarthi Studio Android companion project (desktop remains at repository root)
+# Sarthi Studio Android companion project (desktop remains at repository root)
 /android/.gradle/
 /android/**/build/
 /android/local.properties

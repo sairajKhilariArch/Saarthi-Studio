@@ -1,4 +1,4 @@
-// Pure logic for the Free AI Studio VS Code extension: token-budgeted context
+// Pure logic for the Sarthi Studio VS Code extension: token-budgeted context
 // packing, a small conversation store, a workspace API, and the built-in HTTP
 // server used when the desktop app is not running. Nothing here imports
 // `vscode`, so `node --test` can exercise all of it.
@@ -748,7 +748,7 @@ export interface DesktopProbe {
   health: Record<string, unknown> | null;
 }
 
-/** Is a Free AI Studio desktop app answering on this loopback address? */
+/** Is a Sarthi Studio desktop app answering on this loopback address? */
 export async function probeDesktop(
   desktopUrl: string,
   fetchImpl: typeof fetch = fetch,
@@ -1413,7 +1413,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           });
           return;
         }
-        sendJson(response, 400, { ok: false, error: "Change these values in VS Code settings (Free AI Studio)." });
+        sendJson(response, 400, { ok: false, error: "Change these values in VS Code settings (Sarthi Studio)." });
         return;
       }
 
@@ -1817,7 +1817,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         // Honest refusal: process supervision lives in the desktop binary.
         sendJson(response, 400, {
           ok: false,
-          error: "Start or stop the gateway from the Saarthi Studio desktop app, or run it yourself in a terminal — the VS Code built-in server does not manage background processes.",
+          error: "Start or stop the gateway from the Sarthi Studio desktop app, or run it yourself in a terminal — the VS Code built-in server does not manage background processes.",
         });
         return;
       }
@@ -1845,7 +1845,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       if (routePath.startsWith("/api/terminal/")) {
         sendJson(response, 501, {
           ok: false,
-          error: "The built-in terminal is not available in VS Code's built-in server. Use VS Code's own terminal, or the Saarthi Studio desktop app for the project terminal.",
+          error: "The built-in terminal is not available in VS Code's built-in server. Use VS Code's own terminal, or the Sarthi Studio desktop app for the project terminal.",
         });
         return;
       }

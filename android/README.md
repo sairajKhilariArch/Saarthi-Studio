@@ -1,6 +1,6 @@
-# Saarthi Studio Android companion
+# Sarthi Studio Android companion
 
-Saarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This project preserves locally stored chats and encrypted endpoint settings while adding conversation organization, model preferences/fallback, budget inspection, developer attachments, voice, and optional vision input.
+Sarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This project preserves locally stored chats and encrypted endpoint settings while adding conversation organization, model preferences/fallback, budget inspection, developer attachments, voice, and optional vision input.
 
 ## Project status
 
@@ -22,7 +22,7 @@ Saarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This 
 
 ## Setup
 1. Start FreeLLMAPI on the PC/server. For use over a trusted local hotspot, bind the service to the LAN interface and use the PC's LAN address from the phone.
-2. Open Saarthi Studio Settings and enter the base URL ending in `/v1`, for example `http://192.168.1.10:3001/v1`, and the unified API key.
+2. Open Sarthi Studio Settings and enter the base URL ending in `/v1`, for example `http://192.168.1.10:3001/v1`, and the unified API key.
 3. Load models if available, pick the default model, optionally configure favorite/fallback model IDs, and test the connection.
 
 ## Important limits

@@ -194,7 +194,7 @@ mod tests {
     impl Fixture {
         fn new(request_limit: usize) -> Self {
             let root =
-                std::env::temp_dir().join(format!("saarthi-host-security-{}", Uuid::new_v4()));
+                std::env::temp_dir().join(format!("sarthi-host-security-{}", Uuid::new_v4()));
             fs::create_dir_all(&root).expect("create fixture directory");
             super::super::set_private_permissions(&root, true).expect("secure fixture directory");
             let config_path = root.join("config.json");

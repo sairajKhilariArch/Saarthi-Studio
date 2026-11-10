@@ -1,4 +1,4 @@
-# Building Saarthi Studio Android
+# Building Sarthi Studio Android
 
 ## Toolchain
 - JDK 17
@@ -16,7 +16,7 @@ From the project root:
 The helper runs unit tests, lint, and APK assembly as separate phases, so a lint failure does not prevent an otherwise buildable APK from being produced for diagnosis. Its exit status remains nonzero if any required phase fails. The debug APK should be created at `app/build/outputs/apk/debug/app-debug.apk`; all checks must pass before the build can be called verified.
 
 ## GitHub Actions
-Push to the `android` branch, or run the `Build Saarthi Studio Android APK` workflow manually in the GitHub Actions tab. It runs the unit-test task, Android lint, and debug APK build, then publishes the APK as a 30-day Actions artifact. A green build does not replace physical-device tests for network, speech, image input and SQLite migration.
+Push to the `android` branch, or run the `Build Sarthi Studio Android APK` workflow manually in the GitHub Actions tab. It runs the unit-test task, Android lint, and debug APK build, then publishes the APK as a 30-day Actions artifact. A green build does not replace physical-device tests for network, speech, image input and SQLite migration.
 
 
 ## Release build (production artifacts)

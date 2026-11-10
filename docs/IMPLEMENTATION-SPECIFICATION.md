@@ -1,6 +1,6 @@
 # Implementation specification (adopted)
 
-This is the engineering contract for Saarthi Studio. It states the rules every
+This is the engineering contract for Sarthi Studio. It states the rules every
 phase must follow; the phase-by-phase work is in `docs/MASTER-ROADMAP.md` and
 the current state in `docs/FEATURE-STATUS.md`.
 

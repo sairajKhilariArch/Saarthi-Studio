@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITE_HOME="$HOME/.local/share/free-ai-suite"
-CONFIG_HOME="$HOME/.config/free-ai-suite"
-LOG_HOME="$HOME/.local/state/free-ai-suite"
+SUITE_HOME="$HOME/.local/share/sarthi-studio"
+CONFIG_HOME="$HOME/.config/sarthi-studio"
+LOG_HOME="$HOME/.local/state/sarthi-studio"
 APP_HOME="$SUITE_HOME/app"
 mkdir -p "$CONFIG_HOME" "$LOG_HOME" "$HOME/.local/share/applications"
 
@@ -130,9 +130,9 @@ chmod 755 "$SUITE_HOME/start-router-root.sh"
 cat > "$SUITE_HOME/launch.sh" <<'LAUNCH_SCRIPT_EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-SUITE_HOME="$HOME/.local/share/free-ai-suite"
-CONFIG_HOME="$HOME/.config/free-ai-suite"
-LOG_HOME="$HOME/.local/state/free-ai-suite"
+SUITE_HOME="$HOME/.local/share/sarthi-studio"
+CONFIG_HOME="$HOME/.config/sarthi-studio"
+LOG_HOME="$HOME/.local/state/sarthi-studio"
 APP_HOME="$SUITE_HOME/app"
 API_DIR="$(cat "$CONFIG_HOME/freellmapi-dir" 2>/dev/null || true)"
 API_PORT="$(cat "$CONFIG_HOME/freellmapi-port" 2>/dev/null || printf 3001)"
@@ -171,14 +171,14 @@ if ! studio_is_rust; then
   for _ in $(seq 1 30); do studio_is_rust && break; sleep 1; done
 fi
 if ! studio_is_rust; then
-  command -v notify-send >/dev/null 2>&1 && notify-send "Free AI Suite" "Rust Free AI Studio failed to start. See $LOG_HOME/studio.log"
+  command -v notify-send >/dev/null 2>&1 && notify-send "Free AI Suite" "Rust Sarthi Studio failed to start. See $LOG_HOME/studio.log"
   exit 1
 fi
 xdg-open "$STUDIO_URL" >/dev/null 2>&1 || true
 LAUNCH_SCRIPT_EOF
 chmod 755 "$SUITE_HOME/launch.sh"
 
-cat > "$HOME/.local/share/applications/free-ai-suite.desktop" <<DESKTOP_FILE_EOF
+cat > "$HOME/.local/share/applications/sarthi-studio.desktop" <<DESKTOP_FILE_EOF
 [Desktop Entry]
 Type=Application
 Name=Free AI Suite (Rust)
@@ -189,13 +189,13 @@ Terminal=false
 Categories=Development;Utility;
 StartupNotify=true
 DESKTOP_FILE_EOF
-chmod 644 "$HOME/.local/share/applications/free-ai-suite.desktop"
+chmod 644 "$HOME/.local/share/applications/sarthi-studio.desktop"
 mkdir -p "$HOME/.local/bin"
-cat > "$HOME/.local/bin/free-ai-suite" <<COMMAND_FILE_EOF
+cat > "$HOME/.local/bin/sarthi-studio" <<COMMAND_FILE_EOF
 #!/usr/bin/env bash
 exec "$SUITE_HOME/launch.sh" "\$@"
 COMMAND_FILE_EOF
-chmod 755 "$HOME/.local/bin/free-ai-suite"
+chmod 755 "$HOME/.local/bin/sarthi-studio"
 
 say "Installation finished. Starting Free AI Suite..."
 "$SUITE_HOME/launch.sh"

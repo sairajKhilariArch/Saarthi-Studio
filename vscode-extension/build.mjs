@@ -1,4 +1,4 @@
-// Build script for the Free AI Studio VS Code extension.
+// Build script for the Sarthi Studio VS Code extension.
 //
 // Two bundles:
 //   * dist/extension.js  — the extension host bundle (CommonJS, `vscode` external)

@@ -505,7 +505,7 @@ fn compatibility_block(manifest: &Manifest, app_version: &str) -> Option<String>
         None => None,
         Some(required) if version_at_least(app_version, required) => None,
         Some(required) => Some(format!(
-            "Requires Saarthi Studio {required} or newer; this build is {app_version}."
+            "Requires Sarthi Studio {required} or newer; this build is {app_version}."
         )),
     }
 }

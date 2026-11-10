@@ -828,7 +828,7 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir().join(format!(
-            "saarthi-runner-{name}-{}-{nanos}",
+            "sarthi-runner-{name}-{}-{nanos}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -925,7 +925,7 @@ mod tests {
         let root = temp_dir("paths");
         let inside = root.join("src").join("a.rs");
         let outside = std::env::temp_dir()
-            .join("saarthi-runner-elsewhere")
+            .join("sarthi-runner-elsewhere")
             .join("b.rs");
         let output = format!(
             "{0}:1:1: error: boom\n{0}:1:1: error: boom\n{1}:2:2: error: elsewhere\nerror: link failed without a location\n",

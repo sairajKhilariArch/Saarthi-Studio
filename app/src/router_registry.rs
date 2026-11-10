@@ -1,4 +1,4 @@
-//! Phase 2 router registry: what Saarthi Studio knows about each router it can
+//! Phase 2 router registry: what Sarthi Studio knows about each router it can
 //! manage, independent of which one is installed.
 //!
 //! This is the data layer the Router Manager is built on. It deliberately does
@@ -77,7 +77,7 @@ const ROUTERS: &[RouterSpec] = &[
         arches: &["x86_64", "arm64"],
         methods: &[InstallMethod::DockerCompose, InstallMethod::Remote],
         auto_start_default: true,
-        config: ".config/free-ai-suite/freellmapi-dir",
+        config: ".config/sarthi-studio/freellmapi-dir",
         health: "GET /v1/models",
         docs: "https://github.com/sairajKhilariArch/Saarthi-Studio#router",
     },
@@ -89,7 +89,7 @@ const ROUTERS: &[RouterSpec] = &[
         arches: &["x86_64", "arm64"],
         methods: &[InstallMethod::DockerCompose, InstallMethod::Remote],
         auto_start_default: false,
-        config: ".config/free-ai-suite/omniroute-dir",
+        config: ".config/sarthi-studio/omniroute-dir",
         // The probe in `router.rs` calls /v1/models and counts any answer as
         // reachable (401 included), so the registry documents that same path:
         // the connection tester sends exactly what the health probe sends.
@@ -1279,7 +1279,7 @@ async fn github_text(url: &str) -> Result<String, String> {
     let response = client
         .get(url)
         // GitHub rejects API requests that carry no User-Agent.
-        .header("User-Agent", "saarthi-studio")
+        .header("User-Agent", "sarthi-studio")
         .header("Accept", "application/vnd.github+json")
         .send()
         .await

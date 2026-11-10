@@ -1,7 +1,7 @@
 //! The OS credential store for API keys, so a plaintext secret does not live
 //! in `config.json` (Phase 10).
 //!
-//! One entry per secret: service `io.github.sairajkhilariarch.SaarthiStudio`
+//! One entry per secret: service `io.github.sairajkhilariarch.SarthiStudio`
 //! (the same reverse-DNS id the AppStream metadata carries), account = the
 //! config field name. `save_config_file` moves every non-empty secret into
 //! the store and blanks it from the JSON it writes; `load_config` merges the
@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 pub(crate) const SECRET_FIELDS: [&str; 3] = ["api_key", "search_api_key", "openai_api_key"];
 
 const fn default_service() -> &'static str {
-    "io.github.sairajkhilariarch.SaarthiStudio"
+    "io.github.sairajkhilariarch.SarthiStudio"
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,7 +219,7 @@ mod tests {
     fn the_default_service_is_the_appstream_id() {
         assert_eq!(
             default_service(),
-            "io.github.sairajkhilariarch.SaarthiStudio"
+            "io.github.sairajkhilariarch.SarthiStudio"
         );
     }
 

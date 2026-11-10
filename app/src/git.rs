@@ -1435,7 +1435,7 @@ fn temp_index_path() -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!(
-        "saarthi-checkpoint-{}-{nanos}.index",
+        "sarthi-checkpoint-{}-{nanos}.index",
         std::process::id()
     ))
 }
@@ -1477,7 +1477,7 @@ pub(crate) fn snapshot_tree(root: &Path) -> Result<TreeSnapshot, String> {
         let tree = tree.stdout.trim().to_string();
         let mut args: Vec<String> = vec![
             "-c".to_string(),
-            "user.name=Saarthi Studio".to_string(),
+            "user.name=Sarthi Studio".to_string(),
             "-c".to_string(),
             "user.email=checkpoint@localhost".to_string(),
             "commit-tree".to_string(),
@@ -1493,7 +1493,7 @@ pub(crate) fn snapshot_tree(root: &Path) -> Result<TreeSnapshot, String> {
             }
         }
         args.push("-m".to_string());
-        args.push("Saarthi Studio: checkpoint before an agent run".to_string());
+        args.push("Sarthi Studio: checkpoint before an agent run".to_string());
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         let commit = git(root, &borrowed)?;
         if !commit.ok {
@@ -3292,7 +3292,7 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root =
-            std::env::temp_dir().join(format!("saarthi-not-a-repo-{}-{nanos}", std::process::id()));
+            std::env::temp_dir().join(format!("sarthi-not-a-repo-{}-{nanos}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         assert!(snapshot_tree(&root).is_err());
@@ -3665,7 +3665,7 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root =
-            std::env::temp_dir().join(format!("saarthi-git-{name}-{}-{nanos}", std::process::id()));
+            std::env::temp_dir().join(format!("sarthi-git-{name}-{}-{nanos}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         // Pin the line endings: the fixture writes LF and the assertions read
@@ -4105,7 +4105,7 @@ two
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let root = std::env::temp_dir().join(format!(
-            "saarthi-bare-{name}-{}-{nanos}",
+            "sarthi-bare-{name}-{}-{nanos}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
@@ -4128,7 +4128,7 @@ two
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         let dest = std::env::temp_dir().join(format!(
-            "saarthi-clone-{name}-{}-{nanos}",
+            "sarthi-clone-{name}-{}-{nanos}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dest);

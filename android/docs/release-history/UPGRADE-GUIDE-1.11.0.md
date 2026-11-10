@@ -1,7 +1,7 @@
-# Upgrade guide: Saarthi Studio 1.10.0 → 1.11.0
+# Upgrade guide: Sarthi Studio 1.10.0 → 1.11.0
 
 ## Before upgrading
-1. Open Saarthi Studio 1.10.0 and export **all chats (JSON backup)**. Save the file somewhere outside the app.
+1. Open Sarthi Studio 1.10.0 and export **all chats (JSON backup)**. Save the file somewhere outside the app.
 2. Confirm the FreeLLMAPI URL/key in Settings and test the connection.
 3. If the chat database is valuable, copy the backup to another location. Android's app-private SQLite history is not a substitute for an external backup.
 

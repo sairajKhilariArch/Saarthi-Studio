@@ -925,7 +925,7 @@ mod tests {
 
     #[test]
     fn a_rules_file_round_trips_and_unreadable_input_is_empty() {
-        let dir = std::env::temp_dir().join(format!("saarthi-perm-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sarthi-perm-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("permissions.json");
         let rules = vec![

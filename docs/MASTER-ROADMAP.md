@@ -41,7 +41,7 @@ Delivered in 1.26.4:
   manifests and bad artifact names; wired into `desktop-ci.yml`.
 - All three release jobs call the helper instead of inline `sed`; each job
   validates names before upload; `concurrency` prevents overlapping releases.
-- AppStream metadata (`app/packaging/free-ai-suite.appdata.xml`) shipped into
+- AppStream metadata (`app/packaging/sarthi-studio.appdata.xml`) shipped into
   the AppImage.
 
 Remaining for Phase 1 sign-off:
@@ -336,7 +336,7 @@ a `failed` edge), add/rename/delete with dependency rewriting, an inspector for
 every node field, and the JSON field kept as a synced advanced view. Layout is
 automatic, not free positioning.
 
-Export/import shipped in 2.13.0: a versioned `saarthi.workflow` document, the
+Export/import shipped in 2.13.0: a versioned `sarthi.workflow` document, the
 same validation on import, a new id and unique name, and a fresh schedule
 window.
 
@@ -604,7 +604,7 @@ backup name is not one this app wrote; the panel says which build is back and wh
 the newer one went.
 
 Delivered in 2.42.0: the macOS application bundle. `scripts/ci/bundle-macos-app.sh`
-builds `Saarthi Studio.app` from the staged universal tree — binary in
+builds `Sarthi Studio.app` from the staged universal tree — binary in
 `Contents/MacOS`, UI in `Contents/Resources/static`, an `Info.plist` with the
 version, identifier and executable — and `static_dir_candidates` resolves that
 layout, so the bundle runs as an app rather than a binary with no UI. The release
@@ -641,3 +641,7 @@ running program cannot be deleted.
 
 Open: code signing/notarization, an uninstall for a portable install, and a
 per-machine MSI choice.
+
+## Identity (2.51.0)
+
+The product name is **Sarthi Studio** across the UI, documentation, installers and artifacts. The repository-wide audit, the full old→new map, and every identifier that was deliberately kept (with its migration path) are in `docs/BRANDING-AUDIT.md`. The GitHub repository keeps its own name; the two are not the same thing.

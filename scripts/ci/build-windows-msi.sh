@@ -58,7 +58,7 @@ stage_abs="$(cd "$stage" && pwd)"
 win_stage="$(cygpath -w "$stage_abs" 2>/dev/null || printf '%s' "$stage_abs")"
 
 mkdir -p "$out"
-msi="$out/free-ai-suite_${version}_windows-x86_64.msi"
+msi="$out/sarthi-studio_${version}_windows-x86_64.msi"
 rm -f "$msi"
 
 # `-bindpath stage=<dir>` is what `!(bindpath.stage)` in the authoring resolves
@@ -101,7 +101,7 @@ if command -v msiexec >/dev/null 2>&1; then
     die "msiexec could not unpack the package it just built"
   fi
   # An administrative image keeps the package's directory tree below TARGETDIR
-  # (`LocalApp\\Programs\\Saarthi Studio`), so the payload is found by searching
+  # (`LocalApp\\Programs\\Sarthi Studio`), so the payload is found by searching
   # rather than by assuming a fixed depth.
   if [ -z "$(find "$admin" -type f -name 'free-ai-studio.exe' | head -n 1)" ] ||
     [ -z "$(find "$admin" -type f -path '*static/index.html' | head -n 1)" ]; then

@@ -320,7 +320,7 @@ test("built-in server chats through the router and serves the workspace", async 
 
   const index = await fetch(`${embedded.url}/`);
   assert.equal(index.status, 200);
-  assert.match(await index.text(), /Saarthi Studio/);
+  assert.match(await index.text(), /Sarthi Studio/);
 
   await embedded.close();
   router.server.closeAllConnections();

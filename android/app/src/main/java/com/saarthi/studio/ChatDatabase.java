@@ -8,7 +8,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** SQLite persistence and data records for Saarthi Studio chat history. */
+/** SQLite persistence and data records for Sarthi Studio chat history. */
 public final class ChatDatabase extends android.database.sqlite.SQLiteOpenHelper {
     public static final class PromptPreset {
         final long id; final String name, content; final boolean builtIn;
@@ -99,7 +99,7 @@ public final class ChatDatabase extends android.database.sqlite.SQLiteOpenHelper
     }
 
 
-    private static final String DATABASE_NAME = "saarthi_history.sqlite3";
+    private static final String DATABASE_NAME = "sarthi_history.sqlite3";
 
     public ChatDatabase(Context c) { this(c, DATABASE_NAME); }
 

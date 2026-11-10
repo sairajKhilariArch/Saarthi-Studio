@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn files_round_trip_inside_the_directory() {
         let dir = std::env::temp_dir().join(format!(
-            "saarthi-router-config-{}",
+            "sarthi-router-config-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&dir).unwrap();

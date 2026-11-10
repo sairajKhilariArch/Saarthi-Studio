@@ -1,4 +1,4 @@
-# Upgrade guide: Saarthi Studio 1.11.0 → 1.11.1
+# Upgrade guide: Sarthi Studio 1.11.0 → 1.11.1
 
 ## Before upgrading
 1. Export all chats as JSON and keep a second copy outside the app.

@@ -1,4 +1,4 @@
-# Saarthi Studio — R8/ProGuard rules for the release build.
+# Sarthi Studio — R8/ProGuard rules for the release build.
 #
 # The app's main source set has no runtime dependencies outside the Android
 # framework and uses no reflection, JNI, runtime annotation processing, or

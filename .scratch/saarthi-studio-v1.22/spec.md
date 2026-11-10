@@ -1,4 +1,4 @@
-# Saarthi Studio v1.22.0 — bug fixes + requested improvements
+# Sarthi Studio v1.22.0 — bug fixes + requested improvements
 
 Status: complete (audited & browser-verified 2026-10-29)
 
@@ -30,7 +30,7 @@ Approved decisions (user-confirmed):
 | 12 | Lower-left sidebar organized, Settings entry | done: Settings, Router, Usage + Spaces/Agents/Connections/Files/Auto in the foot; browser-verified |
 | 13 | New thread + thread controls (Build/Plan/Skills/Model) + daily usage | done: Plan mode button, per-message model chip with per-model daily usage from /api/usage, skill picker |
 | 14 | Top-left project selector works (incl. Default) | done: Default project label + server-side project scoping of threads |
-| 15 | Branding = Saarthi Studio everywhere user-facing | done: window title, desktop entry, UI copy; internal free-ai-studio/free-ai-suite identifiers kept per AGENTS.md |
+| 15 | Branding = Sarthi Studio everywhere user-facing | done: window title, desktop entry, UI copy; internal free-ai-studio/sarthi-studio identifiers kept per AGENTS.md |
 | 16 | Settings dynamic + all sections functional | done: 5 sections (Connection/Appearance/Chat context/Deep search/Privacy & about) with persisted active tab; browser-verified |
 | 17 | Media attachments end-to-end + VS Code parity + README/website/contacts | done: committed 1781501 (media+parity) on main, 0ff2f14 (website) on website branch |
 

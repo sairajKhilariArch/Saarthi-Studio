@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="${1:-$HOME/Projects/Saarthi-Studio}"
+REPO="${1:-$HOME/Projects/Sarthi-Studio}"
 if [[ ! -d "$REPO/.git" ]]; then
   echo "Could not find a Git repository at: $REPO" >&2
-  echo "Usage: $0 /path/to/Saarthi-Studio" >&2
+  echo "Usage: $0 /path/to/Sarthi-Studio" >&2
   exit 1
 fi
 if [[ -e "$REPO/android/app" ]]; then
@@ -19,5 +19,5 @@ cp "$SRC/repo-workflow.yml" "$REPO/.github/workflows/build-android.yml"
 echo "Android project copied into: $REPO/android"
 echo "Build workflow installed at: $REPO/.github/workflows/build-android.yml"
 echo
-printf 'Next commands:\n  cd %q\n  git add android .github/workflows/build-android.yml\n  git commit -m "Add Saarthi Studio Android app and APK workflow"\n  git push origin main\n' "$REPO"
-echo "After the push, open the repository's Actions tab and download the saarthi-studio-android-debug-apk artifact from the completed workflow run."
+printf 'Next commands:\n  cd %q\n  git add android .github/workflows/build-android.yml\n  git commit -m "Add Sarthi Studio Android app and APK workflow"\n  git push origin main\n' "$REPO"
+echo "After the push, open the repository's Actions tab and download the sarthi-studio-android-debug-apk artifact from the completed workflow run."

@@ -181,7 +181,7 @@ async fn fetch(state: &AppState) -> Result<Value, String> {
         .header("accept", "application/vnd.github+json")
         .header(
             "user-agent",
-            format!("saarthi-studio/{}", env!("CARGO_PKG_VERSION")),
+            format!("sarthi-studio/{}", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
@@ -438,7 +438,7 @@ async fn published_checksum(
         .timeout(TIMEOUT)
         .header(
             "user-agent",
-            format!("saarthi-studio/{}", env!("CARGO_PKG_VERSION")),
+            format!("sarthi-studio/{}", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
@@ -499,7 +499,7 @@ pub(crate) async fn stage_from(
     }
     let checksum = published_checksum(client, release, &name).await?;
     let meta = json!({
-        "format": "saarthi.update.staged",
+        "format": "sarthi.update.staged",
         "version": 1,
         "latest": latest,
         "current": current,
@@ -676,9 +676,9 @@ fn app_binary_rank(path: &FsPath) -> Option<u8> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     let stem = name.strip_suffix(".exe").unwrap_or(&name);
     match stem {
-        "free-ai-studio" | "saarthi-studio" => Some(0),
+        "free-ai-studio" | "sarthi-studio" => Some(0),
         _ if stem.starts_with("free-ai-studio") => Some(1),
-        _ if stem.starts_with("saarthi") => Some(2),
+        _ if stem.starts_with("sarthi") => Some(2),
         _ => None,
     }
 }
@@ -790,7 +790,7 @@ pub(crate) fn prepare_from(data_dir: &FsPath, staged: &Value) -> Result<Value, S
     let Some(binary) = find_app_binary(&target) else {
         let _ = fs::remove_dir_all(&target);
         return Err(StageError::Refused(format!(
-            "{name} unpacks to {files} files but none of them is a Saarthi Studio binary, so it was not prepared."
+            "{name} unpacks to {files} files but none of them is a Sarthi Studio binary, so it was not prepared."
         )));
     };
     let relative = binary
@@ -799,7 +799,7 @@ pub(crate) fn prepare_from(data_dir: &FsPath, staged: &Value) -> Result<Value, S
         .to_string_lossy()
         .to_string();
     let prepared = json!({
-        "format": "saarthi.update.prepared",
+        "format": "sarthi.update.prepared",
         "version": 1,
         "latest": version,
         "current": env!("CARGO_PKG_VERSION"),
@@ -1171,7 +1171,7 @@ pub(crate) async fn swap_route(
     match swap_binary(&target, FsPath::new(&binary), &version) {
         Ok(swap) => {
             let record = json!({
-                "format": "saarthi.update.applied",
+                "format": "sarthi.update.applied",
                 "version": 1,
                 "latest": swap.version,
                 "previous": env!("CARGO_PKG_VERSION"),
@@ -1399,7 +1399,7 @@ pub(crate) async fn rollback_route(
     match rollback_from(&applied(&dir), &target) {
         Ok(rolled) => {
             let record = json!({
-                "format": "saarthi.update.rollback",
+                "format": "sarthi.update.rollback",
                 "version": 1,
                 "restored": rolled.restored_version,
                 "replaced": rolled.replaced_version,
@@ -1495,7 +1495,7 @@ mod tests {
         // only carries a Windows zip and freebsd is the platform under test
         // through choose_asset, which stage_from reaches via report().
         let payload = report(
-            &release("9.9.9", &["free-ai-suite_9.9.9_freebsd-x86_64.tar.gz"]),
+            &release("9.9.9", &["sarthi-studio_9.9.9_freebsd-x86_64.tar.gz"]),
             "freebsd",
             "x86_64",
             "1.0.0",
@@ -1523,14 +1523,14 @@ mod tests {
         assert!(safe_staged_file(&dir, "a\\b.zip").is_none());
         assert!(safe_staged_file(&dir, "").is_none());
         assert_eq!(
-            safe_staged_file(&dir, "free-ai-suite_2.37.0_windows-x86_64.zip"),
-            Some(staged_dir(&dir).join("free-ai-suite_2.37.0_windows-x86_64.zip"))
+            safe_staged_file(&dir, "sarthi-studio_2.37.0_windows-x86_64.zip"),
+            Some(staged_dir(&dir).join("sarthi-studio_2.37.0_windows-x86_64.zip"))
         );
     }
 
     #[test]
     fn a_malformed_digest_is_never_used_as_the_expected_hash() {
-        let mut broken = release("9.9.9", &["free-ai-suite_9.9.9_windows-x86_64.zip"]);
+        let mut broken = release("9.9.9", &["sarthi-studio_9.9.9_windows-x86_64.zip"]);
         broken["assets"][0]["digest"] = json!("sha256:not-a-hash");
         // No SHA256SUMS.txt in this release either, so the refusal is the only
         // correct answer: an unverifiable download cannot be installed.
@@ -1540,7 +1540,7 @@ mod tests {
             .block_on(published_checksum(
                 &client,
                 &broken,
-                "free-ai-suite_9.9.9_windows-x86_64.zip",
+                "sarthi-studio_9.9.9_windows-x86_64.zip",
             ))
             .expect_err("no usable checksum");
         assert!(
@@ -1580,8 +1580,8 @@ mod tests {
             .collect();
         let url = serve(body.clone()).await;
         let dir = scratch("stage");
-        let meta = json!({"format": "saarthi.update.staged", "version": 1, "latest": "2.37.0", "current": "2.36.0"});
-        let name = "free-ai-suite_2.37.0_windows-x86_64.zip";
+        let meta = json!({"format": "sarthi.update.staged", "version": 1, "latest": "2.37.0", "current": "2.36.0"});
+        let name = "sarthi-studio_2.37.0_windows-x86_64.zip";
 
         let manifest = stage_asset(&staged_dir(&dir), name, &url, &checksum, &meta)
             .await
@@ -1617,7 +1617,7 @@ mod tests {
     fn release(version: &str, assets: &[&str]) -> Value {
         json!({
             "tag_name": format!("v{version}"),
-            "name": format!("Saarthi Studio {version}"),
+            "name": format!("Sarthi Studio {version}"),
             "html_url": format!("https://github.com/sairajKhilariArch/Saarthi-Studio/releases/tag/v{version}"),
             "published_at": "2026-11-10T00:00:00Z",
             "body": "Release notes here.",
@@ -1647,10 +1647,10 @@ mod tests {
     #[test]
     fn the_asset_choice_follows_the_platform_and_refuses_an_unsupported_arch() {
         let names: Vec<String> = [
-            "free-ai-suite_2.36.0_linux-x86_64.tar.gz",
-            "free-ai-suite_2.36.0_windows-x86_64.zip",
-            "free-ai-suite_2.36.0_macos-universal.tar.gz",
-            "free-ai-suite_2.36.0_x86_64.AppImage",
+            "sarthi-studio_2.36.0_linux-x86_64.tar.gz",
+            "sarthi-studio_2.36.0_windows-x86_64.zip",
+            "sarthi-studio_2.36.0_macos-universal.tar.gz",
+            "sarthi-studio_2.36.0_x86_64.AppImage",
             "free-ai-studio_2.36.0-1_amd64.deb",
             "SHA256SUMS.txt",
         ]
@@ -1660,17 +1660,17 @@ mod tests {
 
         assert_eq!(
             choose_asset(&names, "windows", "x86_64").as_deref(),
-            Some("free-ai-suite_2.36.0_windows-x86_64.zip")
+            Some("sarthi-studio_2.36.0_windows-x86_64.zip")
         );
         // The portable tarball, not the .deb or the AppImage: no root, no fuse,
         // and the same file the Linux release already smokes.
         assert_eq!(
             choose_asset(&names, "linux", "x86_64").as_deref(),
-            Some("free-ai-suite_2.36.0_linux-x86_64.tar.gz")
+            Some("sarthi-studio_2.36.0_linux-x86_64.tar.gz")
         );
         assert_eq!(
             choose_asset(&names, "macos", "aarch64").as_deref(),
-            Some("free-ai-suite_2.36.0_macos-universal.tar.gz")
+            Some("sarthi-studio_2.36.0_macos-universal.tar.gz")
         );
         // Nothing is published for this target, so nothing is offered.
         assert_eq!(choose_asset(&names, "linux", "aarch64"), None);
@@ -1681,7 +1681,7 @@ mod tests {
         let payload = report(
             &release(
                 "2.36.0",
-                &["free-ai-suite_2.36.0_windows-x86_64.zip", "SHA256SUMS.txt"],
+                &["sarthi-studio_2.36.0_windows-x86_64.zip", "SHA256SUMS.txt"],
             ),
             "windows",
             "x86_64",
@@ -1694,7 +1694,7 @@ mod tests {
         assert_eq!(payload["latest"], "2.36.0");
         assert_eq!(
             payload["asset"]["name"],
-            "free-ai-suite_2.36.0_windows-x86_64.zip"
+            "sarthi-studio_2.36.0_windows-x86_64.zip"
         );
         assert_eq!(payload["asset"]["digest"], "sha256:abc");
         assert_eq!(payload["asset"]["size"], 1024);
@@ -1709,7 +1709,7 @@ mod tests {
     #[test]
     fn the_same_or_an_older_release_says_there_is_no_update() {
         let same = report(
-            &release("2.35.0", &["free-ai-suite_2.35.0_windows-x86_64.zip"]),
+            &release("2.35.0", &["sarthi-studio_2.35.0_windows-x86_64.zip"]),
             "windows",
             "x86_64",
             "2.35.0",
@@ -1718,7 +1718,7 @@ mod tests {
         assert_eq!(same["update_available"], false);
 
         let older = report(
-            &release("2.34.0", &["free-ai-suite_2.34.0_windows-x86_64.zip"]),
+            &release("2.34.0", &["sarthi-studio_2.34.0_windows-x86_64.zip"]),
             "windows",
             "x86_64",
             "2.35.0",
@@ -1737,7 +1737,7 @@ mod tests {
     #[test]
     fn an_unsupported_platform_still_reports_the_release_without_an_asset() {
         let payload = report(
-            &release("2.36.0", &["free-ai-suite_2.36.0_windows-x86_64.zip"]),
+            &release("2.36.0", &["sarthi-studio_2.36.0_windows-x86_64.zip"]),
             "freebsd",
             "x86_64",
             "2.35.0",
@@ -1750,7 +1750,7 @@ mod tests {
             .as_array()
             .expect("list")
             .iter()
-            .any(|name| name == "free-ai-suite_2.36.0_windows-x86_64.zip"));
+            .any(|name| name == "sarthi-studio_2.36.0_windows-x86_64.zip"));
     }
 
     fn write_zip(path: &FsPath, entries: &[(&str, &[u8])]) {
@@ -1766,7 +1766,7 @@ mod tests {
 
     fn staged_record(version: &str, asset: &str, sha: &str) -> Value {
         json!({
-            "format": "saarthi.update.staged",
+            "format": "sarthi.update.staged",
             "version": 1,
             "latest": version,
             "asset": asset,
@@ -1805,7 +1805,7 @@ mod tests {
         let dir = scratch("prepare-changed");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "free-ai-suite_9.9.9_windows-x86_64.zip";
+        let name = "sarthi-studio_9.9.9_windows-x86_64.zip";
         fs::write(staging.join(name), b"replaced after verification").expect("write");
         // A well-formed hash that is simply not this file's hash.
         let error = prepare_from(&dir, &staged_record("9.9.9", name, &"a".repeat(64)))
@@ -1825,7 +1825,7 @@ mod tests {
         let dir = scratch("prepare-zip");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "free-ai-suite_9.9.9_windows-x86_64.zip";
+        let name = "sarthi-studio_9.9.9_windows-x86_64.zip";
         let archive = staging.join(name);
         write_zip(
             &archive,
@@ -1862,13 +1862,13 @@ mod tests {
         let dir = scratch("prepare-no-binary");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "free-ai-suite_9.9.9_windows-x86_64.zip";
+        let name = "sarthi-studio_9.9.9_windows-x86_64.zip";
         let archive = staging.join(name);
         write_zip(&archive, &[("README.txt", b"notes")]);
         let sha = installer::sha256_file(&archive).expect("hash");
         let error = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect_err("no binary");
         assert!(
-            error.message().contains("Saarthi Studio binary"),
+            error.message().contains("Sarthi Studio binary"),
             "{}",
             error.message()
         );
@@ -2112,7 +2112,7 @@ mod tests {
     fn a_rollback_is_recorded_beside_the_prepared_update() {
         let dir = scratch("rollback-record");
         let record = json!({
-            "format": "saarthi.update.rollback",
+            "format": "sarthi.update.rollback",
             "restored": "9.8.0",
             "replaced": "9.9.9",
             "superseded": "free-ai-studio.old-9.9.9.exe",
@@ -2148,7 +2148,7 @@ mod tests {
         let dir = scratch("prepare-gz");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "free-ai-suite_9.9.9_linux-x86_64.tar.gz";
+        let name = "sarthi-studio_9.9.9_linux-x86_64.tar.gz";
         let archive = staging.join(name);
         {
             let encoder = flate2::write::GzEncoder::new(

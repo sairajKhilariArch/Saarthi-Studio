@@ -1962,7 +1962,7 @@ async fn plan_with_cloud(state: &AppState, run: &RunRow) -> Result<(), String> {
     let messages = vec![
         json!({
             "role": "system",
-            "content": "You are the Saarthi Studio PLANNER running in the cloud. You cannot read \
+            "content": "You are the Sarthi Studio PLANNER running in the cloud. You cannot read \
         files or run commands. Given a coding goal and a workspace outline, reply with a compact \
         implementation plan: numbered steps, one line each, naming the exact files to create or edit \
         and the command that verifies the result. No preamble, no code blocks, at most 40 lines."
@@ -2074,7 +2074,7 @@ async fn ask_cloud_for_guidance(
     let messages = vec![
         json!({
             "role": "system",
-            "content": "You are the Saarthi Studio cloud advisor. A small local model is \
+            "content": "You are the Sarthi Studio cloud advisor. A small local model is \
         executing an approved plan and got stuck. Reply with at most 6 short bullet points of \
         concrete guidance for its next step: what to read, what to change and how to verify. \
         No code dumps."
@@ -3391,48 +3391,48 @@ fn normalize_profile(input: &str) -> String {
 fn profile_role(profile: &str) -> &'static str {
     match profile {
         "planner" => {
-            "You are the Saarthi Studio ARCHITECT/PLANNER. Analyze the task and inspect the \
+            "You are the Sarthi Studio ARCHITECT/PLANNER. Analyze the task and inspect the \
 workspace as needed, plan system structure and boundaries, and produce the plan the \
 implementation agents will follow. When the plan is complete, finish with done whose \
 summary IS the plan (steps, likely files, dependencies). You may NOT write files or \
 run commands."
         }
         "frontend" => {
-            "You are the Saarthi Studio FRONTEND developer. Build and fix UI code (markup, \
+            "You are the Sarthi Studio FRONTEND developer. Build and fix UI code (markup, \
 styles, frontend scripts) in the workspace, one step at a time, and verify what you \
 can with commands. Finish with done only once the frontend actually addresses the goal."
         }
         "backend" => {
-            "You are the Saarthi Studio BACKEND developer. Build and fix server-side code, \
+            "You are the Sarthi Studio BACKEND developer. Build and fix server-side code, \
 routes and business logic in the workspace, one step at a time, and verify what you \
 can with commands. Finish with done only once the backend actually addresses the goal."
         }
         "database" => {
-            "You are the Saarthi Studio DATABASE engineer. Work on schema definitions, \
+            "You are the Sarthi Studio DATABASE engineer. Work on schema definitions, \
 migrations and data-access code in the workspace, one step at a time, and verify \
 what you can with commands. Finish with done only once the data layer actually \
 addresses the goal."
         }
         "debugger" => {
-            "You are the Saarthi Studio DEBUGGING agent. Reproduce failures with real \
+            "You are the Sarthi Studio DEBUGGING agent. Reproduce failures with real \
 commands, read the relevant code and logs, and diagnose the exact cause with file \
 paths and line references. You may run commands but may NOT write files — your \
 summary is the diagnosis (and optionally the suggested fix), not a repair."
         }
         "testing" => {
-            "You are the Saarthi Studio TESTING agent. Find and run the relevant tests for the \
+            "You are the Sarthi Studio TESTING agent. Find and run the relevant tests for the \
 goal, capture real exit codes and output, and separate infrastructure failures (missing \
 tools or deps) from actual test failures. You may run commands but may NOT write files. \
 Never claim tests passed unless a run said so."
         }
         "review" => {
-            "You are the Saarthi Studio REVIEWER. Inspect the current code and recent diffs, and \
+            "You are the Sarthi Studio REVIEWER. Inspect the current code and recent diffs, and \
 report concrete findings (bugs, security risks, regressions, maintainability issues) with \
 file paths and line references where possible. You may NOT write files or run commands. \
 Finish with done whose summary is the findings list."
         }
         _ => {
-            "You are the Saarthi Studio autonomous coding agent working inside an open workspace \
+            "You are the Sarthi Studio autonomous coding agent working inside an open workspace \
 folder. You complete the task one step at a time: inspect, plan, edit, verify, and keep \
 going until the goal is actually met."
         }
@@ -4786,7 +4786,7 @@ mod tests {
     #[test]
     fn the_monitor_payload_carries_tokens_and_timing() {
         let path =
-            std::env::temp_dir().join(format!("saarthi-runs-overview-{}.db", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sarthi-runs-overview-{}.db", uuid::Uuid::new_v4()));
         let conn = crate::open_db(&path).expect("temp db");
         initialize(&conn).expect("schema");
         conn.execute(
@@ -5535,7 +5535,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     #[tokio::test]
     async fn run_command_captures_stdout_and_stderr() {
-        let dir = std::env::temp_dir().join(format!("saarthi-agent-cmd-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sarthi-agent-cmd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let root = FsPath::new(&dir);
         let output = run_command(root, "echo marker-stdout; echo marker-stderr 1>&2")
@@ -5549,7 +5549,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     #[tokio::test]
     async fn run_command_reports_the_real_exit_code() {
-        let dir = std::env::temp_dir().join(format!("saarthi-agent-cmd2-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sarthi-agent-cmd2-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let output = run_command(FsPath::new(&dir), "exit 7").await.unwrap();
         assert!(output.contains("exit: 7"), "{output}");
@@ -5585,7 +5585,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .subsec_nanos();
-        let dir = std::env::temp_dir().join(format!("saarthi-agent-wparent-{}", salt));
+        let dir = std::env::temp_dir().join(format!("sarthi-agent-wparent-{}", salt));
         std::fs::create_dir_all(&dir).unwrap();
         let root = FsPath::new(&dir);
         let action = Action::Write {
@@ -5607,7 +5607,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .subsec_nanos();
-        let dir = std::env::temp_dir().join(format!("saarthi-agent-ckpt-{}", salt));
+        let dir = std::env::temp_dir().join(format!("sarthi-agent-ckpt-{}", salt));
         std::fs::create_dir_all(&dir).unwrap();
         let root = FsPath::new(&dir);
 
@@ -5671,7 +5671,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     fn run_fixture(tag: &str, base_url: &str) -> RunFixture {
         let root =
-            std::env::temp_dir().join(format!("saarthi-agent-e2e-{tag}-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sarthi-agent-e2e-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let ws = root.join("ws");
         std::fs::create_dir_all(&ws).unwrap();
@@ -6490,7 +6490,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     #[test]
     fn the_runs_list_query_maps_every_column() {
         let path =
-            std::env::temp_dir().join(format!("saarthi-runs-list-{}.db", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sarthi-runs-list-{}.db", uuid::Uuid::new_v4()));
         let conn = crate::open_db(&path).expect("temp db");
         initialize(&conn).expect("schema");
         conn.execute(
@@ -6533,7 +6533,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             json!({
                 "servers": [{
                     "name": "ghost",
-                    "command": "saarthi-no-such-mcp-server",
+                    "command": "sarthi-no-such-mcp-server",
                     "args": [],
                     "enabled": true
                 }]
@@ -6983,7 +6983,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         // the API alone; the guard is what protects a record edited out of band,
         // and it is tested against exactly such a record.
         let path =
-            std::env::temp_dir().join(format!("saarthi-queue-cycle-{}.db", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sarthi-queue-cycle-{}.db", uuid::Uuid::new_v4()));
         let conn = crate::open_db(&path).expect("temp db");
         initialize(&conn).expect("schema");
         conn.execute(

@@ -99,7 +99,7 @@ run_case() {
 
     set +e
     PATH="${TMP_DIR}/bin:${PATH}" \
-        SAARTHI_ANDROID_PROJECT_DIR="$WORKSPACE" \
+        SARTHI_ANDROID_PROJECT_DIR="$WORKSPACE" \
         FAKE_ADB_MODE="$mode" \
         bash "$RUNNER_SCRIPT" > "$output_file" 2>&1
     actual_exit=$?

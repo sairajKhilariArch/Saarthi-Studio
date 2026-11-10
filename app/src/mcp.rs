@@ -1159,7 +1159,7 @@ async fn connect_once(server: &Server) -> Result<Handshake, String> {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "saarthi-studio",
+                    "name": "sarthi-studio",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             }),
@@ -2541,7 +2541,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("saarthi-mcp-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sarthi-mcp-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         dir.join("mcp.json")

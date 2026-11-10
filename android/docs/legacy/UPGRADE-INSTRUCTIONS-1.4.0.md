@@ -1,4 +1,4 @@
-# Saarthi Studio Android 1.4.0 — Usage & Diagnostics
+# Sarthi Studio Android 1.4.0 — Usage & Diagnostics
 
 This update adds a local Usage & Diagnostics screen. It records AI request success/failure, configured model, HTTP status when available, latency, usage tokens reported by FreeLLMAPI, routed-provider metadata when supplied, and a short redacted error detail for recent failed requests. The connection-test button checks the configured `/v1/models` endpoint.
 
@@ -8,7 +8,7 @@ This update adds a local Usage & Diagnostics screen. It records AI request succe
 2. From Terminal, switch your local clone to the Android branch:
 
    ```bash
-   cd ~/Projects/Saarthi-Studio
+   cd ~/Projects/Sarthi-Studio
    git switch android
    git pull --ff-only origin android
    ```
@@ -16,7 +16,7 @@ This update adds a local Usage & Diagnostics screen. It records AI request succe
 3. Run the upgrade script from the extracted project directory, passing your local repository path:
 
    ```bash
-   ./apply-usage-diagnostics-upgrade.sh ~/Projects/Saarthi-Studio
+   ./apply-usage-diagnostics-upgrade.sh ~/Projects/Sarthi-Studio
    ```
 
    The script requires branch `android`, makes a timestamped backup, updates the main Android source, and bumps the app to version 1.4.0.
@@ -24,15 +24,15 @@ This update adds a local Usage & Diagnostics screen. It records AI request succe
 4. Review and push:
 
    ```bash
-   cd ~/Projects/Saarthi-Studio
+   cd ~/Projects/Sarthi-Studio
    git diff --check
    git diff --stat
-   git add app/src/main/java/com/saarthi/studio/MainActivity.java app/build.gradle.kts
+   git add app/src/main/java/com/sarthi/studio/MainActivity.java app/build.gradle.kts
    git commit -m "Add usage and diagnostics dashboard"
    git push origin android
    ```
 
-5. Open the repository's Actions tab, run **Build Saarthi Studio Android APK** on `android`, and download `saarthi-studio-android-debug-apk` only after it succeeds.
+5. Open the repository's Actions tab, run **Build Sarthi Studio Android APK** on `android`, and download `sarthi-studio-android-debug-apk` only after it succeeds.
 
 ## What is tracked
 

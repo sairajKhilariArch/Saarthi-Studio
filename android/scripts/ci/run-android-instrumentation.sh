@@ -8,7 +8,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ANDROID_PROJECT_DIR="${SAARTHI_ANDROID_PROJECT_DIR:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
+ANDROID_PROJECT_DIR="${SARTHI_ANDROID_PROJECT_DIR:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
 WORKSPACE="${GITHUB_WORKSPACE:-$(cd -- "${ANDROID_PROJECT_DIR}/.." && pwd)}"
 DIAG_DIR="${ANDROID_PROJECT_DIR}/ci-diagnostics"
 APP_APK="${ANDROID_PROJECT_DIR}/app/build/outputs/apk/debug/app-debug.apk"
@@ -127,7 +127,7 @@ fi
 echo 'Recent Android runtime errors:'
 if [[ -f "${DIAG_DIR}/logcat.txt" ]]; then
     grep -Ei \
-        'FATAL EXCEPTION|AndroidRuntime|INSTRUMENTATION_FAILED|Process: com\.saarthi|Fatal signal|Permission Denial|lowmemorykiller' \
+        'FATAL EXCEPTION|AndroidRuntime|INSTRUMENTATION_FAILED|Process: com\.sarthi|Fatal signal|Permission Denial|lowmemorykiller' \
         "${DIAG_DIR}/logcat.txt" | tail -n 200 || true
 fi
 

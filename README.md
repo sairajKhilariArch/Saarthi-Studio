@@ -1,4 +1,4 @@
-# Saarthi Studio — desktop, Windows, macOS, Android and VS Code
+# Sarthi Studio — desktop, Windows, macOS, Android and VS Code
 
 A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The interface uses HTML, CSS, and JavaScript, served locally by the Rust app and shown in the application window: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
@@ -8,20 +8,20 @@ Pushing a `v*` tag (e.g. `v2.0.0`) to GitHub Actions attaches every release file
 
 | Platform | Artifact | Install & run |
 | --- | --- | --- |
-| Linux (deb) | `free-ai-suite_<version>_amd64.deb` | `sudo dpkg -i free-ai-suite_*_amd64.deb`, then launch **Saarthi Studio** from the menu or run `free-ai-studio` |
-| Linux (AppImage) | `free-ai-suite_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
-| Linux (portable) | `free-ai-suite_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./free-ai-studio` (run `./install-and-run.sh` for the full source-build install instead) |
-| Windows | `free-ai-suite_<version>_windows-x86_64.zip` | Extract, run `free-ai-studio.exe` (WebView2 ships with Windows 10/11) |
-| macOS (arm64) | `free-ai-suite_<version>_macos-arm64.tar.gz` | Extract and run `./free-ai-studio`. **Unsigned build**: on first launch right-click the binary → Open (Gatekeeper otherwise blocks it). No notarization yet. |
-| Android | `free-ai-suite_<version>_android-release-unsigned.apk` | Enable **Install unknown apps** for your file manager, open the APK; an AAB is also attached for Play-style signing |
+| Linux (deb) | `sarthi-studio_<version>_amd64.deb` | `sudo dpkg -i sarthi-studio_*_amd64.deb`, then launch **Sarthi Studio** from the menu or run `free-ai-studio` |
+| Linux (AppImage) | `sarthi-studio_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
+| Linux (portable) | `sarthi-studio_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./free-ai-studio` (run `./install-and-run.sh` for the full source-build install instead) |
+| Windows | `sarthi-studio_<version>_windows-x86_64.zip` | Extract, run `free-ai-studio.exe` (WebView2 ships with Windows 10/11) |
+| macOS (arm64) | `sarthi-studio_<version>_macos-arm64.tar.gz` | Extract and run `./free-ai-studio`. **Unsigned build**: on first launch right-click the binary → Open (Gatekeeper otherwise blocks it). No notarization yet. |
+| Android | `sarthi-studio_<version>_android-release-unsigned.apk` | Enable **Install unknown apps** for your file manager, open the APK; an AAB is also attached for Play-style signing |
 | VS Code | `free-ai-studio-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension free-ai-studio-vscode.vsix` |
 
 Every artifact ships a `SHA256SUMS.txt`; verify before installing. All creatives talk to your router on `127.0.0.1` only — nothing is uploaded anywhere except the request you send.
 
 ## One-command install (from source)
 
-1. Extract `free-ai-suite-rust-ubuntu.zip`.
-2. Open a terminal inside the extracted `free-ai-suite-rust-ubuntu` folder.
+1. Extract `sarthi-studio-rust-ubuntu.zip`.
+2. Open a terminal inside the extracted `sarthi-studio-rust-ubuntu` folder.
 3. Run:
 
    ```bash
@@ -32,7 +32,7 @@ The installer installs missing Ubuntu prerequisites, installs the stable Rust to
 
 The installer reuses `~/freellmapi` if it exists. It preserves FreeLLMAPI's existing `.env`, database, provider configuration, and the AI Studio's existing local settings/history outside the application folder. It does not remove or reset provider settings.
 
-After that, launch **Free AI Suite (Rust)** from the Ubuntu Applications menu, or run `~/.local/bin/free-ai-suite`.
+After that, launch **Free AI Suite (Rust)** from the Ubuntu Applications menu, or run `~/.local/bin/sarthi-studio`.
 
 ## First-time setup
 
@@ -105,7 +105,7 @@ Windows users run `free-ai-studio.exe` from the release zip; WebView2 ships with
 
 ## Router console and Docker lifecycle
 
-Studio reads where FreeLLMAPI is installed from `~/.config/free-ai-suite/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/free-ai-studio/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
+Studio reads where FreeLLMAPI is installed from `~/.config/sarthi-studio/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/free-ai-studio/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
 
 ```bash
 free-ai-studio router status|start|stop
@@ -130,23 +130,23 @@ The built-in server now implements the desktop API surface the UI uses — strea
 - Settings: `~/.config/free-ai-studio/config.json`
 - Last opened folder: `~/.config/free-ai-studio/workspace.json`
 - Chat history: `~/.local/share/free-ai-studio/history.sqlite3`
-- App log: `~/.local/state/free-ai-suite/studio.log`
+- App log: `~/.local/state/sarthi-studio/studio.log`
 
 ## Troubleshooting
 
 ```bash
 cd ~/freellmapi && sudo docker compose ps
 cd ~/freellmapi && sudo docker compose logs --tail=100 freellmapi
-cat ~/.local/state/free-ai-suite/studio.log
+cat ~/.local/state/sarthi-studio/studio.log
 ```
 
-If the Rust build fails, run `cargo build --release` inside `~/.local/share/free-ai-suite/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
+If the Rust build fails, run `cargo build --release` inside `~/.local/share/sarthi-studio/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
 
 FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi — its dashboard (`http://127.0.0.1:3001` by default) is where provider keys and fallback chains are configured.
 
 ## Other GitHub projects this app uses
 
-- **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Saarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
+- **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Sarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
 - **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local `0600` config file.
 
 ## Contacts
@@ -170,12 +170,12 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 
 ### Android (companion client)
 - `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.19.0` (version code `16`).
-- The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB (`saarthi-studio-android-release-unsigned`). Sign artifacts with your own keystore at distribution time.
+- The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB (`sarthi-studio-android-release-unsigned`). Sign artifacts with your own keystore at distribution time.
 - Plaintext router endpoints are restricted to loopback/private LAN ranges via `network_security_config.xml`; public hosts must use HTTPS.
 - Local helper: `android/BUILD-APK-UBUNTU.sh` runs unit tests, lint, debug and release assembly.
 
 ### Desktop (Rust host)
 - The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
 - Pushing a `v*` tag runs "Desktop Release", which builds and attaches every platform: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage with SHA-256 checksums; a Windows x86_64 portable zip built on `windows-latest`; a macOS arm64 portable tarball (unsigned) built on `macos-latest`; the unsigned Android release APK/AAB; and the VS Code `.vsix`.
-- Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/free-ai-suite/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
+- Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/sarthi-studio/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
 

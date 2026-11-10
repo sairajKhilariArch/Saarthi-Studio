@@ -1216,7 +1216,7 @@ fn parse_import(document: &Value) -> Result<ImportedGraph, String> {
 
 fn export_document(workflow: &Workflow) -> Value {
     json!({
-        "format": "saarthi.workflow",
+        "format": "sarthi.workflow",
         "version": EXPORT_VERSION,
         "name": workflow.name,
         "prompt": workflow.prompt,
@@ -1908,7 +1908,7 @@ mod tests {
     #[test]
     fn an_import_document_is_validated_and_normalised() {
         let parsed = parse_import(&json!({
-            "format": "saarthi.workflow",
+            "format": "sarthi.workflow",
             "version": 1,
             "name": "  Nightly  ",
             "nodes": [{ "id": "tidy", "kind": "task", "note": "x" }]
