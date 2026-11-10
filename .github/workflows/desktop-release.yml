@@ -75,6 +75,11 @@ jobs:
           dpkg-deb -c "$DEB" | grep -q usr/share/free-ai-suite/static/skills/debug/SKILL.md || { echo "ERROR: bundled skills missing from the deb"; exit 1; }
           dpkg-deb -c "$DEB"
 
+      # Unpacked and booted here, not just inspected: a package that installs
+      # but cannot start is exactly the failure this catches.
+      - name: Smoke the installed package (unpack, boot, report version)
+        run: bash scripts/ci/smoke-package.sh dist/*.deb
+
       # Reject control characters/spaces in names and verify checksums before
       # anything is handed to upload-artifact or the release API.
       - name: Validate artifact names
@@ -153,6 +158,9 @@ jobs:
           tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
           rm -rf "dist/$STAGE"
 
+      - name: Smoke the portable tarball (unpack, boot, report version)
+        run: bash scripts/ci/smoke-package.sh dist/*.tar.gz
+
       # No .deb here: the deb job (ubuntu-22.04, headless) is the
       # distributable deb — a GUI-tree deb from ubuntu-latest carries a
       # glibc 2.39 dependency that refuses to install on 22.04 (this is what
@@ -204,6 +212,9 @@ jobs:
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "dist/free-ai-suite_${VERSION}_x86_64.AppImage"
+
+      - name: Smoke the AppImage (extract, boot, report version)
+        run: bash scripts/ci/smoke-package.sh dist/*.AppImage
 
       - name: Generate checksums
         run: |
@@ -279,6 +290,12 @@ jobs:
           Copy-Item README.md, app/LICENSE "$stage/"
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/free-ai-suite_${version}_windows-x86_64.zip" -Force
           Remove-Item -Recurse -Force $stage
+
+      # Git Bash ships on every Windows runner, so the same smoke script runs
+      # here and on Linux/macOS instead of a PowerShell second implementation.
+      - name: Smoke the packaged zip (unpack, boot, report version)
+        shell: bash
+        run: bash scripts/ci/smoke-package.sh dist/*.zip
 
       - name: Validate artifact names
         run: bash scripts/ci/verify-artifacts.sh dist
@@ -396,6 +413,9 @@ jobs:
           STAGE="$(cat dist/stage-name.txt)"
           tar -C dist -czf "${STAGE}.tar.gz" "$(basename "$STAGE")"
           rm -rf "$STAGE" dist/stage-name.txt
+
+      - name: Smoke the packaged tarball (unpack, boot, report version)
+        run: bash scripts/ci/smoke-package.sh dist/*.tar.gz
 
       - name: Validate artifact names
         run: bash scripts/ci/verify-artifacts.sh dist

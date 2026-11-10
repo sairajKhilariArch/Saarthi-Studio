@@ -460,9 +460,15 @@ recorded step and the next model call in flight, kill the process, and require
 the restarted app to report that run `interrupted` with a readable step log. The
 harness is 28 checks, up from 19.
 
+Delivered in 2.31.0: install smokes. `scripts/ci/smoke-package.sh` unpacks a
+release artifact the way a user would (tarball, zip, `.deb`, AppImage, or a bare
+binary), boots the packaged binary headless against a scratch home, waits for
+`/api/ready`, serves `/`, and compares the version the binary reports with
+`app/Cargo.toml`. The release workflow runs it on the `.deb`, the Linux tarball
+and AppImage, the Windows zip and the macOS tarball.
+
 Remaining: a render smoke and a harness for `ide.js`, injections for disk-full,
-permission-denied and a corrupt database, install smokes in CI, and a Windows
-Rust job.
+permission-denied and a corrupt database, and a Windows Rust job.
 
 ## Phase 17 — Observability
 

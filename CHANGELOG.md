@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.31.0
+
+A release artifact is now proven to run before it is published, not merely to
+build.
+
+- `scripts/ci/smoke-package.sh` unpacks an artifact the way a user would — a
+  portable tarball, a Windows zip, a `.deb` (`dpkg-deb -x`), an AppImage
+  (`--appimage-extract`) or a bare binary — boots the binary inside it headless
+  against a scratch home on a free port, waits for `/api/ready`, serves `/`, and
+  asks `/api/diagnostics/bundle` for its own version. A missing static tree, a
+  binary that cannot boot, or a build that reports the wrong version fails.
+- The release workflow runs it on every packaged artifact: the `.deb`, the Linux
+  tarball and AppImage, the Windows zip, and the macOS universal tarball (which
+  previously smoke-tested only the staged binary before packing it).
+- On Windows the script passes a native `FREE_AI_STUDIO_HOME` path (`cygpath -m`),
+  because a Git Bash `/tmp` path is not an absolute path to the native binary —
+  the same trap the end-to-end harness hit with the workspace call.
+
 ## 2.30.0
 
 The end-to-end harness now proves that the two failures a user actually hits end
