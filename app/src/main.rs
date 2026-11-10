@@ -71,6 +71,7 @@ mod schema;
 mod skills;
 mod terminal;
 mod thinking;
+mod update;
 mod workspace;
 
 const APP_NAME: &str = "Saarthi Studio";
@@ -2999,6 +3000,9 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "ok": true,
         "app": APP_NAME,
+        // The build this process is, so the About card can show it without a
+        // second source of truth.
+        "version": env!("CARGO_PKG_VERSION"),
         "runtime": "rust",
         "router": cfg.base_url,
         // True only when launched by an embedding host (the VS Code
@@ -4409,6 +4413,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/open", post(open_url))
         .route("/api/health", get(health))
         .route("/api/health/providers", get(health::providers))
+        .route("/api/update/check", get(update::check_route))
         .route("/api/test", post(test_router))
         .route("/api/models", get(models))
         .route("/api/thinking/levels", get(thinking_levels))

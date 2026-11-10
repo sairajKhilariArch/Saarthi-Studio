@@ -50,6 +50,9 @@ function setSettingsSection(name) {
   if (name === "mcp") void loadMcp();
   if (name === "diagnostics") void loadDiagnostics();
   if (name === "extensions") void loadExtensions();
+  // Read on the visit, not at boot: the About card is the only place that shows
+  // the build, and a settings panel that is never opened should cost nothing.
+  if (name === "about") void loadAppVersion();
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
 }
 
@@ -123,6 +126,7 @@ function setupSettingsNav() {
   $("diagBundle").addEventListener("click", () => void downloadDiagnosticsBundle());
   $("diagLogRefresh").addEventListener("click", () => void loadProcessLog());
   $("readyRefresh").addEventListener("click", () => void loadReadiness());
+  if ($("updateCheck")) $("updateCheck").addEventListener("click", () => void checkForUpdates());
   $("diagArea").addEventListener("change", () => void loadDiagnostics());
   $("themeLightBtn").addEventListener("click", () => applyTheme("light"));
   $("themeDarkBtn").addEventListener("click", () => applyTheme("dark"));
@@ -946,6 +950,51 @@ function toast(message) {
   box.classList.remove("hidden");
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => box.classList.add("hidden"), 4000);
+}
+
+/* ---- updates: a check only, never an install --------------------- */
+
+/* The server does the comparison; this only turns its answer into a sentence,
+   so a failed check reads as a failure instead of a version. */
+function updateStatusText(data) {
+  if (!data || typeof data !== "object") return "The update check returned no answer.";
+  if (data.error) return `Update check failed: ${data.error}`;
+  const current = data.current || "unknown";
+  if (!data.update_available) return `You are up to date (${current}).`;
+  const latest = data.latest || "a newer release";
+  const head = `Version ${latest} is available — this build is ${current}.`;
+  if (!data.asset || !data.asset.name) {
+    return `${head} No ${data.platform || "platform"} build is published for this machine; see the release page.`;
+  }
+  const size = typeof data.asset.size === "number" ? ` (${formatBytes(data.asset.size)})` : "";
+  return `${head} Download ${data.asset.name}${size}.`;
+}
+
+async function loadAppVersion() {
+  const host = $("aboutVersion");
+  if (!host) return;
+  try {
+    const { data } = await api("/api/health");
+    if (data && data.version) host.textContent = data.version;
+  } catch {
+    // The card keeps "unknown"; inventing a version would be worse.
+  }
+}
+
+async function checkForUpdates() {
+  const button = $("updateCheck");
+  const status = $("updateStatus");
+  if (!button || !status) return;
+  button.disabled = true;
+  status.textContent = "Checking the public release page…";
+  try {
+    const { data } = await api("/api/update/check");
+    status.textContent = updateStatusText(data);
+  } catch (error) {
+    status.textContent = `Update check failed: ${error && error.message ? error.message : "no answer"}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function api(path, options = {}) {

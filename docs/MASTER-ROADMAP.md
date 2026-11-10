@@ -529,5 +529,11 @@ version unadvanced so the next boot retries; and a database written by a newer
 build is refused without being touched. Boot logs the outcome to `studio.log`
 and `/api/ready` reports the schema version as a required check.
 
-Open: a Windows MSI/EXE, a macOS `.app`/dmg, the auto-update check itself (and
-the download/verify/swap it needs), and a clean uninstall.
+Delivered in 2.36.0: the update check. `GET /api/update/check` reads the newest
+published release, compares versions numerically, and names the asset this
+platform would download (or says there is none for this target). It writes and
+installs nothing, so it is not permission-gated; `/api/health` now reports the
+running version and Settings → Privacy & about shows it with a Check button.
+
+Open: the download/verify/swap path that check would feed, a Windows MSI/EXE, a
+macOS `.app`/dmg, and a clean uninstall.

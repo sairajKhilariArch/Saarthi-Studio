@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 2.36.0 (2026-11-10):** Phase 18 gained an update check (2.36.0):
+`GET /api/update/check` reads the newest published release, compares versions
+numerically and names this platform's asset, and Settings → Privacy & about
+renders it. Nothing downloads or installs, so the install row stays Missing.
+Phase 18 is now 7 rows — 6 Working + 1 Missing = 6/7 = 86% — and the overall mean
+is 92% (the table's own percentages sum to 1,652/18).
+
 **Revision 2.35.0 (2026-11-10):** Phase 18's last row moved from Missing to
 Partial: the database is versioned (`PRAGMA user_version`), copied with
 `VACUUM INTO` and verified before an existing one is migrated, restored if a
@@ -24,7 +31,8 @@ migration fails, and a database from a newer build is refused untouched
 (2.35.0). Auto-update and uninstall are still absent. Phase 18 is 6 rows —
 5 Working + 1 Partial = 5.5/6 = 92% — so the overall mean is 92% (the table's own
 percentages sum to 1,658/18; re-derived here because the previous note's 1,630
-did not match its own table).
+did not match its own table). Superseded by the 2.36.0 note above, which adds a
+row and re-derives the totals.
 
 **Revision 2.34.0 (2026-11-10):** Phase 16's failure-injection row gained two more
 cases (2.34.0): a corrupt database (the process must exit with a named error and
@@ -112,8 +120,9 @@ Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs on a
 schedule, resumes an interrupted one, edits them on a canvas and moves them
 between installs; what remains is free positioning and browser verification of
 the canvas, and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, and now offers its custom tools to the agent's tool loop, but still has no provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
-the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 ships every artifact and now protects the database across an
-upgrade (2.35.0) but has no auto-update check and no uninstaller.
+the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 ships every artifact, protects the database across an upgrade
+(2.35.0) and now reports whether a newer release exists (2.36.0), but nothing
+downloads or installs one and there is no uninstaller.
 Phase 17 closed in 2.4.0.
 
 ## Completion by phase (derived, not a release gate)
@@ -143,7 +152,7 @@ row below moves, so they cannot drift from the tables.
 | 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
 | 16 | Testing and quality | 100% | named caveats only (browser layout checks, a privileged ENOSPC case) |
 | 17 | Observability | 100% | — |
-| 18 | Installation and updates | 92% | Windows MSI/EXE, macOS `.app`, auto-update, uninstall |
+| 18 | Installation and updates | 86% | download/install path, Windows MSI/EXE, macOS `.app`, uninstall |
 
 **Overall (mean of the 18 phases): 92%.** Read it as "one reliable core, most
 phases closed, the remaining work concentrated in 1, 9, 14 and 18". The
@@ -432,7 +441,8 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Android APK/AAB | Working | debug-signed release build |
 | VS Code VSIX | Working | published |
 | DB migration rollback, newer-build guard | Working | 2.35.0: versioned schema, `VACUUM INTO` copy verified before an upgrade, restore on a failed migration, byte-for-byte refusal of a newer schema |
-| Auto-update and uninstall | **Missing** | data paths preserved by design; manual reinstall |
+| Update check (read-only) | Working | 2.36.0: `GET /api/update/check` reads the newest release, compares versions numerically, names this platform's asset; About card renders it |
+| Download, install and uninstall | **Missing** | nothing downloads or installs; no MSI/EXE/.app and no uninstaller |
 
 ## What to build next (spec order, 2.1.0)
 
@@ -445,10 +455,10 @@ table and no second log pipeline, so it cannot disagree with the panels:
    are still open inside it.
 3. **Phase 13 workflow graph** — the last phase with no real implementation. It
    depends on the Phase 5 lifecycle, which is now complete.
-4. **Phase 18 installers and update** — Windows MSI/EXE, macOS `.app`, and an
-   auto-update check. The data half is done (2.35.0: versioned schema, a verified
-   copy before an upgrade, restore on failure), so what remains is packaging, the
-   download/verify/swap path, and a clean uninstall.
+4. **Phase 18 installers and update** — the report is done (2.35.0 versioned the
+   schema and copies the database before an upgrade; 2.36.0 added the read-only
+   update check), so what remains is the download/verify/swap path it would feed,
+   the Windows MSI/EXE and macOS `.app`, and a clean uninstall.
 5. **Phase 15 extension manifest** — name, version, compatibility, permissions,
    entry point and source, plus a boundary for untrusted extensions.
 

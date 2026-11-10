@@ -220,3 +220,41 @@ test("icon falls back to the raw name rather than rendering an undefined id", ()
   assert.ok(unknown.includes("not-a-mapped-icon"), unknown);
   assert.ok(!unknown.includes("undefined"), unknown);
 });
+
+/* ---- update check ------------------------------------------------- */
+
+test("updateStatusText reports an up-to-date build with its own version", () => {
+  assert.equal(
+    call(`updateStatusText({ ok: true, current: "2.35.0", latest: "2.35.0", update_available: false })`),
+    "You are up to date (2.35.0).",
+  );
+});
+
+test("updateStatusText names the newer release, its asset and its size", () => {
+  const text = call(`updateStatusText({
+    ok: true, current: "2.35.0", latest: "2.36.0", update_available: true,
+    asset: { name: "free-ai-suite_2.36.0_windows-x86_64.zip", size: 2048 },
+    platform: "windows/x86_64"
+  })`);
+  assert.ok(text.includes("Version 2.36.0 is available"), text);
+  assert.ok(text.includes("this build is 2.35.0"), text);
+  assert.ok(text.includes("Download free-ai-suite_2.36.0_windows-x86_64.zip"), text);
+  assert.ok(/\(.*(KB|kB|kb).*\)/.test(text), `size was not formatted: ${text}`);
+});
+
+test("updateStatusText says so when no build exists for this platform", () => {
+  const text = call(`updateStatusText({
+    ok: true, current: "2.35.0", latest: "2.36.0", update_available: true,
+    asset: null, platform: "freebsd/x86_64"
+  })`);
+  assert.ok(text.includes("No freebsd/x86_64 build"), text);
+  assert.ok(!text.includes("Download"), text);
+});
+
+test("updateStatusText passes a failed check through as a failure", () => {
+  assert.equal(
+    call(`updateStatusText({ error: "The release API answered 503." })`),
+    "Update check failed: The release API answered 503.",
+  );
+  assert.equal(call("updateStatusText(null)"), "The update check returned no answer.");
+});

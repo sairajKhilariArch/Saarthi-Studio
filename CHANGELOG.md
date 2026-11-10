@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.36.0
+
+Studio can now say whether a newer release exists, without downloading or
+installing anything.
+
+- `app/src/update.rs` reads the newest published release
+  (`GET https://api.github.com/repos/sairajKhilariArch/Saarthi-Studio/releases/latest`)
+  with a 15-second timeout, a `user-agent` and a 512 KiB body cap, and reports it
+  against this build: `current`, `latest`, `update_available`, the platform's
+  `asset`, `checksum_url`, `other_assets`, and the release name, URL, date and
+  notes clipped to 4,000 characters.
+- Versions compare numerically, not as strings: 2.10.0 is newer than 2.9.0, a `v`
+  prefix is accepted, a pre-release suffix is ignored, and a tag that is not a
+  version counts as 0.0.0 so it can never claim to be newer than what is
+  installed.
+- The asset is matched on the exact token the release workflow writes
+  (`_windows-x86_64.zip`, `_linux-x86_64.tar.gz`, `_macos-universal.tar.gz`). A
+  target with no published artifact gets `asset: null` plus the release's other
+  asset names, instead of offering a binary that would not run.
+- `GET /api/update/check` answers 502 with the reason when the API is unreachable,
+  non-2xx or not JSON. It writes nothing, downloads nothing and installs nothing
+  (`installs_nothing: true` in the payload), so it needs no permission prompt;
+  `Action::Update` stays the gate for an install step that does not exist yet.
+- `GET /api/health` now reports the running version, and Settings → Privacy &
+  about gained an Updates card: the build number, Check for updates, and a status
+  line that distinguishes "up to date", "newer release with this asset and its
+  size", "newer release but no build for this platform" and "the check failed".
+- Checks: `cargo test --locked` 513 passed, 1 ignored (6 new); frontend 25 (4
+  new); clippy `--all-targets -D warnings` clean; `node --check` clean; version
+  20; e2e 32. Live: the route answered HTTP 200 against the real release API and
+  reported `update_available: false` — the newest published release (v1.71.0) is
+  older than this 2.35.0 build, which is exactly what numeric comparison should
+  say — and in the real page the About card showed `2.35.0` and the button turned
+  "Not checked yet." into "You are up to date (2.35.0)."
+- Not covered: nothing downloads or installs yet, there is no MSI/EXE/.app and no
+  uninstaller, and the check is manual — nothing runs it at boot or on a timer.
+
 ## 2.35.0
 
 The database now has a version, a copy taken before it is touched, and a way back.
