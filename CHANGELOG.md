@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.0.0
+
+3.0 marks the point where the phase plan is measured against the shipped code
+rather than described: `docs/MASTER-ROADMAP.md` now carries a phase-by-phase
+matrix (done / partial / open, with the evidence), and the one gap that could
+be closed without a platform of its own was closed here.
+
+- **The file tree follows the disk.** `GET /api/workspace/fingerprint` hashes
+  every path, mtime and size under the open folder (bounded to 4000 files and
+  six levels, skipping `.git`, `target`, `node_modules`, `dist`, `build`,
+  `.gradle`, `.next`, virtualenvs and `__pycache__`). The Files pane polls it
+  every four seconds while the document is visible and re-reads the open
+  folders only when the hash actually moves, so an agent run, a `git
+  checkout` or an external editor no longer leaves a stale tree until the
+  folder is reopened. `treeNeedsRefresh` keeps the first poll from re-rendering.
+  This is a poll, not a platform watcher: no new dependency, no background
+  thread, and the walk is capped (KNOWN-ISSUES 37).
+- Corrected two stale status rows that had been true in 1.x but not since:
+  the Windows MSI and the uninstaller shipped in 2.43.0/2.44.0 and are no
+  longer "Missing" in `docs/FEATURE-STATUS.md`.
+- Tests: 1 Rust (hash is stable across reads, ignores generated trees, moves on
+  an edit and on a new file) and 1 frontend (the first poll seeds without
+  refreshing; a moved hash refreshes; a missing answer does not clear the seed).
+- Verified: `cargo test --locked` 548 passed (1 ignored), clippy
+  `--all-targets -D warnings` clean, frontend 44, version 20, bundle 13,
+  installer 11, e2e 32.
+- Not verified: a live external edit refreshing the pane in a browser (the poll
+  path is unit-tested and the route is exercised by the running binary in e2e);
+  debugger and arbitrary command presets remain open (Phase 9).
+
 ## 2.52.0
 
 The mascot is a tardigrade (water bear), and it is now the application's icon

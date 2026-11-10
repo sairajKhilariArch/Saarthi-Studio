@@ -2656,6 +2656,8 @@ async function loadWorkspace() {
   renderWorkspaceHeader();
   if (state.workspace) {
     await loadDir("", { refresh: true });
+    startTreeWatch();
+    await checkTreeFingerprint();
   } else {
     state.tree = { dirs: new Map(), open: new Set(), selected: null, rootLoaded: false };
     renderTree();
@@ -2696,6 +2698,57 @@ function updateTreeTools() {
   $("deleteBtn").disabled = !selected;
   $("newFileBtn").disabled = !state.workspace;
   $("newFolderBtn").disabled = !state.workspace;
+}
+
+const TREE_WATCH_MS = 4000;
+let treeWatchTimer = null;
+
+/** A refresh is only worth it when there was a previous hash and it moved. */
+function treeNeedsRefresh(previous, next) {
+  return Boolean(previous) && Boolean(next) && previous !== next;
+}
+
+/** Re-read the open folders so a change on disk shows up without reopening. */
+async function refreshTree() {
+  const open = [...state.tree.open];
+  await loadDir("", { open: false });
+  for (const dir of open) {
+    if (!dir) continue;
+    try {
+      await loadDir(dir, { open: false });
+    } catch {
+      state.tree.open.delete(dir);
+    }
+  }
+  renderTree();
+  updateTreeTools();
+}
+
+async function checkTreeFingerprint() {
+  if (!state.workspace || document.hidden || state.tree.checking) return;
+  state.tree.checking = true;
+  try {
+    const result = await api("/api/workspace/fingerprint");
+    if (!result.ok) return;
+    const next = result.data.fingerprint;
+    const changed = treeNeedsRefresh(state.tree.fingerprint, next);
+    state.tree.fingerprint = next;
+    if (changed) await refreshTree();
+  } finally {
+    state.tree.checking = false;
+  }
+}
+
+function startTreeWatch() {
+  stopTreeWatch();
+  treeWatchTimer = setInterval(checkTreeFingerprint, TREE_WATCH_MS);
+}
+
+function stopTreeWatch() {
+  if (treeWatchTimer) {
+    clearInterval(treeWatchTimer);
+    treeWatchTimer = null;
+  }
 }
 
 async function loadDir(path, options = {}) {
@@ -2780,6 +2833,7 @@ function renderTree() {
 
 function resetTree() {
   state.tree = { dirs: new Map(), open: new Set(), selected: null, rootLoaded: false };
+  stopTreeWatch();
   renderTree();
   updateTreeTools();
 }
@@ -2791,6 +2845,8 @@ async function applyWorkspacePayload(payload) {
   resetTree();
   renderWorkspaceHeader();
   await loadDir("", { refresh: true });
+  startTreeWatch();
+  await checkTreeFingerprint();
   setSidebarMode("files");
   hideModal($("folderModal"));
   toast(`Opened ${state.workspace.name}.`);

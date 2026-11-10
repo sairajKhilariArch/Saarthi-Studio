@@ -279,6 +279,97 @@ fn push_outline(dir: &FsPath, depth: usize, lines: &mut Vec<String>, entries: &m
     }
 }
 
+/// Directories never walked when fingerprinting: generated, vendored or
+/// enormous, and a change inside them is not a workspace edit.
+const FINGERPRINT_SKIP_DIRS: [&str; 10] = [
+    ".git",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    ".gradle",
+    ".next",
+    ".venv",
+    "venv",
+    "__pycache__",
+];
+const FINGERPRINT_MAX_FILES: usize = 4000;
+const FINGERPRINT_MAX_DEPTH: usize = 6;
+
+fn push_fingerprint(
+    dir: &FsPath,
+    base: &str,
+    depth: usize,
+    entries: &mut Vec<(String, u128, u64)>,
+    truncated: &mut bool,
+) {
+    if depth > FINGERPRINT_MAX_DEPTH {
+        *truncated = true;
+        return;
+    }
+    let Ok(read) = fs::read_dir(dir) else { return };
+    for item in read.flatten() {
+        if entries.len() >= FINGERPRINT_MAX_FILES {
+            *truncated = true;
+            return;
+        }
+        let Ok(kind) = item.file_type() else { continue };
+        if kind.is_symlink() {
+            continue;
+        }
+        let name = item.file_name().to_string_lossy().to_string();
+        let relative = if base.is_empty() {
+            name.clone()
+        } else {
+            format!("{base}/{name}")
+        };
+        if kind.is_dir() {
+            if (name.starts_with('.') && name != ".github")
+                || FINGERPRINT_SKIP_DIRS.contains(&name.as_str())
+            {
+                continue;
+            }
+            push_fingerprint(&item.path(), &relative, depth + 1, entries, truncated);
+            continue;
+        }
+        let meta = item.metadata().ok();
+        let modified = meta
+            .as_ref()
+            .and_then(|data| data.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|span| span.as_nanos())
+            .unwrap_or(0);
+        let size = meta.map(|data| data.len()).unwrap_or(0);
+        entries.push((relative, modified, size));
+    }
+}
+
+/// A cheap change signal for the file tree: one hash over every path, mtime and
+/// size under the open folder. This is not a platform watcher — the frontend
+/// polls it — but it turns "the tree never updates until the folder is reopened"
+/// into a refresh within one poll, with no new dependency and no background
+/// thread. Generated trees (`.git`, `target`, `node_modules`) are excluded so a
+/// build does not look like an edit.
+///
+/// Returns `(fingerprint, files, truncated)`; `truncated` says the walk hit the
+/// depth or count cap, so a caller can tell that a change elsewhere in a very
+/// large tree may not be visible in the hash.
+pub(crate) fn fingerprint_tree(root: &FsPath) -> (String, usize, bool) {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    push_fingerprint(root, "", 0, &mut entries, &mut truncated);
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (path, modified, size) in &entries {
+        path.hash(&mut hasher);
+        modified.hash(&mut hasher);
+        size.hash(&mut hasher);
+    }
+    (format!("{:016x}", hasher.finish()), entries.len(), truncated)
+}
+
 fn canonical_dir(path: &str) -> Option<PathBuf> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -765,6 +856,18 @@ async fn pick_folder(State(state): State<AppState>) -> Response<Body> {
         .into_response(),
         Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
+}
+
+async fn workspace_fingerprint(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, WorkspaceError> {
+    let root = state.workspace.root()?;
+    let (fingerprint, files, truncated) = fingerprint_tree(&root);
+    Ok(Json(json!({
+        "fingerprint": fingerprint,
+        "files": files,
+        "truncated": truncated,
+    })))
 }
 
 async fn list_entries(
@@ -1375,6 +1478,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/workspace/pick", post(pick_folder))
         .route("/api/workspace/close", post(close_workspace))
         .route("/api/workspace/entries", get(list_entries))
+        .route("/api/workspace/fingerprint", get(workspace_fingerprint))
         .route("/api/workspace/files", get(list_artifacts))
         .route("/api/workspace/file", get(read_file).put(write_file))
         .route("/api/workspace/create", post(create))
@@ -1480,6 +1584,36 @@ mod tests {
         assert_eq!(hits[0].line, 2);
         assert_eq!(hits[0].column, 5);
         assert!(!truncated);
+    }
+
+    #[test]
+    fn fingerprint_tracks_edits_and_ignores_generated_trees() {
+        let fixture = Fixture::new("fingerprint");
+        fs::create_dir_all(fixture.path("src")).unwrap();
+        fs::write(fixture.path("src/app.rs"), "fn main() {}\n").unwrap();
+        let root = fs::canonicalize(&fixture.root).unwrap();
+
+        let (first, files, truncated) = fingerprint_tree(&root);
+        assert_eq!(files, 1);
+        assert!(!truncated);
+        let (again, _, _) = fingerprint_tree(&root);
+        assert_eq!(first, again, "reading twice must not change the hash");
+
+        // A build writing into `target/` is not a workspace edit.
+        fs::create_dir_all(fixture.path("target")).unwrap();
+        fs::write(fixture.path("target/built.bin"), "x").unwrap();
+        let (ignored, files, _) = fingerprint_tree(&root);
+        assert_eq!(first, ignored, "generated output must not move the hash");
+        assert_eq!(files, 1);
+
+        fs::write(fixture.path("src/app.rs"), "fn main() { println!(\"hi\"); }\n").unwrap();
+        let (edited, _, _) = fingerprint_tree(&root);
+        assert_ne!(first, edited, "an edit must move the hash");
+
+        fs::write(fixture.path("src/new.rs"), "// new\n").unwrap();
+        let (added, files, _) = fingerprint_tree(&root);
+        assert_ne!(edited, added, "a new file must move the hash");
+        assert_eq!(files, 2);
     }
 
     #[test]

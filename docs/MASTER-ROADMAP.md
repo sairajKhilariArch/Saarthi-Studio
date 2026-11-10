@@ -649,3 +649,30 @@ The product name is **Sarthi Studio** across the UI, documentation, installers a
 ## Mascot (2.52.0)
 
 The product mark is a tardigrade face — orange, black and white, no gradients — generated from one geometry and shipped as the window icon, installer icon, favicon, Linux theme icon, macOS bundle icon and Android adaptive launcher. `docs/BRAND-ASSETS.md` is the inventory.
+
+## 3.0.0 phase matrix
+
+Measured against the implementation, not the plan. Detail and evidence per row:
+`docs/FEATURE-STATUS.md`; defects: `docs/KNOWN-ISSUES.md`.
+
+| Phase | State | What is still open |
+|---|---|---|
+| 1 CI/CD and release | Working | a fresh tagged release run observed end to end; AppStream validation runs only in CI |
+| 2 Router manager | Working | — |
+| 3 Model and provider | Working | pricing only where the provider publishes it |
+| 4 Thinking / OpenAI | Working | — |
+| 5 Agent execution | Working | — |
+| 6 Skills | Working | — |
+| 7 MCP | Working | — |
+| 8 Memory and RAG | Working | embeddings are a probe only; nothing is stored or indexed |
+| 9 Developer environment | Working | no editor engine (by design); no debug adapter or custom command presets |
+| 10 Safety and permissions | Working | — |
+| 11 Token, context, cost | Working | cost reported only where the provider reports usage |
+| 12 Agent monitoring | Working | — |
+| 13 Workflows | Working | — |
+| 14 Cross-platform | Working | capability negotiation drives only a few gates by hand |
+| 15 Extensions | Working | — |
+| 16 Testing and quality | Working | install smoke on deb/AppImage/vsix/apk is not automated |
+| 17 Observability | Working | — |
+| 18 Install and update | Working | cross-platform install smoke; macOS bundle is unsigned |
+

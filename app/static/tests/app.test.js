@@ -452,3 +452,15 @@ test("appliedStatusText stays empty before any swap", () => {
   assert.equal(call("appliedStatusText(null)"), "");
   assert.equal(call("appliedStatusText({})"), "");
 });
+
+test("the file tree refreshes only when the fingerprint actually moves", () => {
+  // First poll after opening a folder only seeds the hash: no needless render.
+  assert.equal(call("treeNeedsRefresh(null, 'abc')"), false);
+  assert.equal(call("treeNeedsRefresh(undefined, 'abc')"), false);
+  // A poll that was answered with nothing must not wipe the seeded hash.
+  assert.equal(call("treeNeedsRefresh('abc', null)"), false);
+  // Unchanged workspace: nothing happens.
+  assert.equal(call("treeNeedsRefresh('abc', 'abc')"), false);
+  // A real edit: refresh.
+  assert.equal(call("treeNeedsRefresh('abc', 'def')"), true);
+});
