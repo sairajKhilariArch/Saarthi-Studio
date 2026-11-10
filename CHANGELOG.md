@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.0.1
+
+CI fix: `.github/workflows/desktop-release.yml` did not parse, so any push that
+touched it produced a failed "workflow file issue" run (for example
+`42897442301` on `d506e96`) and no release job could start.
+
+- Cause: the macOS release-attachment step was written as
+  `      -          name: Attach macOS artifact to GitHub release`. YAML read
+  the over-indented `name` as a nested mapping under the list item and rejected
+  the document at the next line (`line 471, column 9`). It is now `- name:`.
+- Validated the whole file, not just that line: PyYAML parses it (6 jobs: deb,
+  release, windows, macos, vscode-extension, android; 70 steps); a structural
+  pass found no step with both or neither `run`/`uses`, no `with` on a run
+  step, no unknown step keys, and every `if`/`env` of the right type; 38 shell
+  blocks pass `bash -n` after `${{ … }}` substitution, and the two
+  PowerShell blocks are left to the Windows runner's default `pwsh`, which is
+  not installed here.
+- No other workflow logic changed. Version 3.0.1 across `Cargo.toml`,
+  `Cargo.lock` and `tauri.conf.json`.
+
 ## 3.0.0
 
 3.0 marks the point where the phase plan is measured against the shipped code
