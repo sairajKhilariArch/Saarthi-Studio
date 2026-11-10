@@ -373,10 +373,22 @@ sandbox — including loader failures, traps, fuel stops and cancellations — w
 the project, duration, exit code, fuel, host calls and error. `GET
 /api/extension-runs` serves the newest 50 and Settings lists them.
 
-Remaining: custom tools, provider adapters, UI extensions, and
-dependency/compatibility metadata. Installing still grants no capability by
-itself, and the only reachable surface is the two workspace pairs plus
-`last_error`.
+Compatibility metadata (2.25.0): `requiresStudio` names the oldest app version
+the extension works on, so a manifest written for a newer build stays `valid`
+but is `compatible: false` and is neither run nor installed (the reason names
+both versions); `apiVersion` names the manifest schema and a number above the
+supported 1 is refused at parse rather than half-read; `dependencies` lists
+extension ids that must be installed, reported as `missingDependencies` and
+blocking a run (not an install, since the dependency can follow). Discovery
+reads every manifest before judging any, so a dependency is checked against what
+really is installed, and Settings badges an incompatible folder `needs newer
+app` with the requirement in its tooltip.
+
+Remaining: custom tools, provider adapters and UI extensions. Installing still
+grants no capability by itself, and the only reachable surface is the two
+workspace pairs plus `last_error`. A dependency is checked for presence, not for
+its own compatibility, and no dependency cycle is detected (a pair that needs
+each other reports each other as installed and both stay runnable).
 
 ## Phase 16 — Testing
 

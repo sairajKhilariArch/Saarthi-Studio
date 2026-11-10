@@ -1220,6 +1220,8 @@ kbd {
 }
 .badge.on { color: var(--ok); border-color: var(--ok-border); background: var(--ok-soft); }
 .badge.broken { color: var(--danger-ink); border-color: var(--danger-border); background: var(--danger-soft); }
+/* A valid extension this build is too old for: not broken, just unusable here. */
+.badge.compat { color: var(--warn); }
 /* Permissions: decision badges reuse .badge, the trail is a compact list. */
 .badge.deny { color: var(--danger-ink); border-color: var(--danger-border); background: var(--danger-soft); }
 .badge.allow { color: var(--ok); border-color: var(--ok-border); background: var(--ok-soft); }

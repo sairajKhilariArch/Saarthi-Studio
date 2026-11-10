@@ -3587,9 +3587,14 @@ async function loadExtensions() {
     if (permissions.length) small.title = permissions.join(", ");
     main.appendChild(small);
     row.appendChild(main);
+    // A folder can be a perfectly good extension and still be unusable here:
+    // it names a newer Studio. That is a different thing from invalid, so it
+    // gets its own badge and the requirement in the tooltip.
+    const incompatible = extension.valid === true && extension.compatible === false;
     const badge = document.createElement("span");
-    badge.className = `badge ${extension.valid ? "on" : "broken"}`;
-    badge.textContent = extension.valid ? "valid" : "invalid";
+    badge.className = `badge ${extension.valid ? (incompatible ? "compat" : "on") : "broken"}`;
+    badge.textContent = extension.valid ? (incompatible ? "needs newer app" : "valid") : "invalid";
+    if (incompatible) badge.title = String(extension.blockedReason || "");
     row.appendChild(badge);
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";

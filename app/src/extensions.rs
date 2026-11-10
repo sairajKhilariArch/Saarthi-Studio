@@ -33,6 +33,16 @@
 //! closed list: an unknown permission fails validation rather than being
 //! ignored, because silently dropping a capability request is how a user ends up
 //! believing an extension cannot do something that it can.
+//!
+//! Compatibility is declared, not guessed. `apiVersion` names the manifest
+//! schema (missing means 1, the only version this build reads, so an older
+//! folder keeps installing); a schema version from the future is refused at
+//! parse instead of being read partially. `requiresStudio` is the oldest app
+//! version the extension works on: a well-formed manifest that names a newer
+//! build stays `valid` — it is a real extension — but is `compatible: false` and
+//! is neither installed nor run. `dependencies` lists other extension ids that
+//! must already be installed; a missing one is reported and blocks a run, but
+//! does not block an install, because the dependency can be added afterwards.
 
 use crate::AppState;
 use axum::extract::{Path as AxumPath, State};
@@ -65,7 +75,11 @@ const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 /// refused at run by name, instead of running under a narrower sandbox than the
 /// manifest asked for.
 const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
+/// The manifest schema this build understands. Only 1 exists, so any other
+/// declared number is a folder written for a different build.
+const SUPPORTED_API_VERSION: u32 = 1;
 const MAX_PERMISSIONS: usize = 16;
+const MAX_DEPENDENCIES: usize = 16;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
 const MAX_ENTRY_CHARS: usize = 160;
@@ -81,6 +95,14 @@ struct Manifest {
     /// Only `wasm` today. Missing means the extension is installable but has no
     /// runtime this app can execute.
     runtime: Option<String>,
+    /// Manifest schema version. Missing means 1; a higher number is refused at
+    /// parse, because reading part of a schema we do not know is worse than
+    /// saying we cannot read it.
+    api_version: u32,
+    /// Oldest app version this extension works on, `1.2.3`.
+    requires_studio: Option<String>,
+    /// Other extension ids that must be installed first.
+    dependencies: Vec<String>,
     permissions: Vec<String>,
 }
 
@@ -264,6 +286,56 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
             Some(_) => {}
         }
     }
+    let api_version = match raw.get("apiVersion") {
+        None => SUPPORTED_API_VERSION,
+        Some(value) => match value.as_u64() {
+            Some(version) if version >= 1 && version <= u32::MAX as u64 => version as u32,
+            _ => return Err("apiVersion must be a positive integer.".to_string()),
+        },
+    };
+    if api_version > SUPPORTED_API_VERSION {
+        return Err(format!(
+            "This extension declares manifest apiVersion {api_version}; this build supports {SUPPORTED_API_VERSION}."
+        ));
+    }
+    let requires_studio = match raw.get("requiresStudio") {
+        None => None,
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            if !valid_version(value) {
+                return Err("requiresStudio must look like 1.2.3.".to_string());
+            }
+            Some(value.to_string())
+        }
+        Some(_) => return Err("requiresStudio must be a version string like 1.2.3.".to_string()),
+    };
+    let dependencies = match raw.get("dependencies") {
+        None => Vec::new(),
+        Some(Value::Array(list)) => {
+            if list.len() > MAX_DEPENDENCIES {
+                return Err(format!(
+                    "dependencies: at most {MAX_DEPENDENCIES} entries are allowed."
+                ));
+            }
+            let mut dependencies: Vec<String> = Vec::new();
+            for entry in list {
+                let dependency = entry.as_str().unwrap_or("");
+                if !valid_id(dependency) {
+                    return Err(format!(
+                        "dependency \"{dependency}\" is not a valid extension id."
+                    ));
+                }
+                if dependency == id {
+                    return Err("An extension cannot depend on itself.".to_string());
+                }
+                if !dependencies.iter().any(|seen| seen == dependency) {
+                    dependencies.push(dependency.to_string());
+                }
+            }
+            dependencies
+        }
+        Some(_) => return Err("dependencies must be a list of extension ids.".to_string()),
+    };
     let permissions = match raw.get("permissions") {
         None => Vec::new(),
         Some(Value::Array(list)) => {
@@ -297,8 +369,51 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         author,
         entry,
         runtime,
+        api_version,
+        requires_studio,
+        dependencies,
         permissions,
     })
+}
+
+/// Numeric triple comparison. Both sides are validated as `1.2.3` before they
+/// reach here, so a short or odd part can only come from a hand-written call.
+fn version_at_least(version: &str, required: &str) -> bool {
+    let parts = |text: &str| -> Vec<u64> {
+        text.split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (have, want) = (parts(version), parts(required));
+    for index in 0..3 {
+        let have = have.get(index).copied().unwrap_or(0);
+        let want = want.get(index).copied().unwrap_or(0);
+        if have != want {
+            return have > want;
+        }
+    }
+    true
+}
+
+/// Whether this build is too old for the extension. A compatibility fact, not a
+/// validation error: the manifest is well formed, it just names a newer Studio.
+fn compatibility_block(manifest: &Manifest, app_version: &str) -> Option<String> {
+    match manifest.requires_studio.as_deref() {
+        None => None,
+        Some(required) if version_at_least(app_version, required) => None,
+        Some(required) => Some(format!(
+            "Requires Saarthi Studio {required} or newer; this build is {app_version}."
+        )),
+    }
+}
+
+fn missing_dependencies(manifest: &Manifest, installed: &[String]) -> Vec<String> {
+    manifest
+        .dependencies
+        .iter()
+        .filter(|dependency| !installed.iter().any(|id| id == *dependency))
+        .cloned()
+        .collect()
 }
 
 /// Why the runner cannot run this manifest, if it cannot. A wasm extension is
@@ -330,8 +445,13 @@ fn invalid(folder: &str, error: String) -> Value {
         "author": "",
         "entry": Value::Null,
         "runtime": Value::Null,
+        "apiVersion": Value::Null,
+        "requiresStudio": Value::Null,
+        "dependencies": [],
+        "missingDependencies": [],
         "permissions": [],
         "valid": false,
+        "compatible": false,
         "runnable": false,
         "blockedReason": error.clone(),
         "error": error,
@@ -432,7 +552,24 @@ fn install_into(source: &Path, root: &Path) -> Result<String, String> {
         .iter()
         .find(|entry| entry["id"] == manifest.id.as_str());
     match installed {
-        Some(entry) if entry["valid"] == Value::Bool(true) => Ok(manifest.id),
+        Some(entry)
+            if entry["valid"] == Value::Bool(true) && entry["compatible"] == Value::Bool(true) =>
+        {
+            Ok(manifest.id)
+        }
+        Some(entry) if entry["valid"] == Value::Bool(true) => {
+            // Valid but not compatible: the manifest is readable and names a
+            // newer build, so it is refused with that sentence and nothing is
+            // left behind. Missing dependencies are not a reason to refuse the
+            // install — they can be added afterwards.
+            let error = entry["blockedReason"]
+                .as_str()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("This extension is not compatible with this build.")
+                .to_string();
+            let _ = fs::remove_dir_all(&destination);
+            Err(error)
+        }
         Some(entry) => {
             let error = entry["error"]
                 .as_str()
@@ -538,6 +675,40 @@ fn server_error(message: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
+/// Read one folder's manifest and check the files it names. Split out of
+/// [`inspect`] because dependencies make a folder's verdict depend on every
+/// other folder, which needs two passes.
+fn read_manifest(folder: &Path, name: &str) -> Result<Manifest, String> {
+    let manifest_path = folder.join("manifest.json");
+    let too_big = fs::metadata(&manifest_path)
+        .map(|meta| meta.len() > MAX_MANIFEST_BYTES)
+        .unwrap_or(false);
+    if too_big {
+        return Err(format!(
+            "manifest.json is larger than {MAX_MANIFEST_BYTES} bytes."
+        ));
+    }
+    let parsed = match fs::read_to_string(&manifest_path) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) => parse_manifest(name, &value),
+            Err(error) => Err(format!("manifest.json is not valid JSON: {error}")),
+        },
+        Err(_) => Err("manifest.json is missing or unreadable.".to_string()),
+    }?;
+    if let Some(entry) = parsed.entry.as_deref() {
+        let path = folder.join(entry);
+        if !path.is_file() {
+            return Err(format!("entry file \"{entry}\" is missing."));
+        }
+        let base = folder.canonicalize().map_err(|error| error.to_string())?;
+        let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+        if !canonical.starts_with(&base) {
+            return Err("entry file must stay inside the extension folder.".to_string());
+        }
+    }
+    Ok(parsed)
+}
+
 fn inspect(dir: &Path) -> Vec<Value> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -548,7 +719,8 @@ fn inspect(dir: &Path) -> Vec<Value> {
         .filter(|path| path.is_dir() && !is_hidden(path))
         .collect();
     folders.sort();
-    folders
+    let app_version = env!("CARGO_PKG_VERSION");
+    let mut listed: Vec<(String, Result<Manifest, String>)> = folders
         .into_iter()
         .map(|folder| {
             let name = folder
@@ -556,59 +728,51 @@ fn inspect(dir: &Path) -> Vec<Value> {
                 .and_then(|name| name.to_str())
                 .unwrap_or("")
                 .to_string();
-            let manifest_path = folder.join("manifest.json");
-            let too_big = fs::metadata(&manifest_path)
-                .map(|meta| meta.len() > MAX_MANIFEST_BYTES)
-                .unwrap_or(false);
-            if too_big {
-                return invalid(
-                    &name,
-                    format!("manifest.json is larger than {MAX_MANIFEST_BYTES} bytes."),
-                );
-            }
-            let parsed = match fs::read_to_string(&manifest_path) {
-                Ok(text) => match serde_json::from_str::<Value>(&text) {
-                    Ok(value) => parse_manifest(&name, &value),
-                    Err(error) => Err(format!("manifest.json is not valid JSON: {error}")),
-                },
-                Err(_) => Err("manifest.json is missing or unreadable.".to_string()),
-            }
-            .and_then(|manifest| {
-                if let Some(entry) = manifest.entry.as_deref() {
-                    let path = folder.join(entry);
-                    if !path.is_file() {
-                        return Err(format!("entry file \"{entry}\" is missing."));
+            let manifest = read_manifest(&folder, &name);
+            (name, manifest)
+        })
+        .collect();
+    // Every readable manifest is known before any one of them is judged, so a
+    // dependency is checked against the folders that really are installed.
+    let installed: Vec<String> = listed
+        .iter()
+        .filter_map(|(_, manifest)| manifest.as_ref().ok().map(|manifest| manifest.id.clone()))
+        .collect();
+    listed
+        .drain(..)
+        .map(|(name, parsed)| match parsed {
+            Ok(manifest) => {
+                let incompatible = compatibility_block(&manifest, app_version);
+                let missing = missing_dependencies(&manifest, &installed);
+                let blocked = incompatible.clone().or_else(|| {
+                    if missing.is_empty() {
+                        None
+                    } else {
+                        Some(format!("Needs {} installed first.", missing.join(", ")))
                     }
-                    let base = folder.canonicalize().map_err(|error| error.to_string())?;
-                    let canonical = path.canonicalize().map_err(|error| error.to_string())?;
-                    if !canonical.starts_with(&base) {
-                        return Err(
-                            "entry file must stay inside the extension folder.".to_string()
-                        );
-                    }
-                }
-                Ok(manifest)
-            });
-            match parsed {
-                Ok(manifest) => {
-                    let blocked = run_block(&manifest);
-                    json!({
-                        "id": manifest.id,
-                        "name": manifest.name,
-                        "version": manifest.version,
-                        "description": manifest.description,
-                        "author": manifest.author,
-                        "entry": manifest.entry,
-                        "runtime": manifest.runtime,
-                        "permissions": manifest.permissions,
-                        "valid": true,
-                        "runnable": blocked.is_none(),
-                        "blockedReason": blocked.unwrap_or_default(),
-                        "error": "",
-                    })
-                }
-                Err(error) => invalid(&name, error),
+                });
+                let blocked = blocked.or_else(|| run_block(&manifest));
+                json!({
+                    "id": manifest.id,
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "description": manifest.description,
+                    "author": manifest.author,
+                    "entry": manifest.entry,
+                    "runtime": manifest.runtime,
+                    "apiVersion": manifest.api_version,
+                    "requiresStudio": manifest.requires_studio,
+                    "dependencies": manifest.dependencies,
+                    "missingDependencies": missing,
+                    "permissions": manifest.permissions,
+                    "valid": true,
+                    "compatible": incompatible.is_none(),
+                    "runnable": blocked.is_none(),
+                    "blockedReason": blocked.unwrap_or_default(),
+                    "error": "",
+                })
             }
+            Err(error) => invalid(&name, error),
         })
         .collect()
 }
@@ -1040,6 +1204,9 @@ mod tests {
             author: String::new(),
             entry: runtime.map(|_| "tool.wasm".to_string()),
             runtime: runtime.map(str::to_string),
+            api_version: SUPPORTED_API_VERSION,
+            requires_studio: None,
+            dependencies: Vec::new(),
             permissions: permissions.into_iter().map(str::to_string).collect(),
         };
         assert!(run_block(&manifest(None, vec![]))
@@ -1203,6 +1370,175 @@ mod tests {
             .unwrap_or("")
             .contains("missing"));
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_newer_studio_requirement_is_valid_but_incompatible() {
+        let parsed = parse_manifest(
+            "future-tools",
+            &json!({
+                "id": "future-tools", "name": "Future Tools", "version": "1.0.0",
+                "runtime": "wasm", "entry": "tool.wasm", "requiresStudio": "9.0.0"
+            }),
+        )
+        .expect("manifest");
+        assert_eq!(parsed.requires_studio.as_deref(), Some("9.0.0"));
+        let reason = compatibility_block(&parsed, "2.25.0").expect("incompatible");
+        assert!(
+            reason.contains("9.0.0") && reason.contains("2.25.0"),
+            "{reason}"
+        );
+        // The requirement is a floor, and equality satisfies it.
+        assert!(compatibility_block(&parsed, "9.0.0").is_none());
+        assert!(compatibility_block(&parsed, "10.1.2").is_none());
+        assert!(compatibility_block(&parsed, "8.99.99").is_some());
+
+        // A folder that declares nothing keeps working everywhere, and its
+        // manifest schema defaults to the one this build reads.
+        let plain = parse_manifest(
+            "plain-tools",
+            &json!({ "id": "plain-tools", "name": "Plain", "version": "1.0.0" }),
+        )
+        .expect("manifest");
+        assert_eq!(plain.api_version, SUPPORTED_API_VERSION);
+        assert!(plain.requires_studio.is_none());
+        assert!(compatibility_block(&plain, "1.0.0").is_none());
+    }
+
+    #[test]
+    fn versions_compare_numerically_not_as_text() {
+        assert!(version_at_least("2.25.0", "2.9.0"));
+        assert!(!version_at_least("2.9.0", "2.25.0"));
+        assert!(version_at_least("2.25.0", "2.25.0"));
+        assert!(version_at_least("3.0.0", "2.99.99"));
+        assert!(!version_at_least("2.25.0", "2.25.1"));
+    }
+
+    #[test]
+    fn a_manifest_schema_from_the_future_is_refused() {
+        let base = json!({ "id": "x", "name": "X", "version": "1.0.0" });
+        let with = |key: &str, value: Value| {
+            let mut copy = base.clone();
+            copy[key] = value;
+            copy
+        };
+        assert!(parse_manifest("x", &with("apiVersion", json!(2)))
+            .unwrap_err()
+            .contains("apiVersion 2"));
+        assert!(parse_manifest("x", &with("apiVersion", json!(0)))
+            .unwrap_err()
+            .contains("positive integer"));
+        assert!(parse_manifest("x", &with("apiVersion", json!("1")))
+            .unwrap_err()
+            .contains("positive integer"));
+        assert!(parse_manifest("x", &with("apiVersion", json!(1))).is_ok());
+        assert!(parse_manifest("x", &with("requiresStudio", json!("next")))
+            .unwrap_err()
+            .contains("1.2.3"));
+        assert!(parse_manifest("x", &with("requiresStudio", json!(3)))
+            .unwrap_err()
+            .contains("version string"));
+    }
+
+    #[test]
+    fn dependencies_are_validated_and_deduped() {
+        let base = json!({ "id": "x", "name": "X", "version": "1.0.0" });
+        let with = |value: Value| {
+            let mut copy = base.clone();
+            copy["dependencies"] = value;
+            copy
+        };
+        let parsed = parse_manifest(
+            "x",
+            &with(json!(["base-tools", "base-tools", "other_tools"])),
+        )
+        .expect("manifest");
+        assert_eq!(parsed.dependencies, vec!["base-tools", "other_tools"]);
+        assert!(parse_manifest("x", &with(json!(["x"])))
+            .unwrap_err()
+            .contains("itself"));
+        assert!(parse_manifest("x", &with(json!(["Bad Id"])))
+            .unwrap_err()
+            .contains("not a valid extension id"));
+        assert!(parse_manifest("x", &with(json!("base-tools")))
+            .unwrap_err()
+            .contains("list of extension ids"));
+        let many: Vec<String> = (0..MAX_DEPENDENCIES + 1)
+            .map(|index| format!("dep-{index}"))
+            .collect();
+        assert!(parse_manifest("x", &with(json!(many)))
+            .unwrap_err()
+            .contains("at most"));
+    }
+
+    #[test]
+    fn a_missing_dependency_blocks_a_run_until_it_is_installed() {
+        let root = scratch("dependencies");
+        let base = root.join("base-tools");
+        fs::create_dir_all(&base).expect("base folder");
+        fs::write(
+            base.join("manifest.json"),
+            r#"{"id":"base-tools","name":"Base","version":"1.0.0","runtime":"wasm","entry":"tool.wasm"}"#,
+        )
+        .expect("base manifest");
+        fs::write(base.join("tool.wasm"), b"\0asm").expect("base entry");
+
+        let addon = root.join("addon-tools");
+        fs::create_dir_all(&addon).expect("addon folder");
+        fs::write(
+            addon.join("manifest.json"),
+            r#"{"id":"addon-tools","name":"Addon","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","dependencies":["base-tools"]}"#,
+        )
+        .expect("addon manifest");
+        fs::write(addon.join("tool.wasm"), b"\0asm").expect("addon entry");
+
+        let entries = inspect(&root);
+        let by_id = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap_or_else(|| panic!("entry {id}"))
+        };
+        assert_eq!(by_id("addon-tools")["valid"], true);
+        assert_eq!(by_id("addon-tools")["missingDependencies"], json!([]));
+        assert_eq!(by_id("addon-tools")["runnable"], true);
+        assert_eq!(by_id("addon-tools")["dependencies"], json!(["base-tools"]));
+
+        // The dependency disappears: the addon stays valid, names what is
+        // missing and cannot run.
+        remove_extension(&root, "base-tools").expect("remove base");
+        let entries = inspect(&root);
+        let addon = entries
+            .iter()
+            .find(|entry| entry["id"] == "addon-tools")
+            .expect("addon entry");
+        assert_eq!(addon["valid"], true);
+        assert_eq!(addon["missingDependencies"], json!(["base-tools"]));
+        assert_eq!(addon["runnable"], false);
+        assert!(addon["blockedReason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("base-tools"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_incompatible_folder_is_not_installed() {
+        let root = scratch("install-incompatible");
+        let source = root.join("src").join("future-tools");
+        fs::create_dir_all(&source).expect("source folder");
+        fs::write(
+            source.join("manifest.json"),
+            r#"{"id":"future-tools","name":"Future","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","requiresStudio":"99.0.0"}"#,
+        )
+        .expect("manifest");
+        fs::write(source.join("tool.wasm"), b"\0asm").expect("entry");
+
+        let target = root.join("extensions");
+        let error = install_into(&source, &target).expect_err("incompatible");
+        assert!(error.contains("99.0.0"), "{error}");
+        assert!(!target.join("future-tools").exists(), "nothing left behind");
         let _ = fs::remove_dir_all(&root);
     }
 }

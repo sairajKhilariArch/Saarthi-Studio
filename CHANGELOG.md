@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.25.0
+
+An extension can now declare which builds it works on and which other
+extensions it needs, and the app refuses it by name instead of half-reading it.
+
+- `requiresStudio` is the oldest app version the extension works on (`1.2.3`).
+  A manifest naming a newer build stays `valid` — it is a real extension — but
+  reports `compatible: false` and a `blockedReason` of "Requires Saarthi Studio
+  99.0.0 or newer; this build is 2.25.0." It is neither run nor installed.
+  Comparison is numeric per part, so `2.9.0` is older than `2.25.0`.
+- `apiVersion` names the manifest schema. Missing means 1, the only version this
+  build reads; a higher number is refused at parse with the number named, since
+  reading part of an unknown schema is worse than saying it cannot be read. The
+  field is reported back, so an installed folder's schema is inspectable.
+- `dependencies` lists other extension ids that must already be installed (at
+  most 16, deduplicated, no self-reference, ids validated). A missing one is
+  reported as `missingDependencies` and blocks the run ("Needs base-tools
+  installed first.") but not an install, because the dependency can be added
+  afterwards.
+- Discovery now reads every manifest before judging any of them, so a dependency
+  is checked against the folders that really are installed.
+- Settings → Extensions shows `needs newer app` for an incompatible folder — a
+  distinct badge with the requirement in its tooltip — instead of calling it
+  valid.
+- Checks: `cargo test --locked` **489 passed, 1 ignored** (six new: a newer
+  requirement is valid-but-incompatible with a numeric floor, numeric version
+  ordering, a schema from the future refused, dependency validation and dedupe,
+  a missing dependency blocking a run until it is installed, an incompatible
+  folder refused at install with nothing left behind); clippy `--all-targets -D
+  warnings` clean; `node --check` clean; frontend 18; version 20; e2e 19.
+- Live headless on a scratch home: `requiresStudio: "99.0.0"` reported
+  `compatible: false, runnable: false` with the sentence above, and both the run
+  and the install were refused 400 with it; removing the dependency folder made
+  the addon report `missingDependencies: ["base-tools"]` and `runnable: false`.
+- Not verified: the `needs newer app` badge was not opened in a browser; the
+  endpoint behind it was exercised directly.
+
 ## 2.24.0
 
 Every extension run now leaves a row in the database, not only a log line.
