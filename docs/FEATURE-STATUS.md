@@ -1,11 +1,11 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 2.25.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.8.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
 **Partial** (exists but a stated requirement is unmet), **Missing** (no
 implementation), **Broken** (exists and fails).
 
-## Evidence for this audit
+## Evidence from the 2.1.0 audit
 
 | Check | Command | Result |
 |---|---|---|
@@ -15,7 +15,14 @@ implementation), **Broken** (exists and fails).
 | Last green release | run `41884439627` (`v1.26.6`) | all six jobs success, 9 assets |
 | Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
-The counts above are what the tree contains today, not a projection.
+These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
+
+**Revision 3.8.0 (2026-11-11):** documentation correction. The ordered backlog
+now lives in `MASTER-ROADMAP.md` under "Remaining work at 3.8.0"; this report
+replaces the stale 2.1.0 percentage table with a qualitative phase state and
+calls out the work that has shipped since it was written (MSI, macOS `.app`,
+portable uninstall, free-position canvas and extension tools). No code or test
+count changed.
 
 **Revision 3.7.0 (2026-11-11):** Phase 1's deb-only failure has a concrete
 cause: the headless tree links `keyring`'s Secret Service backend, whose
@@ -277,54 +284,44 @@ the shipped-version checklist, `MASTER-ROADMAP.md` the ordering and
 
 ## Verdict in one paragraph
 
-Phases 2, 3, 4, 5, 6, 7, 8, 10, 11 and 14 are delivered in substance; what
-remains inside them is named per row (router update/uninstall in the panel,
-remote-service routers, a price for native OpenAI picks, per-skill permissions,
-an editor that bypasses the run lease, live
-capability negotiation). Phase 1 needs install smokes and the dead-tag decision,
-Phase 9 lacks an editor engine and a debugger, **Phase 13 now runs graphs on a
-schedule, resumes an interrupted one, edits them on a canvas and moves them
-between installs, now including placing cards by hand (2.47.0); and the canvas was driven in Chromium once
-(2.49.0), and Phase 15 runs wasm extensions with workspace and own-data access, now declares compatibility and dependencies, and now offers its custom tools to the agent's tool loop, but still has no provider adapters or UI extensions**; Phase 12 lacks a live step view,Phase 16 now has a frontend unit layer (2.5.0) and a process-level end-to-end run (2.6.0, through
-the agent approval gate since 2.8.0) but no failure matrix or install-smoke layer, and Phase 18 ships every artifact, protects the database across an upgrade
-(2.35.0), reports whether a newer release exists (2.36.0) and downloads and
-verifies one into staging (2.37.0), unpacks it beside the data directory (2.38.0)
-and swaps it in keeping the replaced binary as a backup (2.39.0), but there is no
-MSI/EXE/.app and no uninstaller.
-Phase 17 closed in 2.4.0.
+The core is largely built. Router management, the agent engine, MCP, permissions,
+token/cost, observability, the workflow engine and the testing layers are
+functionally complete; their remaining notes are caveats, not missing
+subsystems. The real remaining work is concentrated in Phase 1 release
+reliability, Phase 4 OpenAI tool calling, Phase 9 editor/debugger depth, Phase 14
+client parity, Phase 15 provider/UI extensions, and Phase 18 signing and
+packaging. Phase 3/6/8/12/13 keep only the smaller gaps below and in
+`MASTER-ROADMAP.md`.
 
-## Completion by phase (derived, not a release gate)
+## Current state by phase
 
-Method: each phase's requirement rows in this file count **Working = 1**,
-**Partial = 0.5**, **Missing/Broken = 0**; the phase percentage is that sum over
-the row count, and "overall" is the unweighted mean of the phases. Rows the
-specification marks optional (Ruflo) are excluded. The numbers move only when a
-row below moves, so they cannot drift from the tables.
+The old percentage table is retired because several rows predated shipped work
+(the MSI, macOS `.app`, portable uninstall, free-position canvas and extension
+tools). This is a qualitative status, not a release gate; the per-phase tables
+below carry the evidence.
 
-| Phase | Area | Completion | Largest open gap |
+| Phase | Area | State | Largest open gap |
 |---|---|---|---|
-| 1 | CI/CD and release | 78% | install smokes in CI, dead-tag decision |
-| 2 | Router manager | 92% | remote-service routers; update/uninstall flow in the panel |
-| 3 | Model and provider | 89% | price and context for native OpenAI picks |
-| 4 | Thinking + OpenAI Platform | 88% | tool calling / structured output through the platform path |
-| 5 | Agent execution | 100% | named caveats only (an editor save bypasses the run lease) |
-| 6 | Skills | 92% | per-skill permissions |
-| 7 | MCP | 100% | — (schema validation landed 2.7.0) |
-| 8 | Memory and RAG | 93% | embeddings are a router proxy, not a local index |
-| 9 | Developer environment | 82% | editor engine, debugger, watch mode |
-| 10 | Safety and permissions | 100% | updates have no in-app route to gate |
-| 11 | Token and context | 100% | — |
-| 12 | Live monitoring | 95% | reordering beyond a numeric priority |
-| 13 | Workflow builder | 95% | free positioning and browser verification of the canvas |
-| 14 | Cross-platform | 80% | client subsets, capability-driven gating |
-| 15 | Extension ecosystem | 82% | provider adapters, UI extensions |
-| 16 | Testing and quality | 100% | named caveats only (browser layout checks, a privileged ENOSPC case) |
-| 17 | Observability | 100% | — |
-| 18 | Installation and updates | 90% | Windows MSI/EXE, macOS `.app`, uninstall |
+| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation; VSIX/APK smokes |
+| 2 | Router manager | Working | remote routers are unauthenticated base URLs; no live network test |
+| 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
+| 4 | Thinking + OpenAI Platform | Partial | tool calling and structured output through the platform path |
+| 5 | Agent execution | Working | named caveats only |
+| 6 | Skills | Working | per-skill permissions only matter if skills execute |
+| 7 | MCP | Working | — |
+| 8 | Memory and RAG | Working | semantic search is a router proxy, not a local index |
+| 9 | Developer environment | Partial | editor engine, debugger, watch mode, custom command presets |
+| 10 | Safety and permissions | Working | — |
+| 11 | Token, context, cost | Working | cost only where the provider reports usage |
+| 12 | Live monitoring | Working | — |
+| 13 | Workflow builder | Working | automated browser test; child agent cancellation |
+| 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
+| 15 | Extension ecosystem | Partial | provider adapters, UI extensions, dependency cycles/upgrade recheck |
+| 16 | Testing and quality | Working | browser layout, privileged ENOSPC, VSIX/APK smokes |
+| 17 | Observability | Working | — |
+| 18 | Installation and updates | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |
 
-**Overall (mean of the 18 phases): 92%.** Read it as "one reliable core, most
-phases closed, the remaining work concentrated in 1, 9, 14 and 18". The
-per-row method is the arbiter: a phase moves only when a row here moves.
+The old `2.1.0` row counts are historical; they are not a progress target.
 
 ## Phase 1 — CI/CD and error diagnosis
 
@@ -336,8 +333,9 @@ per-row method is the arbiter: a phase moves only when a row here moves.
 | Release concurrency | Working | `concurrency: desktop-release-${{ github.ref }}` |
 | AppStream metadata | Working | `appstreamcli validate-tree` clean; AppImage attaches |
 | macOS job | Working | `macos-15-intel`, both Darwin targets, universal tarball |
-| All six release jobs green | Working | run `41884439627`, 9 assets |
-| Install smoke on deb/AppImage/vsix/apk | **Missing** | only the Windows zip was launched locally |
+| All six release jobs green | Partial | last fully green run `41884439627` (`v1.26.6`, 9 assets); no 11-asset run has passed |
+| Deb headless tests | Partial | run `42908396329` (`3.0.2`) exited 101; 3.7.0 adds `libdbus-1-dev` and `pkg-config`, awaiting CI |
+| Install smokes | Partial | deb/AppImage/tarball/zip/macOS are wired into the release jobs; VSIX and APK are not automated |
 | Dead tags `v1.26.0/1/2` | Open | documented as failed; no decision to delete |
 
 Issue A (agent SQL syntax) is **not reproducible**: `agent.rs` compiles and its
@@ -582,7 +580,7 @@ it needs, and both are enforced rather than displayed.
 | Frontend | Working (2.33.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 21 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys, the icon fallback, the workflow graph helpers (layout by dependency depth, add/rename/delete with edge rewriting, per-edge conditions), and a render smoke (2.33.0) that runs `renderWorkflowCanvas` (a card per node, an edge per dependency, an empty-graph note) and evaluates `ide.js` on top of `app.js` (chrome built, `api` wrapped, workbench inside the main pane). Wired into `desktop-ci.yml`. Still not a layout or pixel check — that needs a browser |
 | End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
 | Failure-injection matrix | Working (2.34.0) | Four process-level cases in `scripts/ci/test-e2e.sh`: (1) the mock provider is killed and the next run must reach `failed` with an error while `/api/ready` keeps answering; (2) the provider is slowed and the process killed mid-run, and the restarted app must mark that run `interrupted` with a readable step log; (3) the database is replaced with garbage — the process must exit with `file is not a database` in its log, nothing may answer on the port, and restoring the saved copy must bring it back ready; (4) the data directory is made read-only (POSIX only: Windows Git Bash ignores `chmod`, so the case prints `skip`) and the `data directory` readiness check must go false and then recover. Not covered: a true ENOSPC case (needs a privileged loop/tmpfs mount) and browser-level layout |
-| Install smokes in CI | Working (2.31.0) | `scripts/ci/smoke-package.sh` unpacks a tarball, zip, `.deb` (`dpkg-deb -x`) or AppImage (`--appimage-extract`), boots the packaged binary headless against a scratch home, checks `/api/ready`, serves `/`, and compares `/api/diagnostics/bundle`'s `app.version` with `app/Cargo.toml`. `desktop-release.yml` runs it on the `.deb`, the Linux tarball and AppImage, the Windows zip and the macOS tarball. Verified locally on a zip and a tarball; the `.deb` and AppImage paths run only in the Linux release jobs |
+| Install smokes in CI | Working (2.31.0) | `scripts/ci/smoke-package.sh` unpacks a tarball, zip, `.deb` (`dpkg-deb -x`) or AppImage (`--appimage-extract`), boots the packaged binary headless against a scratch home, checks `/api/ready`, serves `/`, and compares `/api/diagnostics/bundle`'s `app.version` with `app/Cargo.toml`. `desktop-release.yml` runs it on the `.deb`, the Linux tarball and AppImage, the Windows zip and the macOS tarball; VSIX and APK are not covered. Verified locally on a zip and a tarball; the `.deb` and AppImage paths run only in the Linux release jobs |
 | Windows Rust CI job | Working (2.32.0) | `desktop-ci.yml` builds the default `gui` feature and runs `cargo test --locked` on `windows-latest`; WebView2 and MSVC come with the runner and mold/`-Z threads` are Linux-scoped. Linux still owns clippy and the end-to-end smoke. Verified locally with the same commands on Windows; the GitHub job itself runs on push |
 
 ## Phase 17 — Observability and diagnostics
@@ -607,7 +605,7 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Item | Status | Notes |
 |---|---|---|
 | Linux `.deb` / AppImage / tarball | Working | AppStream validates clean |
-| Windows portable zip | Working | no MSI/EXE installer |
+| Windows packages | Working | portable zip and per-user MSI; no per-machine option |
 | macOS package | Working (unsigned) | Gatekeeper right-click → Open |
 | Android APK/AAB | Working | debug-signed release build |
 | VS Code VSIX | Working | published |
@@ -618,29 +616,30 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Replace the installed binary | Working | 2.39.0: copies the prepared binary beside the target, hash-checks the copy, keeps `<name>.old-<version>` and restores it if the new one cannot take its place; a restart runs it, and 2.40.0 removes the leftover backup at the next start |
 | Installer and uninstaller | Working (2.43.0 / 2.44.0) | per-user WiX MSI with Start Menu shortcut and major-upgrade code; `GET /api/uninstall/preview` + `POST /api/uninstall` remove the trees an uninstall owns unless kept, with the About card driving it |
 
-## What to build next (spec order, 2.1.0)
+## Remaining work at 3.8.0
 
-1. ~~**Phase 17 remainder**~~ — closed in 2.4.0: the process log (2.2.0),
-   install/MCP timeline rows (2.3.0), request ids for non-run operations and the
-   readiness view (2.4.0).
-2. **Phase 16 remainder** — an end-to-end harness (headless launch + mock
-   router + restart), then the failure-injection matrix and install smokes. The
-   frontend unit layer landed in 2.5.0; a render smoke and an `ide.js` harness
-   are still open inside it.
-3. **Phase 13 workflow graph** — the last phase with no real implementation. It
-   depends on the Phase 5 lifecycle, which is now complete.
-4. **Phase 18 installers and update** — the data and download halves are done
-   (2.35.0 copy-and-rollback before an upgrade, 2.36.0 the read-only check, 2.37.0
-   the verified download into staging, 2.38.0 the verified unpack, 2.39.0 the swap
-   with a backup and rollback), so what remains is the Windows MSI/EXE, the macOS
-   `.app` and a clean uninstall.
-5. **Phase 15 extension manifest** — name, version, compatibility, permissions,
-   entry point and source, plus a boundary for untrusted extensions.
+The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brief:
 
-Deliberately not next, though open: per-skill permissions (a skill is prompt
-text and never executes), a price table for native OpenAI picks (the app mirrors
-no prices rather than inventing them), and an editor engine or debugger (both
-are a product decision, not a missing route).
+1. **Phase 1 — release reliability.** Get a green tagged run with the 11-asset
+   set, confirm the deb headless tests, pass the existing install smokes, add
+   VSIX/APK smokes, and decide the historical tags. This is the only release
+   blocker.
+2. **Phase 4 — OpenAI Platform.** Add tool calling and structured output to the
+   `openai:` agent path.
+3. **Phase 14 — cross-platform.** Android router management/local execution,
+   VS Code parity, and capability negotiation instead of hand-wired gates.
+4. **Phase 15 — extensions.** Provider adapters, UI extensions, dependency-cycle
+   detection, and re-checking installed folders after an app upgrade.
+5. **Phase 18 — packaging.** Code signing/notarization, a macOS `.dmg`, and a
+   per-machine MSI choice.
+6. **Smaller:** Phase 3 native OpenAI pricing/context, Phase 6 per-skill
+   permissions, Phase 8 local embeddings, Phase 13 automated canvas coverage and
+   child cancellation. Phase 9's editor engine/debugger/watch mode and Phase 3
+   pricing are product decisions, not missing routes.
+
+Already closed in substance: Phases 2, 5, 7, 10, 11, 12, 16 and 17; Phase 13's
+graph engine, canvas, scheduling and resume; Phase 18's installers, updater and
+portable uninstall.
 
 ## Identity and branding
 

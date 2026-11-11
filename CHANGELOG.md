@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.8.0
+
+Documentation correction: the remaining-work sections now describe the current
+tree instead of the 2.1.0 and 3.0.0 snapshots.
+
+- **One ordered backlog.** `docs/MASTER-ROADMAP.md` now opens with
+  "Remaining work at 3.8.0": the Phase 1 release blocker, the missing Phase 4,
+  9, 14, 15 and 18 work, the smaller Phase 3/6/8/12/13 gaps, and the quality and
+  repository-hygiene items. The old phase matrix is updated to match.
+- **Shipped work is no longer listed as missing.** The roadmap and feature
+  status now record the MSI, macOS `.app`, portable uninstall, free-position
+  canvas, cross-process schedule claims, extension tools and editor/run lease as
+  delivered, and stop repeating the stale "still open" notes.
+- **The 2.25.0 percentage table is retired.** `docs/FEATURE-STATUS.md` now uses a
+  qualitative phase state; the old `92%` figure was derived from rows that
+  predated those ships. The 2.1.0 evidence table is labelled as a snapshot.
+- **The defect ledger matches.** `docs/KNOWN-ISSUES.md` now describes only the
+  real remaining extension/canvas gaps, removes the stale "no installer or
+  uninstaller" claims, and names the VSIX/APK install-smoke gap.
+- No code, workflow, dependency or test behavior changed. The documentation-only
+  checks are recorded in `docs/PROGRESS.md`; no Rust build or test was run on
+  this laptop.
+
 ## 3.7.0
 
 Phase 1 deb blocker: the headless build now installs the dbus development files

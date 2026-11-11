@@ -28,6 +28,67 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
+## Remaining work at 3.8.0
+
+This is the ordered backlog for the current tree. It supersedes older
+"remaining" notes inside individual phase logs; the evidence tables are in
+`docs/FEATURE-STATUS.md`, and the defect ledger is `docs/KNOWN-ISSUES.md`.
+
+### Phase 1 — release reliability (blocker)
+
+1. Run the current tree through Desktop Release and get a tagged run where all
+   six build jobs pass. No tag has passed with the current 11-asset set; the last
+   fully green run was `v1.26.6`, which had nine assets.
+2. Confirm the deb job reaches and passes `cargo test --locked
+   --no-default-features`. 3.7.0 adds `libdbus-1-dev` and `pkg-config`; the
+   command and every assertion are unchanged.
+3. Pass the existing deb/AppImage/tarball/zip/macOS install smokes in that run,
+   and add the missing VSIX and APK install smokes.
+4. Resolve macOS runner availability, then decide the historical tags:
+   `v1.26.0/1/2` (failed) and `v1.62.0`–`v1.71.0` (published with zero assets) —
+   backfill or document them as abandoned.
+
+### Missing product work
+
+| Phase | Remaining |
+|---|---|
+| 4 — Thinking + OpenAI Platform | Tool calling and structured output through the `openai:` platform path. |
+| 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, arbitrary command presets, in-pane reflog undo. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
+| 15 — Extensions | Provider adapters, UI extensions, dependency-cycle detection, and re-checking an extension after an app upgrade. |
+| 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
+
+### Smaller named gaps
+
+- Phase 3: native OpenAI picks carry no price; context is shown only when the
+  provider supplies it.
+- Phase 6: per-skill permissions remain absent; a skill is prompt text and is not
+  executed, so this only matters if that changes.
+- Phase 8: semantic search uses the router; there is no local embedding index.
+- Phase 12: no workstream remains open; Move up/Move down covers one-step queue
+  reordering, but drag-and-drop is not promised.
+- Phase 13: add an automated browser test for the canvas and make cancellation
+  forcibly stop a child agent run in flight. Free positioning and cross-process
+  schedule claims shipped in 2.47.0/2.48.0.
+
+### Quality and repository hygiene
+
+- Browser-level layout checks for the IDE and workflow canvas, and a privileged
+  ENOSPC test.
+- Full `rustfmt` coverage and clippy on Windows/macOS as well as Linux.
+- AppStream validation for the renamed Linux package; real-device checks for the
+  macOS/Windows/Android icons.
+- Reconcile the diverged `website` branch and the workflow names still cited by
+  `AGENTS.md`.
+- Run restore remains narrower than a workspace snapshot; diagnostics and
+  redaction have the limits recorded in `KNOWN-ISSUES.md`.
+
+### Already closed
+
+Router management, the agent engine, MCP, permissions, token/cost, observability,
+the workflow engine, and the testing layers are functionally complete. Their
+remaining notes are caveats, not missing subsystems.
+
 ## Phase 1 — CI/CD and release reliability (in progress)
 
 Delivered in 1.26.4:
@@ -77,19 +138,16 @@ Delivered in 3.4.0:
 
 Remaining for Phase 1 sign-off:
 
-- [ ] A tagged run where **all** jobs succeed, including macOS and the deb
-      headless tests.
-- [ ] The deb job's `cargo test --locked --no-default-features` exit 101 on
-      run `42908396329` (`3.0.2`). The headless tree links keyring's Secret
-      Service backend and the job did not install `libdbus-1-dev`; 3.7.0 adds
-      it. A CI run still has to confirm the job reaches and passes the tests.
+- [ ] A tagged run where all six jobs succeed with the 11-asset set. The last
+      fully green run was `v1.26.6`, with nine assets.
+- [ ] Confirm the deb job reaches and passes
+      `cargo test --locked --no-default-features` after 3.7.0 adds
+      `libdbus-1-dev` and `pkg-config`; the command and assertions are unchanged.
 - [ ] macOS runner availability resolved (queue starvation/cancellation).
-- [ ] Install smoke tests executed on the produced artifacts (deb install,
-      AppImage run, zip extract + launch, vsix install, apk install).
-- [ ] Decision recorded for the three dead tags (`v1.26.0`, `v1.26.1`,
-      `v1.26.2`) — leave documented as failed, or delete after a green release.
-- [ ] The historical zero-asset tags `v1.62.0`–`v1.71.0`; the new dispatch path
-      can target one, but it still has to pass that tag's own build and tests.
+- [ ] The deb/AppImage/tarball/zip/macOS smokes pass in that run; add the missing
+      VSIX and APK install smokes.
+- [ ] Decide the historical tags: `v1.26.0/1/2` (failed) and
+      `v1.62.0`–`v1.71.0` (zero assets) — backfill or document as abandoned.
 
 ## Phase 2 — Router manager
 
@@ -116,7 +174,7 @@ been exercised.
 1. Replace the hard-coded FreeLLMAPI/OmniRoute paths in `router.rs` with a
    registry of descriptors (id, name, OS/arch support, install methods, min
    version, config location, health probe, start/stop/update/uninstall).
-   **Done (1.26.9)** — `router_registry.rs`; update/uninstall remain part of (3).
+   **Done (1.26.9)** — `router_registry.rs`; update/uninstall shipped in 1.26.23.
 2. Add detection: installed? version? runtime? healthy? owned?
    **Done (1.26.9)** — `/api/routers`, rebuilt from the existing probes;
    `healthy` is "the probe answered".
@@ -126,14 +184,14 @@ been exercised.
    and verified release downloads (streamed through sha256, unpacked only on a
    match). All three routers have a real path, plus an update check, a gated
    update that pulls before replacing, and an uninstall that keeps data unless
-   told to purge it (1.26.23). A config editor remains.
+   told to purge it (1.26.23), plus the whitelisted config editor (1.43.0).
 4. Add a startup sweep honouring per-router auto-start preferences, and keep
    the ownership rule (never stop what the app did not start). **Done (1.26.17)**
    — preferences in `router-prefs.json`, sweep starts only an enabled, installed,
    not-already-answering router, so nothing is ever adopted.
-5. UI: list, status, logs, connection tester, update/uninstall. **Partial** —
-   list, health, start/stop (1.26.13), connection tester and restart (1.26.15),
-   container logs (1.26.16); update, uninstall and a config editor still open.
+5. UI: list, status, logs, connection tester, update/uninstall. **Done
+   (1.26.13–1.26.16, 1.43.0)** — list, health, start/stop, restart, tester,
+   container logs, update/uninstall and the configuration editor.
 
 ## Phase 3 — Model and provider manager
 
@@ -181,9 +239,8 @@ shape supports them; no agent tool loop uses `openai:` yet).
 3. Role-specialised agents with explicit tools/permissions/budgets.
 4. Parallel execution guarded by worktree isolation or file locks; conflict
    detection before write.
-   *Partially delivered 1.54.0: conflict detection before a `write` and leases
-   between live runs (`app/src/filelock.rs`). Worktrees, a lease that also covers
-   command steps and the editor, and a cross-process ledger are still open.*
+   *Delivered 1.54.0 (conflict detection and path leases), 2.1.0 (a worktree and
+   command claim per writing run) and 2.45.0 (the editor asks the same lease).*
 5. Verification step before a run is marked complete.
    *Delivered 1.56.0: a run that changed the workspace goes to the verifier and
    is only marked complete on `APPROVE`; ISSUES allows one repair round and then
@@ -260,9 +317,10 @@ browser confirms first. In-pane reflog undo is still open.*
 discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it
 (inline diff, stage/unstage/discard, commit box, branch create/switch, history,
-conflict/staged/changed/untracked groups, ahead/behind). Remaining: worktree
-checkpoints before an agent writes (merge/pull/push/fetch followed in 1.68.0;
-per-hunk staging and commit detail in 1.69.0).*
+conflict/staged/changed/untracked groups, ahead/behind). Remaining: editor engine
+(syntax highlighting, completion, formatting), debugger, watch mode, arbitrary
+command presets, and in-pane reflog undo. Checkpoints, worktrees, merge/rebase,
+per-hunk staging and commit detail all shipped through 3.2.0.*
 
 *Delivered 1.67.0: the build/test loop — detected `cargo build`/`cargo test` and
 `package.json` build/test scripts run from the Problems pane, stdout/stderr
@@ -331,7 +389,8 @@ resolves it deletes the placeholder and takes its `seq` (one row per action, no
 gap), a run that stops without a step clears it, and the panel renders the row
 with a pulsing tag that respects `prefers-reduced-motion`.
 
-Remaining: reordering beyond a numeric priority.
+No workstream remains open; Move up/Move down covers one-step queue reordering,
+but drag-and-drop is not promised.
 
 ## Phase 13 — Workflow builder
 
@@ -402,9 +461,10 @@ Export/import shipped in 2.13.0: a versioned `sarthi.workflow` document, the
 same validation on import, a new id and unique name, and a fresh schedule
 window.
 
-Remaining: free positioning on the canvas and browser verification of it.
-Cancelling a run stops the graph but does not forcibly stop a child agent run in
-flight; scheduling is per process.
+Remaining: an automated browser test (the canvas was driven manually in 2.49.0),
+and cancellation still does not forcibly stop a child agent run already in
+flight. Free positioning shipped in 2.47.0 and schedule windows are claimed
+across processes in SQLite since 2.48.0.
 
 ## Phase 14 — Cross-platform
 
@@ -493,13 +553,11 @@ arguments, `env.result` takes exactly one answer. `POST
 behind a new `extension_tool` permission action whose `ask` default refuses
 because the route has no prompt, and records the call in `extension_runs`.
 
-Remaining: the agent's tool loop does not offer these tools yet (no catalog block
-and no step kind), `inputSchema` is advertised but not enforced on the arguments,
-and provider adapters and UI extensions do not exist. Installing still grants no
-capability by itself, and the only reachable surface is the two workspace pairs,
-the extension's own data folder, the tool ABI and `last_error`. A dependency is checked for presence, not for
-its own compatibility, and no dependency cycle is detected (a pair that needs
-each other reports each other as installed and both stay runnable).
+Remaining: no provider adapters and no UI extensions. Installing grants no
+capability by itself; the reachable surface is the two workspace pairs, the
+extension's own data folder, the tool ABI and `last_error`. A dependency is
+checked for presence, not its own compatibility, and no dependency cycle is
+detected; an app upgrade does not re-check installed folders.
 
 Custom tools in the agent loop (2.27.0): building a run's prompt reads every
 valid, runnable folder's declared tools from disk and pushes them as a labelled
@@ -580,7 +638,8 @@ a saved copy must bring it back ready; a read-only data directory must make the
 `chmod` is not enforced).
 
 Remaining: a privileged ENOSPC case (a real full disk needs a loop/tmpfs mount),
-and browser-level layout checks for the canvas and IDE.
+browser-level layout checks for the canvas and IDE, and install smokes for the
+VSIX and APK (the desktop archives, deb and AppImage are wired).
 
 ## Phase 17 — Observability
 
@@ -701,8 +760,8 @@ program folder is removed first so a refusal cannot orphan a working install, an
 a Windows binary is renamed aside with the folder reported as pending, because a
 running program cannot be deleted.
 
-Open: code signing/notarization, an uninstall for a portable install, and a
-per-machine MSI choice.
+Open: code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice.
+The portable uninstall shipped in 2.44.0.
 
 ## Identity (2.51.0)
 
@@ -712,29 +771,28 @@ The product name is **Sarthi Studio** across the UI, documentation, installers a
 
 The product mark is a tardigrade face — orange, black and white, no gradients — generated from one geometry and shipped as the window icon, installer icon, favicon, Linux theme icon, macOS bundle icon and Android adaptive launcher. `docs/BRAND-ASSETS.md` is the inventory.
 
-## 3.0.0 phase matrix
+## 3.8.0 phase matrix
 
 Measured against the implementation, not the plan. Detail and evidence per row:
 `docs/FEATURE-STATUS.md`; defects: `docs/KNOWN-ISSUES.md`.
 
 | Phase | State | What is still open |
 |---|---|---|
-| 1 CI/CD and release | Partial | no fresh green tagged run yet; the deb job's headless tests exit 101, and deb/AppImage/VSIX/APK install smokes are not automated |
-| 2 Router manager | Working | — |
-| 3 Model and provider | Working | pricing only where the provider publishes it |
-| 4 Thinking / OpenAI | Working | — |
+| 1 CI/CD and release | Partial | no fresh green tagged run with the 11-asset set; 3.7.0 deb dependency awaits CI; VSIX/APK install smokes |
+| 2 Router manager | Working | — (remote routers are unauthenticated base URLs; no live network test) |
+| 3 Model and provider | Working | native OpenAI picks carry no price; context only when the provider supplies it |
+| 4 Thinking / OpenAI | Partial | tool calling and structured output through the platform path |
 | 5 Agent execution | Working | — |
-| 6 Skills | Working | — |
+| 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
-| 8 Memory and RAG | Working | embeddings are a probe only; nothing is stored or indexed |
-| 9 Developer environment | Working | no editor engine (by design); no debug adapter or custom command presets |
+| 8 Memory and RAG | Working | semantic search is a router proxy, not a local embedding index |
+| 9 Developer environment | Partial | no editor engine, debugger, watch mode or custom command presets |
 | 10 Safety and permissions | Working | — |
-| 11 Token, context, cost | Working | cost reported only where the provider reports usage |
+| 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |
-| 13 Workflows | Working | — |
-| 14 Cross-platform | Working | capability negotiation drives only a few gates by hand |
-| 15 Extensions | Working | — |
-| 16 Testing and quality | Working | install smoke on deb/AppImage/vsix/apk is not automated |
+| 13 Workflows | Working | automated browser coverage; child agent cancellation |
+| 14 Cross-platform | Partial | Android/VS Code subsets; capability gates are hand-wired |
+| 15 Extensions | Partial | provider adapters and UI extensions; dependency cycles/upgrade recheck |
+| 16 Testing and quality | Working | browser layout, privileged ENOSPC, VSIX/APK install smokes |
 | 17 Observability | Working | — |
-| 18 Install and update | Working | cross-platform install smoke; macOS bundle is unsigned |
-
+| 18 Install and update | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |
