@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.5.0
+
+Phase 1 trigger gap: publishing a GitHub release is now enough to build and
+attach its artifacts, even when no tag-push event ever fired.
+
+- **`release: published` is the third trigger.** The Desktop Release workflow
+  already accepted a `v*` tag push and a manual dispatch with a tag. It now also
+  runs when a release is published through the API or UI. That is the path that
+  created `v1.62.0`–`v1.71.0` without builds: the tags existed, the releases
+  existed, but no tag push started the workflow.
+- The new trigger reuses the existing path unchanged: `github.ref` is the
+  release tag, `preflight` checks it against `app/Cargo.toml`, the six build
+  jobs attach to that tag, and `verify-release` requires all 11 assets. The
+  concurrency group is still scoped to the tag, so a release event and a tag
+  push for the same version cannot race.
+- A release created by this workflow's own `softprops/action-gh-release` step
+  uses the repository `GITHUB_TOKEN`, whose events do not start another run, so
+  the trigger does not loop.
+- Not verified live: no release was published in this session, so the
+  `release` event itself has not been exercised on GitHub. The workflow parses,
+  the step shape checks clean, and the shared preflight shell paths pass. The
+  deb job's `cargo test --no-default-features` exit `101` still blocks a
+  complete green release.
+
 ## 3.4.0
 
 Phase 1 release reliability: a tag can be built on demand, and a release is no

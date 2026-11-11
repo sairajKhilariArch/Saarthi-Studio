@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 3.5.0 (2026-11-11):** Phase 1's trigger gap closes for future releases:
+`release: types: [published]` now runs Desktop Release when a release is created
+through the API/UI without a tag-push event, with the existing tag-scoped
+preflight, build and asset-gate path. The workflow's own `GITHUB_TOKEN` release
+creation does not loop. No live release event was published here; the deb
+headless tests still exit 101, so a complete green release remains blocked. No
+figures changed because this is release plumbing.
+
 **Revision 3.4.0 (2026-11-11):** Phase 1 gained a tag-targeted recovery path and
 a post-build release gate. `workflow_dispatch` now accepts `tag`; `preflight`
 checks out that tag, refuses a mismatch with `app/Cargo.toml`, and scopes

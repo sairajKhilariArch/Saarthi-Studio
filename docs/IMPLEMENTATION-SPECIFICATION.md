@@ -86,10 +86,13 @@ macOS and stay buildable under `--no-default-features`, (4) why is it needed,
 5. Pipeline regressions get a test in `scripts/ci/test-version.sh` (or a Rust
    test for backend behaviour) that fails on a plain `cargo test`/CI push, not
    only during a release.
-6. A manual dispatch may target an existing `tag` to recover a missed trigger.
-   The checked-out manifest version must equal the tag without its `v` prefix;
-   a mismatch fails `preflight` before any package is built. A dispatch with no
-   tag builds artifacts only and never attaches them to a release.
+6. A tag push, a published GitHub release, or a manual dispatch with a `tag`
+   all enter the same build path. A manual dispatch may target an existing tag
+   to recover a missed trigger. The checked-out manifest version must equal the
+   tag without its `v` prefix; a mismatch fails `preflight` before any package
+   is built. A dispatch with no tag builds artifacts only and never attaches
+   them to a release. A release event uses the tag in `github.ref`; releases
+   made by the workflow's own `GITHUB_TOKEN` do not re-trigger it.
 7. A release is "shipped" only when the tag run is green and
    `scripts/ci/verify-release.sh` finds every promised asset with a non-zero
    size. Presence of a release page, or a successful build job, is not enough.

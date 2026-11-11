@@ -44,6 +44,13 @@ Delivered in 1.26.4:
 - AppStream metadata (`app/packaging/sarthi-studio.appdata.xml`) shipped into
   the AppImage.
 
+Delivered in 3.5.0:
+
+- `release: types: [published]` is now a third trigger, so a release created
+  through the API/UI without a tag-push event still builds and attaches its
+  artifacts. The event reuses the tag-scoped preflight, build and verification
+  path; the workflow's own `GITHUB_TOKEN` release creation does not loop.
+
 Delivered in 3.4.0:
 
 - `workflow_dispatch` accepts an existing `tag`. `preflight` checks out that

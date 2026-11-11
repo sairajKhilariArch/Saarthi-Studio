@@ -4,9 +4,9 @@ name: Desktop Release
 # via cargo-deb, AppImage), Windows x86_64 (portable zip and MSI installer),
 # macOS universal
 # arm64+x86_64 (portable tarball, unsigned, headless-smoked), the unsigned
-# Android release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to
-# build and attach all of them to one GitHub release. A workflow_dispatch with
-# no tag builds artifacts only; one with a tag backfills that existing release.
+# Android release APK/AAB, and the VS Code extension .vsix. A `v*` tag push, a
+# published GitHub release, or a workflow_dispatch with a tag builds and
+# attaches all of them. A dispatch with no tag builds artifacts only.
 on:
   workflow_dispatch:
     inputs:
@@ -17,6 +17,10 @@ on:
   push:
     tags:
       - 'v*'
+  release:
+    # Catch a release created through the API or UI without a tag-push event.
+    # Releases made by this workflow's own GITHUB_TOKEN do not re-trigger it.
+    types: [published]
 
 permissions:
   contents: write
