@@ -1,0 +1,32 @@
+name: Release Audit
+
+# Desktop Release verifies the assets at build time, and a published release
+# triggers a build. This is the backstop for a release that was created in a
+# way that produced neither: it checks every release at or above 3.4.0 daily.
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Audit published release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Audit releases at or above 3.4.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          MIN_RELEASE_VERSION: '3.4.0'
+        run: bash scripts/ci/audit-releases.sh

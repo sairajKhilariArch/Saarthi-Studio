@@ -12,6 +12,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tool="$here/verify-release.sh"
+audit="$here/audit-releases.sh"
 tmp="$(mktemp -d)"
 server=""
 trap 'if [ -n "$server" ]; then kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; fi; rm -rf "$tmp"' EXIT
@@ -31,8 +32,10 @@ pass() { passed=$((passed + 1)); printf 'ok   %s\n' "$1"; }
 die() { failed=$((failed + 1)); printf 'FAIL %s\n' "$1" >&2; }
 
 release_dir="$tmp/www/repos/fixture/repo/releases/tags"
+list_dir="$tmp/www/repos/fixture/repo/releases"
 mkdir -p "$release_dir"
 release_file="$release_dir/v9.9.9"
+list_file="$list_dir/index.html"
 
 write_release() { # missing asset name (empty for complete)
   "$py" - "$release_file" "$1" <<'PY'
@@ -58,6 +61,13 @@ assets = [{"name": name, "size": 1024} for name in names if name != missing]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({"draft": False, "assets": assets}, handle)
 PY
+}
+
+write_releases_index() {
+  # http.server serves index.html for the directory URL, and the audit's curl
+  # follows the directory redirect. The body is JSON; the content type is not
+  # consulted.
+  printf '%s\n' '[{"tag_name":"v9.9.9","draft":false,"prerelease":false}]' >"$list_file"
 }
 
 port="$("$py" - <<'PY'
@@ -94,6 +104,15 @@ else
   die "rejected a complete release"
 fi
 
+write_releases_index
+if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+  MIN_RELEASE_VERSION=9.9.9 bash "$audit" >"$tmp/audit-complete.out" 2>&1; then
+  pass "audit accepts a complete release at the minimum version"
+else
+  cat "$tmp/audit-complete.out" >&2
+  die "audit rejected a complete release"
+fi
+
 write_release "free-ai-studio-vscode.vsix"
 if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
   bash "$tool" v9.9.9 9.9.9 >"$tmp/missing.out" 2>&1; then
@@ -102,6 +121,15 @@ else
   grep -q "free-ai-studio-vscode.vsix" "$tmp/missing.out" ||
     die "missing-asset failure did not name the asset"
   pass "rejects a release with a missing asset"
+fi
+
+if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+  MIN_RELEASE_VERSION=9.9.9 bash "$audit" >"$tmp/audit-missing.out" 2>&1; then
+  die "audit accepted a release with a missing asset"
+else
+  grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-missing.out" ||
+    die "audit failure did not name the missing asset"
+  pass "audit rejects a release with a missing asset"
 fi
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 3.6.0 (2026-11-11):** Phase 1 gained a scheduled backstop:
+`scripts/ci/audit-releases.sh` audits every published release at or above 3.4.0
+with the 11-asset gate, and `release-audit.yml` runs it daily plus on manual
+dispatch. The older zero-asset tags stay below the floor and are not re-reported.
+`test-release.sh` covers a passing audit and a missing-VSIX failure (4/4). No
+figures changed; this is release plumbing. The deb headless test exit 101 still
+blocks a complete green release.
+
 **Revision 3.5.0 (2026-11-11):** Phase 1's trigger gap closes for future releases:
 `release: types: [published]` now runs Desktop Release when a release is created
 through the API/UI without a tag-push event, with the existing tag-scoped

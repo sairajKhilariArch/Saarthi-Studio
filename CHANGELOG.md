@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.6.0
+
+Phase 1 backstop: a published release that somehow never triggered a build is
+now caught by a daily audit instead of staying silently empty.
+
+- **`scripts/ci/audit-releases.sh`** lists published releases and audits every
+  one at or above `MIN_RELEASE_VERSION` (default `3.4.0`). It skips the known
+  `v1.62.0`–`v1.71.0` releases below that floor, then runs the same 11-asset
+  `verify-release.sh` gate on each release it finds. Any missing or empty asset
+  fails the audit.
+- **`release-audit.yml`** runs the audit daily at 04:23 UTC and on manual
+  dispatch. It needs only `contents: read`; it is the backstop for a release
+  that was created without a usable tag-push or release event.
+- `test-release.sh` now serves a release list plus a release fixture over
+  loopback and covers both audit outcomes: a complete release passes, and a
+  missing VSIX is refused and named. Four cases pass.
+- Not verified live: the scheduled audit has not run on GitHub, and the deb
+  job's `cargo test --no-default-features` exit `101` still blocks a complete
+  green release.
+
 ## 3.5.0
 
 Phase 1 trigger gap: publishing a GitHub release is now enough to build and

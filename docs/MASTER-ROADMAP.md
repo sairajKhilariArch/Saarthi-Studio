@@ -44,6 +44,14 @@ Delivered in 1.26.4:
 - AppStream metadata (`app/packaging/sarthi-studio.appdata.xml`) shipped into
   the AppImage.
 
+Delivered in 3.6.0:
+
+- `scripts/ci/audit-releases.sh` audits every published release at or above
+  `MIN_RELEASE_VERSION` (default 3.4.0) and fails if one is missing an expected
+  asset. `release-audit.yml` runs it daily and on manual dispatch, so a release
+  created without a usable event is still caught. The known `v1.62.0`–`v1.71.0`
+  tags remain below the floor; `test-release.sh` covers the audit pass/failure.
+
 Delivered in 3.5.0:
 
 - `release: types: [published]` is now a third trigger, so a release created

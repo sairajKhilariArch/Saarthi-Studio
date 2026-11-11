@@ -96,6 +96,9 @@ macOS and stay buildable under `--no-default-features`, (4) why is it needed,
 7. A release is "shipped" only when the tag run is green and
    `scripts/ci/verify-release.sh` finds every promised asset with a non-zero
    size. Presence of a release page, or a successful build job, is not enough.
+8. A scheduled `release-audit.yml` checks every published release at or above
+   `MIN_RELEASE_VERSION` (default 3.4.0) with the same gate. It is the backstop
+   for a release that was created without a tag-push or release event.
 
 ## 8. Cross-platform contract
 

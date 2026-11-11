@@ -11,6 +11,7 @@
 | Android instrumentation | `android/app/src/androidTest/` | emulator script `android/scripts/ci/run-android-instrumentation.sh` | launch, DB migration, paging, backup |
 | Release-pipeline regressions | `scripts/ci/test-version.sh` | `bash scripts/ci/test-version.sh` | version parsing + artifact-name rules |
 | Release asset gate | `scripts/ci/verify-release.sh` | `bash scripts/ci/test-release.sh` | 2 cases over a loopback fixture: a complete release passes, and a missing VSIX fails and is named |
+| Release audit | `scripts/ci/audit-releases.sh` | `bash scripts/ci/test-release.sh` | 2 cases: a complete release at the minimum version passes, and a missing VSIX fails and is named (4 total with the gate) |
 | Extension sandbox host surface | `app/src/extension_run.rs` tests + a live headless smoke | `cd app && cargo test extension_run` | WAT modules driven through the real interpreter: read/write with and without the grant, path escape, saved rule deny, I/O error codes |
 | macOS bundle packager | `scripts/ci/bundle-macos-app.sh` | `bash scripts/ci/test-bundle.sh` | 13 checks: a complete stage builds the bundle, the executable is in `Contents/MacOS` and still executable, the whole UI is in `Contents/Resources/static`, `PkgInfo` is `APPL????`, `Info.plist` declares executable/identifier/type/name/versions and carries the staged version, the zip holds both paths with forward slashes, a stage with no static tree / no binary / an unusable version is refused, and a rebuild replaces rather than merges |
 | Windows MSI packager | `app/packaging/windows/installer.wxs` + `scripts/ci/build-windows-msi.sh` | `bash scripts/ci/test-installer.sh` | 11 checks against a real WiX build: a complete stage builds the MSI and it is named for the version, `msiexec /a` performs an administrative install, the payload puts the binary and the UI beside it in one install folder, a nested file (`static/skills/debug/SKILL.md`) survives, the product name is in the package, three refusals (no static tree, no binary, unusable version), and a rebuild replaces the previous MSI. Prints `skip` where WiX or msiexec is absent |
@@ -23,7 +24,8 @@
 CI gates: `desktop-ci.yml` (clippy `-D warnings`, tests, layout checks, version
 regressions, frontend tests, end-to-end smoke, ubuntu + macOS), `rust-host-api-ci.yml` (rustfmt on
 host modules, tests, clippy), `android-ci.yml` (unit, lint, assemble, emulator
-instrumentation, hard validation gate), `desktop-release.yml` (real artifacts).
+instrumentation, hard validation gate), `desktop-release.yml` (real artifacts),
+`release-audit.yml` (daily published-asset audit).
 
 The frontend layer is deliberately narrow. `app/static/app.js` is a classic
 script with no exports, so `app/static/tests/harness.js` evaluates the real file
