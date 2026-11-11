@@ -1645,14 +1645,20 @@ async fn router_status(State(_state): State<AppState>) -> Json<Value> {
     Json(router::status().await.to_json())
 }
 
-async fn router_start(State(_state): State<AppState>) -> Response<Body> {
+async fn router_start(State(state): State<AppState>) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, "freellmapi", "start") {
+        return response;
+    }
     match router::manual_start().await {
         Ok(status) => Json(status.to_json()).into_response(),
         Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
     }
 }
 
-async fn router_stop(State(_state): State<AppState>) -> Response<Body> {
+async fn router_stop(State(state): State<AppState>) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, "freellmapi", "stop") {
+        return response;
+    }
     match router::manual_stop().await {
         Ok(status) => Json(status.to_json()).into_response(),
         Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
@@ -1663,14 +1669,20 @@ async fn omniroute_status(State(_state): State<AppState>) -> Json<Value> {
     Json(router::omniroute_status().await.to_json())
 }
 
-async fn omniroute_start(State(_state): State<AppState>) -> Response<Body> {
+async fn omniroute_start(State(state): State<AppState>) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, "omniroute", "start") {
+        return response;
+    }
     match router::omniroute_start().await {
         Ok(status) => Json(status.to_json()).into_response(),
         Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
     }
 }
 
-async fn omniroute_stop(State(_state): State<AppState>) -> Response<Body> {
+async fn omniroute_stop(State(state): State<AppState>) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, "omniroute", "stop") {
+        return response;
+    }
     match router::omniroute_stop().await {
         Ok(status) => Json(status.to_json()).into_response(),
         Err(error) => json_error(StatusCode::BAD_GATEWAY, error),
@@ -1809,6 +1821,65 @@ async fn routers_save_config_file(
     }
 }
 
+/// Starting, stopping, installing, updating or removing a router acts on a local
+/// process. When the user has pointed that router at another machine there is no
+/// such process, so the honest answer is a refusal naming the endpoint.
+fn remote_router_refusal(state: &AppState, id: &str, action: &str) -> Option<Response<Body>> {
+    router_registry::remote_endpoint(state, id).map(|url| {
+        json_error(
+            StatusCode::CONFLICT,
+            format!(
+                "{url} is a remote endpoint, so Studio cannot {action} it. Clear the remote endpoint first."
+            ),
+        )
+    })
+}
+
+/// Point one router at an endpoint on another machine, or clear that choice with
+/// an empty URL. The endpoint is validated before anything is written, stored in
+/// `router-prefs.json`, and gated by the same `settings` rule as a settings save.
+async fn routers_remote(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let Some(url) = input.get("url").and_then(Value::as_str) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Send {\"url\": \"https://host[:port]\"}, or an empty string to clear it.",
+        );
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = permissions::guard_user(
+        &state,
+        permissions::Action::Settings,
+        "config",
+        "",
+        approve,
+        "save a router's remote endpoint",
+    ) {
+        return response;
+    }
+    match router_registry::set_remote_endpoint(&state, &id, url) {
+        Ok(stored) => {
+            oplog::record(
+                "info",
+                "router",
+                "remote",
+                format!("{id}: {}", stored.as_deref().unwrap_or("local endpoint")),
+            );
+            Json(json!({"id": id, "remote_url": stored})).into_response()
+        }
+        Err(error) if error.starts_with("Unknown router id") => {
+            json_error(StatusCode::NOT_FOUND, error)
+        }
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
 /// Connection tester: a real request to the router's documented health path,
 /// reporting latency and status instead of only healthy/unhealthy.
 async fn routers_test(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
@@ -1827,6 +1898,9 @@ async fn routers_install_plan(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, &id, "install") {
+        return response;
+    }
     match router_registry::install_plan(&state, &id).await {
         Ok(plan) => Json(serde_json::to_value(plan).unwrap_or(Value::Null)).into_response(),
         Err(error) => json_error(StatusCode::NOT_FOUND, error.message()),
@@ -1851,6 +1925,9 @@ async fn routers_install(
     Path(id): Path<String>,
     Json(input): Json<Value>,
 ) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, &id, "install") {
+        return response;
+    }
     let approve = input
         .get("approve")
         .and_then(Value::as_bool)
@@ -1965,6 +2042,9 @@ async fn routers_update(
     Path(id): Path<String>,
     Json(input): Json<Value>,
 ) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, &id, "update") {
+        return response;
+    }
     let approve = input
         .get("approve")
         .and_then(Value::as_bool)
@@ -1982,6 +2062,9 @@ async fn routers_uninstall(
     Path(id): Path<String>,
     Json(input): Json<Value>,
 ) -> Response<Body> {
+    if let Some(response) = remote_router_refusal(&state, &id, "uninstall") {
+        return response;
+    }
     let approve = input
         .get("approve")
         .and_then(Value::as_bool)
@@ -2058,9 +2141,12 @@ async fn routers_logs(
 
 /// Restart through the existing stop/start paths, so the ownership rules apply
 /// unchanged (an OmniRoute Studio did not start is still not stopped by Studio).
-async fn routers_restart(Path(id): Path<String>) -> Response<Body> {
+async fn routers_restart(State(state): State<AppState>, Path(id): Path<String>) -> Response<Body> {
     if router_registry::find(&id).is_none() {
         return json_error(StatusCode::NOT_FOUND, format!("Unknown router id: {id}"));
+    }
+    if let Some(response) = remote_router_refusal(&state, &id, "restart") {
+        return response;
     }
     match router_registry::restart(&id).await {
         Ok(message) => {
@@ -4409,6 +4495,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/routers/:id/restart", post(routers_restart))
         .route("/api/routers/:id/logs", get(routers_logs))
         .route("/api/routers/:id/auto-start", post(routers_auto_start))
+        .route("/api/routers/:id/remote", post(routers_remote))
         .route("/api/routers/:id/install-plan", get(routers_install_plan))
         .route(
             "/api/routers/:id/install",

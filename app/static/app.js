@@ -6704,6 +6704,7 @@ const ROUTER_ACTIONS = {
 
 function routerStateLabel(entry) {
   if (entry.healthy) return "Healthy";
+  if (entry.remote) return "Remote, not answering";
   if (entry.running) return "Up, not answering";
   if (entry.installed) return "Stopped";
   return "Not installed";
@@ -6747,6 +6748,47 @@ function routerRow(entry) {
   const testLine = document.createElement("small");
   testLine.className = "muted";
   main.appendChild(testLine);
+
+  // Remote endpoint: a router on another machine is usable from here, but
+  // Studio only talks to it. The URL is validated and stored server-side; while
+  // it is set, the local install and lifecycle controls are not offered.
+  if (entry.remote_here) {
+    const remoteBox = document.createElement("div");
+    remoteBox.className = "console-remote";
+    const remoteNote = document.createElement("small");
+    remoteNote.textContent = entry.remote
+      ? "Remote endpoint. Studio talks to this address and never starts or stops it."
+      : "Use a router on another machine: https, or http on loopback.";
+    const remoteInput = document.createElement("input");
+    remoteInput.type = "text";
+    remoteInput.value = entry.remote_url || "";
+    remoteInput.placeholder = "https://router.example.com";
+    remoteInput.setAttribute("aria-label", `${entry.name} remote endpoint`);
+    const saveRemote = async (url) => {
+      const result = await api(`/api/routers/${entry.id}/remote`, {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      });
+      if (!result.ok) {
+        toast(result.data.error || "Could not save that endpoint.");
+        return;
+      }
+      toast(result.data.remote_url
+        ? `${entry.name} now uses ${result.data.remote_url}.`
+        : `${entry.name} is back on a local install.`);
+      await loadRouterList();
+    };
+    const remoteActions = document.createElement("div");
+    remoteActions.className = "console-row-actions";
+    remoteActions.appendChild(
+      rowButton(entry.remote ? "Change" : "Use remote", () => saveRemote(remoteInput.value)),
+    );
+    if (entry.remote) {
+      remoteActions.appendChild(rowButton("Use local", () => saveRemote("")));
+    }
+    remoteBox.append(remoteNote, remoteInput, remoteActions);
+    main.appendChild(remoteBox);
+  }
   row.appendChild(main);
 
   const actions = document.createElement("div");
@@ -6771,7 +6813,7 @@ function routerRow(entry) {
   // that reason instead of an empty pane.
   const logBox = document.createElement("pre");
   logBox.className = "console-logs hidden";
-  actions.appendChild(rowButton("Logs", async () => {
+  const logsButton = rowButton("Logs", async () => {
     if (!logBox.classList.contains("hidden")) {
       logBox.classList.add("hidden");
       return;
@@ -6787,7 +6829,9 @@ function routerRow(entry) {
     logBox.textContent = lines.length
       ? lines.join("\n")
       : "The router has not written any output yet.";
-  }));
+  });
+  // A remote router has no local container, so there is no output to read.
+  if (!entry.remote) actions.appendChild(logsButton);
 
   // Configuration editor. The server decides whether this router has a file to
   // edit or why it does not (a container-only gateway, or the local runtime
@@ -6795,19 +6839,21 @@ function routerRow(entry) {
   // cannot work.
   const configBox = document.createElement("div");
   configBox.className = "console-logs hidden";
-  actions.appendChild(rowButton("Configuration", async () => {
+  const configButton = rowButton("Configuration", async () => {
     if (!configBox.classList.contains("hidden")) {
       configBox.classList.add("hidden");
       return;
     }
     await mountRouterConfig(entry, configBox);
-  }));
+  });
+  // The configuration editor reads files beside a local install.
+  if (!entry.remote) actions.appendChild(configButton);
   row.appendChild(configBox);
 
   // Install: the server builds a plan with no side effects, the panel prints its
   // exact commands and prerequisites, and only that plan's digest can be
   // approved. A blocked plan explains itself and offers nothing to click.
-  if (entry.installable_here && !entry.installed) {
+  if (entry.installable_here && !entry.installed && !entry.remote) {
     const installBtn = rowButton("Install", async () => {
       const previous = actions.querySelector(".approve-install");
       if (previous) previous.remove();
@@ -6860,7 +6906,7 @@ function routerRow(entry) {
   // Update and Uninstall act on an install that already exists. Both ask the
   // server first: the update plan's digest is what the approval names, and the
   // uninstall is approved explicitly rather than implied by a click.
-  if (entry.installable_here && entry.installed) {
+  if (entry.installable_here && entry.installed && !entry.remote) {
     actions.appendChild(rowButton("Update", async () => {
       const status = await api(`/api/routers/${entry.id}/update`);
       if (!status.ok) {
@@ -6901,7 +6947,7 @@ function routerRow(entry) {
   // where the registry says a local install is possible; an external runtime is
   // never started or stopped from here.
   const endpoints = ROUTER_ACTIONS[entry.id];
-  if (endpoints && entry.installable_here) {
+  if (endpoints && entry.installable_here && !entry.remote) {
     const stopping = entry.healthy || entry.owned_by_app;
     actions.appendChild(rowButton(stopping ? "Stop" : "Start", async () => {
       const result = await api(stopping ? endpoints.stop : endpoints.start, {

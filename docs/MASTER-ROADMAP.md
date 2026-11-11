@@ -59,9 +59,21 @@ Delivered through 1.43.0: registry, capability gating, live probes, a real
 configuration editor behind a whitelist + `fs_write`, measured host and
 package-manager probing, approval-gated install/update/uninstall with pinned
 digests and verified downloads, and an auto-start sweep that never adopts an
-external router. Open: remote-service routers (the registry is local-process
-only) and a panel that drives update/uninstall end to end rather than showing
-the plan (both routes already exist).
+external router. The panel drives install, update, uninstall, logs, the
+configuration editor and the connection tester end to end.
+
+Remote-service routers (3.1.0): `POST /api/routers/:id/remote` stores a
+validated base URL per router (https anywhere, http only on loopback; no
+credentials, query, fragment or path) behind the `settings` rule, and an empty
+string clears it. The list and the connection tester probe that endpoint with
+the router's own health path; a remote router is `installed`/`running` only
+when it answers, is never owned, and the start/stop/restart/install/update/
+uninstall routes refuse with `409` naming the endpoint. The startup sweep never
+starts one, and the panel hides the local-only controls while an endpoint is
+set. No workstream remains open here; open ends that are not missing features:
+the endpoint is a base URL only (no per-router credentials or OAuth), the probe
+is an unauthenticated GET, and a real remote router across a network has not
+been exercised.
 
 1. Replace the hard-coded FreeLLMAPI/OmniRoute paths in `router.rs` with a
    registry of descriptors (id, name, OS/arch support, install methods, min

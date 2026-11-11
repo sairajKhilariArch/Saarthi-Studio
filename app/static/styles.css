@@ -990,6 +990,27 @@ kbd {
 }
 .console-row-main small { color: var(--mute); font-size: 11px; }
 .console-row-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* Remote router endpoint: the address gets its own line, so a long URL never
+   squeezes the measured state beside it. */
+.console-remote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: 8px;
+}
+.console-remote small { flex-basis: 100%; color: var(--mute); font-size: 11px; }
+.console-remote input {
+  flex: 1 1 220px;
+  min-width: 160px;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+}
 .console-toggle {
   display: inline-flex;
   align-items: center;

@@ -17,6 +17,21 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 3.1.0 (2026-11-11):** Phase 2 closes: a router can be addressed at a
+remote endpoint. `POST /api/routers/:id/remote` stores a validated base URL
+(https anywhere, http only on loopback; no credentials, query, fragment or
+path) behind the `settings` rule, an empty string clears it, and a value edited
+into the file by hand is re-validated on read. The list probes every saved
+endpoint concurrently with the router's own health path, the connection tester
+uses it, and a remote router is `running` only when it answers and is never
+owned. The middleware routes for start/stop/restart/install/update/uninstall
+refuse `409` naming the endpoint and the startup sweep skips it. Phase 2 is 13
+rows, all Working — the panel's update/uninstall row loses Partial because the
+panel already calls both routes end to end, and remote routers lose Missing.
+The sum moves 1,659 → 1,661 of 18, so the overall mean stays 92%. Not verified:
+a real remote router across a network, the Android path, and the new editor
+rendered in a browser.
+
 **Revision 2.50.0 (2026-11-10):** a P0 in the IDE shell, not in the thread
 code: the conversation lived in the AI dock's column, which the legacy "right panel
 closed" default collapsed to zero width, so a fresh install showed a blank workspace
@@ -294,8 +309,8 @@ Issue F (macOS cancellation) was diagnosed as runner acquisition, not code.
 | UI: list, health, start/stop, restart, tester, logs | Working | 1.26.13–1.26.16 |
 | Configuration editor | Working (1.43.0) | `GET /api/routers/:id/config` lists whitelisted files in the install's config dir; `GET/POST /api/routers/:id/config/file?name=` reads and writes one of them through the same validator, 64 KiB cap, gated on `fs_write`; a router with no editable file explains why instead of showing an empty box |
 | Dependency/package-manager probing | Working (1.43.0) | `/api/routers` reports the measured host: OS + version, arch, apt/dnf/pacman/zypper/apk/brew/winget/choco/scoop/port with versions, Docker and compose, read from PATH and the tools' own output |
-| Update and uninstall from the panel | Partial | both routes exist, are approval-gated and keep the data volume unless `purge`; the panel shows the plan rather than driving a full update/uninstall flow |
-| Remote service routers | Missing | registry is local-process only |
+| Update and uninstall from the panel | Working (1.26.23, re-read 3.1.0) | Update reads the status, prints the plan, asks, then posts `approve` + the plan's digest; Uninstall asks and posts `approve` with `purge: false`, and both reload the measured list. Re-read end to end in the code at 3.1.0; not click-tested in a browser this release |
+| Remote service routers | Working (3.1.0) | `POST /api/routers/:id/remote` stores one validated base URL per router in `router-prefs.json` (empty clears; `settings` → `config` rule); https anywhere, http only on loopback, credentials/query/fragment/path refused, hand-edited values re-validated on read. `GET /api/routers` probes each saved endpoint concurrently on the router's own health path and the tester reports its status/latency; a remote router is `installed`/`running` only when it answers and is never owned. Start/stop/restart/install/update/uninstall answer `409` naming the endpoint, auto-start skips it, and the panel hides the local-only controls. The endpoint is a base URL only — no per-router credentials — and the probe is an unauthenticated GET |
 
 ## Phase 3 — Model and provider manager
 

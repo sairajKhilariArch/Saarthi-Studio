@@ -1,5 +1,46 @@
 # Changelog
 
+## 3.1.0
+
+Phase 2 close-out: a router may now live on another machine. The registry has
+always listed a `remote` install method, but the manager could only probe
+`127.0.0.1` on a fixed port, so the method was a label rather than a feature.
+
+- **Remote endpoints are real, validated settings.** `POST
+  /api/routers/:id/remote` stores a base URL in `router-prefs.json` (or clears
+  it with an empty string) behind the same `settings` → `config` permission rule
+  as a settings save. `validate_remote_url` accepts `https` anywhere and `http`
+  only on loopback (`localhost`, `127.0.0.0/8`, `::1`), refuses credentials, a
+  query, a fragment, a path, whitespace or control characters and values over
+  2048 characters, and normalises the trailing slash. A refused value is never
+  stored, and a value edited into the file by hand is re-validated on read.
+- **The probe and the connection tester use that endpoint.** `GET /api/routers`
+  probes every saved endpoint with the router's own health path, all endpoints
+  concurrently, and `POST /api/routers/:id/test` reports the status and latency
+  it measured. A remote router is `installed` and `running` when it answers —
+  there is no local process to inspect — and is never `owned_by_app`.
+- **A remote router is never started, stopped, installed, updated or removed.**
+  The start/stop/restart/install-plan/install/update/uninstall routes answer
+  `409` naming the endpoint, the startup sweep excludes it even when auto-start
+  is enabled, and the panel hides those controls while the endpoint is set.
+- **The panel gained the editor:** the address, whether it is remote,
+  Save/Change and Use local, beside the measured status. Logs and the
+  configuration editor are hidden for a remote router because both read files
+  next to a local install.
+- Local routers are unchanged: with no endpoint saved the probes, lifecycle and
+  ownership rules behave exactly as before, and an older `router-prefs.json`
+  without the new field still loads.
+
+Verified locally: `node --check app/static/app.js` clean, and the new Rust code is
+rustfmt-formatted. **Not run:** `cargo test`, clippy and the frontend/end-to-end
+harnesses were stopped at the owner's request because this laptop is slow, so
+the Rust change in this commit is **uncompiled**. Run `cargo test --locked` (five
+new tests: URL validation, preferences round-trip/clear, legacy preferences, a
+remote view's fields, and a remote probe against a local server) and
+`cargo clippy --all-targets -D warnings` before trusting it. Not verified: a
+real router reached across a network, the Android remote path, and the panel
+rendered in a browser.
+
 ## 3.0.2
 
 The 3.0.1 indentation fix did its job: run `42905065692` on `5e5b76e` parsed,

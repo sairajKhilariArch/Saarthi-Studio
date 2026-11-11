@@ -264,11 +264,26 @@ pub(crate) struct RouterView {
     pub endpoint: String,
     pub version: String,
     pub message: String,
+    /// Addressed at a saved remote endpoint instead of a local install.
+    pub remote: bool,
+    /// The saved remote endpoint, echoed so the panel can edit it.
+    pub remote_url: Option<String>,
 }
 
 /// Combine capability with a measured probe. Kept pure so it is testable: the
 /// rule that matters is that a process which has not answered is not healthy.
 pub(crate) fn view(capability: Capability, probe: Probe, auto_start: bool) -> RouterView {
+    view_with_remote(capability, probe, auto_start, None)
+}
+
+/// The same view for a router the user pointed at another machine. `remote_url`
+/// is already validated by the caller; it is what makes `remote` true.
+pub(crate) fn view_with_remote(
+    capability: Capability,
+    probe: Probe,
+    auto_start: bool,
+    remote_url: Option<String>,
+) -> RouterView {
     RouterView {
         installed: probe.installed,
         reachable: probe.reachable,
@@ -279,6 +294,8 @@ pub(crate) fn view(capability: Capability, probe: Probe, auto_start: bool) -> Ro
         endpoint: probe.endpoint,
         version: probe.version,
         message: probe.message,
+        remote: remote_url.is_some(),
+        remote_url,
         capability,
     }
 }
@@ -296,6 +313,26 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
     // disagree with /api/router, /api/omniroute or /api/local/status.
     let base_url = local_base_url(state);
     let prefs = preferences(state);
+    // A saved remote endpoint is the fact that matters: it is probed instead of
+    // a local container. Every endpoint is probed at once so three unreachable
+    // remotes do not add three timeouts to one list call.
+    let remote: BTreeMap<&'static str, String> = ROUTERS
+        .iter()
+        .filter_map(|spec| {
+            prefs
+                .remote_for(spec.id)
+                .and_then(|raw| validate_remote_url(raw).ok())
+                .map(|url| (spec.id, url))
+        })
+        .collect();
+    let remote_probes: BTreeMap<&'static str, Probe> =
+        futures_util::future::join_all(remote.iter().map(|(id, url)| async move {
+            let spec = find(*id).expect("a spec taken from ROUTERS");
+            (*id, probe_remote(spec, url).await)
+        }))
+        .await
+        .into_iter()
+        .collect();
     let (router_status, omni_status, local_version) = tokio::join!(
         crate::router::status(),
         crate::router::omniroute_status(),
@@ -366,7 +403,15 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
             },
             other => Probe::not_installed("", &format!("No probe is implemented for {other} yet.")),
         };
-        out.push(view(cap, probe, prefs.auto_start_for(spec)));
+        // The remote probe wins over the local one: it is the endpoint the user
+        // chose, and the same endpoint the connection tester calls.
+        let probe = remote_probes.get(spec.id).cloned().unwrap_or(probe);
+        out.push(view_with_remote(
+            cap,
+            probe,
+            prefs.auto_start_for(spec),
+            remote.get(spec.id).cloned(),
+        ));
     }
     out
 }
@@ -389,6 +434,9 @@ pub(crate) fn local_base_url(state: &AppState) -> String {
 /// The endpoint this router is addressed at right now: the port the installer
 /// recorded for the gateways, the configured base URL for the local runtime.
 fn endpoint_for(state: &AppState, id: &str) -> String {
+    if let Some(remote) = remote_endpoint(state, id) {
+        return remote;
+    }
     match id {
         "freellmapi" => format!("http://127.0.0.1:{}", crate::router::router_port()),
         "omniroute" => format!("http://127.0.0.1:{}", crate::router::omniroute_port()),
@@ -487,6 +535,49 @@ pub(crate) async fn test_connection(state: &AppState, id: &str) -> Result<Connec
         }
         Err(error) => ConnectionTest::from_error(spec, endpoint, path, elapsed, &error.to_string()),
     })
+}
+
+/// Probe a saved remote endpoint with the router's own health path. A remote
+/// router is "running" when it answers: there is no local process to inspect,
+/// and Studio never owns its lifecycle. A refusal or error is a failed probe,
+/// never an assumed success.
+pub(crate) async fn probe_remote(spec: &'static RouterSpec, endpoint: &str) -> Probe {
+    let mut probe = Probe {
+        installed: true,
+        reachable: false,
+        running: false,
+        owned_by_app: false,
+        endpoint: endpoint.to_string(),
+        version: String::new(),
+        message: String::new(),
+    };
+    let Ok(path) = health_path(spec) else {
+        probe.message = format!("{} has no usable health probe.", spec.name);
+        return probe;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+    else {
+        probe.message = "Could not build an HTTP client for the remote probe.".to_string();
+        return probe;
+    };
+    match client.get(format!("{endpoint}{path}")).send().await {
+        Ok(response) => {
+            probe.reachable = true;
+            probe.running = true;
+            probe.message = format!(
+                "Remote endpoint answered {}; Studio does not start or stop a remote router.",
+                response.status().as_u16()
+            );
+        }
+        Err(error) => {
+            probe.message = format!(
+                "No answer from the remote endpoint: {error}. Studio does not start or stop a remote router."
+            );
+        }
+    }
+    probe
 }
 
 const DEFAULT_LOG_LINES: usize = 200;
@@ -625,6 +716,11 @@ const PREFS_FILE: &str = "router-prefs.json";
 pub(crate) struct Preferences {
     #[serde(default)]
     auto_start: BTreeMap<String, bool>,
+    /// Router id -> validated base URL. Kept here rather than in `config.json`
+    /// for the same reason as the launch choices: a sandboxed run gets its own
+    /// settings file. A field absent from an older file means "no remote".
+    #[serde(default)]
+    remote: BTreeMap<String, String>,
 }
 
 impl Preferences {
@@ -637,6 +733,21 @@ impl Preferences {
 
     fn set_auto_start(&mut self, id: &str, enabled: bool) {
         self.auto_start.insert(id.to_string(), enabled);
+    }
+
+    pub(crate) fn remote_for(&self, id: &str) -> Option<&str> {
+        self.remote.get(id).map(String::as_str)
+    }
+
+    fn set_remote(&mut self, id: &str, url: Option<&str>) {
+        match url {
+            Some(url) => {
+                self.remote.insert(id.to_string(), url.to_string());
+            }
+            None => {
+                self.remote.remove(id);
+            }
+        }
     }
 }
 
@@ -681,6 +792,116 @@ pub(crate) fn set_auto_start(state: &AppState, id: &str, enabled: bool) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// Remote endpoints
+
+/// A base URL is a few characters; anything near this is a mistake or an attempt
+/// to bloat the settings file.
+const MAX_REMOTE_URL: usize = 2048;
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim().to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|address| address.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Validate and normalise a remote router endpoint. Plain HTTP is accepted only
+/// on loopback: an endpoint across a network carries API keys and belongs on TLS
+/// (spec §14). Credentials, a query and a fragment are refused because the value
+/// is stored in a settings file and a base URL has no use for them.
+pub(crate) fn validate_remote_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "Pass the remote endpoint's URL, or an empty string to go back to a local install."
+                .to_string(),
+        );
+    }
+    if trimmed.len() > MAX_REMOTE_URL {
+        return Err(format!(
+            "That URL is longer than {MAX_REMOTE_URL} characters."
+        ));
+    }
+    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("A URL cannot contain spaces or control characters.".to_string());
+    }
+    let parsed =
+        reqwest::Url::parse(trimmed).map_err(|error| format!("{trimmed} is not a URL: {error}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(format!(
+                "Only http and https endpoints are supported, not {other}."
+            ))
+        }
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(
+            "A remote endpoint cannot carry credentials in its URL; the provider key is configured separately."
+                .to_string(),
+        );
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("A remote endpoint is a base URL: remove the query and fragment.".to_string());
+    }
+    if !matches!(parsed.path(), "" | "/") {
+        return Err("A remote endpoint is a base URL: remove the path.".to_string());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("{trimmed} has no host."))?;
+    if parsed.scheme() == "http" && !is_loopback_host(host) {
+        return Err(format!(
+            "{host} is not loopback, so it needs https: a plain-text endpoint would expose the key."
+        ));
+    }
+    Ok(parsed.as_str().trim_end_matches('/').to_string())
+}
+
+/// The saved remote endpoint for a router, re-validated on read so a hand-edited
+/// file cannot smuggle in a value the routes would refuse to store.
+pub(crate) fn remote_endpoint(state: &AppState, id: &str) -> Option<String> {
+    preferences(state)
+        .remote_for(id)
+        .and_then(|raw| validate_remote_url(raw).ok())
+}
+
+/// Store or clear one router's remote endpoint in an explicit file. An empty
+/// string clears it; only a registry id that offers the remote method is stored.
+fn set_remote_endpoint_at(path: &FsPath, id: &str, raw: &str) -> Result<Option<String>, String> {
+    let spec = find(id).ok_or_else(|| format!("Unknown router id: {id}"))?;
+    if !spec.methods.contains(&InstallMethod::Remote) {
+        return Err(format!(
+            "{} cannot be used through a remote endpoint.",
+            spec.name
+        ));
+    }
+    let mut prefs = load_prefs_from(path);
+    let stored = if raw.trim().is_empty() {
+        prefs.set_remote(spec.id, None);
+        None
+    } else {
+        let url = validate_remote_url(raw)?;
+        prefs.set_remote(spec.id, Some(&url));
+        Some(url)
+    };
+    save_prefs_to(path, &prefs)?;
+    Ok(stored)
+}
+
+/// Store or clear one router's remote endpoint and return the value as stored.
+pub(crate) fn set_remote_endpoint(
+    state: &AppState,
+    id: &str,
+    raw: &str,
+) -> Result<Option<String>, String> {
+    set_remote_endpoint_at(&prefs_path(state), id, raw)
+}
+
+// ---------------------------------------------------------------------------
 // Launch sweep
 
 /// Routers this build can start by itself. The local runtime is absent on
@@ -692,20 +913,25 @@ fn can_start_locally(id: &str) -> bool {
 /// The auto-start rule, pure so it needs neither Docker nor a network. Only a
 /// router the user enabled, that this build can start, that is installed here and
 /// that is not already answering is started — a router that answers is never
-/// adopted, so closing Studio cannot stop something the user started.
+/// adopted, so closing Studio cannot stop something the user started. A remote
+/// router has no local process to start, so a saved endpoint always excludes it.
 pub(crate) fn should_auto_start(
     pref: bool,
     startable: bool,
     installable_here: bool,
     installed: bool,
     healthy: bool,
+    remote: bool,
 ) -> bool {
-    pref && startable && installable_here && installed && !healthy
+    pref && startable && installable_here && installed && !healthy && !remote
 }
 
 /// Why an enabled router was left alone, in the words the boot log uses.
 fn skip_reason(entry: &RouterView) -> String {
-    if entry.healthy {
+    if entry.remote {
+        "it is configured at a remote endpoint, and Studio does not manage a router it does not run"
+            .to_string()
+    } else if entry.healthy {
         "it is already answering, and Studio does not adopt a router it did not start".to_string()
     } else if !entry.installed {
         "it is not installed here".to_string()
@@ -740,6 +966,7 @@ pub(crate) async fn startup_sweep(state: &AppState) -> Vec<StartupOutcome> {
             entry.capability.installable_here,
             entry.installed,
             entry.healthy,
+            entry.remote,
         ) {
             if enabled {
                 out.push(StartupOutcome {
@@ -2298,26 +2525,30 @@ mod tests {
     #[test]
     fn auto_start_rule_never_adopts_what_already_answers() {
         // pref, startable, installable_here, installed, healthy
-        assert!(should_auto_start(true, true, true, true, false));
+        assert!(should_auto_start(true, true, true, true, false, false));
         assert!(
-            !should_auto_start(true, true, true, true, true),
+            !should_auto_start(true, true, true, true, true, false),
             "a router that already answers is never adopted"
         );
         assert!(
-            !should_auto_start(false, true, true, true, false),
+            !should_auto_start(false, true, true, true, false, false),
             "not enabled"
         );
         assert!(
-            !should_auto_start(true, false, true, true, false),
+            !should_auto_start(true, false, true, true, false, false),
             "no start path"
         );
         assert!(
-            !should_auto_start(true, true, false, true, false),
+            !should_auto_start(true, true, false, true, false, false),
             "cannot install here"
         );
         assert!(
-            !should_auto_start(true, true, true, false, false),
+            !should_auto_start(true, true, true, false, false, false),
             "not installed"
+        );
+        assert!(
+            !should_auto_start(true, true, true, true, false, true),
+            "a remote router has no local process to start"
         );
     }
 
@@ -2744,6 +2975,153 @@ mod tests {
             assert!(value.get(key).is_some(), "logs respond without {key}");
         }
         assert_eq!(value["lines"][0], "listening on 20128");
+    }
+
+    #[test]
+    fn remote_urls_are_validated_and_normalised() {
+        assert_eq!(
+            validate_remote_url(" https://Router.Example.com/ ").unwrap(),
+            "https://router.example.com"
+        );
+        assert_eq!(
+            validate_remote_url("http://127.0.0.1:3001").unwrap(),
+            "http://127.0.0.1:3001"
+        );
+        assert_eq!(
+            validate_remote_url("http://[::1]:20128/").unwrap(),
+            "http://[::1]:20128"
+        );
+        assert_eq!(
+            validate_remote_url("http://localhost:11434").unwrap(),
+            "http://localhost:11434"
+        );
+
+        for bad in [
+            "",
+            "   ",
+            "ftp://router.example.com",
+            "https://user:secret@router.example.com",
+            "https://router.example.com?key=1",
+            "https://router.example.com/#frag",
+            "https://router.example.com/api",
+            "http://router.example.com",
+            "https://router\t.example.com",
+        ] {
+            assert!(
+                validate_remote_url(bad).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
+        let plain = validate_remote_url("http://router.example.com").unwrap_err();
+        assert!(plain.contains("https"), "got: {plain}");
+        let credentials =
+            validate_remote_url("https://user:secret@router.example.com").unwrap_err();
+        assert!(
+            !credentials.contains("secret"),
+            "the refusal must not echo the secret: {credentials}"
+        );
+        let long = format!("https://{}.example.com", "a".repeat(MAX_REMOTE_URL));
+        assert!(validate_remote_url(&long).is_err());
+    }
+
+    #[test]
+    fn remote_endpoint_round_trips_and_clears() {
+        let path = temp_prefs("remote");
+        let _ = fs::remove_file(&path);
+
+        let stored =
+            set_remote_endpoint_at(&path, "freellmapi", "https://router.example.com/").unwrap();
+        assert_eq!(stored.as_deref(), Some("https://router.example.com"));
+        let prefs = load_prefs_from(&path);
+        assert_eq!(
+            prefs.remote_for("freellmapi"),
+            Some("https://router.example.com")
+        );
+        // A launch choice is not disturbed by a remote endpoint.
+        assert!(prefs.auto_start_for(find("freellmapi").unwrap()));
+
+        let cleared = set_remote_endpoint_at(&path, "freellmapi", "").unwrap();
+        assert!(cleared.is_none());
+        assert!(load_prefs_from(&path).remote_for("freellmapi").is_none());
+
+        let unknown = set_remote_endpoint_at(&path, "nope", "https://x.example").unwrap_err();
+        assert!(unknown.contains("Unknown router id"), "got: {unknown}");
+        let refused =
+            set_remote_endpoint_at(&path, "freellmapi", "http://router.example.com").unwrap_err();
+        assert!(refused.contains("https"), "got: {refused}");
+        assert!(
+            load_prefs_from(&path).remote_for("freellmapi").is_none(),
+            "a refused value is never stored"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_older_preferences_file_has_no_remote_endpoints() {
+        let path = temp_prefs("legacy-remote");
+        fs::write(&path, br#"{"auto_start":{"omniroute":true}}"#).unwrap();
+        let prefs = load_prefs_from(&path);
+        assert!(prefs.auto_start_for(find("omniroute").unwrap()));
+        assert!(prefs.remote_for("omniroute").is_none());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_remote_view_names_its_endpoint() {
+        let spec = find("freellmapi").unwrap();
+        let probe = Probe {
+            installed: true,
+            reachable: true,
+            running: true,
+            owned_by_app: false,
+            endpoint: "https://router.example.com".into(),
+            version: String::new(),
+            message: "Remote endpoint answered 200.".into(),
+        };
+        let view = view_with_remote(
+            capability(spec, "linux", "x86_64"),
+            probe,
+            true,
+            Some("https://router.example.com".into()),
+        );
+        assert!(view.remote);
+        assert_eq!(
+            view.remote_url.as_deref(),
+            Some("https://router.example.com")
+        );
+        let value = serde_json::to_value(&view).unwrap();
+        assert_eq!(value["remote"], true);
+        assert_eq!(value["remote_url"], "https://router.example.com");
+
+        // The local view keeps saying so, rather than omitting the fields.
+        let local = view(capability(spec, "linux", "x86_64"), reachable_probe(), true);
+        assert!(!local.remote);
+        assert!(local.remote_url.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_remote_probe_reports_only_what_answered() {
+        let app = axum::Router::new().route("/v1/models", axum::routing::get(|| async { "{}" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let spec = find("freellmapi").unwrap();
+        let probe = probe_remote(spec, &format!("http://127.0.0.1:{port}")).await;
+        assert!(probe.installed && probe.reachable && probe.running);
+        assert!(!probe.owned_by_app, "a remote router is never owned");
+        assert!(
+            probe.message.contains("does not start or stop"),
+            "{}",
+            probe.message
+        );
+        server.abort();
+
+        let dead = probe_remote(spec, "http://127.0.0.1:1").await;
+        assert!(!dead.reachable && !dead.running, "no answer is not health");
+        assert!(dead.message.contains("No answer"), "{}", dead.message);
     }
 
     #[tokio::test]
