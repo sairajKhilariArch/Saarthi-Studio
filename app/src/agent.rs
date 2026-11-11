@@ -1098,6 +1098,110 @@ pub(crate) async fn start_queued(state: &AppState) {
     let _ = dispatch(state).await;
 }
 
+/// Move one queued run a single place in line. The displayed order is the
+/// admission order, so a move rewrites the queued priorities into one explicit
+/// descending sequence inside a single transaction: what the person sees becomes
+/// what the dispatcher reads, including rows that previously shared a priority.
+/// Only a queued run has a place in line; a running or finished one is refused.
+fn reorder_queued(
+    state: &AppState,
+    run_id: &str,
+    direction: &str,
+) -> Result<Value, (StatusCode, String)> {
+    let step: i64 = match direction.trim().to_ascii_lowercase().as_str() {
+        "up" => -1,
+        "down" => 1,
+        other => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("move must be \"up\" or \"down\", not \"{other}\"."),
+            ))
+        }
+    };
+    let mut conn = db(state).map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    let tx = conn
+        .transaction()
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
+    let status: Option<String> = tx
+        .query_row(
+            "SELECT status FROM agent_runs WHERE id=?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
+    match status.as_deref() {
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("Unknown run id: {run_id}"),
+            ))
+        }
+        Some(QUEUED) => {}
+        Some(other) => {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("Only a queued run can be reordered; this one is {other}."),
+            ))
+        }
+    }
+    let queued: Vec<String> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id FROM agent_runs WHERE status=?1 ORDER BY priority DESC, created_at ASC",
+            )
+            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
+        stmt.query_map([QUEUED], |row| row.get(0))
+            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?
+    };
+    let Some(index) = queued.iter().position(|id| id == run_id) else {
+        return Err((
+            StatusCode::CONFLICT,
+            "The run is no longer queued.".to_string(),
+        ));
+    };
+    let target = index as i64 + step;
+    if target < 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "That run is already first in line.".to_string(),
+        ));
+    }
+    if target as usize >= queued.len() {
+        return Err((
+            StatusCode::CONFLICT,
+            "That run is already last in line.".to_string(),
+        ));
+    }
+    let mut order = queued;
+    order.swap(index, target as usize);
+    let total = order.len() as i64;
+    let stamp = now();
+    for (position, id) in order.iter().enumerate() {
+        let priority = total - position as i64;
+        tx.execute(
+            "UPDATE agent_runs SET priority=?2, updated_at=?3 WHERE id=?1 AND status=?4",
+            params![id.as_str(), priority, stamp, QUEUED],
+        )
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
+    }
+    tx.commit()
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
+    Ok(json!({
+        "ok": true,
+        "moved": true,
+        "id": run_id,
+        "position": target + 1,
+        "order": order
+            .iter()
+            .enumerate()
+            .map(|(index, id)| json!({ "id": id, "position": index + 1 }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
 fn run_status(state: &AppState, run_id: &str) -> Result<Option<String>, String> {
     db(state)?
         .query_row(
@@ -3337,6 +3441,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(format!("{prefix}/:id/approve").as_str(), post(approve_run))
         .route(format!("{prefix}/:id/resume").as_str(), post(resume_run))
         .route(format!("{prefix}/:id/pause").as_str(), post(pause_run))
+        .route(format!("{prefix}/:id/queue").as_str(), post(reorder_run))
         .route(format!("{prefix}/:id/retry").as_str(), post(retry_run))
         .route(format!("{prefix}/:id/restore").as_str(), post(restore_run))
         .route(format!("{prefix}/:id/apply").as_str(), post(apply_run))
@@ -4428,6 +4533,20 @@ async fn pause_run(State(state): State<AppState>, Path(run_id): Path<String>) ->
         "pauseRequested": status == RUNNING,
     }))
     .into_response()
+}
+
+/// Move a queued run one place in line. `move` is `"up"` or `"down"`; the
+/// reply carries the run's new 1-based position and the resulting order.
+async fn reorder_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let direction = input.get("move").and_then(Value::as_str).unwrap_or("");
+    match reorder_queued(&state, &run_id, direction) {
+        Ok(value) => Json(value).into_response(),
+        Err((status, message)) => error_response(status, message),
+    }
 }
 
 async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
@@ -7206,6 +7325,76 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 params![id, status],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn a_queued_run_moves_one_place_in_line() {
+        let fixture = run_fixture("queue-order", "http://127.0.0.1:1");
+        for (index, id) in ["q-first", "q-second", "q-third"].iter().enumerate() {
+            insert_run(&fixture.state, id, QUEUED);
+            db(&fixture.state)
+                .unwrap()
+                .execute(
+                    "UPDATE agent_runs SET priority=?2, created_at=?3 WHERE id=?1",
+                    params![id, (3 - index) as i64, 10.0 + index as f64],
+                )
+                .unwrap();
+        }
+        let order = |state: &AppState| -> Vec<String> {
+            db(state)
+                .unwrap()
+                .prepare(
+                    "SELECT id FROM agent_runs WHERE status='queued' \
+                     ORDER BY priority DESC, created_at ASC",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(
+            order(&fixture.state),
+            vec!["q-first", "q-second", "q-third"]
+        );
+
+        // One move rewrites the whole queued order explicitly, so a later move
+        // is stable even though every row started without a useful priority.
+        let moved = reorder_queued(&fixture.state, "q-third", "up").expect("moves up");
+        assert_eq!(moved["position"], 2);
+        assert_eq!(
+            order(&fixture.state),
+            vec!["q-first", "q-third", "q-second"]
+        );
+        let priorities: Vec<i64> = db(&fixture.state)
+            .unwrap()
+            .prepare("SELECT priority FROM agent_runs WHERE status='queued' ORDER BY priority DESC")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(priorities, vec![3, 2, 1]);
+
+        reorder_queued(&fixture.state, "q-first", "down").expect("moves down");
+        assert_eq!(
+            order(&fixture.state),
+            vec!["q-third", "q-first", "q-second"]
+        );
+
+        let (status, message) = reorder_queued(&fixture.state, "q-third", "up").unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("already first"), "{message}");
+
+        set_status(&fixture.state, "q-second", RUNNING);
+        let (status, message) = reorder_queued(&fixture.state, "q-second", "up").unwrap_err();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("Only a queued run"), "{message}");
+
+        let (status, _) = reorder_queued(&fixture.state, "missing", "up").unwrap_err();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = reorder_queued(&fixture.state, "q-first", "sideways").unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     fn set_status(state: &AppState, id: &str, status: &str) {

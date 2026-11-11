@@ -280,6 +280,12 @@ pause/resume of a live run at a step boundary (1.52.0), and the task queue
 waiting note with Cancel only, and priority / depends-on on the run form — which
 completes the control set against real state, queued runs included.
 
+Reordering (3.3.0): `POST /api/runs/:id/queue` moves a queued run one place
+(`move: "up"|"down"`), rewriting every queued priority into one explicit
+descending sequence inside a transaction, so the card's order is the
+dispatcher's order. Only queued runs move, either end refuses with 409, and the
+card offers Move up / Move down.
+
 Live step view (2.29.0): `agent_steps` carries a `status`, and the loop writes a
 `thinking` placeholder with `status: "running"` before each model call, so the
 panel shows the wait during a slow reply instead of a frozen log. The step that

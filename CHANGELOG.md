@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.3.0
+
+Phase 12's last named gap: a queued run could carry a numeric priority, but the
+queue itself could not be reordered. `POST /api/runs/:id/queue` now moves a
+queued run one place.
+
+- **The move is one transaction and one explicit order.** `{"move":"up"}` or
+  `{"move":"down"}` swaps the run with its neighbour in admission order and
+  rewrites every queued run's priority into a descending sequence (n…1), so the
+  order the card shows is the order the dispatcher reads — including rows that
+  previously shared a priority. It is refused with `409` at either end and for
+  a run that is not queued (running, paused, finished), `404` for an unknown
+  run, and `400` unless `move` is `up` or `down`.
+- **The reply is checkable:** `{ok, moved, id, position, order}` with the new
+  1-based position and the resulting queue, so a caller never has to re-read to
+  know where the run landed.
+- **UI:** a queued run's detail shows `Move up` (disabled at the front) and
+  `Move down`; each is a server call, and a refusal is shown as the server's
+  reason.
+- Unchanged: a move does not start a run or change its dependencies, and a run
+  that is already running keeps its slot.
+
+Verified locally: `node --check app/static/app.js` clean. **Not run:** cargo
+test/clippy and the end-to-end harness — stopped at the owner's request because
+this laptop is slow, so the Rust change is **uncompiled**. The new test
+(`a_queued_run_moves_one_place_in_line`) builds a real database: three queued
+runs, a move up, the explicit 3/2/1 priorities, a move down, the ends refused,
+a running run refused, an unknown id and a bad direction. Run
+`cargo test --locked` and `cargo clippy --all-targets -D warnings` before
+trusting it. Not verified: the buttons in a browser.
+
 ## 3.2.0
 
 Phase 9 gap named in `KNOWN-ISSUES.md` #21: a conflicted rebase could be

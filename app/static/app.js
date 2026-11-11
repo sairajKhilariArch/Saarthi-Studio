@@ -8371,6 +8371,24 @@ function buildRunDetail(detail) {
   const controls = document.createElement("div");
   controls.className = "run-controls";
   if (detail.status === "queued") {
+    // A queued run's place is real server state, so moving it is an API call
+    // that rewrites the admission order; the pane only offers "up" where a
+    // place above it exists.
+    const moveUp = document.createElement("button");
+    moveUp.type = "button";
+    moveUp.className = "btn btn-quiet btn-small";
+    moveUp.textContent = "Move up";
+    moveUp.title = "Start before the run ahead of this one when a slot frees";
+    moveUp.disabled = !detail.queuePosition || detail.queuePosition <= 1;
+    moveUp.addEventListener('click', () => moveQueuedRun(detail.id, "up"));
+    controls.appendChild(moveUp);
+    const moveDown = document.createElement("button");
+    moveDown.type = "button";
+    moveDown.className = "btn btn-quiet btn-small";
+    moveDown.textContent = "Move down";
+    moveDown.title = "Let the run behind this one start first";
+    moveDown.addEventListener('click', () => moveQueuedRun(detail.id, "down"));
+    controls.appendChild(moveDown);
     const waiting = document.createElement("span");
     waiting.className = "run-queue-note";
     waiting.textContent = detail.queuePosition
@@ -8724,6 +8742,18 @@ async function saveCrewTemplate() {
   }
   toast("Crew template saved.");
   await loadCrewTemplates();
+}
+
+async function moveQueuedRun(runId, move) {
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/queue`, {
+    method: "POST",
+    body: JSON.stringify({ move }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not move that run in the queue.");
+    return;
+  }
+  await refreshRunsPanel(runId);
 }
 
 async function resumeAgentRun(runId) {

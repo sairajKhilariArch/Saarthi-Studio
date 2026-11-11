@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 3.3.0 (2026-11-11):** Phase 12's last named gap closes:
+`POST /api/runs/:id/queue` moves a queued run one place (`move: "up"|"down"`),
+rewriting the queued priorities into one explicit descending order inside a
+transaction so the card's order is the admission order. Only queued runs move,
+the ends refuse with 409, and the card offers Move up / Move down. Phase 12
+stays Working and no row was added, so the figures are unchanged at 92%.
+
 **Revision 3.2.0 (2026-11-11):** Phase 9's named rebase gap closes:
 `POST /api/workspace/git/rebase/skip` drops the commit being replayed, gated on
 `git` like Continue, refusing when no rebase is in progress and returning the
@@ -471,7 +478,9 @@ itself when a slot frees and its dependencies succeeded. Retry is a real control
 as of 1.55.0 too, and it is distinct from resume: `POST /api/runs/:id/retry`
 starts a clean run of the same goal and settings (linked by `retry_of`, logged as
 a `retry` step), while resume continues an existing step log. There is no
-drag-to-reorder — priority is a number on the form.
+drag-to-reorder: `POST /api/runs/:id/queue` moves a queued run one place up or
+down (3.3.0), rewriting every queued priority into one explicit order inside a
+transaction; the card offers Move up / Move down.
 
 ## Phase 13 — Workflow builder
 
