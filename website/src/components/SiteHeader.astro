@@ -1,0 +1,103 @@
+---
+import Icon from './Icon.astro';
+import ThemeToggle from './ThemeToggle.astro';
+import { NAV, SITE } from '../lib/site';
+import { withBase } from '../lib/url';
+---
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href={withBase('/')} aria-label="Sarthi Studio home">
+      <img
+        class="brand-mark"
+        src={withBase('/brand/tardigrade.svg')}
+        width="32"
+        height="32"
+        alt=""
+        aria-hidden="true"
+      />
+      <span class="brand-name">Sarthi Studio</span>
+    </a>
+
+    <nav class="desktop-nav" aria-label="Primary navigation">
+      {
+        NAV.map((item) => (
+          <a href={withBase(item.href)}>{item.label}</a>
+        ))
+      }
+    </nav>
+
+    <div class="header-actions">
+      <a
+        class="icon-button"
+        href={SITE.repo}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Sarthi Studio on GitHub"
+        title="GitHub"
+      >
+        <Icon name="github" size={19} />
+      </a>
+      <ThemeToggle />
+      <button
+        class="icon-button menu-button"
+        type="button"
+        aria-expanded="false"
+        aria-controls="mobile-nav"
+        data-menu-button
+      >
+        <Icon name="menu" size={20} class="menu-icon menu-icon-open" />
+        <Icon name="x" size={20} class="menu-icon menu-icon-close" />
+        <span class="sr-only" data-menu-label>Open menu</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="mobile-nav" id="mobile-nav" data-mobile-nav hidden>
+    <nav class="container" aria-label="Mobile navigation">
+      {
+        NAV.map((item) => (
+          <a href={withBase(item.href)}>{item.label}</a>
+        ))
+      }
+      <a href={SITE.repo} target="_blank" rel="noopener noreferrer">
+        GitHub
+        <Icon name="external" size={15} />
+      </a>
+    </nav>
+  </div>
+</header>
+
+<script>
+  const button = document.querySelector<HTMLButtonElement>('[data-menu-button]');
+  const panel = document.querySelector<HTMLElement>('[data-mobile-nav]');
+
+  if (button && panel) {
+    const setOpen = (open: boolean) => {
+      panel.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      const label = button.querySelector<HTMLElement>('[data-menu-label]');
+      if (label) label.textContent = open ? 'Close menu' : 'Open menu';
+    };
+
+    button.addEventListener('click', () => setOpen(panel.hasAttribute('hidden')));
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !panel.hasAttribute('hidden')) {
+        setOpen(false);
+        button.focus();
+      }
+    });
+
+    panel.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('a')) {
+        setOpen(false);
+      }
+    });
+
+    const desktop = window.matchMedia('(min-width: 901px)');
+    desktop.addEventListener('change', (event) => {
+      if (event.matches) setOpen(false);
+    });
+  }
+</script>

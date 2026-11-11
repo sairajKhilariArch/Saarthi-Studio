@@ -1,0 +1,31 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Button from '../components/Button.astro';
+import Icon from '../components/Icon.astro';
+import { SITE } from '../lib/site';
+import { withBase } from '../lib/url';
+---
+
+<BaseLayout
+  title="Page not found"
+  description="The page you requested does not exist on the Sarthi Studio website."
+  noindex
+>
+  <section class="not-found">
+    <div class="container not-found-inner">
+      <p class="not-found-code">404 / NOT FOUND</p>
+      <h1>This page is not part of the build.</h1>
+      <p>
+        The link may be old, or the page may not exist yet. The repository and
+        release notes are the best places to continue.
+      </p>
+      <div class="hero-actions">
+        <Button href={withBase('/')}>Back to the home page</Button>
+        <Button href={SITE.releases} variant="secondary">
+          Browse releases
+          <Icon name="arrow-up-right" size={16} />
+        </Button>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

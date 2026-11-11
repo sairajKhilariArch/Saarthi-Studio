@@ -1,0 +1,38 @@
+---
+interface Props {
+  id?: string;
+  eyebrow?: string;
+  title?: string;
+  description?: string;
+  align?: 'left' | 'center';
+  class?: string;
+}
+
+const {
+  id,
+  eyebrow,
+  title,
+  description,
+  align = 'left',
+  class: className,
+} = Astro.props;
+
+const classes = ['section', className].filter(Boolean).join(' ');
+---
+
+<section class={classes} id={id}>
+  <div class="container">
+    {
+      (eyebrow || title || description) && (
+        <header
+          class:list={['section-head', align === 'center' && 'section-head-center']}
+        >
+          {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+          {title && <h2>{title}</h2>}
+          {description && <p class="section-description">{description}</p>}
+        </header>
+      )
+    }
+    <slot />
+  </div>
+</section>

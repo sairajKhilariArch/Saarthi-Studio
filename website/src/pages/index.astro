@@ -1,0 +1,446 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Badge from '../components/Badge.astro';
+import Button from '../components/Button.astro';
+import Card from '../components/Card.astro';
+import Icon from '../components/Icon.astro';
+import Section from '../components/Section.astro';
+import { SITE } from '../lib/site';
+import { getSourceVersion } from '../lib/source';
+import { withBase } from '../lib/url';
+
+const sourceVersion = getSourceVersion();
+
+const features = [
+  {
+    icon: 'terminal',
+    title: 'A real developer workspace',
+    body: 'Projects, a live file tree, tabbed editing, a real PTY terminal, Git operations, and build or test diagnostics in the folder you open.',
+    status: 'Implemented',
+    tone: 'success',
+    limit: 'No editor engine, debugger, watch mode, or arbitrary command presets yet.',
+  },
+  {
+    icon: 'bot',
+    title: 'Agents you can stop',
+    body: 'A bounded run loop with write and command approvals, checkpoints, diffs, a task queue, dependencies, retries, and per-run worktrees.',
+    status: 'Implemented',
+    tone: 'success',
+    limit: 'Agent commands run with your user privileges; they are not OS-sandboxed.',
+  },
+  {
+    icon: 'route',
+    title: 'Models and routers',
+    body: 'OpenAI-compatible providers, local Ollama models, fallback chains, circuit breaking, provider health, and native OpenAI Responses with Thinking.',
+    status: 'Implemented',
+    tone: 'success',
+    limit: 'Price and context are shown only when a provider publishes them.',
+  },
+  {
+    icon: 'plug',
+    title: 'Skills and MCP',
+    body: 'SKILL.md packs with automatic selection, plus MCP servers over stdio, HTTP, and SSE with tool discovery, validation, and permissions.',
+    status: 'Implemented',
+    tone: 'success',
+    limit: 'Skills are prompt text, not executed code; there are no per-skill permissions.',
+  },
+  {
+    icon: 'database',
+    title: 'Memory and code intelligence',
+    body: 'Project memory, a bounded codebase index, symbol search, retrieval into chat and agent runs, and optional semantic search through an embedding model.',
+    status: 'Implemented',
+    tone: 'success',
+    limit: 'Semantic search stays off until an embedding model is set; symbols are line scans, not a parser.',
+  },
+  {
+    icon: 'shield',
+    title: 'Local by default',
+    body: 'A loopback-only service, OS keychain for secrets, path-confined workspace access, permission rules, an audit trail, and a global emergency stop.',
+    status: 'Implemented',
+    tone: 'success',
+    limit: 'Installers and macOS builds are unsigned; builds vary by release.',
+  },
+] as const;
+
+const steps = [
+  {
+    title: 'Get a build',
+    body: 'Download the asset for your platform from GitHub Releases, or install the VS Code extension. The release page lists the files that actually exist.',
+  },
+  {
+    title: 'Connect your models',
+    body: 'Point Studio at FreeLLMAPI or another OpenAI-compatible router, or run a local model through Ollama. Keys stay on your machine.',
+  },
+  {
+    title: 'Open your project',
+    body: 'Work inside a folder you choose: browse and edit files, search the workspace, use the terminal, and run Git or build commands.',
+  },
+  {
+    title: 'Delegate, then review',
+    body: 'Start an agent task. Approve privileged steps, inspect the step log and diff, and keep, restore, or apply the result yourself.',
+  },
+] as const;
+
+const platforms = [
+  {
+    icon: 'terminal',
+    name: 'Linux',
+    body: 'Portable tarball, AppImage, and Debian packaging produced by the release workflow.',
+    badge: 'Desktop',
+    tone: 'neutral',
+  },
+  {
+    icon: 'monitor',
+    name: 'Windows',
+    body: 'Portable zip and a per-user MSI produced by the release workflow. WebView2 ships with Windows 10/11.',
+    badge: 'Desktop',
+    tone: 'neutral',
+  },
+  {
+    icon: 'laptop',
+    name: 'macOS',
+    body: 'Universal arm64 + x86_64 build. Unsigned, so the first launch needs right-click → Open.',
+    badge: 'Unsigned',
+    tone: 'warning',
+  },
+  {
+    icon: 'smartphone',
+    name: 'Android',
+    body: 'Companion client with Direct Router and Desktop Host modes. Host-mode chat is non-streaming.',
+    badge: 'Companion',
+    tone: 'neutral',
+  },
+  {
+    icon: 'code',
+    name: 'VS Code',
+    body: 'Extension with an embedded server when the desktop app is not running. It has no terminal panel.',
+    badge: 'Extension',
+    tone: 'neutral',
+  },
+] as const;
+
+const sources = [
+  {
+    icon: 'book',
+    title: 'README',
+    body: 'Install paths, first-run setup, the feature list, and where local data lives.',
+    href: SITE.readme,
+  },
+  {
+    icon: 'layers',
+    title: 'Architecture',
+    body: 'The verified runtime shape, Rust modules, HTTP surface, and persistence model.',
+    href: SITE.architecture,
+  },
+  {
+    icon: 'check',
+    title: 'Feature status',
+    body: 'Per-requirement status with evidence, named limitations, and the remaining gaps.',
+    href: SITE.featureStatus,
+  },
+] as const;
+---
+
+<BaseLayout
+  title="Sarthi Studio — a local-first AI development workspace"
+  description="Chat, agents, local models, routers, skills, MCP, memory, and a real developer workspace in one desktop app. Open source, local-first, built with Rust."
+>
+  <section class="hero">
+    <div class="container hero-grid">
+      <div class="hero-copy">
+        <p class="hero-eyebrow">
+          <span class="pulse-dot" aria-hidden="true"></span>
+          Local-first AI development workspace
+        </p>
+        <h1>
+          Your AI studio,<br />
+          <span class="accent">on your machine.</span>
+        </h1>
+        <p class="hero-lead">
+          Sarthi Studio brings chat, agents, local models, routers, skills, MCP,
+          memory, and a real developer workspace into one desktop app. Your
+          keys, files, and history stay with you; model requests go only where
+          you point them.
+        </p>
+        <div class="hero-actions">
+          <Button href={SITE.releases} size="lg">
+            Download a build
+            <Icon name="download" size={18} />
+          </Button>
+          <Button href="#capabilities" variant="secondary" size="lg">
+            See what is inside
+            <Icon name="arrow-right" size={18} />
+          </Button>
+        </div>
+        <div class="hero-meta">
+          <span><Icon name="cpu" size={15} /> Rust + SQLite</span>
+          <span><Icon name="monitor" size={15} /> Linux · Windows · macOS</span>
+          <span><Icon name="smartphone" size={15} /> Android + VS Code</span>
+          {sourceVersion && (
+            <span><Icon name="git-branch" size={15} /> Source {sourceVersion}</span>
+          )}
+        </div>
+      </div>
+
+      <div class="hero-visual">
+        <div class="app-frame">
+          <div class="app-frame-bar" aria-hidden="true">
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="app-frame-title">Sarthi Studio</span>
+          </div>
+          <img
+            src={withBase('/screenshots/brand-shell-dark.png')}
+            width="1440"
+            height="900"
+            alt="The Sarthi Studio desktop shell in dark theme, with the thread sidebar, chat, and file workspace."
+            fetchpriority="high"
+            decoding="async"
+          />
+        </div>
+        <p class="hero-caption">
+          Desktop shell, dark theme. Repository screenshot captured at 2.51.0.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="trust">
+    <div class="container trust-grid">
+      <div class="trust-item">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>Loopback by default</strong>
+          <span>The local service binds to 127.0.0.1.</span>
+        </div>
+      </div>
+      <div class="trust-item">
+        <Icon name="database" size={18} />
+        <div>
+          <strong>SQLite history</strong>
+          <span>Conversations, runs, steps, and usage persist locally.</span>
+        </div>
+      </div>
+      <div class="trust-item">
+        <Icon name="git-branch" size={18} />
+        <div>
+          <strong>Git worktrees</strong>
+          <span>Writing runs can work in an isolated checkout.</span>
+        </div>
+      </div>
+      <div class="trust-item">
+        <Icon name="route" size={18} />
+        <div>
+          <strong>OpenAI-compatible routing</strong>
+          <span>Use FreeLLMAPI or another compatible endpoint.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <Section
+    id="capabilities"
+    eyebrow="Capabilities"
+    title="One workspace for the whole loop"
+    description="Not a chat window bolted onto an editor. The same local service owns conversations, runs, files, terminals, permissions, and the model traffic."
+  >
+    <div class="feature-grid">
+      {
+        features.map((feature) => (
+          <article class="feature-card">
+            <div class="feature-top">
+              <span class="feature-icon">
+                <Icon name={feature.icon} size={20} />
+              </span>
+              <Badge tone={feature.tone} label={feature.status} />
+            </div>
+            <h3>{feature.title}</h3>
+            <p>{feature.body}</p>
+            <p class="feature-limit">
+              <span>Limit</span>
+              {feature.limit}
+            </p>
+          </article>
+        ))
+      }
+    </div>
+    <p class="section-footnote">
+      These are the current source-tree statuses. The detailed record, including
+      evidence and remaining gaps, is the
+      <a href={SITE.featureStatus} target="_blank" rel="noopener noreferrer">
+        feature status report
+      </a>.
+    </p>
+  </Section>
+
+  <Section
+    eyebrow="The loop"
+    title="From a question to a reviewed change"
+    description="The agent is useful because every step is visible and privileged actions stop for approval. You keep the final decision."
+    class="section-soft"
+  >
+    <div class="split">
+      <div class="split-media">
+        <div class="media-frame">
+          <img
+            src={withBase('/screenshots/local-ai-dark.png')}
+            width="655"
+            height="711"
+            alt="Local AI settings showing model controls, hardware information, and a pull action."
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+        <p class="media-caption">
+          Local AI panel: local models, hardware detection, and pull progress.
+        </p>
+      </div>
+
+      <div class="split-copy">
+        <ul class="check-list">
+          <li>
+            <Icon name="check" size={17} />
+            <span>Open a folder; every workspace path is confined to it.</span>
+          </li>
+          <li>
+            <Icon name="check" size={17} />
+            <span>Run an agent that pauses before writes and commands.</span>
+          </li>
+          <li>
+            <Icon name="check" size={17} />
+            <span>Inspect the step log, diffs, checkpoints, and token usage.</span>
+          </li>
+          <li>
+            <Icon name="check" size={17} />
+            <span>Commit, merge, rebase, or apply a run's worktree yourself.</span>
+          </li>
+          <li>
+            <Icon name="check" size={17} />
+            <span>Keep conversations and run history in local SQLite.</span>
+          </li>
+        </ul>
+
+        <div class="terminal-card">
+          <div class="terminal-bar" aria-hidden="true">
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="window-dot"></span>
+            <span class="terminal-title">shell</span>
+          </div>
+          <div class="terminal-body">
+            <code><span class="prompt">$</span> free-ai-studio --browser</code>
+          </div>
+        </div>
+        <p class="terminal-caption">
+          Run the same UI in your default browser instead of the native window.
+        </p>
+
+        <p class="split-link">
+          <a class="text-link" href={SITE.architecture} target="_blank" rel="noopener noreferrer">
+            Read the architecture
+            <Icon name="arrow-up-right" size={15} />
+          </a>
+        </p>
+      </div>
+    </div>
+  </Section>
+
+  <Section
+    id="how-it-works"
+    eyebrow="How it works"
+    title="Install, connect, open, delegate"
+    description="The path is deliberately short. The product is the loop that comes after it."
+  >
+    <ol class="steps">
+      {
+        steps.map((step, index) => (
+          <li class="step">
+            <span class="step-number">{String(index + 1).padStart(2, '0')}</span>
+            <h3>{step.title}</h3>
+            <p>{step.body}</p>
+          </li>
+        ))
+      }
+    </ol>
+  </Section>
+
+  <Section
+    id="platforms"
+    eyebrow="Platforms"
+    title="The same workspace, where you work"
+    description="Desktop is the primary product and host. Android and VS Code are companion surfaces, with honest capability limits."
+  >
+    <div class="platform-grid">
+      {
+        platforms.map((platform) => (
+          <article class="card platform-card">
+            <span class="platform-icon">
+              <Icon name={platform.icon} size={20} />
+            </span>
+            <h3>{platform.name}</h3>
+            <p>{platform.body}</p>
+            <Badge tone={platform.tone} label={platform.badge} />
+          </article>
+        ))
+      }
+    </div>
+    <p class="section-footnote">
+      Formats vary by release, and the latest tag may not contain every file.
+      <a href={SITE.releases} target="_blank" rel="noopener noreferrer">
+        Browse the actual release assets
+      </a>
+      rather than relying on a fixed download link.
+    </p>
+  </Section>
+
+  <Section
+    id="source"
+    eyebrow="Source of truth"
+    title="Read what the site is built from"
+    description="The public site follows the repository's maintained documentation. These are the documents behind the claims on this page."
+    class="section-soft"
+  >
+    <div class="source-grid">
+      {
+        sources.map((source) => (
+          <Card href={source.href} class="source-card">
+            <span class="source-icon">
+              <Icon name={source.icon} size={20} />
+            </span>
+            <h3>{source.title}</h3>
+            <p>{source.body}</p>
+            <span class="source-arrow" aria-hidden="true">
+              <Icon name="arrow-up-right" size={17} />
+            </span>
+          </Card>
+        ))
+      }
+    </div>
+  </Section>
+
+  <section class="section cta-section">
+    <div class="container">
+      <div class="cta-panel">
+        <div class="cta-copy">
+          <p class="eyebrow">Open source</p>
+          <h2>Local-first. Built in the open.</h2>
+          <p>
+            Sarthi Studio is MIT-licensed. Read the code, follow releases, and
+            report what breaks.
+          </p>
+        </div>
+        <div class="cta-actions">
+          <Button href={SITE.repo} size="lg">
+            <Icon name="github" size={18} />
+            View on GitHub
+          </Button>
+          <Button href={SITE.releases} variant="secondary" size="lg">
+            Latest releases
+            <Icon name="arrow-up-right" size={17} />
+          </Button>
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

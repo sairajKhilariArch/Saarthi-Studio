@@ -1,0 +1,65 @@
+---
+import { SITE } from '../lib/site';
+import { withBase } from '../lib/url';
+
+interface Props {
+  title: string;
+  description: string;
+  image?: string;
+  type?: 'website' | 'article';
+  noindex?: boolean;
+}
+
+const {
+  title,
+  description,
+  image = '/og/default.png',
+  type = 'website',
+  noindex = false,
+} = Astro.props;
+
+const site = Astro.site ?? new URL('http://localhost:4321');
+const canonical = new URL(Astro.url.pathname, site);
+const imageUrl = new URL(withBase(image), site);
+const pageTitle = title.includes('Sarthi Studio')
+  ? title
+  : `${title} — Sarthi Studio`;
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: SITE.name,
+  url: new URL(withBase('/'), site).toString(),
+  description: SITE.description,
+};
+---
+
+<title>{pageTitle}</title>
+<meta name="description" content={description} />
+<link rel="canonical" href={canonical} />
+<link rel="icon" href={withBase('/brand/favicon.svg')} type="image/svg+xml" />
+<link
+  rel="sitemap"
+  type="application/xml"
+  href={withBase('/sitemap-index.xml')}
+/>
+{noindex && <meta name="robots" content="noindex, nofollow" />}
+
+<meta property="og:type" content={type} />
+<meta property="og:site_name" content={SITE.name} />
+<meta property="og:title" content={pageTitle} />
+<meta property="og:description" content={description} />
+<meta property="og:url" content={canonical} />
+<meta property="og:image" content={imageUrl} />
+<meta property="og:image:alt" content="The Sarthi Studio desktop shell" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={pageTitle} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={imageUrl} />
+
+<meta name="theme-color" content="#0b0b0d" />
+<meta name="color-scheme" content="dark light" />
+<meta name="generator" content={Astro.generator} />
+
+<script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />

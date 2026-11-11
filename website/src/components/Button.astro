@@ -1,0 +1,49 @@
+---
+import { isExternal } from '../lib/url';
+
+interface Props {
+  href?: string;
+  variant?: 'primary' | 'secondary' | 'ghost';
+  size?: 'md' | 'lg';
+  class?: string;
+  type?: 'button' | 'submit' | 'reset';
+  ariaLabel?: string;
+}
+
+const {
+  href,
+  variant = 'primary',
+  size = 'md',
+  class: className,
+  type = 'button',
+  ariaLabel,
+} = Astro.props;
+
+const external = href ? isExternal(href) : false;
+const classes = [
+  'btn',
+  `btn-${variant}`,
+  size === 'lg' ? 'btn-lg' : null,
+  className,
+]
+  .filter(Boolean)
+  .join(' ');
+---
+
+{
+  href ? (
+    <a
+      class={classes}
+      href={href}
+      aria-label={ariaLabel}
+      target={external ? '_blank' : undefined}
+      rel={external ? 'noopener noreferrer' : undefined}
+    >
+      <slot />
+    </a>
+  ) : (
+    <button class={classes} type={type} aria-label={ariaLabel}>
+      <slot />
+    </button>
+  )
+}

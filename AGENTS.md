@@ -28,6 +28,8 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agen
   `src/lib.ts` and only implements a subset of the app's routes.
 - `android/` — React Native + native-emitter client that talks to the desktop
   Host API over SSH.
+- `website/` — official static site (Astro), isolated from the app and deployed
+  to GitHub Pages. See `website/README.md` and `website/PLAN.md`.
 - `.github/workflows/` — release pipelines: `desktop-release.yml` (Linux, Windows),
   `linux-release.yml`, `windows-release.yml`, `vscode-release.yml`,
   `android-release.yml`.
@@ -42,5 +44,7 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agen
   from `app/static/`. Style through CSS custom-property tokens in `styles.css`.
 - Commit subjects put the version number first, then a short description:
   `1.26.10: fix the release gate`. Bump the version in every commit.
+- Website-only work uses its own version line: `website 0.1.0: ...` and bumps
+  `website/package.json`; the desktop version is only bumped for app changes.
 - Commit messages carry no AI attribution: no `Co-Authored-By`, no
   "Generated with" trailer, no bot co-author line.

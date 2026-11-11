@@ -1,0 +1,94 @@
+---
+import Icon from './Icon.astro';
+import { SITE } from '../lib/site';
+import { getSourceVersion } from '../lib/source';
+import { withBase } from '../lib/url';
+
+const sourceVersion = getSourceVersion();
+const year = new Date().getFullYear();
+
+type FooterLink = { label: string; href: string; external?: boolean };
+const columns: Array<{ title: string; links: FooterLink[] }> = [
+  {
+    title: 'Product',
+    links: [
+      { label: 'Capabilities', href: withBase('/#capabilities') },
+      { label: 'How it works', href: withBase('/#how-it-works') },
+      { label: 'Platforms', href: withBase('/#platforms') },
+      { label: 'Source', href: withBase('/#source') },
+    ],
+  },
+  {
+    title: 'Documentation',
+    links: [
+      { label: 'README', href: SITE.readme, external: true },
+      { label: 'Architecture', href: SITE.architecture, external: true },
+      { label: 'Feature status', href: SITE.featureStatus, external: true },
+      { label: 'Testing strategy', href: SITE.testing, external: true },
+    ],
+  },
+  {
+    title: 'Project',
+    links: [
+      { label: 'GitHub repository', href: SITE.repo, external: true },
+      { label: 'Issues', href: SITE.issues, external: true },
+      { label: 'Releases', href: SITE.releases, external: true },
+      { label: 'MIT license', href: SITE.license, external: true },
+    ],
+  },
+];
+---
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href={withBase('/')} aria-label="Sarthi Studio home">
+          <img
+            class="brand-mark"
+            src={withBase('/brand/tardigrade.svg')}
+            width="28"
+            height="28"
+            alt=""
+            aria-hidden="true"
+          />
+          <span class="brand-name">Sarthi Studio</span>
+        </a>
+        <p>
+          A local-first AI development workspace for chat, agents, models, and
+          the code you are already working on.
+        </p>
+        <a class="text-link" href={SITE.repo} target="_blank" rel="noopener noreferrer">
+          <Icon name="github" size={16} />
+          Build in the open
+        </a>
+      </div>
+
+      {
+        columns.map((column) => (
+          <nav class="footer-column" aria-label={column.title}>
+            <h3>{column.title}</h3>
+            {column.links.map((link) => (
+              <a
+                href={link.href}
+                target={link.external ? '_blank' : undefined}
+                rel={link.external ? 'noopener noreferrer' : undefined}
+              >
+                {link.label}
+              </a>
+            ))}
+          </nav>
+        ))
+      }
+    </div>
+
+    <div class="footer-bottom">
+      <p>&copy; {year} Sarthi Studio. Local-first by design.</p>
+      <p class="footer-meta">
+        <span>MIT licensed</span>
+        {sourceVersion && <span>Website for source {sourceVersion}</span>}
+        <span>Built with Rust</span>
+      </p>
+    </div>
+  </div>
+</footer>

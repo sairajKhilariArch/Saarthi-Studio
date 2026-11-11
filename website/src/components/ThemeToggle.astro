@@ -1,0 +1,42 @@
+---
+import Icon from './Icon.astro';
+---
+
+<button
+  class="icon-button theme-toggle"
+  type="button"
+  data-theme-toggle
+  aria-label="Switch to light theme"
+  title="Switch color theme"
+>
+  <Icon name="sun" size={18} class="theme-icon theme-icon-sun" />
+  <Icon name="moon" size={18} class="theme-icon theme-icon-moon" />
+</button>
+
+<script>
+  const storageKey = 'sarthi-theme';
+  const root = document.documentElement;
+  const button = document.querySelector<HTMLButtonElement>('[data-theme-toggle]');
+
+  const syncLabel = () => {
+    if (!button) return;
+    const isLight = root.dataset.theme === 'light';
+    button.setAttribute(
+      'aria-label',
+      isLight ? 'Switch to dark theme' : 'Switch to light theme',
+    );
+  };
+
+  button?.addEventListener('click', () => {
+    const next = root.dataset.theme === 'light' ? 'dark' : 'light';
+    root.dataset.theme = next;
+    try {
+      localStorage.setItem(storageKey, next);
+    } catch {
+      // The theme still applies for this page when storage is unavailable.
+    }
+    syncLabel();
+  });
+
+  syncLabel();
+</script>
