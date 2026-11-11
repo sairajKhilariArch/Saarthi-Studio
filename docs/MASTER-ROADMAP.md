@@ -212,6 +212,12 @@ repository sanity check runs when a folder opens (1.89.0–1.90.0). Open: an
 editor engine (syntax highlighting, completion, formatting), a debugger, and
 watch mode; only the detected build/test presets can be run.
 
+*Delivered 3.2.0: `git rebase --skip` — the Rebase form can drop the commit the
+replay is stuck on and continue with the next one (`POST
+/api/workspace/git/rebase/skip`, gated on `git`), returning the dropped subject.
+Unmerged markers are allowed here because that is git's own skip case, and the
+browser confirms first. In-pane reflog undo is still open.*
+
 *Delivered 1.66.0: the Git half — `app/src/git.rs` (diff, stage, unstage,
 discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it

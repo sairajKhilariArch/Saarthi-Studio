@@ -195,6 +195,7 @@
       '<input id="scmRebaseInput" type="text" placeholder="branch to rebase onto" aria-label="Branch to rebase onto" autocomplete="off">',
       '<button id="scmRebaseGo" class="tiny-toggle primary" type="button">Rebase</button>',
       '<button id="scmRebaseContinue" class="tiny-toggle" type="button">Continue</button>',
+      '<button id="scmRebaseSkip" class="tiny-toggle" type="button">Skip commit</button>',
       '<button id="scmRebaseAbort" class="tiny-toggle" type="button">Abort rebase</button></div>',
       '<div class="scm-branch-form hidden" id="scmRemoteForm">',
       '<input id="scmRemoteName" type="text" placeholder="remote name" aria-label="Remote name" autocomplete="off">',
@@ -895,6 +896,26 @@
     const data = result.data || {};
     $("scmRebaseForm").classList.add("hidden");
     toast(`Rebase finished on ${data.branch}`);
+  }
+
+  async function skipRebaseScm() {
+    if (!window.confirm("Skip the commit being replayed and continue with the next one?\n\nThat commit's changes are dropped from this branch. Resolve and Continue instead if you want to keep them.")) return;
+    const result = await api("/api/workspace/git/rebase/skip", {
+      method: "POST",
+      body: JSON.stringify({ approve: true }),
+      confirmApproval: true,
+    });
+    await refreshScm();
+    if (!result.ok) {
+      const conflicted = Array.isArray(result.data && result.data.conflicted) ? result.data.conflicted : [];
+      toast(conflicted.length
+        ? `Rebase stopped again: ${conflicted.length} conflicted file(s) — ${conflicted.slice(0, 3).join(", ")}${conflicted.length > 3 ? "…" : ""}`
+        : (result.data.error || "Could not skip the commit."));
+      return;
+    }
+    const data = result.data || {};
+    $("scmRebaseForm").classList.add("hidden");
+    toast(data.dropped ? `Skipped ${data.dropped}` : "Commit skipped; the rebase finished.");
   }
 
   /// A changed line inside a hunk is clickable: selecting it builds the index
@@ -1788,6 +1809,7 @@
     $("scmRebaseGo").addEventListener("click", () => void rebaseScm());
     $("scmRebaseAbort").addEventListener("click", () => void abortRebaseScm());
     $("scmRebaseContinue").addEventListener("click", () => void continueRebaseScm());
+    $("scmRebaseSkip").addEventListener("click", () => void skipRebaseScm());
     $("scmRemotesBtn").addEventListener("click", () => void showRemotes());
     $("scmApplyAll").addEventListener("click", () => void scmApplyEverything());
     $("scmClearAll").addEventListener("click", () => scmClearEverything());

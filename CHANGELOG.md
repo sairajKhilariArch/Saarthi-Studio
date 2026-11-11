@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.2.0
+
+Phase 9 gap named in `KNOWN-ISSUES.md` #21: a conflicted rebase could be
+resolved, continued or aborted, but dropping the commit you did not want needed
+a terminal.
+
+- **`POST /api/workspace/git/rebase/skip`** runs `git rebase --skip` against the
+  repository, gated on the `git` permission action like Continue. It refuses
+  with `409` when no rebase is in progress, reads the commit subject from
+  `REBASE_HEAD` before git discards it, and answers
+  `{skipped, dropped, branch, summary}` when the replay finishes. A stop at the
+  next commit is reported like Continue: its conflicted paths, then a
+  still-in-progress rebase if git stopped without unmerged files.
+- Unmerged markers are allowed on purpose: skipping is the action git offers at
+  a stop you do not want to keep. The browser asks first and says the commit's
+  changes are dropped; Continue remains the way to keep a resolved patch.
+- **UI:** `Skip commit` sits beside `Continue` and `Abort rebase` in the Rebase
+  form, reports the dropped subject, and shows the next conflict's files.
+- Not changed: history is still rewritten on purpose, there is still no in-pane
+  reflog undo, and a skip is not reversible from the pane.
+
+Verified locally: `node --check app/static/ide.js` clean. **Not run:** cargo
+test/clippy and the end-to-end harness — stopped at the owner's request because
+this laptop is slow, so the Rust change is **uncompiled**. The new test
+(`skips_the_conflicted_commit_and_keeps_the_rest_of_the_rebase`) drives a real
+repository: conflict, skip, the dropped change gone, the next commit kept, a
+clean tree, and a second skip refused. Run `cargo test --locked` and
+`cargo clippy --all-targets -D warnings` before trusting it. Not verified: the
+pane in a browser, and `REBASE_HEAD` on an ancient git.
+
 ## 3.1.0
 
 Phase 2 close-out: a router may now live on another machine. The registry has

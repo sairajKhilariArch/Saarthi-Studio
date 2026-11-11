@@ -1789,6 +1789,71 @@ fn continue_rebase(root: &Path) -> Result<Value, (StatusCode, String)> {
     ))
 }
 
+/// `git rebase --skip` drops the patch being replayed and moves to the next
+/// commit. It is deliberately its own action: Continue keeps a resolved patch,
+/// Skip discards it, and the two must never be guessed from the tree's state.
+/// Unmerged markers are allowed here because skipping is exactly what git
+/// offers at a stop the person does not want to keep; the browser asks first,
+/// and the reply names the commit that was dropped.
+fn skip_rebase(root: &Path) -> Result<Value, (StatusCode, String)> {
+    if !rebase_in_progress(root) {
+        return Err((
+            StatusCode::CONFLICT,
+            "There is no rebase in progress, so there is nothing to skip.".to_string(),
+        ));
+    }
+    // Name the commit before git drops it: after `--skip` the reference is gone.
+    let dropped = git(root, &["log", "-1", "--format=%s", "REBASE_HEAD"])
+        .ok()
+        .filter(|output| output.ok)
+        .map(|output| output.stdout.trim().to_string())
+        .unwrap_or_default();
+    let output = git(root, &["rebase", "--skip"])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if output.ok {
+        let summary = output
+            .stdout
+            .lines()
+            .chain(output.stderr.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(12)
+            .collect::<Vec<&str>>()
+            .join("\n");
+        return Ok(json!({
+            "ok": true,
+            "skipped": true,
+            "dropped": dropped,
+            "branch": branch_at_head(root).unwrap_or_else(|| "HEAD".to_string()),
+            "summary": summary,
+        }));
+    }
+    // A stop at the next commit is the same outcome as Continue's: the tree is
+    // intact and the person can resolve, skip again or abort.
+    let paths = unmerged_paths(root);
+    if !paths.is_empty() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "The rebase stopped again with {} conflicted file(s): {}",
+                paths.len(),
+                paths.join(", ")
+            ),
+        ));
+    }
+    if rebase_in_progress(root) {
+        let text = format!("{}\n{}", output.stdout.trim(), output.stderr.trim());
+        return Err((
+            StatusCode::CONFLICT,
+            format!("The rebase is still in progress: {}", text.trim()),
+        ));
+    }
+    Err((
+        StatusCode::CONFLICT,
+        git_error(&output, "git could not skip the commit"),
+    ))
+}
+
 /// `git rebase --abort` puts the branch back where the rebase started, which is
 /// the one thing that makes a conflicted rewrite safe to attempt.
 fn abort_rebase(root: &Path) -> Result<Value, (StatusCode, String)> {
@@ -2601,6 +2666,28 @@ async fn continue_rebase_route(
     }
 }
 
+async fn skip_rebase_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        "rebase --skip",
+        "",
+        approve,
+        "skip the commit being replayed",
+    ) {
+        return response;
+    }
+    match skip_rebase(&root) {
+        Ok(value) => Json(value).into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
 async fn create_branch_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
     let root = match workspace_root(&state) {
         Ok(root) => root,
@@ -3029,6 +3116,7 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/workspace/git/rebase/continue",
             post(continue_rebase_route),
         )
+        .route("/api/workspace/git/rebase/skip", post(skip_rebase_route))
         .route("/api/workspace/git/checkout", post(checkout_route))
         .route("/api/workspace/git/remotes", get(remotes_route))
         .route("/api/workspace/git/remotes/add", post(add_remote_route))
@@ -3468,6 +3556,60 @@ mod tests {
         assert!(run_git(&root, &["status", "--porcelain"]).trim().is_empty());
         // With the rebase finished, continue has nothing to do.
         assert!(continue_rebase(&root).is_err());
+    }
+
+    #[test]
+    fn skips_the_conflicted_commit_and_keeps_the_rest_of_the_rebase() {
+        let Some(root) = branch_fixture("rebase-skip") else {
+            return;
+        };
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("a.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "conflicting"]);
+        std::fs::write(root.join("b.txt"), "kept\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "second"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        std::fs::write(root.join("a.txt"), "main\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "main"]);
+        run_git(&root, &["checkout", "-q", "feature"]);
+        assert!(matches!(
+            rebase_branch(&root, "main"),
+            Ok(RebaseOutcome::Conflict { .. })
+        ));
+
+        let value = skip_rebase(&root).expect("the commit is skipped");
+        assert_eq!(value["skipped"], true, "{value}");
+        assert_eq!(value["dropped"], "conflicting");
+        assert_eq!(value["branch"], "feature");
+        assert!(!rebase_in_progress(&root), "one skip finished the replay");
+        // The dropped patch's change is gone; main's version and the next
+        // commit both landed, and no markers are left behind.
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "main\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.txt")).unwrap(),
+            "kept\n"
+        );
+        assert!(run_git(&root, &["status", "--porcelain"])
+            .trim()
+            .is_empty());
+        let subjects = run_git(&root, &["log", "--format=%s", "-3"]);
+        assert_eq!(
+            subjects.lines().take(2).collect::<Vec<_>>(),
+            vec!["second", "main"]
+        );
+        // With the rebase finished, skip has nothing left to drop.
+        let (status, message) = match skip_rebase(&root) {
+            Ok(_) => panic!("there is nothing to skip"),
+            Err(error) => error,
+        };
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(message.contains("no rebase in progress"), "{message}");
     }
 
     #[test]
