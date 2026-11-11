@@ -80,8 +80,9 @@ Remaining for Phase 1 sign-off:
 - [ ] A tagged run where **all** jobs succeed, including macOS and the deb
       headless tests.
 - [ ] The deb job's `cargo test --locked --no-default-features` exit 101 on
-      run `42908396329` (`3.0.2`); the failing test is not visible without
-      GitHub authentication and no assertion has been weakened.
+      run `42908396329` (`3.0.2`). The headless tree links keyring's Secret
+      Service backend and the job did not install `libdbus-1-dev`; 3.7.0 adds
+      it. A CI run still has to confirm the job reaches and passes the tests.
 - [ ] macOS runner availability resolved (queue starvation/cancellation).
 - [ ] Install smoke tests executed on the produced artifacts (deb install,
       AppImage run, zip extract + launch, vsix install, apk install).

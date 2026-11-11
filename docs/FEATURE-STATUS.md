@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 3.7.0 (2026-11-11):** Phase 1's deb-only failure has a concrete
+cause: the headless tree links `keyring`'s Secret Service backend, whose
+`libdbus-sys` build script needs `libdbus-1-dev`, and the deb job installed only
+`mold`; the Tauri jobs get the headers through GTK. The job now installs
+`libdbus-1-dev` and `pkg-config`, and `test-release.sh` guards that line (5/5).
+No figures changed; a CI rerun is still required. The old zero-asset tags and
+the rest of Phase 1 remain open.
+
 **Revision 3.6.0 (2026-11-11):** Phase 1 gained a scheduled backstop:
 `scripts/ci/audit-releases.sh` audits every published release at or above 3.4.0
 with the 11-asset gate, and `release-audit.yml` runs it daily plus on manual

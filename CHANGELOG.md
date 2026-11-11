@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.7.0
+
+Phase 1 deb blocker: the headless build now installs the dbus development files
+its keyring backend needs, so the Ubuntu 22.04 job can reach its tests instead of
+failing during the build.
+
+- **The deb-only failure had a build-dependency cause.** `keyring 3.6.3` is
+  built with `sync-secret-service`, which resolves to
+  `keyring → dbus-secret-service → dbus → libdbus-sys`. `libdbus-sys`'s build
+  script probes `pkg-config` for `dbus-1` and panics when the headers are
+  absent; Cargo reports that panic as exit `101`. The deb job installed only
+  `mold`, while the Tauri jobs get the dbus headers transitively through GTK.
+  GitHub's Ubuntu 22.04 image ships the dbus runtime and `pkg-config` but not
+  the `libdbus-1-dev` headers, and the deb job was the only build job that did
+  not install the Tauri dependency set that brings them in.
+- **The fix is the missing build dependency.** The deb job now installs
+  `libdbus-1-dev` and `pkg-config` beside `mold`. The headless test command is
+  unchanged: no test was skipped, removed or weakened, and the same
+  `cargo test --locked --no-default-features` still has to pass.
+- **`test-release.sh` guards it.** A new offline case reads the deb job from
+  `desktop-release.yml` and fails if the install line stops naming both
+  `libdbus-1-dev` and `pkg-config`. Five cases pass.
+- **Not verified yet:** the step's log was not accessible without GitHub
+  authentication, so a CI rerun is still required to prove the deb job now gets
+  past the build and passes the tests. No Rust build or test was run locally,
+  and no tag, release or workflow was triggered.
+
 ## 3.6.0
 
 Phase 1 backstop: a published release that somehow never triggered a build is

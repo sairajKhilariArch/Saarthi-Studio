@@ -104,8 +104,12 @@ jobs:
 
       # .cargo/config.toml links with mold everywhere; without this binary the
       # 22.04 job died at the first build-script link (cannot find 'ld').
-      - name: Install mold linker
-        run: sudo apt-get update && sudo apt-get install -y mold
+      # The headless tree still links keyring's Secret Service backend, whose
+      # libdbus-sys build script probes pkg-config for dbus-1. The GUI jobs get
+      # those headers through GTK; this job installs no Tauri dependencies, so
+      # it must name them itself or the build panics before any test runs.
+      - name: Install headless build dependencies
+        run: sudo apt-get update && sudo apt-get install -y mold libdbus-1-dev pkg-config
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

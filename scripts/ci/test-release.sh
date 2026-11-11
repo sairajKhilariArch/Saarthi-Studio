@@ -104,6 +104,17 @@ else
   die "rejected a complete release"
 fi
 
+# The deb job builds without Tauri, so it must install the dbus headers that
+# keyring's Secret Service backend probes for; the GUI jobs get them through
+# GTK. Pin that dependency here so it cannot silently disappear again.
+workflow="$here/../../.github/workflows/desktop-release.yml"
+deb_job="$(sed -n '/^  deb:/,/^  release:/p' "$workflow")"
+if grep -Eq 'libdbus-1-dev.*pkg-config|pkg-config.*libdbus-1-dev' <<<"$deb_job"; then
+  pass "deb job installs the dbus headers and pkg-config"
+else
+  die "deb job is missing libdbus-1-dev or pkg-config"
+fi
+
 write_releases_index
 if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
   MIN_RELEASE_VERSION=9.9.9 bash "$audit" >"$tmp/audit-complete.out" 2>&1; then
