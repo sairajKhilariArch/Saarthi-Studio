@@ -138,18 +138,26 @@ binary="$(find "$search" -type f \( -name 'free-ai-studio' -o -name 'free-ai-stu
 chmod +x "$binary" 2>/dev/null || true
 pass "artifact contains the binary ($(basename "$search")/$(realpath --relative-to="$search" "$binary" 2>/dev/null || basename "$binary"))"
 
-# The UI is resolved from static/ beside the binary; a package without it boots
-# a server that serves nothing. A macOS .app keeps it one level up instead, in
-# Contents/Resources/static, which the binary resolves as
-# `<exe dir>/../Resources/static`.
-static="$(dirname "$binary")/static"
-bundle_static="$(dirname "$binary")/../Resources/static"
+# The UI is resolved from one of the layouts `static_dir_candidates` knows:
+# beside the binary (portable tarball/zip), under `share/sarthi-studio` (deb
+# and AppImage), under the pre-2.51 `share/free-ai-suite` name, or in a macOS
+# bundle's Contents/Resources. A package without one boots a server that serves
+# nothing, so every recognised layout is checked before failing.
+exe_dir="$(dirname "$binary")"
+static="$exe_dir/static"
+installed_static="$exe_dir/../share/sarthi-studio/static"
+legacy_static="$exe_dir/../share/free-ai-suite/static"
+bundle_static="$exe_dir/../Resources/static"
 if [ -f "$static/index.html" ] || [ -f "$static/app.js" ]; then
   pass "the packaged static tree is beside the binary"
+elif [ -f "$installed_static/index.html" ] || [ -f "$installed_static/app.js" ]; then
+  pass "the packaged static tree is under share/sarthi-studio"
+elif [ -f "$legacy_static/index.html" ] || [ -f "$legacy_static/app.js" ]; then
+  pass "the packaged static tree is under the legacy share/free-ai-suite name"
 elif [ -f "$bundle_static/index.html" ] || [ -f "$bundle_static/app.js" ]; then
   pass "the packaged static tree is in the app bundle's Resources"
 else
-  die "no static tree beside the packaged binary ($static or $bundle_static)"
+  die "no static tree in any packaged layout ($static, $installed_static, $legacy_static or $bundle_static)"
 fi
 
 # A free port, chosen by binding one and letting go.

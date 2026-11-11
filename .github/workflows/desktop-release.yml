@@ -5,10 +5,15 @@ name: Desktop Release
 # macOS universal
 # arm64+x86_64 (portable tarball, unsigned, headless-smoked), the unsigned
 # Android release APK/AAB, and the VS Code extension .vsix. Push a `v*` tag to
-# build and attach all of them to one GitHub release; workflow_dispatch builds
-# and uploads artifacts without a release.
+# build and attach all of them to one GitHub release. A workflow_dispatch with
+# no tag builds artifacts only; one with a tag backfills that existing release.
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build and attach (must match app/Cargo.toml); leave blank to build artifacts only'
+        required: false
+        type: string
   push:
     tags:
       - 'v*'
@@ -19,10 +24,60 @@ permissions:
 # Two tag pushes must never build the same release at once: assets are keyed by
 # filename on a single release, so an overlapping run races the attachment.
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    # One job decides what is being released before any package is built. A tag
+    # is accepted only when its version is exactly the version in the checked
+    # out manifest, so a stale tag can never receive a differently-versioned
+    # binary. A dispatch with no tag remains an artifacts-only run.
+    name: Verify release tag and version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      release: ${{ steps.meta.outputs.release }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Read and verify the version
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          version="$(bash scripts/ci/version.sh app/Cargo.toml)"
+          tag=""
+          release="false"
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            release="true"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+            release="true"
+          fi
+          if [ "$release" = "true" ]; then
+            case "$tag" in
+              v*) ;;
+              *) echo "ERROR: a release tag must start with v: $tag" >&2; exit 1 ;;
+            esac
+            expected="${tag#v}"
+            if [ "$version" != "$expected" ]; then
+              echo "ERROR: tag $tag does not match app/Cargo.toml version $version" >&2
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "version $version; tag ${tag:-none}; release $release"
+
   deb:
     # The .deb is built headless (--no-default-features: no Tauri/GTK links)
     # on ubuntu-22.04, so cargo-deb's $auto resolves to glibc 2.35 and the
@@ -31,11 +86,14 @@ jobs:
     # deb's desktop entry runs the server plus browser (no window needed);
     # windowed binaries ship as the tarball and AppImage below.
     name: Build portable .deb (Ubuntu 22.04+)
+    needs: preflight
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
@@ -95,18 +153,22 @@ jobs:
           retention-days: 30
 
       - name: Attach .deb to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.preflight.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
           files: dist/*.deb
 
   release:
     name: Build Linux release packages
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
@@ -236,14 +298,16 @@ jobs:
           retention-days: 30
 
       - name: Attach artifacts to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.preflight.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
           files: dist/*
           generate_release_notes: true
 
   windows:
     name: Build Windows release package
+    needs: preflight
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -252,6 +316,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       # The repo pins nightly for -Z threads and the cranelift dev backend;
       # release builds only need a stable-enough compiler, but the pinned
@@ -331,9 +397,10 @@ jobs:
           retention-days: 30
 
       - name: Attach Windows artifact to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.preflight.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
           files: |
             dist/*.zip
             dist/*.msi
@@ -356,11 +423,14 @@ jobs:
     # the queue until the run was cancelled. macos-15-intel is the Intel image
     # (still supported), and the job cross-builds the aarch64 slice anyway, so
     # the universal binary is unchanged.
+    needs: preflight
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
@@ -468,20 +538,24 @@ jobs:
           retention-days: 30
 
       - name: Attach macOS artifact to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.preflight.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
           files: |
             dist/*.tar.gz
             dist/*.app.zip
 
   vscode-extension:
     name: Build VS Code extension (.vsix)
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -509,18 +583,22 @@ jobs:
           retention-days: 30
 
       - name: Attach extension to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.preflight.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
           files: dist/free-ai-studio-vscode.vsix
 
   android:
     name: Build Android release APK and AAB (signed)
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -565,9 +643,33 @@ jobs:
           retention-days: 30
 
       - name: Attach Android artifacts to GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.preflight.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
           files: |
             dist/free-ai-studio-android.apk
             dist/free-ai-studio-android.aab
+
+  verify-release:
+    # A green build is not a shipped release until the assets are actually on
+    # the tag. This catches the failure mode that produced v1.62.0-v1.71.0:
+    # releases with zero assets because no build was ever attached.
+    name: Verify release assets
+    needs: [preflight, deb, release, windows, macos, vscode-extension, android]
+    if: always() && needs.preflight.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Verify every expected asset is attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: bash scripts/ci/verify-release.sh "$RELEASE_TAG" "$RELEASE_VERSION"

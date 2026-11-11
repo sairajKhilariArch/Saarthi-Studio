@@ -1,5 +1,52 @@
 # Changelog
 
+## 3.4.0
+
+Phase 1 release reliability: a tag can be built on demand, and a release is no
+longer treated as shipped until every artifact is actually attached.
+
+- **The zero-asset releases are now understood.** `v1.62.0`–`v1.71.0` were
+  published together on 2026-11-06, but only `v1.61.0` triggered a Desktop
+  Release run. Each later tag has Desktop CI and Rust CI on its commit, no
+  release-workflow run, and zero assets. The release path now has a recovery
+  entry point instead of depending on the original tag push.
+- **Dispatch can target an existing tag.** `workflow_dispatch` gained a `tag`
+  input. The new `preflight` job checks out that tag, refuses unless
+  `app/Cargo.toml` equals the tag without its `v` prefix, and exports the
+  version, tag and release flag to every build job. A dispatch without a tag
+  still builds artifacts only. `tag_name` and the concurrency group use that
+  tag, so a backfill cannot race a tag push for the same release.
+- **A release is checked after it is built.** `scripts/ci/verify-release.sh`
+  reads the published release and requires all 11 promised assets with a
+  non-zero size: Linux tarball, AppImage and deb; Windows zip and MSI; macOS
+  tarball and app zip; VSIX; APK and AAB; `SHA256SUMS.txt`. The final
+  `verify-release` job runs after all six build jobs and fails the run if one is
+  missing or empty. `scripts/ci/test-release.sh` exercises the gate against a
+  loopback fixture: a complete release passes, and a missing VSIX is refused
+  and named.
+- **The AppImage smoke no longer rejects a valid package.** The package installs
+  its UI at `usr/share/sarthi-studio/static`, but `smoke-package.sh` only looked
+  beside the binary or in a macOS `Contents/Resources/static`. It now also
+  accepts the installed and legacy `share/free-ai-suite` layouts, matching
+  `static_dir_candidates`. This is the check that failed the AppImage step in
+  run `42908396329`.
+- **Still red: the deb job's headless tests.** That same run's
+  `cargo test --locked --no-default-features` step exits `101` on `3.0.2`
+  (`52158bc`). GitHub exposes only the exit code without authentication, so the
+  failing test has not been identified. No assertion was removed or weakened;
+  the deb artifact, and therefore a complete release, remains blocked until
+  that test is repaired.
+- Not done: no tag was created or pushed, no release was published, and no
+  GitHub Actions run was triggered. The historical zero-asset tags remain
+  documented; backfilling one still has to pass the code and tests at that tag.
+
+Verified locally: PyYAML parses `desktop-release.yml` (8 jobs) and
+`desktop-ci.yml`; the step-shape check reports no problems; every
+`scripts/ci/*.sh` passes `bash -n`; `test-version.sh` 20/20;
+`test-release.sh` 2/2; version `3.4.0` in `Cargo.toml`, `Cargo.lock` and
+`tauri.conf.json`. **Not run:** Rust build/tests (owner's laptop constraint) and
+any live release run.
+
 ## 3.3.0
 
 Phase 12's last named gap: a queued run could carry a numeric priority, but the

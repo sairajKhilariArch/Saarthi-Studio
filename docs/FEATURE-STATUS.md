@@ -17,6 +17,19 @@ implementation), **Broken** (exists and fails).
 
 The counts above are what the tree contains today, not a projection.
 
+**Revision 3.4.0 (2026-11-11):** Phase 1 gained a tag-targeted recovery path and
+a post-build release gate. `workflow_dispatch` now accepts `tag`; `preflight`
+checks out that tag, refuses a mismatch with `app/Cargo.toml`, and scopes
+attachment and concurrency to it. `scripts/ci/verify-release.sh` requires all 11
+promised assets with non-zero size, and the final `verify-release` job fails a
+tag run when one is missing. `smoke-package.sh` now recognises the
+AppImage/deb UI under `share/sarthi-studio/static` (and the legacy
+`share/free-ai-suite` path), matching `static_dir_candidates`; that layout false
+negative is what failed the AppImage smoke in run `42908396329`. The same run's
+deb job still fails `cargo test --no-default-features` with exit 101 on `3.0.2`,
+so a complete release remains blocked; no assertion was weakened. No figures
+changed because this closes release plumbing, not a feature row.
+
 **Revision 3.3.0 (2026-11-11):** Phase 12's last named gap closes:
 `POST /api/runs/:id/queue` moves a queued run one place (`move: "up"|"down"`),
 rewriting the queued priorities into one explicit descending order inside a

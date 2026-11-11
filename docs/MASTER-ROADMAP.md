@@ -44,14 +44,36 @@ Delivered in 1.26.4:
 - AppStream metadata (`app/packaging/sarthi-studio.appdata.xml`) shipped into
   the AppImage.
 
+Delivered in 3.4.0:
+
+- `workflow_dispatch` accepts an existing `tag`. `preflight` checks out that
+  tag, refuses a tag/manifest version mismatch, and gives every job the version,
+  tag and release flag. `tag_name` and the concurrency group are scoped to the
+  target tag; a dispatch without one only uploads artifacts.
+- `scripts/ci/verify-release.sh` requires all 11 promised assets (Linux
+  tarball/AppImage/deb, Windows zip/MSI, macOS tarball/app zip, VSIX, APK/AAB,
+  `SHA256SUMS.txt`) with non-zero size. The final `verify-release` job fails a
+  tag run when one is missing; `scripts/ci/test-release.sh` proves the pass and
+  missing-asset failure offline.
+- `smoke-package.sh` recognises the installed AppImage/deb UI layout under
+  `<exe>/../share/sarthi-studio/static` and the legacy `free-ai-suite` path,
+  matching `static_dir_candidates`. This removes a false failure in the
+  AppImage smoke.
+
 Remaining for Phase 1 sign-off:
 
-- [ ] A tagged run where **all** jobs succeed, including macOS.
+- [ ] A tagged run where **all** jobs succeed, including macOS and the deb
+      headless tests.
+- [ ] The deb job's `cargo test --locked --no-default-features` exit 101 on
+      run `42908396329` (`3.0.2`); the failing test is not visible without
+      GitHub authentication and no assertion has been weakened.
 - [ ] macOS runner availability resolved (queue starvation/cancellation).
 - [ ] Install smoke tests executed on the produced artifacts (deb install,
       AppImage run, zip extract + launch, vsix install, apk install).
 - [ ] Decision recorded for the three dead tags (`v1.26.0`, `v1.26.1`,
-      `v1.26.2`) — leave documented as failed, or delete after v1.26.4 ships.
+      `v1.26.2`) — leave documented as failed, or delete after a green release.
+- [ ] The historical zero-asset tags `v1.62.0`–`v1.71.0`; the new dispatch path
+      can target one, but it still has to pass that tag's own build and tests.
 
 ## Phase 2 — Router manager
 
@@ -681,7 +703,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 
 | Phase | State | What is still open |
 |---|---|---|
-| 1 CI/CD and release | Working | a fresh tagged release run observed end to end; AppStream validation runs only in CI |
+| 1 CI/CD and release | Partial | no fresh green tagged run yet; the deb job's headless tests exit 101, and deb/AppImage/VSIX/APK install smokes are not automated |
 | 2 Router manager | Working | — |
 | 3 Model and provider | Working | pricing only where the provider publishes it |
 | 4 Thinking / OpenAI | Working | — |
