@@ -30,9 +30,12 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agen
   Host API over SSH.
 - `website/` — official static site (Astro), isolated from the app and deployed
   to GitHub Pages. See `website/README.md` and `website/PLAN.md`.
-- `.github/workflows/` — release pipelines: `desktop-release.yml` (Linux, Windows),
-  `linux-release.yml`, `windows-release.yml`, `vscode-release.yml`,
-  `android-release.yml`.
+- `.github/workflows/` — checks: `desktop-ci.yml`, `rust-host-api-ci.yml`,
+  `android-ci.yml`. Release: `desktop-release.yml` builds every published
+  artifact from one tagged run (Linux deb/AppImage/tarball, Windows zip/MSI,
+  macOS tarball/`.app`, the VSIX and the APK/AAB, plus `SHA256SUMS.txt`),
+  `release-audit.yml` rechecks published releases daily, and
+  `website-deploy.yml` publishes `website/`.
 
 ## Conventions
 

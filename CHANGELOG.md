@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.10.0
+
+Documentation: the agent-facing map now lists the CI and release workflows this
+repository actually has, closing known issue #8.
+
+- **`AGENTS.md` no longer sends an agent to files that are gone.** It named
+  `linux-release.yml`, `windows-release.yml`, `vscode-release.yml` and
+  `android-release.yml`, which were removed when the release was consolidated
+  into `desktop-release.yml`. The entry now names the checks (`desktop-ci.yml`,
+  `rust-host-api-ci.yml`, `android-ci.yml`), the release pipeline and what its
+  jobs build (Linux deb/AppImage/tarball, Windows zip/MSI, macOS tarball/`.app`,
+  the VSIX, the APK/AAB and `SHA256SUMS.txt`), the daily `release-audit.yml`
+  recheck and `website-deploy.yml`.
+- **Known issue #8 is recorded as fixed**, including the history: those four
+  files did exist until the consolidation, so the note says where they went
+  instead of claiming they never existed.
+- **The roadmap's hygiene list drops the resolved half** of its entry; the
+  diverged `website` branch is still open.
+- No code, workflow, dependency or test behavior changed.
+
+Verified with `scripts/ci/test-version.sh` (20/20), `scripts/ci/test-release.sh`
+(5/5), `scripts/ci/test-frontend.sh` (44 passed) and version 3.10.0 in
+`app/Cargo.toml`, `app/Cargo.lock` and `app/tauri.conf.json`. Not run: no Rust
+build (no code changed) and no CI run.
+
 ## 3.9.0
 
 Phase 15 dependency cycles, and the 3.8.0 tree builds again. Two type errors had

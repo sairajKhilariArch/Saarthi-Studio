@@ -78,8 +78,8 @@ This is the ordered backlog for the current tree. It supersedes older
 - Full `rustfmt` coverage and clippy on Windows/macOS as well as Linux.
 - AppStream validation for the renamed Linux package; real-device checks for the
   macOS/Windows/Android icons.
-- Reconcile the diverged `website` branch and the workflow names still cited by
-  `AGENTS.md`.
+- Reconcile the diverged `website` branch. (The stale workflow names in
+  `AGENTS.md` were fixed in 3.10.0.)
 - Run restore remains narrower than a workspace snapshot; diagnostics and
   redaction have the limits recorded in `KNOWN-ISSUES.md`.
 
