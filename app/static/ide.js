@@ -22,6 +22,7 @@
     diffKey: null,
     scmHistory: false,
     runner: { presets: [], running: false },
+    watch: { status: null, timer: null, lastRunAt: null, wasWatching: false },
     searchSeq: 0,
     paletteIndex: 0,
     paletteItems: [],
@@ -303,6 +304,7 @@
       '<span id="runnerTests" class="muted"></span>' +
       '<select id="runPresetSelect" aria-label="Command to run"></select>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runPreset">Run</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="watchPreset" title="Rerun the chosen command when files change">Watch</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runBuild">Build</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runTest">Test</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
@@ -322,6 +324,7 @@
 
     $("problemsClear").addEventListener("click", () => { IDE.problems = []; renderProblems(); updateProblemCounts(); });
     $("runPreset").addEventListener("click", () => void runChosen());
+    $("watchPreset").addEventListener("click", () => void toggleWatch());
     $("runBuild").addEventListener("click", () => void runBuild("build"));
     $("runTest").addEventListener("click", () => void runBuild("test"));
     $("outputClear").addEventListener("click", () => { IDE.output = []; renderOutput(); });
@@ -352,7 +355,7 @@
     });
     if (state.panelShow && !state.panelShow.bottom) togglePanel("bottom");
     if (id === "terminal") showTerminalPanel();
-    if (id === "problems") { renderProblems(); void loadRunnerPresets(); }
+    if (id === "problems") { renderProblems(); void loadRunnerPresets(); void loadWatchStatus(); }
     if (id === "runs") void loadRunsPane();
     if (id === "tasks") void loadTasksPane();
     if (id === "output") renderOutput();
@@ -1652,6 +1655,7 @@
       $("runPreset").disabled = IDE.runner.running || !has;
       $("runPreset").classList.toggle("hidden", !has);
     }
+    updateWatchButton();
   }
 
   // Options come from the server, so a saved command is shown as its own text
@@ -1738,44 +1742,168 @@
         toast(result.data.error || "Could not run that command.");
         return;
       }
-      const data = result.data;
-      const problems = data.problems || [];
-      IDE.problems = problems.map((problem) => ({
-        where: problem.path,
-        line: problem.line,
-        column: problem.column,
-        severity: problem.severity,
-        message: problem.message,
-        at: Date.now(),
-      }));
-      renderProblems();
-      updateProblemCounts();
-      showRunnerOutput(data);
-      const seconds = ((data.durationMs || Math.round(performance.now() - started)) / 1000).toFixed(1);
-      const count = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
-      setRunnerStatus(`${data.command} · exit ${data.exitCode}${data.timedOut ? " (timed out)" : ""} · ${count} · ${seconds}s`);
-      // Test counts come from the runner's own parse of the tool's summary. No
-      // summary line means nothing is shown, never zeroes.
-      const tests = data.tests || null;
-      const testsBox = $("runnerTests");
-      if (testsBox) {
-        if (tests && (tests.total || tests.failed)) {
-          const facts = [`${tests.passed} passed`, `${tests.failed} failed`];
-          if (tests.ignored) facts.push(`${tests.ignored} ignored`);
-          testsBox.textContent = ` · ${facts.join(" · ")}`;
-          testsBox.title = tests.failures && tests.failures.length
-            ? `Failed: ${tests.failures.join(", ")}`
-            : `${tests.framework || "test"} summary`;
-        } else {
-          testsBox.textContent = "";
-          testsBox.title = "";
-        }
-      }
-      toast(data.success ? `${data.command} passed` : `${data.command} failed`);
+      applyRunResult(result.data, started);
     } finally {
       IDE.runner.running = false;
       updateRunnerButtons();
     }
+  }
+
+  // One renderer for a manual run and a watched one: the server answer is the
+  // same object, so problems, output and test counts are handled once. A watch
+  // run is quiet because its status line belongs to the watcher, not to one run.
+  function applyRunResult(data, started, quiet = false) {
+    const problems = data.problems || [];
+    IDE.problems = problems.map((problem) => ({
+      where: problem.path,
+      line: problem.line,
+      column: problem.column,
+      severity: problem.severity,
+      message: problem.message,
+      at: Date.now(),
+    }));
+    renderProblems();
+    updateProblemCounts();
+    showRunnerOutput(data);
+    if (!quiet) {
+      const seconds = ((data.durationMs || Math.round(performance.now() - started)) / 1000).toFixed(1);
+      const count = `${problems.length} problem${problems.length === 1 ? "" : "s"}`;
+      setRunnerStatus(`${data.command} · exit ${data.exitCode}${data.timedOut ? " (timed out)" : ""} · ${count} · ${seconds}s`);
+    }
+    // Test counts come from the runner's own parse of the tool's summary. No
+    // summary line means nothing is shown, never zeroes.
+    const tests = data.tests || null;
+    const testsBox = $("runnerTests");
+    if (testsBox) {
+      if (tests && (tests.total || tests.failed)) {
+        const facts = [`${tests.passed} passed`, `${tests.failed} failed`];
+        if (tests.ignored) facts.push(`${tests.ignored} ignored`);
+        testsBox.textContent = ` · ${facts.join(" · ")}`;
+        testsBox.title = tests.failures && tests.failures.length
+          ? `Failed: ${tests.failures.join(", ")}`
+          : `${tests.framework || "test"} summary`;
+      } else {
+        testsBox.textContent = "";
+        testsBox.title = "";
+      }
+    }
+    if (!quiet) toast(data.success ? `${data.command} passed` : `${data.command} failed`);
+  }
+
+  /* Watch mode: the server owns the loop; this side only starts, stops and
+     polls. A watch survives a page reload, so opening the pane asks the server
+     for the current state before showing "Watch" again. */
+
+  function stopWatchPolling() {
+    if (IDE.watch.timer) {
+      clearInterval(IDE.watch.timer);
+      IDE.watch.timer = null;
+    }
+  }
+
+  function startWatchPolling() {
+    if (IDE.watch.timer) return;
+    IDE.watch.timer = setInterval(() => { void loadWatchStatus(); }, 1200);
+  }
+
+  function renderWatchStatus() {
+    const status = IDE.watch.status;
+    if (!status || !status.watching) return;
+    const runs = status.runs || 0;
+    const last = status.lastRun;
+    let line = "waiting for changes";
+    if (last) {
+      if (last.stopped) {
+        line = "last run stopped";
+      } else {
+        const seconds = ((last.durationMs || 0) / 1000).toFixed(1);
+        const count = last.problemCount || 0;
+        line = `last ${last.success ? "passed" : `failed (exit ${last.exitCode})`} in ${seconds}s · ${count} problem${count === 1 ? "" : "s"}`;
+      }
+    }
+    const size = status.truncated ? " · tree too large to see every change" : "";
+    const error = status.error ? ` · ${status.error}` : "";
+    setRunnerStatus(`Watching ${status.command} · ${runs} run${runs === 1 ? "" : "s"} · ${line}${size}${error}`);
+  }
+
+  function updateWatchButton() {
+    const button = $("watchPreset");
+    if (!button) return;
+    const status = IDE.watch.status;
+    const watching = Boolean(status && status.watching);
+    const stopping = Boolean(status && status.stopping);
+    button.textContent = watching ? (stopping ? "Stopping…" : "Stop watching") : "Watch";
+    button.disabled = stopping || (!watching && (IDE.runner.running || !IDE.runner.presets.length));
+    button.title = watching
+      ? "Stop rerunning this command when files change"
+      : "Rerun the chosen command when files change";
+  }
+
+  function applyWatchStatus(status) {
+    const wasWatching = IDE.watch.wasWatching;
+    IDE.watch.status = status;
+    IDE.watch.wasWatching = Boolean(status.watching);
+    if (status.watching) startWatchPolling();
+    else stopWatchPolling();
+    if (status.watching) {
+      // A watch holds the runner's only slot, so manual Run/Build/Test stay
+      // disabled for its lifetime.
+      IDE.runner.running = true;
+    } else if (wasWatching) {
+      IDE.runner.running = false;
+      setRunnerStatus("Watcher stopped. The problems above are from its last run.");
+      void loadRunnerPresets();
+    }
+    updateRunnerButtons();
+    updateWatchButton();
+    if (status.watching) renderWatchStatus();
+    const last = status.lastRun;
+    if (last && last.finishedAt && last.finishedAt !== IDE.watch.lastRunAt) {
+      IDE.watch.lastRunAt = last.finishedAt;
+      applyRunResult(last, performance.now(), true);
+      renderWatchStatus();
+    }
+  }
+
+  async function loadWatchStatus() {
+    if (!state.workspace) {
+      stopWatchPolling();
+      IDE.watch.status = null;
+      IDE.watch.wasWatching = false;
+      updateWatchButton();
+      return;
+    }
+    const result = await api("/api/workspace/watch");
+    if (!result.ok) return;
+    applyWatchStatus(result.data);
+  }
+
+  async function toggleWatch() {
+    const status = IDE.watch.status;
+    if (status && status.watching) {
+      const result = await api("/api/workspace/watch/stop", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (!result.ok) { toast(result.data.error || "Could not stop watching."); return; }
+      IDE.watch.status = { ...status, stopping: true };
+      updateWatchButton();
+      setRunnerStatus(result.data.message || "Stopping the watcher…");
+      return;
+    }
+    const select = $("runPresetSelect");
+    if (!select || !select.value) { toast("No command to watch in this folder."); return; }
+    const preset = IDE.runner.presets.find((entry) => entry.id === select.value);
+    if (!preset) { toast("That command is no longer in this folder's list."); return; }
+    const result = await api("/api/workspace/watch/start", {
+      method: "POST",
+      body: JSON.stringify({ id: preset.id }),
+      confirmApproval: true,
+    });
+    if (!result.ok) { toast(result.data.error || "Could not start watching."); return; }
+    IDE.watch.wasWatching = false;
+    applyWatchStatus(result.data);
+    toast(`Watching ${preset.command}. It reruns when files change.`);
   }
 
   function updateProblemCounts() {

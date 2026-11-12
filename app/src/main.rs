@@ -73,6 +73,7 @@ mod thinking;
 mod trace;
 mod uninstall;
 mod update;
+mod watch;
 mod workflow;
 mod workspace;
 
@@ -2826,6 +2827,9 @@ async fn activate_project(State(state): State<AppState>, Path(id): Path<String>)
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
 
+    // The active folder is about to change, so a watcher rooted in the old one
+    // must stop before anything runs there again.
+    crate::watch::stop_active();
     let workspace = if folder.trim().is_empty() {
         state.workspace.close();
         json!({ "open": false })

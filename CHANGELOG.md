@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.21.0
+
+Phase 9's watch mode: the Problems pane reruns one command whenever the open
+folder changes, and Stop kills it instead of waiting for it.
+
+- **One watch, one preset id.** `POST /api/workspace/watch/start {id}` resolves
+  the id against the same list `/api/workspace/runner` serves, so a command line
+  never comes from the request. It is gated on `command` with the whole line as
+  its target; that decision covers the reruns for the session, because a
+  background thread cannot prompt. The watch holds the runner's only slot for
+  its lifetime, so Run/Build/Test are disabled while it is active.
+- **No new file watcher.** The loop reuses `workspace::fingerprint_tree` every
+  700 ms — the same path/mtime/size hash the explorer polls — so `.git`,
+  `target` and `node_modules` do not look like edits. The baseline is taken
+  again after each run, so a command that writes generated files cannot trigger
+  itself.
+- **Status is the last real run.** `GET /api/workspace/watch` reports the preset,
+  interval, run count, the last run's exit code, duration, problems, test
+  summary and a bounded output tail, plus `truncated` when the tree is too large
+  to fingerprint fully and `error` when a run could not start. Nothing is
+  simulated.
+- **Stop actually stops.** The runner polls a stop flag every 120 ms; on Windows
+  `taskkill /T` also takes the shell's children down, and a stopped run returns
+  without waiting for its pipe readers. `POST /api/workspace/watch/stop` signals;
+  the thread clears the slot itself, so a new watch starts once the old one is
+  gone.
+- **The pane.** Problems gains Watch / Stop watching beside Run. It polls every
+  1.2 s while a watch is active, uses the same renderer as a manual run for
+  problems, output and test counts, keeps Run and the picker disabled while
+  watching, and restores the state after a reload. Opening another folder,
+  closing it, or activating a project stops the watcher before the folder
+  changes.
+
+Verified: `cargo test --locked` 579 passed, 1 ignored (2 new: a change runs the
+command once and its own output does not retrigger it; Stop kills a 30 s command
+in under 5 s); clippy `--all-targets -D warnings` clean; `cargo fmt --check`
+clean; `node --check` clean; `test-frontend.sh` 48 passed; `test-version.sh`
+20/20; `test-e2e.sh` 32 passed. Live headless on a scratch home and folder:
+start answered watching with the saved command, a duplicate start was 409, an
+edit ran once (exit 0, 0 problems), 1.8 s later the run count was still 1, stop
+turned watching false, a second watch started and stopped, and an unknown id was
+400. **Not run:** the Watch button was not clicked in a browser, and no watch
+was exercised on macOS or Linux (the stop test ran on Windows only).
+
 ## 3.20.0
 
 Phase 14's negotiation gap narrows: the local API states what it can do, the

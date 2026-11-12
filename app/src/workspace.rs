@@ -753,6 +753,9 @@ async fn open_workspace(State(state): State<AppState>, Json(input): Json<Value>)
     let Some(path) = input.get("path").and_then(Value::as_str) else {
         return json_error(StatusCode::BAD_REQUEST, "Provide a folder path to open.");
     };
+    // A watcher belongs to the folder it started in; never run a command in a
+    // folder the person has just left.
+    crate::watch::stop_active();
     match state.workspace.open(path) {
         Ok(entry) => {
             // The folder that is open belongs to the active project, so a
@@ -774,6 +777,7 @@ async fn open_workspace(State(state): State<AppState>, Json(input): Json<Value>)
 }
 
 async fn close_workspace(State(state): State<AppState>) -> Json<Value> {
+    crate::watch::stop_active();
     state.workspace.close();
     crate::record_project_folder(&state, "");
     Json(json!({ "ok": true }))
@@ -834,23 +838,26 @@ fn run_folder_picker() -> PickerResult {
 
 async fn pick_folder(State(state): State<AppState>) -> Response<Body> {
     match tokio::task::spawn_blocking(run_folder_picker).await {
-        Ok(PickerResult::Picked(path)) => match state.workspace.open(&path) {
-            Ok(entry) => {
-                crate::record_project_folder(&state, &entry.root.display().to_string());
-                Json(json!({
-                    "ok": true,
-                    "picked": true,
-                    "workspace": {
-                        "path": display_path(&entry.root),
-                        "absolute_path": entry.root.display().to_string(),
-                        "name": entry.name,
-                    },
-                    "recent": state.workspace.recent(),
-                }))
-                .into_response()
+        Ok(PickerResult::Picked(path)) => {
+            crate::watch::stop_active();
+            match state.workspace.open(&path) {
+                Ok(entry) => {
+                    crate::record_project_folder(&state, &entry.root.display().to_string());
+                    Json(json!({
+                        "ok": true,
+                        "picked": true,
+                        "workspace": {
+                            "path": display_path(&entry.root),
+                            "absolute_path": entry.root.display().to_string(),
+                            "name": entry.name,
+                        },
+                        "recent": state.workspace.recent(),
+                    }))
+                    .into_response()
+                }
+                Err(error) => error.into_response(),
             }
-            Err(error) => error.into_response(),
-        },
+        }
         Ok(PickerResult::Cancelled) => Json(json!({ "ok": true, "picked": false })).into_response(),
         Ok(PickerResult::Unavailable) => Json(json!({
             "ok": true,
@@ -1492,6 +1499,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .route("/api/workspace/vcs", get(vcs_status))
         .merge(crate::git::router())
         .merge(crate::runner::router())
+        .merge(crate::watch::router())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(
             LocalOriginGuard { port },

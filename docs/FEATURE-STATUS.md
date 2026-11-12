@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.21.0 (2026-11-12):** Phase 9's watch mode ships. The Problems pane
+can watch one preset and rerun it when the open folder changes: the server
+start resolves the id from the same preset list (never a command line), asks the
+`command` permission once for the session, holds the runner's only slot, and
+polls the existing tree fingerprint every 700 ms. A run's own generated files
+become the new baseline, so it cannot retrigger itself. Stop kills the command
+(runner poll plus `taskkill /T` on Windows) and the watch clears after the
+thread exits. `GET /api/workspace/watch` reports the last real run, and changing
+folders stops the watcher. Phase 9 is left with the editor engine and a debugger.
+
 **Revision 3.20.0 (2026-11-12):** Phase 14's local negotiation gap narrows. The
 local API answers `GET /api/capabilities` with a versioned contract: 20 feature
 ids it implements, plus limits read from the constants the routes enforce. The
@@ -391,7 +401,7 @@ below carry the evidence.
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
 | 8 | Memory and RAG | Working | semantic search is a router proxy, not a local index |
-| 9 | Developer environment | Partial | editor engine, debugger, watch mode |
+| 9 | Developer environment | Partial | editor engine, debugger |
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
@@ -548,7 +558,8 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Git reflog undo | Working (3.18.0) | `GET /api/workspace/git/reflog` lists the newest 50 `HEAD@{n}` entries (`hash`, `selector`, `action`, `date`) and `inProgress`; an unborn branch answers an empty list. `POST /api/workspace/git/undo` takes a selector the server itself listed, resolves the commit from that entry (a raw hash, another ref's reflog or `HEAD@{0}` is a 400) and runs `git reset --hard` behind the `git` action. It refuses 409 while a merge or rebase is unfinished or tracked files are modified, because the tree is reset with the branch; untracked files are ignored. The reset is itself a reflog entry, so the same list redoes it. The pane's `Undo…` lists the entries, marks the current one, disables Restore during a merge or rebase, and confirms branch, selector, short hash and action |
 | Syntax highlighting, diagnostics, completion, formatting | Missing | no editor engine, by design |
 | Build/test runner + diagnostics in the Problems panel | Working (1.73.0) | `app/src/runner.rs`: detects `cargo build`/`cargo test` from `Cargo.toml`, and `build`/`test` scripts from `package.json` through npm/pnpm/yarn. `GET /api/workspace/runner`, `POST /api/workspace/run` (preset id only, never a command line; gated on `command`; one run at a time; 300 s ceiling; 1 MiB per stream, last 200 000 chars returned). Parses Rust, TypeScript and generic `path:line:col` diagnostics, dedupes, caps at 200, drops paths outside the folder. The Problems pane runs them, shows the raw output, and opens a diagnostic at its real line. Since 1.73.0 a test run also reports counts: `tests {framework,total,passed,failed,ignored,failures}` parsed from libtest's per-binary result lines, Jest, Vitest and node's TAP summary, shown in the pane header with the failing names in its tooltip. A build is never searched and a summary-less test run reports `null`, so zeroes are never invented. Since 3.17.0 the same list carries commands saved in Settings (`kind: custom`, ids `custom-<slug>`, at most 20, each a `name :: command` line run through the platform shell) and the pane has a picker and Run for them; the request still sends an id, never a command line |
-| Debugger and watch mode | **Missing** | there is no debug adapter and no watch mode. A user-defined command preset (3.17.0) covers the "run any command" case: it is saved in Settings, listed after the detected presets, and run through the platform shell behind the same `command` gate. The tree change signal is the 3.0.0 fingerprint poll, not a platform watcher |
+| Watch mode | Working (3.21.0) | `POST /api/workspace/watch/start` takes a preset id resolved from `runner::all` (never a command line) and asks the `command` permission once with the full line; that decision covers the session because a background thread cannot prompt. The loop reuses `workspace::fingerprint_tree` every 700 ms and takes a new baseline after each run, so generated output cannot retrigger it. A watch holds the runner's only slot, so manual runs are refused meanwhile. `GET /api/workspace/watch` returns the preset, run count, last real run (exit code, duration, problems, bounded output tail, test summary), `truncated` and `error`; `POST /api/workspace/watch/stop` signals, and the runner kills the command at its next 120 ms poll (with `taskkill /T` on Windows) instead of waiting up to 300 s. Opening or closing a folder stops it. The Problems pane has Watch / Stop watching, polls every 1.2 s, reuses the manual run renderer and restores its state after a reload |
+| Debugger | **Missing** | there is no debug adapter. A user-defined command preset (3.17.0) still covers the "run any command" case, and watch mode (3.21.0) reruns it on changes |
 
 ## Phase 10 — Safety and permissions
 
@@ -720,7 +731,8 @@ The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brie
 6. **Smaller:** Phase 3 native OpenAI pricing/context, Phase 6 per-skill
    permissions, Phase 8 local embeddings, Phase 13 automated canvas coverage and
    child cancellation. Phase 9's editor engine/debugger/watch mode and Phase 3
-   pricing are product decisions, not missing routes.
+   pricing are product decisions, not missing routes. Phase 9's watch mode
+   shipped in 3.21.0; only its editor engine and debugger remain.
 
 Already closed in substance: Phases 2, 5, 7, 10, 11, 12, 16 and 17; Phase 13's
 graph engine, canvas, scheduling and resume; Phase 18's installers, updater and

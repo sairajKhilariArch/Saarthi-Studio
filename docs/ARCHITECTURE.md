@@ -28,6 +28,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `host_api.rs` | 1807 | Authenticated router for the Android companion (health, capabilities, models, chat, conversations, messages) |
 | `workspace.rs` | 1699 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, and the read-only `git status` the Source Control pane loads |
 | `git.rs` | 1785 | Real Git operations in the open folder: diff, stage, unstage, discard, commit, branches, log, fetch, fast-forward pull, push, per-hunk staging and a commit-detail diff. Argv-only invocations, validated workspace-relative paths and remote names, every mutation behind the `git` permission action. Remote commands have a 90 s deadline, no terminal prompt, and drained, bounded streams; hunk patches are built server-side and sent on stdin |
+| `watch.rs` | 416 | Watch mode: one preset reruns when the open folder's fingerprint moves (700 ms, the explorer's hash), behind one `command` approval; holds the runner's only slot, reports the last real run, and Stop kills the command and its shell's children on Windows |
 | `runner.rs` | 817 | Detected build/test presets, bounded process capture (separate stdout/stderr threads, 300 s ceiling, 1 MiB per stream) and compiler/test output parsed into clickable `path:line:col` problems |
 | `local.rs` | 1167 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
 | `deepsearch.rs` | 714 | Research answers: provider-native grounding (Gemini, OpenAI `web_search`) or Exa/Tavily loop; bounded queries; SSE steps; citations |
@@ -58,6 +59,7 @@ Loopback UI/API (`main.rs`):
 - `GET|POST /api/config`
 - `GET /api/conversations/:id/messages`, `POST /api/conversations/:id/delete`
 - `GET /api/usage`, `POST /api/open`, `GET /api/health`, `GET /api/capabilities`, `POST /api/test`
+- `GET /api/workspace/watch`, `POST /api/workspace/watch/start`, `POST /api/workspace/watch/stop`
 - `GET /api/router`, `POST /api/router/start`, `POST /api/router/stop`
 - `GET /api/omniroute`, `POST /api/omniroute/start`, `POST /api/omniroute/stop`
 

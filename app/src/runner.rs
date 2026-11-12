@@ -26,6 +26,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -333,7 +334,7 @@ fn read_capped(mut reader: impl Read, cap: usize) -> Capture {
 }
 
 /// The last `limit` characters of `text`, cut on a character boundary.
-fn tail(text: &str, limit: usize) -> String {
+pub(crate) fn tail(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
@@ -341,11 +342,31 @@ fn tail(text: &str, limit: usize) -> String {
     text.chars().skip(skip).collect()
 }
 
-fn fail(status: StatusCode, message: impl Into<String>) -> Response {
+/// Stop a run and the processes it started. A shell preset (`cmd /C npm run …`)
+/// has at least one child, and killing only the shell leaves that child writing
+/// into pipes nobody reads — the reader threads then wait for the command's
+/// full duration even though the run was stopped. Windows takes the tree down
+/// with `taskkill`; elsewhere the direct child is enough for the common case
+/// and Stop never waits on the readers anyway.
+fn kill_process(child: &mut std::process::Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let pid = child.id().to_string();
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+pub(crate) fn fail(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
-fn bad(message: impl Into<String>) -> Response {
+pub(crate) fn bad(message: impl Into<String>) -> Response {
     fail(StatusCode::BAD_REQUEST, message)
 }
 
@@ -356,7 +377,7 @@ fn workspace_root(state: &AppState) -> Result<PathBuf, Box<Response>> {
         .map_err(|error| Box::new(error.into_response()))
 }
 
-fn approval(input: &Value) -> bool {
+pub(crate) fn approval(input: &Value) -> bool {
     input
         .get("approve")
         .and_then(Value::as_bool)
@@ -365,11 +386,11 @@ fn approval(input: &Value) -> bool {
 
 /// Only one build/test at a time. The guard clears the flag when the run ends,
 /// including on an early return.
-struct RunSlot;
+pub(crate) struct RunSlot;
 
 static RUNNING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 
-fn acquire_slot() -> Option<RunSlot> {
+pub(crate) fn acquire_slot() -> Option<RunSlot> {
     let mut running = RUNNING.lock().ok()?;
     if *running {
         return None;
@@ -789,6 +810,25 @@ pub(crate) fn parse_test_summary(output: &str) -> Option<Value> {
 // Running
 
 fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
+    run_preset_inner(root, preset, None)
+}
+
+/// A watch run passes its stop flag, so Stop kills the command instead of
+/// waiting up to the 300 s ceiling. The permission was decided when the watch
+/// started; this function never prompts (a background thread cannot).
+pub(crate) fn run_watched(
+    root: &Path,
+    preset: &Preset,
+    stop: &AtomicBool,
+) -> Result<Value, String> {
+    run_preset_inner(root, preset, Some(stop))
+}
+
+fn run_preset_inner(
+    root: &Path,
+    preset: &Preset,
+    stop: Option<&AtomicBool>,
+) -> Result<Value, String> {
     let started = Instant::now();
     let mut command = spawn_command(preset);
     command
@@ -811,7 +851,16 @@ fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
     let stderr_thread = std::thread::spawn(move || read_capped(stderr, MAX_CAPTURE_BYTES));
 
     let mut timed_out = false;
+    let mut stopped = false;
     let status = loop {
+        if stop
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false)
+        {
+            stopped = true;
+            kill_process(&mut child);
+            break child.wait().ok();
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) => {}
@@ -819,19 +868,28 @@ fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
         }
         if started.elapsed() >= RUN_TIMEOUT {
             timed_out = true;
-            let _ = child.kill();
+            kill_process(&mut child);
             break child.wait().ok();
         }
         std::thread::sleep(Duration::from_millis(120));
     };
-    let out = stdout_thread.join().unwrap_or(Capture {
+    // A stopped run returns now: the readers are detached, because a surviving
+    // grandchild can hold the pipes open long after the stop. Their output is
+    // not shown for a run the person cancelled.
+    let empty = || Capture {
         text: String::new(),
         truncated: false,
-    });
-    let err = stderr_thread.join().unwrap_or(Capture {
-        text: String::new(),
-        truncated: false,
-    });
+    };
+    let out = if stopped {
+        empty()
+    } else {
+        stdout_thread.join().unwrap_or_else(|_| empty())
+    };
+    let err = if stopped {
+        empty()
+    } else {
+        stderr_thread.join().unwrap_or_else(|_| empty())
+    };
 
     let mut combined = out.text;
     if !err.text.is_empty() {
@@ -849,13 +907,14 @@ fn run_preset(root: &Path, preset: &Preset) -> Result<Value, String> {
         None
     };
     let exit_code = status.and_then(|status| status.code()).unwrap_or(-1);
-    let success = !timed_out && exit_code == 0;
+    let success = !timed_out && !stopped && exit_code == 0;
 
     Ok(json!({
         "ok": true,
         "id": preset.id,
         "command": preset.command,
         "success": success,
+        "stopped": stopped,
         "exitCode": exit_code,
         "timedOut": timed_out,
         "durationMs": started.elapsed().as_millis() as u64,
