@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.12.0
+
+Phase 4: an agent step on the OpenAI Platform now asks for a JSON action instead
+of prose, and the docs stop repeating a claim that was never true.
+
+- **Structured output on the platform path.** `openai::step_format` describes the
+  one object a step must be — `action` required, plus every field an action may
+  carry (`summary`, `reason`, `path`, `content`, `command`, `server`,
+  `extension`, `tool`, `arguments`) and nothing else required, because the
+  agent's parser, not the schema, is the authority on which fields an action
+  needs. `with_step_format` puts it on the request as `text.format`, and
+  `call_model_structured` uses it for agent steps.
+- **A model that refuses the block still runs.** A 400 naming `text.format`,
+  `json_schema` or `response_format` is retried once without the block and that
+  model is remembered for the process, so the cost is one retry rather than
+  every step — the same rule the reasoning parameter already follows. The meta
+  reports `format_dropped`.
+- **Nothing else changed shape.** Router picks and local mode keep the free-form
+  request they had (a router has no schema for a step), chat is untouched, and
+  the fallback chain, budget gate and circuit breaker run exactly as before.
+- **A stale claim is corrected.** The roadmap, feature status and known issues
+  said "no agent tool loop uses `openai:` yet". Agent steps have routed to the
+  platform since 1.29.0 (`attempt_router_once` handles the prefix); what was
+  missing was asking them for structured output. Native tool calling
+  (`tools` / `function_call`) remains open and is now the only Phase 4 gap.
+
+Verified: `cargo test --locked` 561 passed / 1 ignored (4 new: the schema's shape,
+which 400s count as a schema refusal, a mock `/responses` refusing the block then
+answering the retry with the refusal remembered, and a platform pick sending the
+schema while a router pick sends none); `cargo clippy --locked --all-targets -D
+warnings` clean. Not run: a live OpenAI Platform call (no key here), so the
+request shape is proven against a mock, not the real endpoint.
+
 ## 3.11.0
 
 Phase 1: the last two packaged artifacts get install smokes. A VSIX and an APK

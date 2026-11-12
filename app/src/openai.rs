@@ -126,6 +126,66 @@ fn strip_reasoning(body: &mut Value) {
     }
 }
 
+/// The one JSON object an agent step must be. Loose on purpose: `action` is
+/// required and every other field is described but optional, because each
+/// action carries different fields and the agent's own parser — not this
+/// schema — is the authority on which ones an action needs. A schema that
+/// listed every required field would reject the legal action shapes it did not
+/// predict, which is a worse failure than a parse strike.
+pub(crate) fn step_format() -> Value {
+    json!({
+        "type": "json_schema",
+        "name": "sarthi_step",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "think, list, read, write, command, mcp, extension, done or fail"
+                },
+                "summary": { "type": "string", "description": "think and done" },
+                "reason": { "type": "string", "description": "fail" },
+                "path": { "type": "string", "description": "list, read and write" },
+                "content": { "type": "string", "description": "write" },
+                "command": { "type": "string", "description": "command" },
+                "server": { "type": "string", "description": "mcp" },
+                "extension": { "type": "string", "description": "extension" },
+                "tool": { "type": "string", "description": "mcp and extension" },
+                "arguments": { "type": "object", "description": "mcp and extension" }
+            },
+            "required": ["action"],
+            "additionalProperties": true
+        }
+    })
+}
+
+/// Ask the platform for one JSON action per reply. Applied to agent steps only:
+/// chat keeps free-form text, because a conversation is not a JSON document.
+pub(crate) fn with_step_format(body: &mut Value) {
+    body["text"] = json!({ "format": step_format() });
+}
+
+/// Remove the structured-output block before a retry.
+fn strip_format(body: &mut Value) {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("text");
+    }
+}
+
+/// A 400 that names the structured-output block is the model refusing it. The
+/// message differs by model (`text.format`, `response_format`, or the schema
+/// keyword), so all three are read as the same refusal instead of guessing from
+/// the status code alone.
+pub(crate) fn is_format_rejection(status: u16, body: &str) -> bool {
+    if status != 400 {
+        return false;
+    }
+    let body = body.to_ascii_lowercase();
+    body.contains("json_schema")
+        || body.contains("text.format")
+        || body.contains("response_format")
+}
+
 /// Visible answer text: the `output_text` parts of `message` items, falling
 /// back to the convenience field the API also returns.
 pub(crate) fn output_text(response: &Value) -> String {
@@ -333,6 +393,26 @@ fn remember_rejection(model: &str) {
     }
 }
 
+/// Models that refused the structured-output block, remembered for the process
+/// so a step on such a model costs one retry rather than every step.
+fn rejected_formats() -> &'static Mutex<HashSet<String>> {
+    static REJECTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    REJECTED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub(crate) fn remembers_format_rejection(model: &str) -> bool {
+    rejected_formats()
+        .lock()
+        .map(|set| set.contains(model))
+        .unwrap_or(false)
+}
+
+fn remember_format_rejection(model: &str) {
+    if let Ok(mut set) = rejected_formats().lock() {
+        set.insert(model.to_string());
+    }
+}
+
 /// A 400 whose body names reasoning is the model refusing the parameter, which
 /// is the one case worth retrying without it.
 pub(crate) fn is_reasoning_rejection(status: u16, body: &str) -> bool {
@@ -378,9 +458,14 @@ pub(crate) async fn responses_once(
         .to_string();
     let mut body = body;
     let mut dropped = false;
+    let mut format_dropped = false;
     if remembers_rejection(&model) {
         strip_reasoning(&mut body);
         dropped = true;
+    }
+    if remembers_format_rejection(&model) {
+        strip_format(&mut body);
+        format_dropped = true;
     }
     loop {
         let response = client
@@ -410,6 +495,7 @@ pub(crate) async fn responses_once(
                 meta["reasoning_summary"] = json!(summary);
             }
             meta["reasoning_dropped"] = json!(dropped);
+            meta["format_dropped"] = json!(format_dropped);
             return Ok((answer, meta));
         }
         if !dropped
@@ -419,6 +505,17 @@ pub(crate) async fn responses_once(
             remember_rejection(&model);
             strip_reasoning(&mut body);
             dropped = true;
+            continue;
+        }
+        // Same rule for the step schema: a model that will not take it answers
+        // free-form, which the agent's parser already reads.
+        if !format_dropped
+            && body.get("text").is_some()
+            && is_format_rejection(status.as_u16(), &text)
+        {
+            remember_format_rejection(&model);
+            strip_format(&mut body);
+            format_dropped = true;
             continue;
         }
         return Err(api_error(status, &text));
@@ -743,6 +840,130 @@ mod tests {
 
         // An event nobody needs produces no frame at all.
         assert!(upstream_frames(r#"{"type":"response.created"}"#).is_empty());
+    }
+
+    #[test]
+    fn a_step_ask_is_one_json_action_with_every_field_an_action_may_carry() {
+        let mut body = request_body("gpt-5", &transcript(), None, false);
+        assert!(body.get("text").is_none(), "chat asks for no schema");
+        with_step_format(&mut body);
+        let format = &body["text"]["format"];
+        assert_eq!(format["type"], "json_schema");
+        assert_eq!(format["name"], "sarthi_step");
+        assert_eq!(format["schema"]["required"], json!(["action"]));
+        // Every field the parser reads is described, so the model is not left
+        // guessing at a name the action needs.
+        for field in [
+            "summary",
+            "reason",
+            "path",
+            "content",
+            "command",
+            "server",
+            "extension",
+            "tool",
+            "arguments",
+        ] {
+            assert!(
+                format["schema"]["properties"].get(field).is_some(),
+                "{field} is not described"
+            );
+        }
+        // Loose by design: an action's other fields stay optional.
+        assert!(format["schema"].get("strict").is_none());
+    }
+
+    #[test]
+    fn only_a_400_that_names_the_schema_is_a_format_rejection() {
+        assert!(is_format_rejection(
+            400,
+            r#"{"error":{"message":"Unsupported parameter: 'text.format'."}}"#
+        ));
+        assert!(is_format_rejection(
+            400,
+            r#"{"error":{"message":"Invalid schema for json_schema"}}"#
+        ));
+        assert!(is_format_rejection(
+            400,
+            r#"{"error":{"message":"response_format is not supported"}}"#
+        ));
+        assert!(!is_format_rejection(
+            400,
+            r#"{"error":{"message":"Unknown model"}}"#
+        ));
+        assert!(!is_format_rejection(429, "json_schema"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_schema_is_retried_without_it_and_remembered() {
+        use axum::extract::State;
+        use std::sync::{Arc, Mutex};
+
+        let bodies: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let app = axum::Router::new()
+            .route(
+                "/responses",
+                axum::routing::post(
+                    |State(bodies): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+                        let request = {
+                            let mut seen = bodies.lock().unwrap();
+                            seen.push(body);
+                            seen.len()
+                        };
+                        if request == 1 {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "error": { "message": "Unsupported parameter: 'text.format'." } })),
+                            )
+                        } else {
+                            (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "model": "schema-retry-model",
+                                    "output": [{ "type": "message", "content": [
+                                        { "type": "output_text", "text": "{\"action\":\"think\"}" }
+                                    ]}],
+                                    "usage": { "input_tokens": 5, "output_tokens": 2, "total_tokens": 7 }
+                                })),
+                            )
+                        }
+                    },
+                ),
+            )
+            .with_state(bodies.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = reqwest::Client::new();
+        let mut body = request_body("schema-retry-model", &transcript(), None, false);
+        with_step_format(&mut body);
+        let (answer, meta) = responses_once(
+            &client,
+            &format!("http://{address}"),
+            "test-key",
+            body,
+        )
+        .await
+        .expect("the retry answered");
+        assert_eq!(answer, "{\"action\":\"think\"}");
+        assert_eq!(meta["format_dropped"], true);
+        assert_eq!(meta["reasoning_dropped"], false);
+        let seen = bodies.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one refusal, one retry");
+        assert!(
+            seen[0].get("text").is_some(),
+            "the first request carried the schema"
+        );
+        assert!(
+            seen[1].get("text").is_none(),
+            "the retry dropped exactly that block"
+        );
+        assert!(remembers_format_rejection("schema-retry-model"));
     }
 
     #[test]

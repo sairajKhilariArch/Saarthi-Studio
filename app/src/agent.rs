@@ -2656,7 +2656,9 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         let tier = crate::adaptive_tier(state, &last_action, had_error);
         // call_model routes to the local runtime in Local AI mode and to the
         // remote router otherwise; a local miss never silently goes remote.
-        let outcome = crate::call_model(state, messages, tier.as_deref()).await;
+        // A platform pick is asked for one JSON action; every other model gets
+        // the same free-form request it has always had.
+        let outcome = crate::call_model_structured(state, messages, tier.as_deref()).await;
         match outcome {
             Ok((reply, _)) => (reply, tier.clone()),
             // Visible failover: a tier miss falls back to the configured base
@@ -2675,7 +2677,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                     &stored_background(state, run),
                     &crate::extensions::catalog(state),
                 );
-                let (reply, _) = crate::call_model(state, base_messages, None).await?;
+                let (reply, _) = crate::call_model_structured(state, base_messages, None).await?;
                 (reply, None)
             }
             Err(error) => return Err(error),

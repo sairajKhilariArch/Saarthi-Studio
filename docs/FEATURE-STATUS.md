@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.12.0 (2026-11-12):** Phase 4 gains structured output on the platform
+path: an agent step over an `openai:` pick sends `text.format` with a
+`json_schema`, retries once without it when a model refuses, and remembers the
+refusal — the same pattern as the reasoning parameter. That also corrects a
+stale claim repeated here and in the roadmap: agent steps have routed to the
+platform since 1.29.0, so only *native tool calling* remains open in Phase 4.
+
 **Revision 3.11.0 (2026-11-12):** Phase 1's missing artifact coverage closes: the
 VSIX and the APK/AAB each get an install smoke in their own release job
 (`scripts/ci/smoke-vsix.sh`, `scripts/ci/smoke-apk.sh`), regression-tested in
@@ -320,7 +327,7 @@ below carry the evidence.
 | 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation |
 | 2 | Router manager | Working | remote routers are unauthenticated base URLs; no live network test |
 | 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
-| 4 | Thinking + OpenAI Platform | Partial | tool calling and structured output through the platform path |
+| 4 | Thinking + OpenAI Platform | Partial | native tool calling through the platform path (structured output shipped in 3.12.0) |
 | 5 | Agent execution | Working | named caveats only |
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
@@ -401,6 +408,8 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Scope precedence (message > agent > project > global) | Working (1.29.0) — `projects.thinking` column migrated in place, agent scope from config |
 | Reasoning summaries / progress surfacing | Working (1.30.0) — collapsible card fed by the provider's summary frames |
 | Platform key in Settings (write-only) + key test | Working (1.30.0) — `/api/openai/test`, no tokens spent |
+| Structured output for agent steps | Working (3.12.0) — `text.format` `json_schema` on a platform pick, one retry without it and the refusal remembered; router and local calls unchanged |
+| Native tool calling (`tools` / `function_call`) | Missing — steps are JSON actions in the reply, parsed and executed by the app |
 | Tests | Working — 21 new cases, 204 total; live smoke on :8799 for the new routes |
 | Tool calling / structured output through the platform path | Missing — the request shape allows it, no agent tool loop uses `openai:` yet |
 
@@ -639,8 +648,8 @@ The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brie
    set, confirm the deb headless tests, pass the existing install smokes, add
    and decide the historical tags. This is the only release
    blocker.
-2. **Phase 4 — OpenAI Platform.** Add tool calling and structured output to the
-   `openai:` agent path.
+2. **Phase 4 — OpenAI Platform.** Add native tool calling to the `openai:` agent
+   path. Structured output shipped in 3.12.0.
 3. **Phase 14 — cross-platform.** Android router management/local execution,
    VS Code parity, and capability negotiation instead of hand-wired gates.
 4. **Phase 15 — extensions.** Provider adapters, UI extensions, dependency-cycle

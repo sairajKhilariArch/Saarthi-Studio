@@ -1238,6 +1238,39 @@ pub(crate) async fn call_model(
     call_router(state, messages, model_override).await
 }
 
+/// The agent's step seam: the same routing, breaker and fallback chain as chat,
+/// but a platform pick is asked for one JSON action per reply instead of prose.
+/// Local mode and router picks are handed to the ordinary path unchanged — a
+/// router has no schema for a step, and its reply is already text.
+pub(crate) async fn call_model_structured(
+    state: &AppState,
+    messages: Vec<Value>,
+    model_override: Option<&str>,
+) -> Result<(String, Value), String> {
+    let cfg = load_config(state);
+    if cfg.local_chat {
+        return call_model(state, messages, model_override).await;
+    }
+    let level = thinking::ThinkingLevel::parse(&cfg.run_thinking_level);
+    let model = match model_override {
+        Some(model) => model.to_string(),
+        None => {
+            let project = project_model(state, &cfg.active_project);
+            model_scope::resolve(
+                None,
+                Some(&cfg.agent_model),
+                Some(&project),
+                Some(&cfg.model),
+            )
+            .model
+        }
+    };
+    if openai::platform_model(&model).is_none() {
+        return call_router_with(state, messages, Some(&model), level, false).await;
+    }
+    call_router_with(state, messages, Some(&model), level, true).await
+}
+
 pub(crate) async fn call_router(
     state: &AppState,
     messages: Vec<Value>,
@@ -1262,19 +1295,21 @@ pub(crate) async fn call_router(
             .model
         }
     };
-    call_router_with(state, messages, Some(&model), level).await
+    call_router_with(state, messages, Some(&model), level, false).await
 }
 
 /// The same request with the Thinking level the caller resolved, tried across
 /// the configured fallback chain: the chosen model first, then each fallback, but
 /// only when the failure was the provider being unavailable (see
 /// `model_scope::retryable`). A `fallbacks` array lands in the meta whenever a
-/// later model answered.
+/// later model answered. `structured` asks the OpenAI Platform for a JSON action;
+/// chat passes false.
 pub(crate) async fn call_router_with(
     state: &AppState,
     messages: Vec<Value>,
     model_override: Option<&str>,
     level: Option<thinking::ThinkingLevel>,
+    structured: bool,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     // Checked once, before the chain: a spent budget must not be circumvented by
@@ -1296,7 +1331,7 @@ pub(crate) async fn call_router_with(
             tried.push(json!({ "model": candidate, "error": "circuit open: skipped" }));
             continue;
         }
-        match attempt_router_once(state, candidate, messages.clone(), level).await {
+        match attempt_router_once(state, candidate, messages.clone(), level, structured).await {
             Ok((answer, mut meta)) => {
                 breaker::success(&scope, candidate);
                 if !tried.is_empty() {
@@ -1333,6 +1368,7 @@ async fn attempt_router_once(
     chosen: &str,
     messages: Vec<Value>,
     level: Option<thinking::ThinkingLevel>,
+    structured: bool,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     let chosen = chosen.trim().to_string();
@@ -1342,7 +1378,10 @@ async fn attempt_router_once(
             return Err("Add your OpenAI Platform key in Settings to use this model.".into());
         }
         let started = Instant::now();
-        let body = openai::request_body(&platform_model, &messages, level, false);
+        let mut body = openai::request_body(&platform_model, &messages, level, false);
+        if structured {
+            openai::with_step_format(&mut body);
+        }
         let (answer, mut meta) = openai::responses_once(
             &state.client,
             &cfg.openai_base_url,
@@ -3712,6 +3751,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         packed.messages,
         Some(&chosen_model),
         thinking.map(|resolved| resolved.level),
+        false,
     )
     .await
     {
@@ -5000,6 +5040,106 @@ mod tests {
             "{meta}"
         );
         assert_eq!(meta["model"], json!("backup-model"), "{meta}");
+        let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
+    }
+
+    /// Serves both provider shapes and records what each request carried, so a
+    /// test can see the wire body rather than only the answer.
+    async fn scripted_providers(
+        platform_answer: &'static str,
+        router_answer: &'static str,
+    ) -> (String, Arc<std::sync::Mutex<Vec<(String, Value)>>>) {
+        use axum::extract::State;
+        use axum::routing::post;
+        use axum::Json;
+
+        type Seen = Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+        let seen: Seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/responses",
+                post(
+                    move |State(seen): State<Seen>, Json(body): Json<Value>| async move {
+                        seen.lock().unwrap().push(("responses".to_string(), body));
+                        Json(json!({
+                            "model": "step-model",
+                            "output": [{ "type": "message", "content": [
+                                { "type": "output_text", "text": platform_answer }
+                            ]}],
+                            "usage": { "input_tokens": 4, "output_tokens": 3, "total_tokens": 7 }
+                        }))
+                    },
+                ),
+            )
+            .route(
+                "/chat/completions",
+                post(
+                    move |State(seen): State<Seen>, Json(body): Json<Value>| async move {
+                        seen.lock().unwrap().push(("chat".to_string(), body));
+                        Json(json!({
+                            "choices": [{ "message": { "role": "assistant", "content": router_answer } }],
+                            "usage": { "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5 }
+                        }))
+                    },
+                ),
+            )
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{address}"), seen)
+    }
+
+    #[tokio::test]
+    async fn a_structured_step_asks_the_platform_for_json_and_a_router_for_text() {
+        let (base, seen) = scripted_providers(
+            "{\"action\":\"think\",\"summary\":\"checking\"}",
+            "{\"action\":\"think\"}",
+        )
+        .await;
+        let state = fixture("structured-step");
+        let mut cfg = load_config(&state);
+        cfg.base_url = base.clone();
+        cfg.api_key = "test-key".to_string();
+        cfg.openai_base_url = base;
+        cfg.openai_api_key = "platform-key".to_string();
+        cfg.model = "router-model".to_string();
+        cfg.run_thinking_level.clear();
+        save_config_file(&state.config_path, &cfg).expect("save config");
+        let messages = vec![json!({ "role": "user", "content": "next step" })];
+
+        // A platform pick is asked for one JSON action.
+        let (answer, meta) = call_model_structured(
+            &state,
+            messages.clone(),
+            Some("openai:step-model"),
+        )
+        .await
+        .expect("the platform answered");
+        assert!(answer.contains("checking"), "{answer}");
+        assert_eq!(meta["format_dropped"], false);
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen[0].0, "responses");
+            assert_eq!(seen[0].1["text"]["format"]["type"], "json_schema");
+            assert_eq!(seen[0].1["text"]["format"]["name"], "sarthi_step");
+            assert_eq!(seen[0].1["model"], "step-model");
+        }
+
+        // A router pick keeps the free-form request it always had: a router has
+        // no schema for an agent step and would only reject one.
+        let (answer, _meta) = call_model_structured(&state, messages, Some("router-model"))
+            .await
+            .expect("the router answered");
+        assert_eq!(answer, "{\"action\":\"think\"}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen[1].0, "chat");
+        assert!(seen[1].1.get("text").is_none(), "no schema on a router call");
+        assert!(seen[1].1.get("response_format").is_none());
         let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
     }
 

@@ -52,7 +52,7 @@ This is the ordered backlog for the current tree. It supersedes older
 
 | Phase | Remaining |
 |---|---|
-| 4 — Thinking + OpenAI Platform | Tool calling and structured output through the `openai:` platform path. |
+| 4 — Thinking + OpenAI Platform | Native tool calling through the `openai:` platform path (structured output shipped in 3.12.0). |
 | 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, arbitrary command presets, in-pane reflog undo. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
 | 15 — Extensions | Provider adapters, UI extensions, and re-checking an extension after an app upgrade. (Dependency cycles are detected and block a run since 3.9.0.) |
@@ -223,8 +223,21 @@ Delivered 1.29.0 (backend) and 1.30.0 (composer and settings):
 4. Reasoning summaries rendered from the provider's own summary frames; hidden
    chain-of-thought is never claimed or displayed.
 
-Open: tool calling and structured output through the platform path (the request
-shape supports them; no agent tool loop uses `openai:` yet).
+Structured output (3.12.0): an agent step on a platform pick now sends
+`text.format` with a `json_schema` ("one action object, `action` required, every
+field an action may carry described, nothing else required"), so the reply is a
+JSON action instead of prose the parser has to repair. A model that refuses the
+block answers 400; the request is retried once without it and that model is
+remembered for the process, exactly like the reasoning parameter. Router picks
+and local mode are untouched — a router has no schema for a step. The earlier
+claim that "no agent tool loop uses `openai:` yet" was wrong: agent steps have
+routed to the platform since 1.29.0 (`attempt_router_once` handles the prefix),
+and this change is what makes them ask for a structured reply.
+
+Open: tool calling through the platform path. A step still comes back as a JSON
+action the app parses and executes, rather than as native `tools` /
+`function_call` items the platform can drive; MCP and extension tools stay
+reachable through the text protocol.
 
 ## Phase 5 — Agent execution engine
 
@@ -782,7 +795,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 1 CI/CD and release | Partial | no fresh green tagged run with the 11-asset set; 3.7.0 deb dependency awaits CI |
 | 2 Router manager | Working | — (remote routers are unauthenticated base URLs; no live network test) |
 | 3 Model and provider | Working | native OpenAI picks carry no price; context only when the provider supplies it |
-| 4 Thinking / OpenAI | Partial | tool calling and structured output through the platform path |
+| 4 Thinking / OpenAI | Partial | native tool calling through the platform path (structured output shipped in 3.12.0) |
 | 5 Agent execution | Working | — |
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
