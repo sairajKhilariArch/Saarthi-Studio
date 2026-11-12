@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.9.0
+## Remaining work at 3.11.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -43,7 +43,7 @@ This is the ordered backlog for the current tree. It supersedes older
    --no-default-features`. 3.7.0 adds `libdbus-1-dev` and `pkg-config`; the
    command and every assertion are unchanged.
 3. Pass the existing deb/AppImage/tarball/zip/macOS install smokes in that run,
-   and add the missing VSIX and APK install smokes.
+   with the VSIX and APK/AAB smokes added in 3.11.0.
 4. Resolve macOS runner availability, then decide the historical tags:
    `v1.26.0/1/2` (failed) and `v1.62.0`–`v1.71.0` (published with zero assets) —
    backfill or document them as abandoned.
@@ -145,7 +145,7 @@ Remaining for Phase 1 sign-off:
       `libdbus-1-dev` and `pkg-config`; the command and assertions are unchanged.
 - [ ] macOS runner availability resolved (queue starvation/cancellation).
 - [ ] The deb/AppImage/tarball/zip/macOS smokes pass in that run; add the missing
-      VSIX and APK install smokes.
+      VSIX and APK smokes (added in 3.11.0).
 - [ ] Decide the historical tags: `v1.26.0/1/2` (failed) and
       `v1.62.0`–`v1.71.0` (zero assets) — backfill or document as abandoned.
 
@@ -637,9 +637,10 @@ a saved copy must bring it back ready; a read-only data directory must make the
 `data directory` readiness check go false and recover (POSIX only, skipped where
 `chmod` is not enforced).
 
-Remaining: a privileged ENOSPC case (a real full disk needs a loop/tmpfs mount),
-browser-level layout checks for the canvas and IDE, and install smokes for the
-VSIX and APK (the desktop archives, deb and AppImage are wired).
+Remaining: a privileged ENOSPC case (a real full disk needs a loop/tmpfs mount)
+and browser-level layout checks for the canvas and IDE. The VSIX and the
+APK/AAB got their install smokes in 3.11.0 (`smoke-vsix.sh`, `smoke-apk.sh`),
+beside the desktop archives, deb and AppImage that were already wired.
 
 ## Phase 17 — Observability
 
@@ -778,7 +779,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 
 | Phase | State | What is still open |
 |---|---|---|
-| 1 CI/CD and release | Partial | no fresh green tagged run with the 11-asset set; 3.7.0 deb dependency awaits CI; VSIX/APK install smokes |
+| 1 CI/CD and release | Partial | no fresh green tagged run with the 11-asset set; 3.7.0 deb dependency awaits CI |
 | 2 Router manager | Working | — (remote routers are unauthenticated base URLs; no live network test) |
 | 3 Model and provider | Working | native OpenAI picks carry no price; context only when the provider supplies it |
 | 4 Thinking / OpenAI | Partial | tool calling and structured output through the platform path |
@@ -793,6 +794,6 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 13 Workflows | Working | automated browser coverage; child agent cancellation |
 | 14 Cross-platform | Partial | Android/VS Code subsets; capability gates are hand-wired |
 | 15 Extensions | Partial | provider adapters and UI extensions; dependency cycles/upgrade recheck |
-| 16 Testing and quality | Working | browser layout, privileged ENOSPC, VSIX/APK install smokes |
+| 16 Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 Observability | Working | — |
 | 18 Install and update | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |

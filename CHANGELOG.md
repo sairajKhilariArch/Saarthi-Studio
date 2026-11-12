@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.11.0
+
+Phase 1: the last two packaged artifacts get install smokes. A VSIX and an APK
+were built, attached and never opened; now each is checked as the installer or
+runtime would read it.
+
+- **`scripts/ci/smoke-vsix.sh`** opens a `.vsix` the way VS Code does: the
+  `extension.vsixmanifest` identity and version, `extension/package.json` with a
+  publisher, name and semver, an `engines.vscode` floor (no floor means no
+  install is offered), the declared `main` entry present and non-empty inside the
+  package, the manifest and `package.json` agreeing on the version, no
+  secret-shaped files (`.env*`, `.dev.vars`, `id_rsa*`, `*.pem`/`.p12`/`.pfx`),
+  and a clean unpack. The expected version defaults to
+  `vscode-extension/package.json`, because the extension keeps its own line
+  (2.6.0) separate from the desktop app's.
+- **`scripts/ci/smoke-apk.sh`** takes an APK and/or an AAB and checks what an
+  install needs: a compiled `AndroidManifest.xml` (and, for an APK, that it is
+  binary XML rather than a stray text file), at least one non-empty dex,
+  `resources.arsc` or `base/resources.pb`, the React Native JavaScript bundle at
+  `assets/index.android.bundle` (a release build without it opens to a red
+  screen), at least one non-empty `lib/<abi>/*.so`, a `META-INF/*.RSA|EC|DSA`
+  signature for an APK (an unsigned APK is refused by `adb install`) and
+  `BundleConfig.pb` for an AAB. It reports the Android `versionName` from the
+  project and labels it as such instead of guessing at the binary manifest,
+  which needs aapt.
+- **Both run in the jobs that build the artifacts** — `smoke-vsix.sh` in
+  `vscode-extension`, `smoke-apk.sh` over both files in `android` — and
+  `scripts/ci/test-release.sh` guards those lines and runs each smoke over good
+  and broken fixtures, so a smoke that stops failing on a broken package is
+  caught offline.
+
+Verified: `test-release.sh` 13 passed / 0 failed (up from 5); `smoke-vsix.sh`
+against the real package built here with `npm ci && npm run build && vsce
+package --no-dependencies` — 9 passed (identity 2.6.0, entry 125 542 bytes);
+`smoke-apk.sh` against synthetic React-Native-shaped APK and AAB fixtures — 8/8
+and 7/7, with the bundle-less and unsigned APKs failing by name; `bash -n` on
+every `scripts/ci/*.sh`; PyYAML parses the release workflow; version 20/20;
+frontend 44. Not run: the Android Gradle build (no SDK here), so the APK smoke
+has only seen fixtures, and no CI run or device install.
+
 ## 3.10.0
 
 Documentation: the agent-facing map now lists the CI and release workflows this

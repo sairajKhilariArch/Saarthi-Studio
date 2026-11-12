@@ -115,6 +115,114 @@ else
   die "deb job is missing libdbus-1-dev or pkg-config"
 fi
 
+# --- install smokes for the two artifacts that had none ---------------------
+# The VSIX and the APK used to be built, uploaded and never opened. Guard that
+# each job runs its smoke, then run both smokes over fixtures so the scripts
+# themselves stay honest: a good package passes, a broken one fails.
+vsix_job="$(sed -n '/^  vscode-extension:/,/^  android:/p' "$workflow")"
+if grep -q 'smoke-vsix.sh' <<<"$vsix_job"; then
+  pass "vsix job smokes the packaged extension"
+else
+  die "vsix job never runs smoke-vsix.sh"
+fi
+android_job="$(sed -n '/^  android:/,/^  verify-release:/p' "$workflow")"
+if grep -q 'smoke-apk.sh' <<<"$android_job"; then
+  pass "android job smokes the packaged apk and aab"
+else
+  die "android job never runs smoke-apk.sh"
+fi
+
+mkdir -p "$tmp/packages"
+"$py" - "$tmp/packages" <<'PY'
+import json
+import sys
+import zipfile
+
+out = sys.argv[1]
+
+
+def vsix(name, entry=True, secret=False):
+    with zipfile.ZipFile(f"{out}/{name}", "w") as archive:
+        package = {
+            "name": "free-ai-studio",
+            "publisher": "sarthi",
+            "version": "9.9.9",
+            "engines": {"vscode": "^1.92.0"},
+            "main": "./dist/extension.js",
+        }
+        archive.writestr("extension/package.json", json.dumps(package))
+        archive.writestr(
+            "extension.vsixmanifest",
+            '<PackageManifest><Metadata><Identity Language="en-US" '
+            'Id="free-ai-studio" Version="9.9.9" Publisher="sarthi" />'
+            "</Metadata></PackageManifest>",
+        )
+        if entry:
+            archive.writestr("extension/dist/extension.js", "// activates\n")
+        if secret:
+            archive.writestr("extension/.env", "API_KEY=do-not-ship\n")
+
+
+def apk(name, bundle=True, signed=True):
+    with zipfile.ZipFile(f"{out}/{name}", "w") as archive:
+        archive.writestr("AndroidManifest.xml", b"\x03\x00\x08\x00" + b"\x00" * 16)
+        archive.writestr("classes.dex", b"dex\n035\x00" + b"\x00" * 64)
+        archive.writestr("resources.arsc", b"\x02\x00\x0c\x00" + b"\x00" * 32)
+        if bundle:
+            archive.writestr("assets/index.android.bundle", "var x = 1;\n" * 8)
+        archive.writestr("lib/arm64-v8a/libreact_native_so.so", b"\x7fELF" + b"\x00" * 64)
+        if signed:
+            archive.writestr("META-INF/CERT.RSA", b"\x30\x82" + b"\x00" * 32)
+
+
+vsix("good.vsix")
+vsix("no-entry.vsix", entry=False)
+vsix("secret.vsix", secret=True)
+apk("good.apk")
+apk("no-bundle.apk", bundle=False)
+apk("unsigned.apk", signed=False)
+PY
+
+vsix_smoke="$here/smoke-vsix.sh"
+apk_smoke="$here/smoke-apk.sh"
+if bash "$vsix_smoke" "$tmp/packages/good.vsix" 9.9.9 >"$tmp/vsix-good.out" 2>&1; then
+  pass "vsix smoke accepts an installable package"
+else
+  cat "$tmp/vsix-good.out" >&2
+  die "vsix smoke rejected an installable package"
+fi
+if bash "$vsix_smoke" "$tmp/packages/no-entry.vsix" 9.9.9 >"$tmp/vsix-entry.out" 2>&1; then
+  die "vsix smoke accepted a package with no activation entry"
+else
+  grep -q 'main entry' "$tmp/vsix-entry.out" ||
+    die "vsix failure did not name the missing entry"
+  pass "vsix smoke rejects a package with no activation entry"
+fi
+if bash "$vsix_smoke" "$tmp/packages/secret.vsix" 9.9.9 >"$tmp/vsix-secret.out" 2>&1; then
+  die "vsix smoke accepted a package carrying a .env"
+else
+  pass "vsix smoke rejects a package carrying a secret file"
+fi
+
+if bash "$apk_smoke" "$tmp/packages/good.apk" >"$tmp/apk-good.out" 2>&1; then
+  pass "apk smoke accepts an installable apk"
+else
+  cat "$tmp/apk-good.out" >&2
+  die "apk smoke rejected an installable apk"
+fi
+if bash "$apk_smoke" "$tmp/packages/no-bundle.apk" >"$tmp/apk-bundle.out" 2>&1; then
+  die "apk smoke accepted an apk with no JavaScript bundle"
+else
+  grep -q 'index.android.bundle' "$tmp/apk-bundle.out" ||
+    die "apk failure did not name the missing bundle"
+  pass "apk smoke rejects an apk with no JavaScript bundle"
+fi
+if bash "$apk_smoke" "$tmp/packages/unsigned.apk" >"$tmp/apk-unsigned.out" 2>&1; then
+  die "apk smoke accepted an unsigned apk"
+else
+  pass "apk smoke rejects an unsigned apk"
+fi
+
 write_releases_index
 if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
   MIN_RELEASE_VERSION=9.9.9 bash "$audit" >"$tmp/audit-complete.out" 2>&1; then

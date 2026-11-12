@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.11.0 (2026-11-12):** Phase 1's missing artifact coverage closes: the
+VSIX and the APK/AAB each get an install smoke in their own release job
+(`scripts/ci/smoke-vsix.sh`, `scripts/ci/smoke-apk.sh`), regression-tested in
+`test-release.sh` (now 13 checks). What still keeps Phase 1 Partial is a green
+tagged run with the 11-asset set, not a missing check.
+
 **Revision 3.9.0 (2026-11-12):** Phase 15 gained dependency-cycle detection —
 discovery reports `dependencyCycle` and blocks a run whose chain closes on
 itself — so that named gap closes. The same commit repairs two type errors that
@@ -311,7 +317,7 @@ below carry the evidence.
 
 | Phase | Area | State | Largest open gap |
 |---|---|---|---|
-| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation; VSIX/APK smokes |
+| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation |
 | 2 | Router manager | Working | remote routers are unauthenticated base URLs; no live network test |
 | 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
 | 4 | Thinking + OpenAI Platform | Partial | tool calling and structured output through the platform path |
@@ -326,7 +332,7 @@ below carry the evidence.
 | 13 | Workflow builder | Working | automated browser test; child agent cancellation |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
 | 15 | Extension ecosystem | Partial | provider adapters, UI extensions, upgrade recheck |
-| 16 | Testing and quality | Working | browser layout, privileged ENOSPC, VSIX/APK smokes |
+| 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 | Observability | Working | — |
 | 18 | Installation and updates | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |
 
@@ -344,7 +350,7 @@ The old `2.1.0` row counts are historical; they are not a progress target.
 | macOS job | Working | `macos-15-intel`, both Darwin targets, universal tarball |
 | All six release jobs green | Partial | last fully green run `41884439627` (`v1.26.6`, 9 assets); no 11-asset run has passed |
 | Deb headless tests | Partial | run `42908396329` (`3.0.2`) exited 101; 3.7.0 adds `libdbus-1-dev` and `pkg-config`, awaiting CI |
-| Install smokes | Partial | deb/AppImage/tarball/zip/macOS are wired into the release jobs; VSIX and APK are not automated |
+| Install smokes | Working (3.11.0) | deb/AppImage/tarball/zip/macOS were wired in 2.31.0; the VSIX and the APK/AAB are smoked in their own jobs since 3.11.0 (`smoke-vsix.sh`, `smoke-apk.sh`), each proven against a good and a broken fixture in `test-release.sh` |
 | Dead tags `v1.26.0/1/2` | Open | documented as failed; no decision to delete |
 
 Issue A (agent SQL syntax) is **not reproducible**: `agent.rs` compiles and its
@@ -631,7 +637,7 @@ The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brie
 
 1. **Phase 1 — release reliability.** Get a green tagged run with the 11-asset
    set, confirm the deb headless tests, pass the existing install smokes, add
-   VSIX/APK smokes, and decide the historical tags. This is the only release
+   and decide the historical tags. This is the only release
    blocker.
 2. **Phase 4 — OpenAI Platform.** Add tool calling and structured output to the
    `openai:` agent path.

@@ -582,6 +582,11 @@ jobs:
           mkdir -p ../dist
           npx vsce package --no-dependencies -o ../dist/free-ai-studio-vscode.vsix
 
+      # The package a user installs, not the build tree: identity, version,
+      # activation entry, engine floor and no secret-shaped files.
+      - name: Smoke the packaged VSIX
+        run: bash scripts/ci/smoke-vsix.sh dist/free-ai-studio-vscode.vsix
+
       - name: Upload extension artifact
         uses: actions/upload-artifact@v4
         with:
@@ -639,6 +644,11 @@ jobs:
           mkdir -p dist
           cp android/app/build/outputs/apk/release/app-release*.apk dist/free-ai-studio-android.apk
           cp android/app/build/outputs/bundle/release/app-release*.aab dist/free-ai-studio-android.aab
+
+      # Both artifacts, as packaged: manifest, dex, resources, signature, the
+      # native libraries React Native loads and its JavaScript bundle.
+      - name: Smoke the packaged APK and AAB
+        run: bash scripts/ci/smoke-apk.sh dist/free-ai-studio-android.apk dist/free-ai-studio-android.aab
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
