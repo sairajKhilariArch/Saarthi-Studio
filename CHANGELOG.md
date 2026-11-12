@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.14.0
+
+Phase 15's compatibility row closes: a dependency that cannot run here now blocks
+the folder that needs it, and a listing is proven to re-judge itself after an
+upgrade.
+
+- **An incompatible dependency blocks its dependents.** Discovery already judged
+  each folder's own `requiresStudio`; it now keeps those verdicts and reports
+  `incompatibleDependencies` on every folder, blocking with "Needs future-tools,
+  which requires a newer Sarthi Studio." when an installed dependency cannot run
+  on this build. The dependency's own row is unchanged, a missing dependency and a
+  cycle still take precedence, and a satisfied dependency is not named.
+- **Nothing about compatibility is stored.** `inspect` was split into
+  `inspect_for(dir, app_version)`, and a test lists one folder requiring `9.0.0`
+  twice — blocked at `1.2.3`, runnable at `9.0.0` — which is exactly what an app
+  upgrade does, because every verdict is recomputed from the manifests on each
+  listing rather than saved beside the folder.
+- **Same gates, same shapes.** The new field sits beside `missingDependencies`
+  and `dependencyCycle`, `invalid` folders report it empty, and a blocked folder
+  is still valid but `runnable: false` — an install is never refused for it.
+
+Verified: `cargo test --locked` 566 passed / 1 ignored (2 new: the dependency
+chain blocked by name with a satisfied dependency left alone, and the two-version
+re-judge); `cargo clippy --locked --all-targets -D warnings` clean. Not run: no
+browser check of the Settings badge, which shows `blockedReason` unchanged.
+
 ## 3.13.0
 
 Phase 4 closes: a platform step can now answer with a native tool call instead of

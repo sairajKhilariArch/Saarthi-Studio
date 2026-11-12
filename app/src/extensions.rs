@@ -594,6 +594,7 @@ fn invalid(folder: &str, error: String) -> Value {
         "dependencies": [],
         "missingDependencies": [],
         "dependencyCycle": [],
+        "incompatibleDependencies": [],
         "tools": [],
         "permissions": [],
         "valid": false,
@@ -862,6 +863,15 @@ fn read_manifest(folder: &Path, name: &str) -> Result<Manifest, String> {
 }
 
 fn inspect(dir: &Path) -> Vec<Value> {
+    // Every verdict is recomputed from the manifests on each listing, so a
+    // folder is judged against the build that is running now — an upgrade frees
+    // a folder that needed a newer Studio, with nothing stored to go stale.
+    inspect_for(dir, env!("CARGO_PKG_VERSION"))
+}
+
+/// [`inspect`] with the app version passed in, so a test can ask what a folder
+/// would look like on a newer build.
+fn inspect_for(dir: &Path, app_version: &str) -> Vec<Value> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -871,7 +881,6 @@ fn inspect(dir: &Path) -> Vec<Value> {
         .filter(|path| path.is_dir() && !is_hidden(path))
         .collect();
     folders.sort();
-    let app_version = env!("CARGO_PKG_VERSION");
     let mut listed: Vec<(String, Result<Manifest, String>)> = folders
         .into_iter()
         .map(|folder| {
@@ -897,6 +906,13 @@ fn inspect(dir: &Path) -> Vec<Value> {
         .filter_map(|(_, manifest)| manifest.as_ref().ok())
         .map(|manifest| (manifest.id.clone(), manifest.dependencies.clone()))
         .collect();
+    // Each installed folder's own verdict, so a dependency that cannot run on
+    // this build blocks whatever needs it instead of looking satisfied.
+    let compatibility: HashMap<String, Option<String>> = listed
+        .iter()
+        .filter_map(|(_, manifest)| manifest.as_ref().ok())
+        .map(|manifest| (manifest.id.clone(), compatibility_block(manifest, app_version)))
+        .collect();
     listed
         .drain(..)
         .map(|(name, parsed)| match parsed {
@@ -904,6 +920,17 @@ fn inspect(dir: &Path) -> Vec<Value> {
                 let incompatible = compatibility_block(&manifest, app_version);
                 let missing = missing_dependencies(&manifest, &installed);
                 let cycle = dependency_cycle(&manifest.id, &graph);
+                let incompatible_dependencies: Vec<String> = manifest
+                    .dependencies
+                    .iter()
+                    .filter(|dependency| {
+                        compatibility
+                            .get(dependency.as_str())
+                            .map(Option::is_some)
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect();
                 let blocked = incompatible.clone().or_else(|| {
                     if missing.is_empty() {
                         None
@@ -915,6 +942,14 @@ fn inspect(dir: &Path) -> Vec<Value> {
                     cycle
                         .as_ref()
                         .map(|chain| format!("Dependency cycle: {}.", chain.join(" → ")))
+                });
+                let blocked = blocked.or_else(|| {
+                    (!incompatible_dependencies.is_empty()).then(|| {
+                        format!(
+                            "Needs {}, which requires a newer Sarthi Studio.",
+                            incompatible_dependencies.join(", ")
+                        )
+                    })
                 });
                 let blocked = blocked.or_else(|| run_block(&manifest));
                 let tools: Vec<Value> = manifest
@@ -942,6 +977,7 @@ fn inspect(dir: &Path) -> Vec<Value> {
                     "dependencies": manifest.dependencies,
                     "missingDependencies": missing,
                     "dependencyCycle": cycle.unwrap_or_default(),
+                    "incompatibleDependencies": incompatible_dependencies,
                     "tools": tools,
                     "permissions": manifest.permissions,
                     "valid": true,
@@ -2157,6 +2193,89 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("base-tools"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_dependency_that_needs_a_newer_build_blocks_the_folder_that_needs_it() {
+        let root = scratch("dependency-incompatible");
+        let folder = |id: &str, dependencies: &str, requires: &str| {
+            let dir = root.join(id);
+            fs::create_dir_all(&dir).expect("folder");
+            fs::write(
+                dir.join("manifest.json"),
+                format!(
+                    r#"{{"id":"{id}","name":"{id}","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","dependencies":{dependencies},"requiresStudio":"{requires}"}}"#
+                ),
+            )
+            .expect("manifest");
+            fs::write(dir.join("tool.wasm"), b"\0asm").expect("entry");
+        };
+        // The dependency itself is fine on this build; the addon is too. Only
+        // the folder that needs a newer build is incompatible.
+        folder("base-tools", "[]", "1.0.0");
+        folder("future-tools", "[]", "99.0.0");
+        folder("addon-tools", r#"["base-tools","future-tools"]"#, "1.0.0");
+
+        let entries = inspect(&root);
+        let by_id = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap_or_else(|| panic!("entry {id}"))
+        };
+        // The incompatible folder still reports its own reason.
+        assert_eq!(by_id("future-tools")["compatible"], false);
+        assert_eq!(by_id("future-tools")["runnable"], false);
+
+        let addon = by_id("addon-tools");
+        assert_eq!(addon["valid"], true);
+        // Nothing is missing and there is no cycle: the dependency is present,
+        // it just cannot run here.
+        assert_eq!(addon["missingDependencies"], json!([]));
+        assert_eq!(addon["dependencyCycle"], json!([]));
+        assert_eq!(addon["compatible"], true, "its own floor is satisfied");
+        assert_eq!(addon["runnable"], false);
+        assert_eq!(
+            addon["incompatibleDependencies"],
+            json!(["future-tools"])
+        );
+        let reason = addon["blockedReason"].as_str().unwrap_or("");
+        assert!(reason.contains("future-tools"), "{reason}");
+        assert!(reason.contains("newer"), "{reason}");
+        // The satisfied dependency is not named.
+        assert!(!reason.contains("base-tools"), "{reason}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_folder_is_re_judged_on_every_listing_so_an_upgrade_frees_it() {
+        let root = scratch("upgrade-recheck");
+        let dir = root.join("next-tools");
+        fs::create_dir_all(&dir).expect("folder");
+        fs::write(
+            dir.join("manifest.json"),
+            r#"{"id":"next-tools","name":"Next","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","requiresStudio":"9.0.0"}"#,
+        )
+        .expect("manifest");
+        fs::write(dir.join("tool.wasm"), b"\0asm").expect("entry");
+
+        // Before the upgrade: valid, but not usable on this build.
+        let before = inspect_for(&root, "1.2.3");
+        assert_eq!(before[0]["valid"], true);
+        assert_eq!(before[0]["compatible"], false);
+        assert_eq!(before[0]["runnable"], false);
+        assert!(before[0]["blockedReason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("9.0.0"));
+
+        // After it: the same folder, judged again with nothing stored between
+        // the two listings, is runnable.
+        let after = inspect_for(&root, "9.0.0");
+        assert_eq!(after[0]["compatible"], true);
+        assert_eq!(after[0]["runnable"], true);
+        assert_eq!(after[0]["blockedReason"], "");
         let _ = fs::remove_dir_all(&root);
     }
 

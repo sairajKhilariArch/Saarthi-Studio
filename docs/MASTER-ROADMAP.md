@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.11.0
+## Remaining work at 3.14.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -55,7 +55,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
 | 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, arbitrary command presets, in-pane reflog undo. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
-| 15 — Extensions | Provider adapters, UI extensions, and re-checking an extension after an app upgrade. (Dependency cycles are detected and block a run since 3.9.0.) |
+| 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
 ### Smaller named gaps
@@ -816,7 +816,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 12 Agent monitoring | Working | — |
 | 13 Workflows | Working | automated browser coverage; child agent cancellation |
 | 14 Cross-platform | Partial | Android/VS Code subsets; capability gates are hand-wired |
-| 15 Extensions | Partial | provider adapters and UI extensions; dependency cycles/upgrade recheck |
+| 15 Extensions | Partial | provider adapters and UI extensions |
 | 16 Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 Observability | Working | — |
 | 18 Install and update | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |

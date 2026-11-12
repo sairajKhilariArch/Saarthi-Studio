@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.14.0 (2026-11-12):** Phase 15's compatibility row closes: a
+dependency that itself needs a newer build now blocks the folder that needs it
+(`incompatibleDependencies` plus a named reason), and `inspect_for` proves a
+listing re-judges a folder against the running build, so an upgrade frees it with
+nothing stored to go stale. Provider adapters and UI extensions are what remain
+in the phase.
+
 **Revision 3.13.0 (2026-11-12):** Phase 4's last gap closes: a platform step also
 declares the action vocabulary as native functions and translates a
 `function_call` back into the same action object, so Phase 4 moves from Partial
@@ -344,7 +351,7 @@ below carry the evidence.
 | 12 | Live monitoring | Working | — |
 | 13 | Workflow builder | Working | automated browser test; child agent cancellation |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
-| 15 | Extension ecosystem | Partial | provider adapters, UI extensions, upgrade recheck |
+| 15 | Extension ecosystem | Partial | provider adapters, UI extensions |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 | Observability | Working | — |
 | 18 | Installation and updates | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |
@@ -658,8 +665,8 @@ The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brie
    output, then native tool calling); only a live platform call is unverified.
 3. **Phase 14 — cross-platform.** Android router management/local execution,
    VS Code parity, and capability negotiation instead of hand-wired gates.
-4. **Phase 15 — extensions.** Provider adapters, UI extensions, dependency-cycle
-   detection, and re-checking installed folders after an app upgrade.
+4. **Phase 15 — extensions.** Provider adapters and UI extensions    (dependency cycles, dependency compatibility and the post-upgrade re-judge
+   shipped in 3.9.0/3.14.0).
 5. **Phase 18 — packaging.** Code signing/notarization, a macOS `.dmg`, and a
    per-machine MSI choice.
 6. **Smaller:** Phase 3 native OpenAI pricing/context, Phase 6 per-skill
