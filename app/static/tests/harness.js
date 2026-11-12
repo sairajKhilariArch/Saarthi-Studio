@@ -44,8 +44,13 @@ function stubStyle() {
   };
 }
 
-/** A stand-in element: records listeners, returns itself for every property. */
+/** A stand-in element: records listeners and attributes, and returns itself for
+ * every property. Recording both is what lets a test drive a gesture (dispatch a
+ * pointer event to the handlers the real code registered) and read what it
+ * wrote (an edge path's `d`, a card's position), without a layout engine. */
 function stubElement(id) {
+  const listeners = [];
+  const attributes = new Map();
   const element = {
     id,
     dataset: {},
@@ -75,8 +80,34 @@ function stubElement(id) {
     scrollTop: 0,
     scrollHeight: 0,
     offsetHeight: 0,
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type, handler) {
+      listeners.push({ type: String(type), handler });
+    },
+    removeEventListener(type, handler) {
+      const at = listeners.findIndex(
+        (entry) => entry.type === String(type) && entry.handler === handler,
+      );
+      if (at >= 0) listeners.splice(at, 1);
+    },
+    /** Fire every handler registered for `type`, as the browser would. */
+    dispatch(type, event = {}) {
+      const handlers = listeners
+        .filter((entry) => entry.type === String(type))
+        .map((entry) => entry.handler);
+      for (const handler of handlers) {
+        handler({
+          type,
+          button: 0,
+          pointerId: 1,
+          preventDefault() {},
+          stopPropagation() {},
+          ...event,
+        });
+      }
+      return handlers.length;
+    },
+    /** Listeners currently registered, for a test that asserts the wiring. */
+    listeners,
     appendChild(child) {
       this.children.push(child);
       return child;
@@ -104,11 +135,18 @@ function stubElement(id) {
     remove() {},
     focus() {},
     blur() {},
-    setAttribute() {},
-    getAttribute() {
-      return null;
+    setAttribute(name, value) {
+      attributes.set(String(name), String(value));
     },
-    removeAttribute() {},
+    getAttribute(name) {
+      return attributes.has(String(name)) ? attributes.get(String(name)) : null;
+    },
+    removeAttribute(name) {
+      attributes.delete(String(name));
+    },
+    /** A card is positioned on the canvas; the drag reads the canvas width. */
+    clientWidth: 960,
+    clientHeight: 600,
     querySelector() {
       return stubElement(null);
     },

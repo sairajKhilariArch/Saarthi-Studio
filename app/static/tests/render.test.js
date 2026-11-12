@@ -67,6 +67,76 @@ test("the workflow canvas renders a card per node and an edge per dependency", (
   assert.ok(byId.get("plan").x < byId.get("build").x, "depth runs left to right");
 });
 
+test("dragging a card moves it live, follows its edge and commits the position", () => {
+  const ui = loadApp();
+  const call = (expression) => evaluate(ui, expression);
+  call(`workflowGraph = [
+    { id: "plan", kind: "task", title: "Plan the change" },
+    { id: "build", kind: "agent", title: "Build it", dependsOn: ["plan"] }
+  ]`);
+  call("renderWorkflowCanvas()");
+
+  const layer = ui.document.getElementById("workflowNodesLayer");
+  const card = layer.children[0];
+  const svg = ui.document.getElementById("workflowEdges");
+  const edges = () =>
+    svg.children
+      .map((node) => node.getAttribute("d"))
+      .filter(Boolean)
+      .join(" | ");
+  const before = edges();
+  assert.match(before, /^M \d+/, "the edge is drawn before the drag");
+
+  const startX = Number(String(card.style.left).replace("px", ""));
+  const startY = Number(String(card.style.top).replace("px", ""));
+  assert.equal(card.dispatch("pointerdown", { clientX: 40, clientY: 40 }), 1, "one drag handler");
+  card.dispatch("pointermove", { clientX: 140, clientY: 90 });
+
+  // While the pointer is down the card itself follows it...
+  assert.equal(
+    String(card.style.left),
+    `${startX + 100}px`,
+    "the card follows the pointer without waiting for the release",
+  );
+  assert.equal(String(card.style.top), `${startY + 50}px`);
+  assert.ok(card.classList.contains("dragging"), "the card is marked while dragged");
+  // ...and so does the edge that starts at it.
+  assert.notEqual(edges(), before, "the edge is redrawn as the card moves");
+
+  card.dispatch("pointerup", {});
+  assert.equal(card.classList.contains("dragging"), false, "the mark is cleared on release");
+  const committed = JSON.parse(call("JSON.stringify(workflowGraph[0])"));
+  assert.equal(committed.x, startX + 100, "the release writes the position into the graph");
+  assert.equal(committed.y, startY + 50, "so saving the workflow returns the card here");
+
+  // The canvas width is the limit: a drag past the right edge stops at it.
+  const moved = layer.children[0];
+  moved.dispatch("pointerdown", { clientX: 0, clientY: 0 });
+  moved.dispatch("pointermove", { clientX: 99999, clientY: 99999 });
+  moved.dispatch("pointerup", {});
+  const clamped = JSON.parse(call("JSON.stringify(workflowGraph[0])"));
+  assert.equal(clamped.x, 960 - 190 - 24, "the card stops inside the canvas");
+  assert.ok(clamped.y > 0, "and the height is free so a downward drag is kept");
+});
+
+test("a press without movement selects the card and writes no position", () => {
+  const ui = loadApp();
+  const call = (expression) => evaluate(ui, expression);
+  call(`workflowGraph = [{ id: "plan", kind: "task", title: "Plan" }]`);
+  call("renderWorkflowCanvas()");
+
+  const card = ui.document.getElementById("workflowNodesLayer").children[0];
+  card.dispatch("pointerdown", { clientX: 10, clientY: 10 });
+  // Below the 3px threshold the browser would call this a click, not a drag.
+  card.dispatch("pointermove", { clientX: 11, clientY: 11 });
+  card.dispatch("pointerup", {});
+  assert.equal(call("workflowGraph[0].x === undefined"), true, "no x is invented");
+  assert.equal(call("workflowGraph[0].y === undefined"), true, "no y is invented");
+
+  card.dispatch("click");
+  assert.equal(call("selectedWorkflowNode"), "plan", "the click selects the node");
+});
+
 test("an empty workflow says so instead of rendering a blank box", () => {
   const ui = loadApp();
   evaluate(ui, "workflowGraph = []");

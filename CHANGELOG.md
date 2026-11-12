@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.16.0
+
+Phase 13's canvas gap narrows to layout: the drag gesture that places a card is
+tested now, not just the pure helpers behind it.
+
+- **The harness can drive a gesture.** `app/static/tests/harness.js` used to drop
+  every `addEventListener` and `setAttribute` call, so a test could check what a
+  render produced but never what a pointer did. Stub elements now record their
+  listeners (with `removeEventListener` honoured) and their attributes, expose
+  `dispatch(type, event)`, and report a canvas size — the minimum needed to fire
+  the handlers the real code registered and read what they wrote.
+- **The drag is covered end to end, browser-free.** A `pointerdown` followed by a
+  `pointermove` moves the card before the release and redraws the edge that
+  starts at it; the `pointerup` commits `x`/`y` into the node so saving returns
+  the card to the same place; a press that moves fewer than 3 px writes no
+  position and still selects on click; and a drag past the canvas width clamps to
+  `clientWidth - 190 - 24`.
+- **The test is not a tautology.** Replacing the drag's position write with a
+  no-op makes `dragging a card moves it live, follows its edge and commits the
+  position` fail, which is how the assertions were checked before restoring it.
+
+No app behaviour changed in this release; only the test harness and its coverage.
+
+Verified: `bash scripts/ci/test-frontend.sh` 46 passed (2 new), and the mutation
+above fails the new test. **Not run:** a real browser — layout, rects and pixels
+remain unverified, which is what this change does not claim to fix.
+
 ## 3.15.0
 
 Phase 13's last execution gap closes: cancelling a workflow now stops the agent

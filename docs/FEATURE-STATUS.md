@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.16.0 (2026-11-12):** Phase 13's canvas gap narrows to layout. The
+test harness now records element listeners and attributes, so it can dispatch the
+pointer events the real card handlers registered and read what they wrote: a drag
+moves the card and redraws its edge before release, the release commits `x`/`y`
+to the graph, a press under the 3px threshold writes no position and the click
+still selects, and a drag past the canvas width clamps. A deliberate mutation of
+the drag handler makes the new test fail, so it is not a tautology. What is still
+not automated is a real browser's layout and pixels.
+
 **Revision 3.15.0 (2026-11-12):** A workflow cancel stops what the graph started.
 `agent::stop_run` is now the one cancel path — wake a live loop's flag, persist
 `cancelled`, notify — shared by the per-run route and by `workflow::cancel`, which
@@ -355,7 +364,7 @@ below carry the evidence.
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
-| 13 | Workflow builder | Working | automated browser test; a workflow cancel stops the child agent runs it started (3.15.0) |
+| 13 | Workflow builder | Working | browser layout test only; rendering and the drag gesture are harness-tested (3.16.0), a workflow cancel stops the child agent runs it started (3.15.0) |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
 | 15 | Extension ecosystem | Partial | provider adapters, UI extensions |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
@@ -572,7 +581,8 @@ persisted execution of it.
 | Validation before execution | Working (2.9.0) | ids, kinds, profiles, missing deps, self references, cycles, per-kind requirements, a 50-node cap — each error names the node |
 | Persisted run history | Working (2.9.0) | `workflow_runs`/`workflow_steps` carry status, output, timing and the agent run id; a boot sweep marks a run the process abandoned as `interrupted` |
 | Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph and, since 3.15.0, also cancels the child agent runs it started, naming them in `stoppedAgentRuns` — a child that already finished is left alone |
-| Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas was driven in Chromium once (2.49.0) — drag, live edges, clamping and a position restored after reload — though no automated browser test exists |
+| Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas was driven in Chromium once (2.49.0) — drag, live edges, clamping and a position restored after reload — though since 3.16.0 the browser-free harness drives the drag gesture too (card follows the pointer, the edge redraws live, the release commits
+x/y, a 2px press writes nothing, a drag past the right edge clamps) while a real browser's layout and pixels are still unverified |
 | Graph import/export | Working (2.13.0) | export is a versioned `sarthi.workflow` document; import runs the save-time validation before writing, assigns a new id and a unique name, and starts a fresh schedule window |
 | Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, a live run is not stacked, and the window is claimed in SQLite (2.48.0) so two processes sharing one home cannot both start it |
 | Resume an interrupted run | Working (2.11.0) | `POST /api/workflow-runs/:id/resume` keeps finished steps, reopens the rest, refuses an edited or deleted workflow; a resumed agent node starts a fresh agent run |
