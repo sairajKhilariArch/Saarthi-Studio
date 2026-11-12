@@ -52,7 +52,7 @@ This is the ordered backlog for the current tree. It supersedes older
 
 | Phase | Remaining |
 |---|---|
-| 4 — Thinking + OpenAI Platform | Native tool calling through the `openai:` platform path (structured output shipped in 3.12.0). |
+| 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
 | 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, arbitrary command presets, in-pane reflog undo. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
 | 15 — Extensions | Provider adapters, UI extensions, and re-checking an extension after an app upgrade. (Dependency cycles are detected and block a run since 3.9.0.) |
@@ -234,10 +234,20 @@ claim that "no agent tool loop uses `openai:` yet" was wrong: agent steps have
 routed to the platform since 1.29.0 (`attempt_router_once` handles the prefix),
 and this change is what makes them ask for a structured reply.
 
-Open: tool calling through the platform path. A step still comes back as a JSON
-action the app parses and executes, rather than as native `tools` /
-`function_call` items the platform can drive; MCP and extension tools stay
-reachable through the text protocol.
+Native tool calling (3.13.0): the same request also declares the agent's action
+vocabulary as functions — `list_files`, `read_file`, `write_file`, `run_command`,
+`report_think`, `finish`, `give_up`, plus `mcp_call` and `extension_call` only
+when that run's prompt advertised them — with `tool_choice: "auto"`.
+`function_call_action` turns a call back into the identical action object the
+text protocol uses, so gating, approval, conflict detection, the audit trail and
+the step log are unchanged; a call wins over a preamble beside it, and an unknown
+function name becomes a `think` step saying nothing ran.
+
+Each step is a fresh request (the app sends its own `input` list, not a previous
+response id), so a call is answered through the step history text rather than a
+`function_call_output` item: the platform never sees a half-finished tool loop.
+Phase 4 is complete in the tree; what it still lacks is a live call against the
+real platform, which needs an owner key.
 
 ## Phase 5 — Agent execution engine
 
@@ -795,7 +805,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 1 CI/CD and release | Partial | no fresh green tagged run with the 11-asset set; 3.7.0 deb dependency awaits CI |
 | 2 Router manager | Working | — (remote routers are unauthenticated base URLs; no live network test) |
 | 3 Model and provider | Working | native OpenAI picks carry no price; context only when the provider supplies it |
-| 4 Thinking / OpenAI | Partial | native tool calling through the platform path (structured output shipped in 3.12.0) |
+| 4 Thinking / OpenAI | Working | no live platform call has been made (the request shapes are proven against a mock) |
 | 5 Agent execution | Working | — |
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |

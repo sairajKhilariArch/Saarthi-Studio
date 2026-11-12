@@ -165,6 +165,165 @@ pub(crate) fn with_step_format(body: &mut Value) {
     body["text"] = json!({ "format": step_format() });
 }
 
+/// The agent's action vocabulary as native functions, so a platform model can
+/// answer with a tool call instead of writing JSON. Both routes land on the same
+/// step parser: [`function_call_action`] turns a call into the identical action
+/// object. `mcp` and `extension` are offered only when the prompt advertised
+/// them — telling a model about a tool that would be refused is worse than
+/// staying silent, which is the rule the action list already follows.
+pub(crate) fn step_tools(mcp: bool, extensions: bool) -> Value {
+    fn tool(name: &str, description: &str, properties: Value, required: Value) -> Value {
+        json!({
+            "type": "function",
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            }
+        })
+    }
+    let string = || json!({ "type": "string" });
+    let mut tools = vec![
+        tool(
+            "list_files",
+            "List one directory in the workspace.",
+            json!({ "path": string() }),
+            json!(["path"]),
+        ),
+        tool(
+            "read_file",
+            "Read one workspace file.",
+            json!({ "path": string() }),
+            json!(["path"]),
+        ),
+        tool(
+            "write_file",
+            "Create or replace one workspace file with the complete content.",
+            json!({ "path": string(), "content": string() }),
+            json!(["path", "content"]),
+        ),
+        tool(
+            "run_command",
+            "Run one shell command in the workspace and read its output.",
+            json!({ "command": string() }),
+            json!(["command"]),
+        ),
+        tool(
+            "report_think",
+            "Record a short progress note without changing anything.",
+            json!({ "summary": string() }),
+            json!(["summary"]),
+        ),
+        tool(
+            "finish",
+            "Claim the task is complete, with a summary of what changed.",
+            json!({ "summary": string() }),
+            json!(["summary"]),
+        ),
+        tool(
+            "give_up",
+            "Stop because the task cannot be completed, with the reason.",
+            json!({ "reason": string() }),
+            json!(["reason"]),
+        ),
+    ];
+    if mcp {
+        tools.push(tool(
+            "mcp_call",
+            "Call one tool on a connected MCP server.",
+            json!({
+                "server": string(),
+                "tool": string(),
+                "arguments": { "type": "object", "additionalProperties": true }
+            }),
+            json!(["server", "tool"]),
+        ));
+    }
+    if extensions {
+        tools.push(tool(
+            "extension_call",
+            "Call one tool declared by an installed extension.",
+            json!({
+                "extension": string(),
+                "tool": string(),
+                "arguments": { "type": "object", "additionalProperties": true }
+            }),
+            json!(["extension", "tool"]),
+        ));
+    }
+    Value::Array(tools)
+}
+
+/// Declare those tools beside the step schema and let the model choose.
+pub(crate) fn with_step_tools(body: &mut Value, mcp: bool, extensions: bool) {
+    body["tools"] = step_tools(mcp, extensions);
+    body["tool_choice"] = json!("auto");
+}
+
+/// The first native call in a response, turned into the JSON action the agent
+/// already parses. Text and a call are both possible in one reply; the call wins
+/// because the text is a preamble ("I'll write the file") rather than an action,
+/// and reading it as one would burn a parse strike. An unknown function name
+/// becomes a `think` step that says nothing ran, so the loop continues honestly
+/// instead of silently accepting a call it cannot execute.
+pub(crate) fn function_call_action(response: &Value) -> Option<(String, String)> {
+    let items = response.get("output")?.as_array()?;
+    for item in items {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            continue;
+        }
+        let Some(name) = item.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        // `arguments` is a JSON *string* on a function_call, per the API.
+        let arguments = item
+            .get("arguments")
+            .and_then(Value::as_str)
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .unwrap_or_else(|| json!({}));
+        let text = |field: &str| {
+            arguments
+                .get(field)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let action = match name {
+            "list_files" => json!({ "action": "list", "path": text("path") }),
+            "read_file" => json!({ "action": "read", "path": text("path") }),
+            "write_file" => json!({
+                "action": "write", "path": text("path"), "content": text("content")
+            }),
+            "run_command" => json!({ "action": "command", "command": text("command") }),
+            "report_think" => json!({ "action": "think", "summary": text("summary") }),
+            "finish" => json!({ "action": "done", "summary": text("summary") }),
+            "give_up" => json!({ "action": "fail", "reason": text("reason") }),
+            "mcp_call" => json!({
+                "action": "mcp",
+                "server": text("server"),
+                "tool": text("tool"),
+                "arguments": arguments.get("arguments").cloned().unwrap_or_else(|| json!({}))
+            }),
+            "extension_call" => json!({
+                "action": "extension",
+                "extension": text("extension"),
+                "tool": text("tool"),
+                "arguments": arguments.get("arguments").cloned().unwrap_or_else(|| json!({}))
+            }),
+            other => json!({
+                "action": "think",
+                "summary": format!(
+                    "The model called the unknown tool \"{other}\"; no step was executed."
+                )
+            }),
+        };
+        return Some((name.to_string(), action.to_string()));
+    }
+    None
+}
+
 /// Remove the structured-output block before a retry.
 fn strip_format(body: &mut Value) {
     if let Some(object) = body.as_object_mut() {
@@ -481,7 +640,12 @@ pub(crate) async fn responses_once(
         if status.is_success() {
             let parsed: Value = serde_json::from_str(&text)
                 .map_err(|e| format!("The platform answered with unreadable JSON: {e}"))?;
-            let answer = output_text(&parsed);
+            // A tool call wins over any preamble text beside it: the action it
+            // names is what has to run.
+            let (answer, tool_call) = match function_call_action(&parsed) {
+                Some((name, action)) => (action, Some(name)),
+                None => (output_text(&parsed), None),
+            };
             if answer.trim().is_empty() {
                 return Err("The OpenAI Platform returned an empty answer.".to_string());
             }
@@ -496,6 +660,9 @@ pub(crate) async fn responses_once(
             }
             meta["reasoning_dropped"] = json!(dropped);
             meta["format_dropped"] = json!(format_dropped);
+            if let Some(name) = tool_call {
+                meta["tool_call"] = json!(name);
+            }
             return Ok((answer, meta));
         }
         if !dropped
@@ -964,6 +1131,157 @@ mod tests {
             "the retry dropped exactly that block"
         );
         assert!(remembers_format_rejection("schema-retry-model"));
+    }
+
+    #[test]
+    fn native_tools_cover_the_action_vocabulary_and_only_the_advertised_tool_actions() {
+        let core = step_tools(false, false);
+        let names: Vec<&str> = core
+            .as_array()
+            .expect("tools")
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "list_files",
+                "read_file",
+                "write_file",
+                "run_command",
+                "report_think",
+                "finish",
+                "give_up"
+            ]
+        );
+        for tool in core.as_array().unwrap() {
+            assert_eq!(tool["type"], "function");
+            assert!(tool["description"].as_str().unwrap_or("").len() > 10);
+            assert_eq!(tool["parameters"]["type"], "object");
+            assert!(tool["parameters"]["required"].is_array());
+        }
+        // A tool action is offered only when the prompt advertised it.
+        let all = step_tools(true, true);
+        let names: Vec<&str> = all
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
+        assert_eq!(names.len(), 9);
+        assert!(names.contains(&"mcp_call") && names.contains(&"extension_call"));
+        let only_mcp = step_tools(true, false);
+        assert!(!only_mcp.to_string().contains("extension_call"));
+    }
+
+    #[test]
+    fn a_function_call_becomes_the_same_action_the_text_protocol_uses() {
+        let response = json!({
+            "output": [{
+                "type": "function_call",
+                "name": "write_file",
+                "arguments": "{\"path\":\"a.txt\",\"content\":\"x\"}"
+            }]
+        });
+        let (name, action) = function_call_action(&response).expect("a call");
+        assert_eq!(name, "write_file");
+        let action: Value = serde_json::from_str(&action).expect("action json");
+        assert_eq!(action["action"], "write");
+        assert_eq!(action["path"], "a.txt");
+        assert_eq!(action["content"], "x");
+
+        // A tool call keeps its arguments object for the schema check downstream.
+        let mcp = json!({"output": [{
+            "type": "function_call",
+            "name": "mcp_call",
+            "arguments": "{\"server\":\"srv\",\"tool\":\"echo\",\"arguments\":{\"text\":\"hi\"}}"
+        }]});
+        let (_, action) = function_call_action(&mcp).expect("a call");
+        let action: Value = serde_json::from_str(&action).unwrap();
+        assert_eq!(action["action"], "mcp");
+        assert_eq!(action["server"], "srv");
+        assert_eq!(action["arguments"]["text"], "hi");
+
+        // A preamble beside a call does not hide the call.
+        let mixed = json!({"output": [
+            { "type": "message", "content": [{ "type": "output_text", "text": "I'll write it." }] },
+            { "type": "function_call", "name": "finish", "arguments": "{\"summary\":\"done\"}" }
+        ]});
+        let (name, action) = function_call_action(&mixed).expect("a call");
+        assert_eq!(name, "finish");
+        assert!(action.contains("\"done\""), "{action}");
+
+        // An unknown name runs nothing and says so instead of being dropped.
+        let unknown = json!({"output": [{"type": "function_call", "name": "delete_everything", "arguments": "{}"}]});
+        let (name, action) = function_call_action(&unknown).expect("a call");
+        assert_eq!(name, "delete_everything");
+        let action: Value = serde_json::from_str(&action).unwrap();
+        assert_eq!(action["action"], "think");
+        assert!(action["summary"].as_str().unwrap().contains("delete_everything"));
+
+        // Arguments that are not JSON are read as none, not as a failure.
+        let broken = json!({"output": [{"type": "function_call", "name": "read_file", "arguments": "not json"}]});
+        let (_, action) = function_call_action(&broken).expect("a call");
+        assert!(action.contains("\"read\""));
+        // A reply with no call at all is not one.
+        assert!(function_call_action(&json!({"output": []})).is_none());
+        assert!(function_call_action(&json!({})).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_native_tool_call_is_answered_as_a_step_action() {
+        use axum::extract::State;
+        use std::sync::{Arc, Mutex};
+
+        let bodies: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let app = axum::Router::new()
+            .route(
+                "/responses",
+                axum::routing::post(
+                    |State(bodies): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+                        bodies.lock().unwrap().push(body);
+                        Json(json!({
+                            "model": "tool-call-model",
+                            "output": [
+                                { "type": "message", "content": [
+                                    { "type": "output_text", "text": "I'll write it." }
+                                ]},
+                                { "type": "function_call", "name": "write_file",
+                                  "arguments": "{\"path\":\"note.txt\",\"content\":\"hi\"}" }
+                            ],
+                            "usage": { "input_tokens": 9, "output_tokens": 4, "total_tokens": 13 }
+                        }))
+                    },
+                ),
+            )
+            .with_state(bodies.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let client = reqwest::Client::new();
+        let mut body = request_body("tool-call-model", &transcript(), None, false);
+        with_step_format(&mut body);
+        with_step_tools(&mut body, false, true);
+        let (answer, meta) = responses_once(
+            &client,
+            &format!("http://{address}"),
+            "test-key",
+            body,
+        )
+        .await
+        .expect("the call came back");
+        assert!(answer.contains("\"write\""), "{answer}");
+        assert!(answer.contains("note.txt"), "{answer}");
+        assert_eq!(meta["tool_call"], "write_file");
+        let seen = bodies.lock().unwrap();
+        assert_eq!(seen[0]["tool_choice"], "auto");
+        assert_eq!(seen[0]["text"]["format"]["type"], "json_schema");
+        assert!(seen[0]["tools"].to_string().contains("write_file"));
     }
 
     #[test]

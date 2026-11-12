@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.13.0 (2026-11-12):** Phase 4's last gap closes: a platform step also
+declares the action vocabulary as native functions and translates a
+`function_call` back into the same action object, so Phase 4 moves from Partial
+to Working. The only thing left in it is a live call against the real platform,
+which needs an owner key; every request shape is proven against a mock.
+
 **Revision 3.12.0 (2026-11-12):** Phase 4 gains structured output on the platform
 path: an agent step over an `openai:` pick sends `text.format` with a
 `json_schema`, retries once without it when a model refuses, and remembers the
@@ -310,7 +316,7 @@ The core is largely built. Router management, the agent engine, MCP, permissions
 token/cost, observability, the workflow engine and the testing layers are
 functionally complete; their remaining notes are caveats, not missing
 subsystems. The real remaining work is concentrated in Phase 1 release
-reliability, Phase 4 OpenAI tool calling, Phase 9 editor/debugger depth, Phase 14
+reliability, Phase 9 editor/debugger depth, Phase 14
 client parity, Phase 15 provider/UI extensions, and Phase 18 signing and
 packaging. Phase 3/6/8/12/13 keep only the smaller gaps below and in
 `MASTER-ROADMAP.md`.
@@ -327,7 +333,7 @@ below carry the evidence.
 | 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation |
 | 2 | Router manager | Working | remote routers are unauthenticated base URLs; no live network test |
 | 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
-| 4 | Thinking + OpenAI Platform | Partial | native tool calling through the platform path (structured output shipped in 3.12.0) |
+| 4 | Thinking + OpenAI Platform | Working | no live platform call yet; request shapes are proven against a mock |
 | 5 | Agent execution | Working | named caveats only |
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
@@ -409,7 +415,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Reasoning summaries / progress surfacing | Working (1.30.0) — collapsible card fed by the provider's summary frames |
 | Platform key in Settings (write-only) + key test | Working (1.30.0) — `/api/openai/test`, no tokens spent |
 | Structured output for agent steps | Working (3.12.0) — `text.format` `json_schema` on a platform pick, one retry without it and the refusal remembered; router and local calls unchanged |
-| Native tool calling (`tools` / `function_call`) | Missing — steps are JSON actions in the reply, parsed and executed by the app |
+| Native tool calling (`tools` / `function_call`) | Working (3.13.0) — seven core functions plus `mcp_call`/`extension_call` when the prompt advertised them, `tool_choice: "auto"`, each call translated into the same action object the text protocol uses |
 | Tests | Working — 21 new cases, 204 total; live smoke on :8799 for the new routes |
 | Tool calling / structured output through the platform path | Missing — the request shape allows it, no agent tool loop uses `openai:` yet |
 
@@ -648,8 +654,8 @@ The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brie
    set, confirm the deb headless tests, pass the existing install smokes, add
    and decide the historical tags. This is the only release
    blocker.
-2. **Phase 4 — OpenAI Platform.** Add native tool calling to the `openai:` agent
-   path. Structured output shipped in 3.12.0.
+2. **Phase 4 — OpenAI Platform.** Complete in the tree since 3.13.0 (structured
+   output, then native tool calling); only a live platform call is unverified.
 3. **Phase 14 — cross-platform.** Android router management/local execution,
    VS Code parity, and capability negotiation instead of hand-wired gates.
 4. **Phase 15 — extensions.** Provider adapters, UI extensions, dependency-cycle

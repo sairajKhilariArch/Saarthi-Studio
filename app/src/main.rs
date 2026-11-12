@@ -1238,14 +1238,27 @@ pub(crate) async fn call_model(
     call_router(state, messages, model_override).await
 }
 
+/// What an agent step asks of the provider beyond the message list. Chat uses
+/// `default()`: prose and nothing else. A platform pick turns `structured` into
+/// `text.format`, and the tool flags into native `tools` declarations — only for
+/// the actions the run's own prompt advertised.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct StepOptions {
+    pub structured: bool,
+    pub mcp_tools: bool,
+    pub extension_tools: bool,
+}
+
 /// The agent's step seam: the same routing, breaker and fallback chain as chat,
-/// but a platform pick is asked for one JSON action per reply instead of prose.
-/// Local mode and router picks are handed to the ordinary path unchanged — a
-/// router has no schema for a step, and its reply is already text.
-pub(crate) async fn call_model_structured(
+/// but a platform pick is asked for one JSON action per reply (or a native tool
+/// call) instead of prose. Local mode and router picks are handed to the ordinary
+/// path unchanged — a router has no schema for a step, and its reply is already
+/// text.
+pub(crate) async fn call_model_step(
     state: &AppState,
     messages: Vec<Value>,
     model_override: Option<&str>,
+    options: StepOptions,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     if cfg.local_chat {
@@ -1266,9 +1279,9 @@ pub(crate) async fn call_model_structured(
         }
     };
     if openai::platform_model(&model).is_none() {
-        return call_router_with(state, messages, Some(&model), level, false).await;
+        return call_router_with(state, messages, Some(&model), level, StepOptions::default()).await;
     }
-    call_router_with(state, messages, Some(&model), level, true).await
+    call_router_with(state, messages, Some(&model), level, options).await
 }
 
 pub(crate) async fn call_router(
@@ -1295,21 +1308,21 @@ pub(crate) async fn call_router(
             .model
         }
     };
-    call_router_with(state, messages, Some(&model), level, false).await
+    call_router_with(state, messages, Some(&model), level, StepOptions::default()).await
 }
 
 /// The same request with the Thinking level the caller resolved, tried across
 /// the configured fallback chain: the chosen model first, then each fallback, but
 /// only when the failure was the provider being unavailable (see
 /// `model_scope::retryable`). A `fallbacks` array lands in the meta whenever a
-/// later model answered. `structured` asks the OpenAI Platform for a JSON action;
-/// chat passes false.
+/// later model answered. `options` asks the OpenAI Platform for a structured step;
+/// chat passes `default()`.
 pub(crate) async fn call_router_with(
     state: &AppState,
     messages: Vec<Value>,
     model_override: Option<&str>,
     level: Option<thinking::ThinkingLevel>,
-    structured: bool,
+    options: StepOptions,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     // Checked once, before the chain: a spent budget must not be circumvented by
@@ -1331,7 +1344,7 @@ pub(crate) async fn call_router_with(
             tried.push(json!({ "model": candidate, "error": "circuit open: skipped" }));
             continue;
         }
-        match attempt_router_once(state, candidate, messages.clone(), level, structured).await {
+        match attempt_router_once(state, candidate, messages.clone(), level, options).await {
             Ok((answer, mut meta)) => {
                 breaker::success(&scope, candidate);
                 if !tried.is_empty() {
@@ -1368,7 +1381,7 @@ async fn attempt_router_once(
     chosen: &str,
     messages: Vec<Value>,
     level: Option<thinking::ThinkingLevel>,
-    structured: bool,
+    options: StepOptions,
 ) -> Result<(String, Value), String> {
     let cfg = load_config(state);
     let chosen = chosen.trim().to_string();
@@ -1379,8 +1392,9 @@ async fn attempt_router_once(
         }
         let started = Instant::now();
         let mut body = openai::request_body(&platform_model, &messages, level, false);
-        if structured {
+        if options.structured {
             openai::with_step_format(&mut body);
+            openai::with_step_tools(&mut body, options.mcp_tools, options.extension_tools);
         }
         let (answer, mut meta) = openai::responses_once(
             &state.client,
@@ -3751,7 +3765,7 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
         packed.messages,
         Some(&chosen_model),
         thinking.map(|resolved| resolved.level),
-        false,
+        StepOptions::default(),
     )
     .await
     {
@@ -5113,10 +5127,16 @@ mod tests {
         let messages = vec![json!({ "role": "user", "content": "next step" })];
 
         // A platform pick is asked for one JSON action.
-        let (answer, meta) = call_model_structured(
+        let options = StepOptions {
+            structured: true,
+            mcp_tools: false,
+            extension_tools: false,
+        };
+        let (answer, meta) = call_model_step(
             &state,
             messages.clone(),
             Some("openai:step-model"),
+            options,
         )
         .await
         .expect("the platform answered");
@@ -5128,18 +5148,27 @@ mod tests {
             assert_eq!(seen[0].1["text"]["format"]["type"], "json_schema");
             assert_eq!(seen[0].1["text"]["format"]["name"], "sarthi_step");
             assert_eq!(seen[0].1["model"], "step-model");
+            // Native tools ride beside the schema, core actions only here.
+            assert_eq!(seen[0].1["tool_choice"], "auto");
+            assert_eq!(seen[0].1["tools"].as_array().unwrap().len(), 7);
         }
 
         // A router pick keeps the free-form request it always had: a router has
         // no schema for an agent step and would only reject one.
-        let (answer, _meta) = call_model_structured(&state, messages, Some("router-model"))
-            .await
-            .expect("the router answered");
+        let (answer, _meta) = call_model_step(
+            &state,
+            messages,
+            Some("router-model"),
+            options,
+        )
+        .await
+        .expect("the router answered");
         assert_eq!(answer, "{\"action\":\"think\"}");
         let seen = seen.lock().unwrap();
         assert_eq!(seen[1].0, "chat");
         assert!(seen[1].1.get("text").is_none(), "no schema on a router call");
         assert!(seen[1].1.get("response_format").is_none());
+        assert!(seen[1].1.get("tools").is_none(), "no tools on a router call");
         let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
     }
 

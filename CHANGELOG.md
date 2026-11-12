@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.13.0
+
+Phase 4 closes: a platform step can now answer with a native tool call instead of
+writing JSON, and that call becomes the same action the loop already runs.
+
+- **The action vocabulary is declared as functions.** `openai::step_tools` offers
+  `list_files`, `read_file`, `write_file`, `run_command`, `report_think`,
+  `finish` and `give_up`, plus `mcp_call` and `extension_call` **only** when that
+  run's prompt advertised them — telling a model about a tool that would be
+  refused is worse than staying silent, the rule the action list already follows.
+  `with_step_tools` adds them beside the step schema with `tool_choice: "auto"`.
+- **A call becomes the identical action.** `function_call_action` maps the first
+  `function_call` in the reply to the same JSON object the text protocol uses
+  (`write_file` → `{"action":"write",…}`), so permission gates, approval,
+  conflict detection, the audit trail and the step log are unchanged. A call wins
+  over a preamble beside it ("I'll write the file" would otherwise burn a parse
+  strike), and an unknown function name becomes a `think` step that says nothing
+  ran rather than a silently dropped request. `tool_call` reports the name in the
+  meta.
+- **Only the platform is affected.** Router picks and local mode keep their
+  free-form request; `StepOptions` replaced the bare `structured` flag so the
+  tool flags travel with it, and chat passes `default()`.
+
+Verified: `cargo test --locked` 564 passed / 1 ignored (3 new: the tool list and
+its conditional entries, every translation including an unknown name, a preamble
+beside a call, non-JSON arguments and a reply with no call, and a mock
+`/responses` whose call is answered as a write action with `tools` and
+`tool_choice` proven on the wire); `cargo clippy --locked --all-targets -D
+warnings` clean. Not run: a live OpenAI Platform call (no key here). Each step is
+a fresh request, so a call is answered through the step history rather than a
+`function_call_output` item — recorded in known issue #41.
+
 ## 3.12.0
 
 Phase 4: an agent step on the OpenAI Platform now asks for a JSON action instead

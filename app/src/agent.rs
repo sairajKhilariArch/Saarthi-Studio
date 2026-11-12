@@ -2559,12 +2559,21 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         crew.get(crew_stage_index(handoffs, crew.len()))
             .unwrap_or(&run.profile),
     );
+    let extension_tools = crate::extensions::catalog(state);
     let mut messages = build_messages_with(
         &staged_run,
         &build_history(state, &run.id)?,
         &stored_background(state, run),
-        &crate::extensions::catalog(state),
+        &extension_tools,
     );
+    // What a platform model may answer with natively: the core actions plus the
+    // two tool actions only when this run's prompt actually advertised them, so
+    // a native call is never offered for something the loop would refuse.
+    let step_options = crate::StepOptions {
+        structured: true,
+        mcp_tools: run.allow_mcp && mcp_catalog_block(&run.mcp_tools).is_some(),
+        extension_tools: !extension_tools.is_empty(),
+    };
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
     // The step log already carries them; this message tells the executor what
@@ -2658,7 +2667,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         // remote router otherwise; a local miss never silently goes remote.
         // A platform pick is asked for one JSON action; every other model gets
         // the same free-form request it has always had.
-        let outcome = crate::call_model_structured(state, messages, tier.as_deref()).await;
+        let outcome = crate::call_model_step(state, messages, tier.as_deref(), step_options).await;
         match outcome {
             Ok((reply, _)) => (reply, tier.clone()),
             // Visible failover: a tier miss falls back to the configured base
@@ -2677,7 +2686,8 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
                     &stored_background(state, run),
                     &crate::extensions::catalog(state),
                 );
-                let (reply, _) = crate::call_model_structured(state, base_messages, None).await?;
+                let (reply, _) =
+                    crate::call_model_step(state, base_messages, None, step_options).await?;
                 (reply, None)
             }
             Err(error) => return Err(error),
