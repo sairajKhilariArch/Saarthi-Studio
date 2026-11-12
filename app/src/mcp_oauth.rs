@@ -161,7 +161,11 @@ fn origin_of(url: &str) -> String {
 /// Path component without a trailing slash (`""` for the origin root).
 fn path_of(url: &str) -> String {
     url.split_once("://")
-        .map(|(_, rest)| rest.split_once('/').map(|(_, path)| format!("/{path}")).unwrap_or_default())
+        .map(|(_, rest)| {
+            rest.split_once('/')
+                .map(|(_, path)| format!("/{path}"))
+                .unwrap_or_default()
+        })
         .unwrap_or_default()
         .trim_end_matches('/')
         .to_string()
@@ -225,7 +229,11 @@ pub(crate) async fn discover(
                 let metadata =
                     fetch_authorization_metadata(issuer.trim_end_matches('/'), client).await?;
                 return Ok((
-                    if resource.resource.is_empty() { url.to_string() } else { resource.resource },
+                    if resource.resource.is_empty() {
+                        url.to_string()
+                    } else {
+                        resource.resource
+                    },
                     metadata,
                 ));
             }
@@ -413,10 +421,7 @@ pub(crate) fn build_authorize_url(
         ("client_id".to_string(), client_id.to_string()),
         ("redirect_uri".to_string(), redirect_uri.to_string()),
         ("state".to_string(), state.to_string()),
-        (
-            "code_challenge".to_string(),
-            pkce_challenge(verifier),
-        ),
+        ("code_challenge".to_string(), pkce_challenge(verifier)),
         ("code_challenge_method".to_string(), "S256".to_string()),
     ];
     if !resource.trim().is_empty() {
@@ -496,8 +501,7 @@ async fn token_request(
             body.chars().take(300).collect::<String>()
         ));
     }
-    serde_json::from_str(&body)
-        .map_err(|error| format!("The token answer is not JSON: {error}"))
+    serde_json::from_str(&body).map_err(|error| format!("The token answer is not JSON: {error}"))
 }
 
 /// The token endpoint's answer, folded into what gets stored. `expires_in` is
@@ -540,7 +544,9 @@ fn from_token_response(
             .and_then(Value::as_str)
             .unwrap_or(previous.refresh_token.as_str())
             .to_string(),
-        expires_at: expires_in.map(|seconds| now + seconds as f64).unwrap_or(0.0),
+        expires_at: expires_in
+            .map(|seconds| now + seconds as f64)
+            .unwrap_or(0.0),
     })
 }
 
@@ -560,7 +566,9 @@ pub(crate) async fn refresh(
     http: &reqwest::Client,
 ) -> Result<Credentials, String> {
     let Some(existing) = credentials(state, server_name) else {
-        return Err(format!("\"{server_name}\" has no saved OAuth session to refresh."));
+        return Err(format!(
+            "\"{server_name}\" has no saved OAuth session to refresh."
+        ));
     };
     if existing.refresh_token.trim().is_empty() {
         return Err(format!(
@@ -840,9 +848,7 @@ mod tests {
             query_encode("http://127.0.0.1:8765/api/mcp/oauth/callback")
         )));
         assert!(url.contains("state=state-772"));
-        assert!(url.contains(
-            "code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        ));
+        assert!(url.contains("code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("scope=read%20write"));
         assert!(url.contains(&format!(
@@ -893,7 +899,10 @@ mod tests {
         )
         .expect("tokens");
         assert_eq!(open_ended.expires_at, 0.0);
-        assert!(!open_ended.expired(), "unknown expiry is not an expired token");
+        assert!(
+            !open_ended.expired(),
+            "unknown expiry is not an expired token"
+        );
 
         // A provider refusal is text, not a stored credential.
         assert!(from_token_response(
@@ -967,12 +976,14 @@ mod tests {
 
         let http = reqwest::Client::builder().build().unwrap();
         let (resource, metadata) = discover(&base, &http).await.expect("discovery");
-        assert_eq!(resource, base, "no resource metadata; the server URL is the resource");
+        assert_eq!(
+            resource, base,
+            "no resource metadata; the server URL is the resource"
+        );
         assert!(metadata.registration_endpoint.ends_with("/register"));
-        let credentials =
-            register_client(&metadata, "http://127.0.0.1:8765/cb", &base, &http)
-                .await
-                .expect("registration");
+        let credentials = register_client(&metadata, "http://127.0.0.1:8765/cb", &base, &http)
+            .await
+            .expect("registration");
         assert_eq!(credentials.client_id, "client-from-registration");
         let exchanged = exchange(
             &credentials,
@@ -1010,4 +1021,3 @@ mod tests {
         assert!(browser_callback("code-2", &state, "").is_err());
     }
 }
-

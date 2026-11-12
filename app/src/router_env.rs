@@ -75,7 +75,7 @@ impl Environment {
 /// the list is the union the router projects' own install docs mention; the
 /// measured answer decides which ones are actually usable here.
 const PACKAGE_MANAGERS: [&str; 10] = [
-    "apt-get", "dnf", "pacman", "zypper", "apk", // Linux
+    "apt-get", "dnf", "pacman", "zypper", "apk",  // Linux
     "brew", // macOS and Linux
     "winget", "choco", "scoop", "port", // Windows and macOS extras
 ];
@@ -331,7 +331,10 @@ mod tests {
         );
         // No dot: a port number is not a version.
         assert_eq!(parse_version("listening on 3001"), None);
-        assert_eq!(parse_version("apt 2.4.12 (amd64)").as_deref(), Some("2.4.12"));
+        assert_eq!(
+            parse_version("apt 2.4.12 (amd64)").as_deref(),
+            Some("2.4.12")
+        );
     }
 
     #[test]
@@ -348,14 +351,17 @@ mod tests {
 
     #[test]
     fn files_round_trip_inside_the_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "sarthi-router-config-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("sarthi-router-config-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(list_in(&dir).is_empty());
 
-        write_in(&dir, "docker-compose.yml", "services:\n  freellmapi:\n    image: x\n").unwrap();
+        write_in(
+            &dir,
+            "docker-compose.yml",
+            "services:\n  freellmapi:\n    image: x\n",
+        )
+        .unwrap();
         write_in(&dir, ".env", "PORT=3001\n").unwrap();
         let files = list_in(&dir);
         let names: Vec<&str> = files.iter().map(|file| file.name.as_str()).collect();
@@ -366,7 +372,10 @@ mod tests {
             "services:\n  freellmapi:\n    image: x\n"
         );
         assert!(read_in(&dir, "config.json").is_err());
-        assert!(read_in(&dir, "missing.yml").is_err(), "not a whitelisted name");
+        assert!(
+            read_in(&dir, "missing.yml").is_err(),
+            "not a whitelisted name"
+        );
 
         // An oversized file is refused rather than truncated.
         let big = "x".repeat(MAX_CONFIG_BYTES + 1);
@@ -380,6 +389,8 @@ mod tests {
     fn routers_without_a_file_say_so() {
         assert!(config_dir("omniroute").is_err());
         assert!(config_dir("ollama").is_err());
-        assert!(config_dir("nope").unwrap_err().contains("Unknown router id"));
+        assert!(config_dir("nope")
+            .unwrap_err()
+            .contains("Unknown router id"));
     }
 }

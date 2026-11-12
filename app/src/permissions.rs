@@ -543,7 +543,11 @@ pub(crate) fn record(
             format!(" in {project}")
         };
         crate::oplog::record(
-            if decision == Decision::Deny { "warn" } else { "info" },
+            if decision == Decision::Deny {
+                "warn"
+            } else {
+                "info"
+            },
             "permission",
             decision.as_str(),
             format!("{}{project_note}: {detail}", action.as_str()),
@@ -818,17 +822,27 @@ mod tests {
     fn path_targets_match_across_separators_and_trailing_slashes() {
         // The bug this guards: a Windows caller builds its target with
         // `Path::join` (backslashes) while the rule was written with `/`.
-        let file = rule(Action::FsWrite, "C:/work/ws/.env", Decision::Deny, Scope::Always);
+        let file = rule(
+            Action::FsWrite,
+            "C:/work/ws/.env",
+            Decision::Deny,
+            Scope::Always,
+        );
         assert!(applies(&file, Action::FsWrite, r"C:\work\ws\.env", ""));
         assert!(applies(&file, Action::FsWrite, "C:/work/ws/.env", ""));
-        assert!(!applies(&file, Action::FsWrite, r"C:\work\ws\other.txt", ""));
-        let directory = rule(Action::FsWrite, "C:/work/ws/", Decision::Deny, Scope::Always);
-        assert!(applies(
-            &directory,
+        assert!(!applies(
+            &file,
             Action::FsWrite,
-            r"C:\work\ws\.env",
+            r"C:\work\ws\other.txt",
             ""
         ));
+        let directory = rule(
+            Action::FsWrite,
+            "C:/work/ws/",
+            Decision::Deny,
+            Scope::Always,
+        );
+        assert!(applies(&directory, Action::FsWrite, r"C:\work\ws\.env", ""));
         assert_eq!(normalise_target(r"C:\work\ws\"), "C:/work/ws");
     }
 

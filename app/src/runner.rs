@@ -266,7 +266,15 @@ pub(crate) fn custom(pairs: &[(String, String)]) -> Vec<Preset> {
             let (program, args) = ("cmd", ["/C", command.as_str()]);
             #[cfg(not(target_os = "windows"))]
             let (program, args) = ("sh", ["-c", command.as_str()]);
-            Preset::new(&custom_id(label), label, "custom", command, program, &args, false)
+            Preset::new(
+                &custom_id(label),
+                label,
+                "custom",
+                command,
+                program,
+                &args,
+                false,
+            )
         })
         .collect()
 }
@@ -993,14 +1001,26 @@ mod tests {
         );
         assert_eq!(presets[0].label, "Lint the tree");
         assert_eq!(presets[0].command, "echo lint");
-        assert_eq!(presets[0].kind, "custom", "never mistaken for a build or test");
+        assert_eq!(
+            presets[0].kind, "custom",
+            "never mistaken for a build or test"
+        );
         // The user wrote a command line, so it goes to the platform shell.
         #[cfg(target_os = "windows")]
-        assert_eq!((presets[0].program.as_str(), presets[0].args.as_slice()), ("cmd", &["/C".to_string(), "echo lint".to_string()][..]));
+        assert_eq!(
+            (presets[0].program.as_str(), presets[0].args.as_slice()),
+            ("cmd", &["/C".to_string(), "echo lint".to_string()][..])
+        );
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((presets[0].program.as_str(), presets[0].args.as_slice()), ("sh", &["-c".to_string(), "echo lint".to_string()][..]));
+        assert_eq!(
+            (presets[0].program.as_str(), presets[0].args.as_slice()),
+            ("sh", &["-c".to_string(), "echo lint".to_string()][..])
+        );
         // A name with nothing alphanumeric still gets an id, not a panic.
-        assert_eq!(custom(&[("!!!".into(), "echo".into())])[0].id, "custom-command");
+        assert_eq!(
+            custom(&[("!!!".into(), "echo".into())])[0].id,
+            "custom-command"
+        );
     }
 
     #[test]
@@ -1018,8 +1038,9 @@ mod tests {
         }
 
         // A line break would split one saved command into two, so it is refused.
-        let error = validate_custom(&[json!({ "label": "lint", "command": "npm run lint\nnpm test" })])
-            .expect_err("control character");
+        let error =
+            validate_custom(&[json!({ "label": "lint", "command": "npm run lint\nnpm test" })])
+                .expect_err("control character");
         assert!(error.contains("control characters"), "{error}");
 
         // Two names that slug the same would share an id, so the second is refused.
@@ -1047,7 +1068,10 @@ mod tests {
         let result = run_preset(&dir, &presets[0]).expect("a saved command runs");
         assert_eq!(result["success"], json!(true), "{result}");
         assert_eq!(result["command"], json!("echo hi"));
-        assert!(result["output"].as_str().unwrap_or("").contains("hi"), "{result}");
+        assert!(
+            result["output"].as_str().unwrap_or("").contains("hi"),
+            "{result}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

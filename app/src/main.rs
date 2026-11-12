@@ -28,7 +28,6 @@ use uuid::Uuid;
 
 mod agent;
 mod breaker;
-mod workflow;
 mod browser;
 mod capabilities;
 mod context;
@@ -60,8 +59,6 @@ mod model_scope;
 mod openai;
 mod oplog;
 mod permissions;
-mod trace;
-mod uninstall;
 mod privacy;
 mod router;
 mod router_console;
@@ -72,7 +69,10 @@ mod schema;
 mod skills;
 mod terminal;
 mod thinking;
+mod trace;
+mod uninstall;
 mod update;
+mod workflow;
 mod workspace;
 
 const APP_NAME: &str = "Sarthi Studio";
@@ -1312,7 +1312,8 @@ pub(crate) async fn call_model_step(
         }
     };
     if openai::platform_model(&model).is_none() {
-        return call_router_with(state, messages, Some(&model), level, StepOptions::default()).await;
+        return call_router_with(state, messages, Some(&model), level, StepOptions::default())
+            .await;
     }
     call_router_with(state, messages, Some(&model), level, options).await
 }
@@ -4542,7 +4543,11 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
                 format!(
                     "{} replaced {} removed from the install directory",
                     removed.len(),
-                    if removed.len() == 1 { "binary" } else { "binaries" }
+                    if removed.len() == 1 {
+                        "binary"
+                    } else {
+                        "binaries"
+                    }
                 ),
             ),
             Ok(_) => {}
@@ -4633,7 +4638,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/update/staged/discard", post(update::discard_route))
         .route("/api/update/prepare", post(update::prepare_route))
         .route("/api/update/prepared", get(update::prepared_route))
-        .route("/api/update/prepared/discard", post(update::discard_prepared_route))
+        .route(
+            "/api/update/prepared/discard",
+            post(update::discard_prepared_route),
+        )
         .route("/api/update/swap", post(update::swap_route))
         .route("/api/update/rollback", post(update::rollback_route))
         .route("/api/uninstall/preview", get(uninstall::preview_route))
@@ -4926,7 +4934,9 @@ mod tests {
         migrate_permission_request_id(&conn).expect("migrate twice");
 
         let columns: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(permission_audit)").expect("pragma");
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(permission_audit)")
+                .expect("pragma");
             stmt.query_map([], |row| row.get::<_, String>(1))
                 .expect("columns")
                 .collect::<rusqlite::Result<Vec<_>>>()
@@ -5179,14 +5189,10 @@ mod tests {
             mcp_tools: false,
             extension_tools: false,
         };
-        let (answer, meta) = call_model_step(
-            &state,
-            messages.clone(),
-            Some("openai:step-model"),
-            options,
-        )
-        .await
-        .expect("the platform answered");
+        let (answer, meta) =
+            call_model_step(&state, messages.clone(), Some("openai:step-model"), options)
+                .await
+                .expect("the platform answered");
         assert!(answer.contains("checking"), "{answer}");
         assert_eq!(meta["format_dropped"], false);
         {
@@ -5202,20 +5208,21 @@ mod tests {
 
         // A router pick keeps the free-form request it always had: a router has
         // no schema for an agent step and would only reject one.
-        let (answer, _meta) = call_model_step(
-            &state,
-            messages,
-            Some("router-model"),
-            options,
-        )
-        .await
-        .expect("the router answered");
+        let (answer, _meta) = call_model_step(&state, messages, Some("router-model"), options)
+            .await
+            .expect("the router answered");
         assert_eq!(answer, "{\"action\":\"think\"}");
         let seen = seen.lock().unwrap();
         assert_eq!(seen[1].0, "chat");
-        assert!(seen[1].1.get("text").is_none(), "no schema on a router call");
+        assert!(
+            seen[1].1.get("text").is_none(),
+            "no schema on a router call"
+        );
         assert!(seen[1].1.get("response_format").is_none());
-        assert!(seen[1].1.get("tools").is_none(), "no tools on a router call");
+        assert!(
+            seen[1].1.get("tools").is_none(),
+            "no tools on a router call"
+        );
         let _ = std::fs::remove_dir_all(state.config_path.parent().unwrap());
     }
 
@@ -5657,9 +5664,11 @@ mod tests {
         let old = open_db(&copy).expect("open copy");
         assert_eq!(schema::read_version(&old).expect("version"), 0);
         let kept: String = old
-            .query_row("SELECT title FROM conversations WHERE id='kept'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT title FROM conversations WHERE id='kept'",
+                [],
+                |row| row.get(0),
+            )
             .expect("row in the copy");
         assert_eq!(kept, "Real history");
         drop(old);
@@ -5671,15 +5680,19 @@ mod tests {
             schema::SCHEMA_VERSION
         );
         let kept: String = conn
-            .query_row("SELECT title FROM conversations WHERE id='kept'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT title FROM conversations WHERE id='kept'",
+                [],
+                |row| row.get(0),
+            )
             .expect("row after the upgrade");
         assert_eq!(kept, "Real history");
         let project: String = conn
-            .query_row("SELECT project_id FROM conversations WHERE id='kept'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT project_id FROM conversations WHERE id='kept'",
+                [],
+                |row| row.get(0),
+            )
             .expect("backfilled into a project");
         assert!(!project.is_empty());
     }
@@ -5752,9 +5765,11 @@ mod tests {
         assert_eq!(kind, "view");
         // ...and the row a half-applied migration must not lose is still there.
         let kept: String = conn
-            .query_row("SELECT title FROM conversations WHERE id='kept'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT title FROM conversations WHERE id='kept'",
+                [],
+                |row| row.get(0),
+            )
             .expect("row survived the failed upgrade");
         assert_eq!(kept, "Kept");
     }

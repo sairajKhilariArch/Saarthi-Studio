@@ -3516,7 +3516,10 @@ mod tests {
         assert_eq!(undone["undone"]["hash"], json!(first));
         assert_eq!(undone["replaced"]["hash"], json!(third));
         assert_eq!(run_git(&root, &["rev-parse", "HEAD"]).trim(), first);
-        assert!(!root.join("b.txt").exists(), "the tree follows the branch back");
+        assert!(
+            !root.join("b.txt").exists(),
+            "the tree follows the branch back"
+        );
         assert!(!root.join("c.txt").exists());
         assert_eq!(
             std::fs::read_to_string(root.join("a.txt")).unwrap(),
@@ -3947,9 +3950,7 @@ mod tests {
             std::fs::read_to_string(root.join("b.txt")).unwrap(),
             "kept\n"
         );
-        assert!(run_git(&root, &["status", "--porcelain"])
-            .trim()
-            .is_empty());
+        assert!(run_git(&root, &["status", "--porcelain"]).trim().is_empty());
         let subjects = run_git(&root, &["log", "--format=%s", "-3"]);
         assert_eq!(
             subjects.lines().take(2).collect::<Vec<_>>(),
@@ -4598,10 +4599,8 @@ two
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "sarthi-bare-{name}-{}-{nanos}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("sarthi-bare-{name}-{}-{nanos}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let output = Command::new("git")
             .args(["init", "-q", "--bare", "-b", "main"])

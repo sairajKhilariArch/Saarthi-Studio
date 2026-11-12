@@ -3090,7 +3090,7 @@ mod tests {
             version: String::new(),
             message: "Remote endpoint answered 200.".into(),
         };
-                let remote = view_with_remote(
+        let remote = view_with_remote(
             capability(spec, "linux", "x86_64"),
             probe,
             true,

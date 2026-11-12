@@ -139,8 +139,8 @@ fn with_entry<T>(
     let mut cache = cache.lock().unwrap();
     let cache_key = (service_for(location), name.to_string());
     if !cache.contains_key(&cache_key) {
-        let entry = Entry::new(&cache_key.0, name)
-            .map_err(|error| format!("keychain entry: {error}"))?;
+        let entry =
+            Entry::new(&cache_key.0, name).map_err(|error| format!("keychain entry: {error}"))?;
         cache.insert(cache_key.clone(), entry);
     }
     let entry = cache.get(&cache_key).expect("the entry was just inserted");
@@ -149,10 +149,7 @@ fn with_entry<T>(
 
 /// Stored value, or `None` when the name has not been stored. A store error
 /// surfaces as `Err` and the caller keeps the config-file value.
-pub(crate) fn read_secret(
-    location: &str,
-    name: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn read_secret(location: &str, name: &str) -> Result<Option<String>, String> {
     if mode() == Mode::Off {
         return Ok(None);
     }
@@ -164,11 +161,7 @@ pub(crate) fn read_secret(
 }
 
 /// Store (or replace) a secret.
-pub(crate) fn write_secret(
-    location: &str,
-    name: &str,
-    value: &str,
-) -> Result<(), String> {
+pub(crate) fn write_secret(location: &str, name: &str, value: &str) -> Result<(), String> {
     if mode() == Mode::Off {
         return Err("the keychain is disabled; the secret stays in config.json".to_string());
     }
@@ -180,10 +173,7 @@ pub(crate) fn write_secret(
 }
 
 /// Remove a stored secret. A name that was never stored counts as removed.
-pub(crate) fn delete_secret(
-    location: &str,
-    name: &str,
-) -> Result<(), String> {
+pub(crate) fn delete_secret(location: &str, name: &str) -> Result<(), String> {
     if mode() == Mode::Off {
         return Ok(());
     }
@@ -237,7 +227,10 @@ mod tests {
 
     #[test]
     fn an_unstored_name_reads_as_none() {
-        assert_eq!(read_secret("probe-location", "never-installed-key").expect("read"), None);
+        assert_eq!(
+            read_secret("probe-location", "never-installed-key").expect("read"),
+            None
+        );
     }
 
     #[test]
@@ -261,7 +254,11 @@ mod tests {
         let a = service_for("fixture-a");
         let b = service_for("fixture-b");
         assert_ne!(a, b, "parallel fixtures must not share a service name");
-        assert_eq!(a, service_for("fixture-a"), "the name is stable per location");
+        assert_eq!(
+            a,
+            service_for("fixture-a"),
+            "the name is stable per location"
+        );
         assert!(a.starts_with(default_service()));
     }
 }

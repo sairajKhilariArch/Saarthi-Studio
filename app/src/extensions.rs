@@ -911,7 +911,12 @@ fn inspect_for(dir: &Path, app_version: &str) -> Vec<Value> {
     let compatibility: HashMap<String, Option<String>> = listed
         .iter()
         .filter_map(|(_, manifest)| manifest.as_ref().ok())
-        .map(|manifest| (manifest.id.clone(), compatibility_block(manifest, app_version)))
+        .map(|manifest| {
+            (
+                manifest.id.clone(),
+                compatibility_block(manifest, app_version),
+            )
+        })
         .collect();
     listed
         .drain(..)
@@ -1374,8 +1379,10 @@ pub(crate) async fn invoke_for_run(
         ),
     );
     match outcome.result.as_deref() {
-        Some(text) => Ok(serde_json::from_str::<Value>(text)
-            .unwrap_or_else(|_| Value::String(text.to_string()))),
+        Some(text) => {
+            Ok(serde_json::from_str::<Value>(text)
+                .unwrap_or_else(|_| Value::String(text.to_string())))
+        }
         None => Ok(Value::Null),
     }
 }
@@ -2236,10 +2243,7 @@ mod tests {
         assert_eq!(addon["dependencyCycle"], json!([]));
         assert_eq!(addon["compatible"], true, "its own floor is satisfied");
         assert_eq!(addon["runnable"], false);
-        assert_eq!(
-            addon["incompatibleDependencies"],
-            json!(["future-tools"])
-        );
+        assert_eq!(addon["incompatibleDependencies"], json!(["future-tools"]));
         let reason = addon["blockedReason"].as_str().unwrap_or("");
         assert!(reason.contains("future-tools"), "{reason}");
         assert!(reason.contains("newer"), "{reason}");
@@ -2366,7 +2370,10 @@ mod tests {
             // The chain is reported from the folder that asked, so a cycle is
             // the same set of folders only rotated; it must still close on
             // itself and name both of them.
-            let chain = entry["dependencyCycle"].as_array().cloned().unwrap_or_default();
+            let chain = entry["dependencyCycle"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             assert_eq!(chain.len(), 3, "{id}: {chain:?}");
             assert_eq!(chain.first(), chain.last(), "{id}: {chain:?}");
             assert!(
@@ -2376,7 +2383,10 @@ mod tests {
             );
             let reason = entry["blockedReason"].as_str().unwrap_or("");
             assert!(reason.contains("Dependency cycle"), "{id}: {reason}");
-            assert!(reason.contains("a-tools") && reason.contains("b-tools"), "{id}: {reason}");
+            assert!(
+                reason.contains("a-tools") && reason.contains("b-tools"),
+                "{id}: {reason}"
+            );
         }
         // A folder outside the cycle is unaffected.
         assert_eq!(by_id("plain-tools")["runnable"], true);

@@ -202,8 +202,7 @@ impl HostState {
     fn cap_reached(&mut self) -> bool {
         self.calls += 1;
         if self.calls > MAX_HOST_CALLS {
-            self.last_error =
-                format!("The {MAX_HOST_CALLS}-call budget for host access is spent.");
+            self.last_error = format!("The {MAX_HOST_CALLS}-call budget for host access is spent.");
             return true;
         }
         false
@@ -211,7 +210,12 @@ impl HostState {
 
     /// The rules are resolved exactly as the agent resolves them; `ask` is a
     /// refusal because nothing can answer for the extension.
-    fn decide(&mut self, action: Action, target: &str, capability: &'static str) -> Result<(), i32> {
+    fn decide(
+        &mut self,
+        action: Action,
+        target: &str,
+        capability: &'static str,
+    ) -> Result<(), i32> {
         let Some(grant) = self.grant.as_ref() else {
             return Err(-1);
         };
@@ -330,24 +334,56 @@ fn run_bytes(
 
     let mut linker = Linker::new(&engine);
     linker
-        .func_wrap("env", "read", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, out_ptr: i32, out_cap: i32| -> i32 {
-            host_read(&mut caller, path_ptr, path_len, out_ptr, out_cap)
-        })
+        .func_wrap(
+            "env",
+            "read",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             path_ptr: i32,
+             path_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 { host_read(&mut caller, path_ptr, path_len, out_ptr, out_cap) },
+        )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
-        .func_wrap("env", "write", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, data_ptr: i32, data_len: i32| -> i32 {
-            host_write(&mut caller, path_ptr, path_len, data_ptr, data_len)
-        })
+        .func_wrap(
+            "env",
+            "write",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             path_ptr: i32,
+             path_len: i32,
+             data_ptr: i32,
+             data_len: i32|
+             -> i32 { host_write(&mut caller, path_ptr, path_len, data_ptr, data_len) },
+        )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
-        .func_wrap("env", "data_read", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, out_ptr: i32, out_cap: i32| -> i32 {
-            host_data_read(&mut caller, path_ptr, path_len, out_ptr, out_cap)
-        })
+        .func_wrap(
+            "env",
+            "data_read",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             path_ptr: i32,
+             path_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                host_data_read(&mut caller, path_ptr, path_len, out_ptr, out_cap)
+            },
+        )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
-        .func_wrap("env", "data_write", |mut caller: wasmi::Caller<'_, HostState>, path_ptr: i32, path_len: i32, data_ptr: i32, data_len: i32| -> i32 {
-            host_data_write(&mut caller, path_ptr, path_len, data_ptr, data_len)
-        })
+        .func_wrap(
+            "env",
+            "data_write",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             path_ptr: i32,
+             path_len: i32,
+             data_ptr: i32,
+             data_len: i32|
+             -> i32 {
+                host_data_write(&mut caller, path_ptr, path_len, data_ptr, data_len)
+            },
+        )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
         .func_wrap(
@@ -368,9 +404,13 @@ fn run_bytes(
         )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
     linker
-        .func_wrap("env", "last_error", |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
-            host_last_error(&mut caller, ptr, cap)
-        })
+        .func_wrap(
+            "env",
+            "last_error",
+            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
+                host_last_error(&mut caller, ptr, cap)
+            },
+        )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
 
     let started = Instant::now();
@@ -412,7 +452,9 @@ fn run_bytes(
 // Host functions
 
 fn guest_memory(caller: &wasmi::Caller<'_, HostState>) -> Option<Memory> {
-    caller.get_export("memory").and_then(wasmi::Extern::into_memory)
+    caller
+        .get_export("memory")
+        .and_then(wasmi::Extern::into_memory)
 }
 
 /// Copy up to `max` bytes out of guest memory. A length the caller cannot have
@@ -449,7 +491,10 @@ fn read_inside(
     out_ptr: i32,
     out_cap: i32,
 ) -> i32 {
-    if let Err(code) = caller.data_mut().decide(Action::FsRead, relative, capability) {
+    if let Err(code) = caller
+        .data_mut()
+        .decide(Action::FsRead, relative, capability)
+    {
         return code;
     }
     let path = match crate::workspace::resolve_inside(root, relative) {
@@ -487,7 +532,10 @@ fn read_inside(
             .data_mut()
             .fail(-1, "The module exports no memory for the result.");
     };
-    if memory.write(&mut *caller, out_ptr.max(0) as usize, &bytes).is_err() {
+    if memory
+        .write(&mut *caller, out_ptr.max(0) as usize, &bytes)
+        .is_err()
+    {
         return caller
             .data_mut()
             .fail(-4, "The result does not fit the module's memory.");
@@ -518,7 +566,15 @@ fn host_read(
             .data_mut()
             .fail(-2, "No folder is open, so there is no workspace to read.");
     };
-    read_inside(caller, &root, &label, "workspace.read", &relative, out_ptr, out_cap)
+    read_inside(
+        caller,
+        &root,
+        &label,
+        "workspace.read",
+        &relative,
+        out_ptr,
+        out_cap,
+    )
 }
 
 /// The extension's own data folder. Nothing else in the extensions directory is
@@ -546,7 +602,15 @@ fn host_data_read(
             .data_mut()
             .fail(-2, "This extension has no data folder for this run.");
     };
-    read_inside(caller, &root, &label, "data.read", &relative, out_ptr, out_cap)
+    read_inside(
+        caller,
+        &root,
+        &label,
+        "data.read",
+        &relative,
+        out_ptr,
+        out_cap,
+    )
 }
 
 /// Write inside a granted folder. The default policy for a write is `ask`, which
@@ -561,15 +625,19 @@ fn write_inside(
     content: &str,
     create_root: bool,
 ) -> i32 {
-    if let Err(code) = caller.data_mut().decide(Action::FsWrite, relative, capability) {
+    if let Err(code) = caller
+        .data_mut()
+        .decide(Action::FsWrite, relative, capability)
+    {
         return code;
     }
     // The data folder is created on first write, after the policy said yes: an
     // extension cannot make folders in the extensions directory by asking to.
     if create_root && fs::create_dir_all(root).is_err() {
-        return caller
-            .data_mut()
-            .fail(-6, format!("{label}: the data folder could not be created."));
+        return caller.data_mut().fail(
+            -6,
+            format!("{label}: the data folder could not be created."),
+        );
     }
     match crate::workspace::write_text_file(root, relative, content) {
         Ok(_) => 0,
@@ -661,11 +729,7 @@ fn host_data_write(
 }
 
 /// Fetch a write's payload, leaving the reason in `last_error` on failure.
-fn guest_content(
-    caller: &mut wasmi::Caller<'_, HostState>,
-    ptr: i32,
-    len: i32,
-) -> Option<String> {
+fn guest_content(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, len: i32) -> Option<String> {
     let Some(data) = guest_bytes(caller, ptr, len, MAX_HOST_BYTES) else {
         caller.data_mut().fail(
             -4,
@@ -676,9 +740,7 @@ fn guest_content(
     match String::from_utf8(data) {
         Ok(content) => Some(content),
         Err(_) => {
-            caller
-                .data_mut()
-                .fail(-5, "The content is not UTF-8 text.");
+            caller.data_mut().fail(-5, "The content is not UTF-8 text.");
             None
         }
     }
@@ -962,7 +1024,11 @@ mod tests {
         );
         let outcome = run_file(&path, Some(grant(&root, true, false))).expect("run");
         assert_eq!(outcome.exit_code, -2, "path escape refused");
-        assert_eq!(outcome.audit[0].decision, Decision::Allow, "the grant allowed the call, the path rule refused it");
+        assert_eq!(
+            outcome.audit[0].decision,
+            Decision::Allow,
+            "the grant allowed the call, the path rule refused it"
+        );
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&root);
     }
@@ -1001,7 +1067,10 @@ mod tests {
                (call $write (i32.const 0) (i32.const 7) (i32.const 16) (i32.const 7))))"#;
         let path = module_file("write", source);
         let outcome = run_file(&path, Some(grant(&root, false, true))).expect("run");
-        assert_eq!(outcome.exit_code, -1, "the default policy for a write is ask");
+        assert_eq!(
+            outcome.exit_code, -1,
+            "the default policy for a write is ask"
+        );
         assert_eq!(outcome.audit[0].decision, Decision::Ask);
         assert!(!root.join("out.txt").exists());
 

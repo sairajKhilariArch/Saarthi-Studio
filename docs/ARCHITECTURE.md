@@ -111,7 +111,7 @@ Linux tarball + AppImage + `SHA256SUMS.txt`, Windows zip, macOS universal
 tarball (unsigned), Android APK/AAB, VS Code VSIX — each job attaches its own
 artifact with `softprops/action-gh-release`. CI gates: `desktop-ci.yml`
 (clippy `-D warnings`, tests, ubuntu + macOS), `rust-host-api-ci.yml`
-(rustfmt on four host modules, tests, clippy), `android-ci.yml` (unit, lint,
+(a whole-tree `cargo fmt --check`, tests, clippy), `android-ci.yml` (unit, lint,
 assemble, emulator instrumentation, hard validation gate).
 
 ## 7. Architectural boundaries that must not erode

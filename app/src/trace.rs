@@ -99,7 +99,10 @@ mod tests {
             accept("0f8b1c4a-7a4e-4f47-9f0e-5b1c2d3e4f50").as_deref(),
             Some("0f8b1c4a-7a4e-4f47-9f0e-5b1c2d3e4f50")
         );
-        assert_eq!(accept("  build-2026-11-09  ").as_deref(), Some("build-2026-11-09"));
+        assert_eq!(
+            accept("  build-2026-11-09  ").as_deref(),
+            Some("build-2026-11-09")
+        );
     }
 
     #[test]

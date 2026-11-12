@@ -82,6 +82,13 @@ jobs:
       - name: Test the macOS bundle packager
         run: bash scripts/ci/test-bundle.sh
 
+      # rustfmt ships in the pinned toolchain and the whole tree is formatted, so
+      # an unformatted change fails on the push instead of making every later
+      # diff noisy.
+      - name: Check Rust formatting
+        working-directory: app
+        run: cargo fmt --check
+
       - name: Build debug binary
         working-directory: app
         run: cargo build --locked

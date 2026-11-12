@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.19.0 (2026-11-12):** The formatting gap closes. `cargo fmt` over
+`app/` reformatted 17 files without touching behaviour, `desktop-ci.yml` runs
+`cargo fmt --check` before its build, and `rust-host-api-ci.yml` now checks the
+whole manifest instead of four host modules. KNOWN-ISSUES #10 is fixed; clippy on
+Windows/macOS (#11) is the remaining quality gate gap. No phase row moved.
+
 **Revision 3.18.0 (2026-11-12):** Phase 9's last Git gap closes: a history
 rewrite can be taken back from the pane. The reflog route lists the newest
 `HEAD@{n}` entries and reports an unfinished merge or rebase; the undo route

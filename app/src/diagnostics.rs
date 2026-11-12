@@ -581,7 +581,10 @@ async fn timeline_route(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if let Some(named) = area.as_deref() {
-        if !matches!(named, "provider" | "permission" | "agent" | "router" | "mcp") {
+        if !matches!(
+            named,
+            "provider" | "permission" | "agent" | "router" | "mcp"
+        ) {
             return crate::json_error(
                 StatusCode::BAD_REQUEST,
                 "area must be provider, permission, agent, router or mcp",
@@ -659,8 +662,7 @@ pub(crate) fn readiness_value(state: &AppState) -> Value {
 
     // The schema version decides whether this build may write here at all, so a
     // mismatch is reported rather than left to whatever the first query does.
-    let version = open_db(&state.database_path)
-        .and_then(|conn| crate::schema::read_version(&conn));
+    let version = open_db(&state.database_path).and_then(|conn| crate::schema::read_version(&conn));
     checks.push(match version {
         Ok(version) if version == crate::schema::SCHEMA_VERSION => {
             check("schema", true, true, format!("version {version}"))
@@ -1005,7 +1007,10 @@ mod tests {
     fn readiness_requires_only_the_database_and_a_writable_data_directory() {
         let state = fixture("ready");
         let ready = readiness_value(&state);
-        assert_eq!(ready["ready"], true, "a fixture with a live database is ready");
+        assert_eq!(
+            ready["ready"], true,
+            "a fixture with a live database is ready"
+        );
         let checks = ready["checks"].as_array().expect("checks");
         let names: Vec<&str> = checks
             .iter()

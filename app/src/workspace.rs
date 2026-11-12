@@ -367,7 +367,11 @@ pub(crate) fn fingerprint_tree(root: &FsPath) -> (String, usize, bool) {
         modified.hash(&mut hasher);
         size.hash(&mut hasher);
     }
-    (format!("{:016x}", hasher.finish()), entries.len(), truncated)
+    (
+        format!("{:016x}", hasher.finish()),
+        entries.len(),
+        truncated,
+    )
 }
 
 fn canonical_dir(path: &str) -> Option<PathBuf> {
@@ -1606,7 +1610,11 @@ mod tests {
         assert_eq!(first, ignored, "generated output must not move the hash");
         assert_eq!(files, 1);
 
-        fs::write(fixture.path("src/app.rs"), "fn main() { println!(\"hi\"); }\n").unwrap();
+        fs::write(
+            fixture.path("src/app.rs"),
+            "fn main() { println!(\"hi\"); }\n",
+        )
+        .unwrap();
         let (edited, _, _) = fingerprint_tree(&root);
         assert_ne!(first, edited, "an edit must move the hash");
 

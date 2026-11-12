@@ -20,10 +20,7 @@ pub(crate) fn open_url(url: &str) {
     // cannot make that promise: cmd splits the line at every `&`.
     let program = (
         "rundll32",
-        vec![
-            "url.dll,FileProtocolHandler".to_string(),
-            url.to_string(),
-        ],
+        vec!["url.dll,FileProtocolHandler".to_string(), url.to_string()],
     );
 
     match std::process::Command::new(program.0)

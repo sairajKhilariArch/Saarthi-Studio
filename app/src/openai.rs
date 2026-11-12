@@ -340,9 +340,7 @@ pub(crate) fn is_format_rejection(status: u16, body: &str) -> bool {
         return false;
     }
     let body = body.to_ascii_lowercase();
-    body.contains("json_schema")
-        || body.contains("text.format")
-        || body.contains("response_format")
+    body.contains("json_schema") || body.contains("text.format") || body.contains("response_format")
 }
 
 /// Visible answer text: the `output_text` parts of `message` items, falling
@@ -1109,14 +1107,10 @@ mod tests {
         let client = reqwest::Client::new();
         let mut body = request_body("schema-retry-model", &transcript(), None, false);
         with_step_format(&mut body);
-        let (answer, meta) = responses_once(
-            &client,
-            &format!("http://{address}"),
-            "test-key",
-            body,
-        )
-        .await
-        .expect("the retry answered");
+        let (answer, meta) =
+            responses_once(&client, &format!("http://{address}"), "test-key", body)
+                .await
+                .expect("the retry answered");
         assert_eq!(answer, "{\"action\":\"think\"}");
         assert_eq!(meta["format_dropped"], true);
         assert_eq!(meta["reasoning_dropped"], false);
@@ -1217,7 +1211,10 @@ mod tests {
         assert_eq!(name, "delete_everything");
         let action: Value = serde_json::from_str(&action).unwrap();
         assert_eq!(action["action"], "think");
-        assert!(action["summary"].as_str().unwrap().contains("delete_everything"));
+        assert!(action["summary"]
+            .as_str()
+            .unwrap()
+            .contains("delete_everything"));
 
         // Arguments that are not JSON are read as none, not as a failure.
         let broken = json!({"output": [{"type": "function_call", "name": "read_file", "arguments": "not json"}]});
@@ -1267,14 +1264,10 @@ mod tests {
         let mut body = request_body("tool-call-model", &transcript(), None, false);
         with_step_format(&mut body);
         with_step_tools(&mut body, false, true);
-        let (answer, meta) = responses_once(
-            &client,
-            &format!("http://{address}"),
-            "test-key",
-            body,
-        )
-        .await
-        .expect("the call came back");
+        let (answer, meta) =
+            responses_once(&client, &format!("http://{address}"), "test-key", body)
+                .await
+                .expect("the call came back");
         assert!(answer.contains("\"write\""), "{answer}");
         assert!(answer.contains("note.txt"), "{answer}");
         assert_eq!(meta["tool_call"], "write_file");

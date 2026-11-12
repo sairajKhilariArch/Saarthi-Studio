@@ -47,13 +47,10 @@ jobs:
         with:
           workspaces: app -> target
 
-      - name: Check formatting of host modules
-        run: |
-          rustfmt --edition 2021 --check \
-            app/src/host_auth.rs \
-            app/src/host_api.rs \
-            app/src/host_transport.rs \
-            app/src/host_security.rs
+      # The whole tree is formatted, so this is the same gate as desktop-ci's;
+      # checking four modules here only let the rest drift.
+      - name: Check formatting
+        run: cargo fmt --manifest-path app/Cargo.toml --check
 
       - name: Run Rust tests
         run: cargo test --manifest-path app/Cargo.toml

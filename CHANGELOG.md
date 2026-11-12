@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.19.0
+
+The Rust tree is formatted once, and the formatting check now covers all of it
+instead of four host modules.
+
+- **The tree is formatted.** `cargo fmt` over `app/` touched 17 files (482
+  insertions, 318 deletions): wrapped arguments, split tuples and one-line
+  expressions. No logic, route, schema or dependency changed, and
+  `cargo test --locked` plus clippy are unchanged apart from the version.
+- **`desktop-ci.yml` gained the gate.** The Linux job runs `cargo fmt --check`
+  before the build, so an unformatted change fails on the push instead of making
+  the next diff noisy. `rustfmt` ships in the pinned toolchain, so no new setup.
+- **`rust-host-api-ci.yml` checks the whole tree.** Its four-module `rustfmt`
+  step became `cargo fmt --manifest-path app/Cargo.toml --check`; checking only
+  the host modules is exactly how the other 17 files drifted while that job
+  stayed green.
+- KNOWN-ISSUES #10 is closed. The remaining formatting-adjacent gap is clippy on
+  Windows and macOS, which still runs only on Linux (#11).
+
+Verified: `cargo fmt --check` clean on the whole manifest (108 diffs before the
+change); `cargo test --locked` 575 passed, 1 ignored; clippy
+`--all-targets -D warnings` clean; `test-frontend.sh` 48 passed;
+`test-version.sh` 20/20; `test-e2e.sh` 32 passed. **Not run:** CI itself — the two
+workflows were parsed locally, not executed on GitHub.
+
 ## 3.18.0
 
 Phase 9's last Git gap: local history that was rewritten by accident can be

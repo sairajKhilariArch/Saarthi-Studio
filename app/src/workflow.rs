@@ -307,15 +307,16 @@ fn parse_edges(node_id: &str, raw: Option<&Value>) -> Result<Vec<Edge>, String> 
         let edge = match entry {
             Value::String(id) => Edge {
                 id: clean_id(id).ok_or_else(|| {
-                    format!("Node \"{node_id}\": a dependency id must be 1-40 letters, digits, - or _.")
+                    format!(
+                        "Node \"{node_id}\": a dependency id must be 1-40 letters, digits, - or _."
+                    )
                 })?,
                 when: When::Succeeded,
             },
             Value::Object(map) => {
                 let id = map.get("id").and_then(Value::as_str).unwrap_or("");
-                let id = clean_id(id).ok_or_else(|| {
-                    format!("Node \"{node_id}\": a dependency needs a valid id.")
-                })?;
+                let id = clean_id(id)
+                    .ok_or_else(|| format!("Node \"{node_id}\": a dependency needs a valid id."))?;
                 let when = match map.get("when").and_then(Value::as_str).unwrap_or("succeeded") {
                     "succeeded" => When::Succeeded,
                     "failed" => When::Failed,
@@ -398,7 +399,8 @@ fn validate_nodes(raw: &Value) -> Result<Vec<ValidNode>, String> {
             } else {
                 requested
             };
-            crate::agent::checked_profile(&requested).map_err(|error| format!("Node \"{id}\": {error}"))?
+            crate::agent::checked_profile(&requested)
+                .map_err(|error| format!("Node \"{id}\": {error}"))?
         } else {
             String::new()
         };
@@ -520,15 +522,13 @@ fn status_of<'a>(statuses: &'a HashMap<String, String>, id: &str) -> &'a str {
 /// Whether the edge conditions are met is a separate question: an unmet branch
 /// skips the node instead of blocking the graph.
 fn next_ready(nodes: &[ValidNode], statuses: &HashMap<String, String>) -> Option<usize> {
-    nodes
-        .iter()
-        .position(|node| {
-            status_of(statuses, &node.id) == "pending"
-                && node
-                    .depends_on
-                    .iter()
-                    .all(|edge| is_settled(status_of(statuses, &edge.id)))
-        })
+    nodes.iter().position(|node| {
+        status_of(statuses, &node.id) == "pending"
+            && node
+                .depends_on
+                .iter()
+                .all(|edge| is_settled(status_of(statuses, &edge.id)))
+    })
 }
 
 fn edges_satisfied(node: &ValidNode, statuses: &HashMap<String, String>) -> bool {
@@ -608,9 +608,11 @@ fn run_status(state: &AppState, run_id: &str) -> String {
     crate::open_db(&state.database_path)
         .ok()
         .and_then(|conn| {
-            conn.query_row("SELECT status FROM workflow_runs WHERE id=?1", [run_id], |row| {
-                row.get::<_, String>(0)
-            })
+            conn.query_row(
+                "SELECT status FROM workflow_runs WHERE id=?1",
+                [run_id],
+                |row| row.get::<_, String>(0),
+            )
             .ok()
         })
         .unwrap_or_default()
@@ -654,9 +656,9 @@ fn step_rows(state: &AppState, run_id: &str) -> Vec<(String, String)> {
     let Ok(conn) = crate::open_db(&state.database_path) else {
         return Vec::new();
     };
-    let Ok(mut stmt) = conn.prepare(
-        "SELECT node_id, status FROM workflow_steps WHERE run_id=?1 ORDER BY rowid",
-    ) else {
+    let Ok(mut stmt) =
+        conn.prepare("SELECT node_id, status FROM workflow_steps WHERE run_id=?1 ORDER BY rowid")
+    else {
         return Vec::new();
     };
     let Ok(rows) = stmt.query_map([run_id], |row| {
@@ -689,7 +691,8 @@ fn step_statuses(state: &AppState, run_id: &str) -> HashMap<String, String> {
     let Ok(conn) = crate::open_db(&state.database_path) else {
         return map;
     };
-    let Ok(mut stmt) = conn.prepare("SELECT node_id, status FROM workflow_steps WHERE run_id=?1") else {
+    let Ok(mut stmt) = conn.prepare("SELECT node_id, status FROM workflow_steps WHERE run_id=?1")
+    else {
         return map;
     };
     let Ok(rows) = stmt.query_map([run_id], |row| {
@@ -704,7 +707,10 @@ fn step_statuses(state: &AppState, run_id: &str) -> HashMap<String, String> {
 }
 
 fn cancelled(state: &AppState, run_id: &str) -> bool {
-    matches!(run_status(state, run_id).as_str(), "cancelled" | "interrupted")
+    matches!(
+        run_status(state, run_id).as_str(),
+        "cancelled" | "interrupted"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -796,12 +802,7 @@ async fn execute(state: &AppState, run_id: &str, nodes: &[ValidNode]) {
     }
 }
 
-async fn execute_node(
-    state: &AppState,
-    run_id: &str,
-    node: &ValidNode,
-    attempt: i64,
-) -> StepEnd {
+async fn execute_node(state: &AppState, run_id: &str, node: &ValidNode, attempt: i64) -> StepEnd {
     match node.kind {
         Kind::Agent => execute_agent(state, run_id, node, attempt).await,
         Kind::Approval => execute_approval(state, run_id, node).await,
@@ -827,11 +828,15 @@ fn execute_condition(state: &AppState, run_id: &str, node: &ValidNode) -> StepEn
         .map(|edge| format!("{}={}", edge.id, status_of(&statuses, &edge.id)))
         .collect::<Vec<_>>()
         .join(", ");
-    let matched = node.depends_on.iter().all(|edge| {
-        status_of(&statuses, &edge.id) == node.expect.as_str()
-    });
+    let matched = node
+        .depends_on
+        .iter()
+        .all(|edge| status_of(&statuses, &edge.id) == node.expect.as_str());
     if matched {
-        StepEnd::Succeeded(format!("Every dependency ended {} ({observed}).", node.expect.as_str()))
+        StepEnd::Succeeded(format!(
+            "Every dependency ended {} ({observed}).",
+            node.expect.as_str()
+        ))
     } else {
         StepEnd::Failed(format!(
             "Expected every dependency to end {} but found {observed}.",
@@ -869,11 +874,7 @@ async fn execute_approval(state: &AppState, run_id: &str, node: &ValidNode) -> S
     }
 }
 
-fn insert_agent_run(
-    state: &AppState,
-    node: &ValidNode,
-    prompt: &str,
-) -> Result<String, String> {
+fn insert_agent_run(state: &AppState, node: &ValidNode, prompt: &str) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let project = crate::active_project_id(state);
     let (snapshot, model) = crate::run_record_snapshot(
@@ -908,24 +909,17 @@ fn insert_agent_run(
 }
 
 fn agent_outcome(state: &AppState, run_id: &str) -> Option<(String, String)> {
-    crate::open_db(&state.database_path)
+    crate::open_db(&state.database_path).ok().and_then(|conn| {
+        conn.query_row(
+            "SELECT status, error FROM agent_runs WHERE id=?1",
+            [run_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
         .ok()
-        .and_then(|conn| {
-            conn.query_row(
-                "SELECT status, error FROM agent_runs WHERE id=?1",
-                [run_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .ok()
-        })
+    })
 }
 
-async fn execute_agent(
-    state: &AppState,
-    run_id: &str,
-    node: &ValidNode,
-    attempt: i64,
-) -> StepEnd {
+async fn execute_agent(state: &AppState, run_id: &str, node: &ValidNode, attempt: i64) -> StepEnd {
     if state.workspace.root().is_err() {
         return StepEnd::Failed(
             "Open a workspace folder first — agent nodes run inside it.".to_string(),
@@ -989,18 +983,14 @@ async fn execute_agent(
             last = status.clone();
         }
         match status.as_str() {
-            "succeeded" => {
-                return StepEnd::Succeeded(format!("Agent run {agent_id} succeeded."))
-            }
+            "succeeded" => return StepEnd::Succeeded(format!("Agent run {agent_id} succeeded.")),
             "failed" | "cancelled" | "interrupted" => {
                 let suffix = if error.trim().is_empty() {
                     String::new()
                 } else {
                     format!(": {}", cap(error.trim(), MAX_ERROR_CHARS))
                 };
-                return StepEnd::Failed(format!(
-                    "Agent run {agent_id} ended {status}{suffix}"
-                ));
+                return StepEnd::Failed(format!("Agent run {agent_id} ended {status}{suffix}"));
             }
             _ => {}
         }
@@ -1188,7 +1178,10 @@ fn parse_import(document: &Value) -> Result<ImportedGraph, String> {
     );
     let skill = clipped(document.get("skill").and_then(Value::as_str), 160);
     let every_minutes = parse_interval(
-        document.get("everyMinutes").and_then(Value::as_i64).unwrap_or(0),
+        document
+            .get("everyMinutes")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
     )?;
     let raw = document.get("nodes").cloned().unwrap_or_else(|| json!([]));
     let nodes = if matches!(raw, Value::Null) {
@@ -1230,10 +1223,7 @@ pub(crate) async fn export(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    let Some(workflow) = load(&state)
-        .into_iter()
-        .find(|workflow| workflow.id == id)
-    else {
+    let Some(workflow) = load(&state).into_iter().find(|workflow| workflow.id == id) else {
         return not_found("No such workflow.");
     };
     let body = match serde_json::to_string_pretty(&export_document(&workflow)) {
@@ -1289,7 +1279,10 @@ pub(crate) async fn save(State(state): State<AppState>, Json(input): Json<Value>
     let name = clipped(input.get("name").and_then(Value::as_str), 64)
         .trim()
         .to_string();
-    let prompt = clipped(input.get("prompt").and_then(Value::as_str), MAX_PROMPT_CHARS);
+    let prompt = clipped(
+        input.get("prompt").and_then(Value::as_str),
+        MAX_PROMPT_CHARS,
+    );
     let skill = clipped(input.get("skill").and_then(Value::as_str), 160);
     if name.is_empty() {
         return bad("A workflow needs a name.");
@@ -1308,7 +1301,10 @@ pub(crate) async fn save(State(state): State<AppState>, Json(input): Json<Value>
     }
 
     let every_minutes = match parse_interval(
-        input.get("everyMinutes").and_then(Value::as_i64).unwrap_or(0),
+        input
+            .get("everyMinutes")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
     ) {
         Ok(minutes) => minutes,
         Err(error) => return bad(error),
@@ -1332,7 +1328,9 @@ pub(crate) async fn save(State(state): State<AppState>, Json(input): Json<Value>
     // so saving a workflow never makes it due immediately by accident.
     let schedule_since = match (&previous, every_minutes) {
         (_, 0) => 0.0,
-        (Some(previous), minutes) if previous.every_minutes == minutes && previous.schedule_since > 0.0 => {
+        (Some(previous), minutes)
+            if previous.every_minutes == minutes && previous.schedule_since > 0.0 =>
+        {
             previous.schedule_since
         }
         _ => now(),
@@ -1398,11 +1396,7 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
     }
 }
 
-fn begin_run(
-    state: &AppState,
-    workflow: &Workflow,
-    nodes: &[ValidNode],
-) -> Result<String, String> {
+fn begin_run(state: &AppState, workflow: &Workflow, nodes: &[ValidNode]) -> Result<String, String> {
     let run_id = uuid::Uuid::new_v4().to_string();
     insert_run(state, &run_id, workflow)?;
     if let Err(error) = insert_steps(state, &run_id, nodes) {
@@ -1495,7 +1489,10 @@ async fn tick(state: &AppState) {
                     "info",
                     "workflow",
                     "scheduled",
-                    format!("{} started run {run_id} (every {} min)", workflow.name, workflow.every_minutes),
+                    format!(
+                        "{} started run {run_id} (every {} min)",
+                        workflow.name, workflow.every_minutes
+                    ),
                 );
             }
             Err(error) => {
@@ -1658,9 +1655,11 @@ pub(crate) async fn resume(
     let workflow_id = crate::open_db(&state.database_path)
         .ok()
         .and_then(|conn| {
-            conn.query_row("SELECT workflow_id FROM workflow_runs WHERE id=?1", [&id], |row| {
-                row.get::<_, String>(0)
-            })
+            conn.query_row(
+                "SELECT workflow_id FROM workflow_runs WHERE id=?1",
+                [&id],
+                |row| row.get::<_, String>(0),
+            )
             .ok()
         })
         .unwrap_or_default();
@@ -1678,9 +1677,15 @@ pub(crate) async fn resume(
     if steps.is_empty() {
         return bad("This run has no recorded steps to resume from.");
     }
-    let mut stored = steps.iter().map(|(node, _)| node.as_str()).collect::<Vec<_>>();
+    let mut stored = steps
+        .iter()
+        .map(|(node, _)| node.as_str())
+        .collect::<Vec<_>>();
     stored.sort_unstable();
-    let mut expected = nodes.iter().map(|node| node.id.as_str()).collect::<Vec<_>>();
+    let mut expected = nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<Vec<_>>();
     expected.sort_unstable();
     if stored != expected {
         return bad(
@@ -1715,7 +1720,10 @@ pub(crate) async fn cancel(
     if status.is_empty() {
         return not_found("No such workflow run.");
     }
-    if matches!(status.as_str(), "succeeded" | "failed" | "cancelled" | "interrupted") {
+    if matches!(
+        status.as_str(),
+        "succeeded" | "failed" | "cancelled" | "interrupted"
+    ) {
         return bad(format!("This workflow run already ended {status}."));
     }
     set_run(&state, &id, "cancelled", "Cancelled by the user.");
@@ -1851,14 +1859,8 @@ mod tests {
                 ]),
                 "cycle",
             ),
-            (
-                json!([{ "id": "a", "kind": "agent" }]),
-                "needs a prompt",
-            ),
-            (
-                json!([{ "id": "a", "kind": "teleport" }]),
-                "unknown kind",
-            ),
+            (json!([{ "id": "a", "kind": "agent" }]), "needs a prompt"),
+            (json!([{ "id": "a", "kind": "teleport" }]), "unknown kind"),
             (
                 json!([{ "id": "a", "kind": "condition" }]),
                 "at least one dependency",

@@ -771,7 +771,13 @@ fn set_run(
     let conn = db(state)?;
     conn.execute(
         "UPDATE agent_runs SET status=?1, error=?2, pending_action=?3, updated_at=?4 WHERE id=?5",
-        params![status, error.unwrap_or(""), pending.unwrap_or(""), now(), run_id],
+        params![
+            status,
+            error.unwrap_or(""),
+            pending.unwrap_or(""),
+            now(),
+            run_id
+        ],
     )
     .map_err(|e| e.to_string())?;
     // Nothing is in flight once a run stops running: a placeholder that outlived
@@ -1131,12 +1137,7 @@ fn reorder_queued(
         .optional()
         .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
     match status.as_deref() {
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                format!("Unknown run id: {run_id}"),
-            ))
-        }
+        None => return Err((StatusCode::NOT_FOUND, format!("Unknown run id: {run_id}"))),
         Some(QUEUED) => {}
         Some(other) => {
             return Err((
@@ -6043,7 +6044,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         // A run with nothing installed must not advertise a dead action.
         let bare = build_messages_with(&run, "(no steps yet)", "", &[]);
         let bare_prompt = bare[0]["content"].as_str().unwrap_or("");
-        assert!(!bare_prompt.contains("\"action\":\"extension\""), "{bare_prompt}");
+        assert!(
+            !bare_prompt.contains("\"action\":\"extension\""),
+            "{bare_prompt}"
+        );
     }
 
     #[tokio::test]
@@ -6077,11 +6081,11 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         add_step(&fixture.state, "run-live", "read", "read a file", "hi").unwrap();
         let conn = db(&fixture.state).unwrap();
         let rows: Vec<(i64, String, String)> = conn
-            .prepare("SELECT seq, action, status FROM agent_steps WHERE run_id='run-live' ORDER BY seq")
+            .prepare(
+                "SELECT seq, action, status FROM agent_steps WHERE run_id='run-live' ORDER BY seq",
+            )
             .unwrap()
-            .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .unwrap()
             .filter_map(Result::ok)
             .collect();
@@ -6133,7 +6137,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         }
         drop(conn);
 
-        let response = crate::workflow::cancel(State(state.clone()), Path("wf-run".to_string())).await;
+        let response =
+            crate::workflow::cancel(State(state.clone()), Path("wf-run".to_string())).await;
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
@@ -6149,9 +6154,11 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         );
         let reason: String = crate::open_db(&state.database_path)
             .expect("db")
-            .query_row("SELECT error FROM agent_runs WHERE id='child-live'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT error FROM agent_runs WHERE id='child-live'",
+                [],
+                |row| row.get(0),
+            )
             .expect("the reason is recorded");
         assert_eq!(reason, "The workflow run was cancelled.");
         // A finished child is not rewritten by the workflow's cancel.

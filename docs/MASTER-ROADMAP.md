@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.18.0
+## Remaining work at 3.19.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -76,7 +76,7 @@ This is the ordered backlog for the current tree. It supersedes older
 
 - Browser-level layout checks for the IDE and workflow canvas, and a privileged
   ENOSPC test.
-- Full `rustfmt` coverage and clippy on Windows/macOS as well as Linux.
+- Clippy on Windows/macOS as well as Linux (the whole tree is rustfmt-gated since 3.19.0).
 - AppStream validation for the renamed Linux package; real-device checks for the
   macOS/Windows/Android icons.
 - Reconcile the diverged `website` branch. (The stale workflow names in
@@ -91,6 +91,13 @@ the workflow engine, and the testing layers are functionally complete. Their
 remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
+
+Delivered in 3.19.0:
+
+- The whole Rust tree is formatted, and both Rust workflows check all of it:
+  `desktop-ci.yml` runs `cargo fmt --check` before the build, and
+  `rust-host-api-ci.yml` no longer checks only four host modules. This closes
+  KNOWN-ISSUES #10; clippy on Windows/macOS (#11) is what remains.
 
 Delivered in 1.26.4:
 
