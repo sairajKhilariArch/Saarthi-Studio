@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.8.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.15.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -16,6 +16,12 @@ implementation), **Broken** (exists and fails).
 | Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
+
+**Revision 3.15.0 (2026-11-12):** A workflow cancel stops what the graph started.
+`agent::stop_run` is now the one cancel path — wake a live loop's flag, persist
+`cancelled`, notify — shared by the per-run route and by `workflow::cancel`, which
+cancels every child agent run the run's steps recorded and answers
+`stoppedAgentRuns`. Phase 13's remaining work is the automated canvas test.
 
 **Revision 3.14.0 (2026-11-12):** Phase 15's compatibility row closes: a
 dependency that itself needs a newer build now blocks the folder that needs it
@@ -349,7 +355,7 @@ below carry the evidence.
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
-| 13 | Workflow builder | Working | automated browser test; child agent cancellation |
+| 13 | Workflow builder | Working | automated browser test; a workflow cancel stops the child agent runs it started (3.15.0) |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
 | 15 | Extension ecosystem | Partial | provider adapters, UI extensions |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
@@ -565,7 +571,7 @@ persisted execution of it.
 | Dependencies and branches | Working (2.9.0) | `dependsOn` ids or `{id, when: "failed"}`; an unmet edge marks the node `skipped`; a failure counts as handled only when its repair branch succeeded |
 | Validation before execution | Working (2.9.0) | ids, kinds, profiles, missing deps, self references, cycles, per-kind requirements, a 50-node cap — each error names the node |
 | Persisted run history | Working (2.9.0) | `workflow_runs`/`workflow_steps` carry status, output, timing and the agent run id; a boot sweep marks a run the process abandoned as `interrupted` |
-| Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph (a child agent run in flight is not forcibly stopped) |
+| Retry and cancel | Working (2.9.0) | per-node retries (0–3); cancel stops the graph and, since 3.15.0, also cancels the child agent runs it started, naming them in `stoppedAgentRuns` — a child that already finished is left alone |
 | Visual editor | Working (2.12.0) | canvas cards in dependency columns with SVG edges (dashed for `failed`), add-by-kind, rename/delete (dependencies rewritten), inspector for every node field, per-edge `when`; the JSON field remains as a synced advanced view. cards can be dragged and the position is stored on the node (2.47.0); graph helpers are unit-tested, but rendering and dragging are not, and the canvas was driven in Chromium once (2.49.0) — drag, live edges, clamping and a position restored after reload — though no automated browser test exists |
 | Graph import/export | Working (2.13.0) | export is a versioned `sarthi.workflow` document; import runs the save-time validation before writing, assigns a new id and a unique name, and starts a fresh schedule window |
 | Scheduled execution | Working (2.10.0) | `everyMinutes` 5–10080 (0 = manual), checked every 30 s; the anchor is the later of the last run and the window start, a live run is not stacked, and the window is claimed in SQLite (2.48.0) so two processes sharing one home cannot both start it |

@@ -1719,7 +1719,39 @@ pub(crate) async fn cancel(
         return bad(format!("This workflow run already ended {status}."));
     }
     set_run(&state, &id, "cancelled", "Cancelled by the user.");
-    ok(json!({ "ok": true, "status": "cancelled" }))
+    // Stop what the graph started. A node's agent run is its own live task, so
+    // cancelling the workflow alone would leave it writing files for a task the
+    // user has already stopped; it is cancelled through the same path the
+    // per-run route uses.
+    let stopped = stop_child_agent_runs(&state, &id);
+    if !stopped.is_empty() {
+        let _ = crate::agent::dispatch(&state).await;
+    }
+    ok(json!({ "ok": true, "status": "cancelled", "stoppedAgentRuns": stopped }))
+}
+
+/// Cancel every live agent run this workflow started. A child that already
+/// finished is left alone and is not reported as stopped.
+fn stop_child_agent_runs(state: &AppState, run_id: &str) -> Vec<String> {
+    let Ok(conn) = crate::open_db(&state.database_path) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT agent_run_id FROM workflow_steps WHERE run_id=?1 AND agent_run_id<>''",
+    ) else {
+        return Vec::new();
+    };
+    let children: Vec<String> = stmt
+        .query_map([run_id], |row| row.get::<_, String>(0))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default();
+    drop(stmt);
+    children
+        .into_iter()
+        .filter(|child| {
+            crate::agent::stop_run(state, child, "The workflow run was cancelled.").is_ok()
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

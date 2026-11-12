@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.15.0
+
+Phase 13's last execution gap closes: cancelling a workflow now stops the agent
+runs its nodes started, instead of leaving them working on a task the user has
+already stopped.
+
+- **A workflow cancel reaches its child agent runs.** An `agent` node starts a
+  real agent run as its own live task and polls its status; cancelling the
+  workflow only marked the workflow run `cancelled`, so the child kept reading,
+  writing and running commands until it finished. `POST
+  /api/workflow-runs/:id/cancel` now cancels every live child recorded in
+  `workflow_steps.agent_run_id` and answers `stoppedAgentRuns` with their ids.
+  The child's reason is "The workflow run was cancelled.", which is what the
+  agent's step log shows.
+- **One cancel path.** `agent::stop_run` (wake a live loop's cancel flag, persist
+  the terminal state, notify the UI) is now shared by the per-run cancel route
+  and the workflow cancel, so both write the same record and both free the
+  run's slot through the dispatcher. A run that finished between the check and
+  the write is still answered as "Run is not running." (400), not a 500.
+- **Only live children are touched.** A step that already finished keeps its
+  status and is not listed in `stoppedAgentRuns`; a paused or queued child is
+  cancelled from its record, since its loop is already parked.
+
+Verified: `cargo test --locked` 567 passed, 1 ignored (new:
+`cancelling_a_workflow_stops_its_child_agent_run`, which inserts one live and one
+finished child, cancels the workflow and asserts the live one is `cancelled` with
+the workflow's reason, the finished one is untouched, and only the live id is
+reported). Clippy `--all-targets -D warnings` clean. **Not run:** the workflow
+panel was not driven in a browser; the UI ignores the new response field and
+reflects the child through the run events it already listens to.
+
 ## 3.14.0
 
 Phase 15's compatibility row closes: a dependency that cannot run here now blocks

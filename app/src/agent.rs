@@ -1007,7 +1007,7 @@ fn promote(state: &AppState, run_id: &str) -> bool {
 /// Two passes at once could both see the same free slot, so the pass holds one
 /// process-wide lock. The status change is conditional as well, which is what
 /// keeps a raced promotion from starting the same run twice.
-async fn dispatch(state: &AppState) -> Vec<String> {
+pub(crate) async fn dispatch(state: &AppState) -> Vec<String> {
     static PASS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
     let _pass = PASS.lock().await;
     // Above one run, isolation is a real checkout per run: a folder that is not a
@@ -4433,6 +4433,30 @@ async fn restore_step(
     Json(json!({ "ok": true, "path": path })).into_response()
 }
 
+/// Stop one run: wake a live loop's cancel flag, persist the terminal state, and
+/// tell the UI. The record is written for every live status, because a paused or
+/// queued run has already parked its loop and exists only in the record — the
+/// loop's own status check then never overwrites the terminal state. Shared by
+/// the per-run route and by a workflow cancel, so a workflow that stops does not
+/// leave an agent working for it.
+pub(crate) fn stop_run(state: &AppState, run_id: &str, reason: &str) -> Result<(), String> {
+    let live = matches!(
+        run_status(state, run_id).ok().flatten().as_deref(),
+        Some(RUNNING) | Some(AWAITING_APPROVAL) | Some(PAUSED) | Some(QUEUED)
+    );
+    if !live {
+        return Err("Run is not running.".to_string());
+    }
+    // 1) wake the cancel flag so a live loop exits, 2) persist the state, and
+    // the loop's status check will never overwrite a terminal state.
+    if let Some(control) = ACTIVE.lock().unwrap().get(run_id) {
+        control.cancel.store(true, Ordering::Relaxed);
+    }
+    let outcome = finish(state, run_id, CANCELLED, reason);
+    notify(state, Some(run_id));
+    outcome
+}
+
 /// Emergency stop: cancel every live agent run in one call. A run counts as
 /// live when its stored status is `running` or `awaiting_approval` — exactly
 /// the statuses the per-run cancel endpoint refuses to leave behind — and the
@@ -4578,19 +4602,18 @@ async fn cancel_run(State(state): State<AppState>, Path(run_id): Path<String>) -
     ) {
         return error_response(StatusCode::BAD_REQUEST, "Run is not running.");
     }
-    // 1) wake the cancel flag so a live loop exits, 2) persist the state, and
-    // the loop's status check will never overwrite a terminal state.
-    if let Some(control) = ACTIVE.lock().unwrap().get(&run_id) {
-        control.cancel.store(true, Ordering::Relaxed);
-    }
-    let outcome = finish(&state, &run_id, CANCELLED, "Cancelled by user.");
-    notify(&state, Some(&run_id));
+    let outcome = stop_run(&state, &run_id, "Cancelled by user.");
     if outcome.is_ok() {
         // A cancelled run frees its slot (or its queue entry).
         let _ = dispatch(&state).await;
     }
     match outcome {
         Ok(()) => Json(json!({ "ok": true, "status": CANCELLED })).into_response(),
+        // The run finished between the check above and the write: the same
+        // answer the check would have given, not a server error.
+        Err(error) if error == "Run is not running." => {
+            error_response(StatusCode::BAD_REQUEST, error)
+        }
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
 }
@@ -6075,6 +6098,68 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             )
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_workflow_stops_its_child_agent_run() {
+        // No model call is made here: the fixture only supplies a database, a
+        // workspace and a config, and the child runs are inserted directly.
+        let fx = run_fixture("workflow-cancel-child", "http://127.0.0.1:9");
+        let state = fx.state.clone();
+        let conn = crate::open_db(&state.database_path).expect("db");
+        crate::workflow::initialize(&conn).expect("workflow tables");
+        // One child still working, one that already finished.
+        for (id, status) in [("child-live", "running"), ("child-old", "succeeded")] {
+            conn.execute(
+                "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at) \
+                 VALUES(?1,'','goal',?2,0,0,0,12,'','',0,0)",
+                params![id, status],
+            )
+            .expect("agent run");
+        }
+        conn.execute(
+            "INSERT INTO workflow_runs(id,workflow_id,name,status,error,created_at,updated_at) \
+             VALUES('wf-run','wf','Build','running','',0,0)",
+            [],
+        )
+        .expect("workflow run");
+        for (node, child) in [("n0", "child-old"), ("n1", "child-live")] {
+            conn.execute(
+                "INSERT INTO workflow_steps(run_id,node_id,kind,title,status,output,agent_run_id,started_at,ended_at) \
+                 VALUES('wf-run',?1,'agent',?1,'running','',?2,0,0)",
+                params![node, child],
+            )
+            .expect("workflow step");
+        }
+        drop(conn);
+
+        let response = crate::workflow::cancel(State(state.clone()), Path("wf-run".to_string())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(payload["status"], json!("cancelled"));
+        // Only the child that was still working is reported as stopped.
+        assert_eq!(payload["stoppedAgentRuns"], json!(["child-live"]));
+
+        assert_eq!(
+            run_status(&state, "child-live").ok().flatten().as_deref(),
+            Some("cancelled")
+        );
+        let reason: String = crate::open_db(&state.database_path)
+            .expect("db")
+            .query_row("SELECT error FROM agent_runs WHERE id='child-live'", [], |row| {
+                row.get(0)
+            })
+            .expect("the reason is recorded");
+        assert_eq!(reason, "The workflow run was cancelled.");
+        // A finished child is not rewritten by the workflow's cancel.
+        assert_eq!(
+            run_status(&state, "child-old").ok().flatten().as_deref(),
+            Some("succeeded")
+        );
+        let _ = std::fs::remove_dir_all(&fx.root);
     }
 
     #[tokio::test]

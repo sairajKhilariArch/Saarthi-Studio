@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.14.0
+## Remaining work at 3.15.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -67,9 +67,10 @@ This is the ordered backlog for the current tree. It supersedes older
 - Phase 8: semantic search uses the router; there is no local embedding index.
 - Phase 12: no workstream remains open; Move up/Move down covers one-step queue
   reordering, but drag-and-drop is not promised.
-- Phase 13: add an automated browser test for the canvas and make cancellation
-  forcibly stop a child agent run in flight. Free positioning and cross-process
-  schedule claims shipped in 2.47.0/2.48.0.
+- Phase 13: add an automated browser test for the canvas. A workflow cancel now
+  stops the child agent runs it started and names them in `stoppedAgentRuns`
+  (3.15.0). Free positioning and cross-process schedule claims shipped in
+  2.47.0/2.48.0.
 
 ### Quality and repository hygiene
 
