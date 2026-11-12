@@ -1,5 +1,46 @@
 # Changelog
 
+## 3.18.0
+
+Phase 9's last Git gap: local history that was rewritten by accident can be
+taken back from the Source Control pane.
+
+- **Reflog listing.** `GET /api/workspace/git/reflog?limit=30` runs
+  `git reflog --format=%H%x09%gd%x09%gs%x09%aI` (clamped to 50), parses each row
+  into `{hash, selector, action, date}`, and adds `inProgress` (`"merge"`,
+  `"rebase"` or `null`). An unborn branch answers `{entries: []}` instead of an
+  error, the rule `git log` already follows.
+- **The undo takes its target from the list, not the request.**
+  `POST /api/workspace/git/undo {selector}` accepts only a selector the server
+  just served and resolves the commit from that entry. A raw hash, `main@{1}`,
+  `HEAD@{99}` or `HEAD@{0}` is a 400 naming the list. It is gated on the existing
+  `git` action with `undo <selector>` as its target.
+- **It refuses what it would destroy.** A merge or rebase in progress is a 409
+  naming the operation; tracked files with uncommitted changes are a 409 with
+  the count and "commit or stash first", because `git reset --hard` takes the
+  working tree with it. Untracked files are ignored, as they are everywhere else
+  in this module.
+- **The pane.** Source Control gains `Undo…`, which lists the newest entries with
+  selector, action and date, marks the current one, disables Restore while a
+  merge or rebase runs, and confirms the branch, selector, short hash and action
+  before it resets. After a successful restore it refreshes status, branch and
+  history and says what was undone.
+- **The undo can be undone.** The reset is itself a reflog entry, so the same
+  list offers the discarded commit back; a commit → undo → redo cycle is in the
+  tests.
+
+Verified: `cargo test --locked` 575 passed, 1 ignored (4 new: newest-first
+listing plus an empty one on an unborn branch, a commit → undo → redo cycle with
+file contents, a fast-forward merge undone to the pre-merge commit, and the
+dirty-tree during-merge and hand-made-selector refusals with HEAD unchanged);
+clippy `--all-targets -D warnings` clean; `node --check app/static/ide.js`;
+`test-frontend.sh` 48 passed; `test-version.sh` 20/20; `test-e2e.sh` 32 passed.
+Live headless on a scratch home and a scratch repository: the reflog served two
+entries newest first with `inProgress` empty, `POST /undo` moved HEAD to the
+first commit and removed the second's file, the same request then restored the
+second commit, a dirty tracked file was a 409 "Commit or stash", `HEAD@{99}` and
+`main@{1}` were 400s. **Not run:** the pane was not viewed in a browser.
+
 ## 3.17.0
 
 Phase 9's "arbitrary command presets": the Run panel can start a command the

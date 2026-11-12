@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.18.0 (2026-11-12):** Phase 9's last Git gap closes: a history
+rewrite can be taken back from the pane. The reflog route lists the newest
+`HEAD@{n}` entries and reports an unfinished merge or rebase; the undo route
+accepts only a selector from that list, resolves the commit itself, resets behind
+the `git` gate and refuses a dirty tracked tree or unfinished history work. The
+reset is its own reflog entry, so the list also redoes it. What remains in Phase
+9 is the editor engine, a debugger and watch mode.
+
 **Revision 3.17.0 (2026-11-12):** Phase 9's arbitrary-command gap closes. A
 command the user saved in Settings runs from the Problems pane beside the
 detected build and test commands: `command_presets` is configuration (never
@@ -368,7 +376,7 @@ below carry the evidence.
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
 | 8 | Memory and RAG | Working | semantic search is a router proxy, not a local index |
-| 9 | Developer environment | Partial | editor engine, debugger, watch mode, in-pane reflog undo |
+| 9 | Developer environment | Partial | editor engine, debugger, watch mode |
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
@@ -522,6 +530,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Git checkpoint before a run writes | Working (1.75.0) | any run started with writes or commands snapshots the whole tree before its first step: `git::snapshot_tree` builds a commit over a throwaway `GIT_INDEX_FILE`, so nothing in the user's index, worktree or history changes and untracked files are included; the commit is kept in `run_checkpoints`, first snapshot wins on resume. `POST /api/runs/:id/checkpoint/restore` restores tracked paths that differ, removes files the snapshot never had, refuses a live run (409), caps at 500 paths, and consults `fs_write` per path before writing; untracked files are left alone and the index is not rewritten |
 | Git rebase, continue, skip and abort | Working (3.2.0) | `POST /api/workspace/git/rebase` (body `branch`) replays the checked-out branch's commits on top of another branch; `/rebase/abort` restores the branch where the rebase started. A dirty tracked tree and the already-checked-out branch are refused (untracked files are ignored, as git ignores them), the branch name is narrowed before argv, and both routes are gated on `git`. Success answers `{branch, current, summary}`; a conflict answers 409 `{conflicted, output, inProgress}` and leaves the tree to finish or abort; abort is a 409 when nothing is in progress. A resolved conflict is staged and finished with `/rebase/continue` (a 409 names any still-unmerged path, a second conflict is reported, and a finished rebase refuses; `-c core.editor=true` keeps a terminal-less git off an editor). Skip (`/rebase/skip`) runs `git rebase --skip` behind the same `git` gate, refuses with no rebase in progress, reads the dropped subject from `REBASE_HEAD` and reports the next conflict or a still-in-progress rebase like Continue. UI: Rebase… form, Continue, Skip commit and Abort rebase controls, conflicted files named in the toast |
 | Git worktree per run | Working (2.1.0) | a writing run gets `<repo>-run-<id>` on a `run/<id>` branch, can be applied back and cleaned up (2.0.0); read-only runs and non-git folders keep the shared root |
+| Git reflog undo | Working (3.18.0) | `GET /api/workspace/git/reflog` lists the newest 50 `HEAD@{n}` entries (`hash`, `selector`, `action`, `date`) and `inProgress`; an unborn branch answers an empty list. `POST /api/workspace/git/undo` takes a selector the server itself listed, resolves the commit from that entry (a raw hash, another ref's reflog or `HEAD@{0}` is a 400) and runs `git reset --hard` behind the `git` action. It refuses 409 while a merge or rebase is unfinished or tracked files are modified, because the tree is reset with the branch; untracked files are ignored. The reset is itself a reflog entry, so the same list redoes it. The pane's `Undo…` lists the entries, marks the current one, disables Restore during a merge or rebase, and confirms branch, selector, short hash and action |
 | Syntax highlighting, diagnostics, completion, formatting | Missing | no editor engine, by design |
 | Build/test runner + diagnostics in the Problems panel | Working (1.73.0) | `app/src/runner.rs`: detects `cargo build`/`cargo test` from `Cargo.toml`, and `build`/`test` scripts from `package.json` through npm/pnpm/yarn. `GET /api/workspace/runner`, `POST /api/workspace/run` (preset id only, never a command line; gated on `command`; one run at a time; 300 s ceiling; 1 MiB per stream, last 200 000 chars returned). Parses Rust, TypeScript and generic `path:line:col` diagnostics, dedupes, caps at 200, drops paths outside the folder. The Problems pane runs them, shows the raw output, and opens a diagnostic at its real line. Since 1.73.0 a test run also reports counts: `tests {framework,total,passed,failed,ignored,failures}` parsed from libtest's per-binary result lines, Jest, Vitest and node's TAP summary, shown in the pane header with the failing names in its tooltip. A build is never searched and a summary-less test run reports `null`, so zeroes are never invented. Since 3.17.0 the same list carries commands saved in Settings (`kind: custom`, ids `custom-<slug>`, at most 20, each a `name :: command` line run through the platform shell) and the pane has a picker and Run for them; the request still sends an id, never a command line |
 | Debugger and watch mode | **Missing** | there is no debug adapter and no watch mode. A user-defined command preset (3.17.0) covers the "run any command" case: it is saved in Settings, listed after the detected presets, and run through the platform shell behind the same `command` gate. The tree change signal is the 3.0.0 fingerprint poll, not a platform watcher |

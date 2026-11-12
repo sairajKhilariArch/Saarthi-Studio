@@ -63,7 +63,7 @@ Loopback UI/API (`main.rs`):
 Mounted sub-routers:
 
 - Workspace: `/api/workspace`, `/open`, `/pick`, `/close`, `/entries`, `/files`, `/file` (GET+PUT), `/create`, `/rename`, `/delete`, `/search`, `/vcs`
-- Git (same router, so the same origin guard and body cap): `GET /api/workspace/git/diff`, `POST /git/stage`, `/git/unstage`, `/git/discard`, `/git/commit`, `GET /git/branches`, `POST /git/branch`, `/git/checkout`, `/git/fetch`, `/git/pull`, `/git/push`, `/git/stage-hunk`, `/git/unstage-hunk`, `GET /git/show`, `GET /git/log`
+- Git (same router, so the same origin guard and body cap): `GET /api/workspace/git/diff`, `POST /git/stage`, `/git/unstage`, `/git/discard`, `/git/commit`, `GET /git/branches`, `POST /git/branch`, `/git/checkout`, `/git/fetch`, `/git/pull`, `/git/push`, `/git/stage-hunk`, `/git/unstage-hunk`, `GET /git/show`, `GET /git/log`, `GET /git/reflog`, `POST /git/undo`
 - Runner (same router): `GET /api/workspace/runner` (detected presets, then commands saved in Settings), `POST /api/workspace/run` (one preset id, never a command line)
 - Skills: `GET /api/skills`, `GET /api/skills/:id`, `POST /api/skills/:id/state`
 - Terminal: `POST /api/terminal/open`, `/api/terminal/:id/input`, `/resize`, `/close`, `GET /api/terminal/:id/stream` (SSE)

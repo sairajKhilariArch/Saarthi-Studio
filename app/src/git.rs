@@ -49,6 +49,9 @@ const MAX_PATHS: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 4000;
 /// History entries one request may ask for.
 const MAX_LOG_ENTRIES: usize = 200;
+/// Reflog entries one request may ask for. This is a recovery list rather than a
+/// log viewer: the newest handful is what an undo needs.
+const MAX_REFLOG_ENTRIES: usize = 50;
 /// A remote operation can wait on a server, a proxy or a credential helper, so
 /// it needs a ceiling a local command does not. Without one an unreachable host
 /// would hold the HTTP request (and the pane) open indefinitely.
@@ -2311,6 +2314,169 @@ fn log_entries(root: &Path, limit: usize) -> Result<Value, String> {
     Ok(json!({ "commits": parse_log(&output.stdout) }))
 }
 
+/// A history operation that must be finished or aborted before the branch can be
+/// moved. Reported by name so the pane can say which one.
+fn history_operation_in_progress(root: &Path) -> Option<&'static str> {
+    if rebase_in_progress(root) {
+        return Some("rebase");
+    }
+    let merging = git(root, &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"])
+        .map(|output| output.ok)
+        .unwrap_or(false);
+    if merging {
+        return Some("merge");
+    }
+    None
+}
+
+/// The reflog as the pane reads it. `selector` is git's own `HEAD@{n}` spelling:
+/// the UI posts it back and the server resolves it against this same list, so no
+/// revision expression is ever taken from a client.
+fn reflog_entries(root: &Path, limit: usize) -> Result<Value, String> {
+    let limit = limit.clamp(1, MAX_REFLOG_ENTRIES);
+    let format = "--format=%H%x09%gd%x09%gs%x09%aI";
+    let count = format!("-n{limit}");
+    let output = git(root, &["reflog", &count, format])?;
+    if !output.ok {
+        let message = git_error(&output, "git reflog failed");
+        // An unborn branch has no reflog yet; that is an empty list, not a fault.
+        let lower = message.to_ascii_lowercase();
+        if lower.contains("does not have any commits")
+            || lower.contains("unknown revision")
+            || lower.contains("ambiguous argument")
+        {
+            return Ok(json!({ "entries": [] }));
+        }
+        return Err(message);
+    }
+    Ok(json!({ "entries": parse_reflog(&output.stdout) }))
+}
+
+fn parse_reflog(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, '\t');
+            let hash = parts.next()?.trim();
+            let selector = parts.next()?.trim();
+            let action = parts.next().unwrap_or("").trim();
+            let date = parts.next().unwrap_or("").trim();
+            if hash.is_empty() || selector.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "hash": hash,
+                "selector": selector,
+                "action": action,
+                "date": date,
+            }))
+        })
+        .collect()
+}
+
+/// Move the current branch back to a reflog entry the server itself listed.
+///
+/// This is the way back from a commit, merge, rebase or reset a person did not
+/// mean to keep. It is deliberately narrow: the target must be one of the newest
+/// entries, never a revision expression from the request, and it refuses while a
+/// merge or rebase is unfinished or tracked files are modified — `reset --hard`
+/// restores the tree too, so uncommitted work would be lost.
+fn undo_history(root: &Path, raw_selector: &str) -> Result<Value, (StatusCode, String)> {
+    let selector = raw_selector.trim();
+    if selector.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Pick a reflog entry to restore.".to_string(),
+        ));
+    }
+    if let Some(operation) = history_operation_in_progress(root) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "A {operation} is in progress. Finish or abort it before restoring an earlier commit."
+            ),
+        ));
+    }
+    let dirty = dirty_tracked(root)?;
+    if dirty > 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "Commit or stash your {dirty} changed file(s) before restoring an earlier commit: the working tree is reset with it."
+            ),
+        ));
+    }
+    let listing = reflog_entries(root, MAX_REFLOG_ENTRIES)
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    let entries = listing
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(entry) = entries
+        .iter()
+        .find(|entry| entry.get("selector").and_then(Value::as_str) == Some(selector))
+    else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Pick one of the operations in the reflog list.".to_string(),
+        ));
+    };
+    if selector == "HEAD@{0}" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "That is where the branch already is; pick an earlier entry.".to_string(),
+        ));
+    }
+    let hash = entry
+        .get("hash")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if hash.is_empty() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "The reflog entry named no commit.".to_string(),
+        ));
+    }
+    let subject = git(root, &["log", "-1", "--format=%s", &hash])
+        .map(|output| {
+            if output.ok {
+                output.stdout.trim().to_string()
+            } else {
+                String::new()
+            }
+        })
+        .unwrap_or_default();
+    let short = git(root, &["rev-parse", "--short", &hash])
+        .ok()
+        .filter(|output| output.ok)
+        .map(|output| output.stdout.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| hash.chars().take(7).collect());
+    let replaced = git(root, &["rev-parse", "HEAD"])
+        .ok()
+        .filter(|output| output.ok)
+        .map(|output| output.stdout.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let replaced_short = replaced
+        .as_deref()
+        .map(|value| value.chars().take(7).collect::<String>());
+    let output = git(root, &["reset", "--hard", &hash])
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    if !output.ok {
+        return Err((
+            StatusCode::CONFLICT,
+            git_error(&output, "git could not restore that commit"),
+        ));
+    }
+    Ok(json!({
+        "ok": true,
+        "branch": branch_at_head(root).unwrap_or_else(|| "HEAD".to_string()),
+        "undone": { "selector": selector, "hash": hash, "short": short, "subject": subject },
+        "replaced": { "hash": replaced, "short": replaced_short },
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 
@@ -3090,6 +3256,55 @@ async fn log_route(
     }
 }
 
+async fn reflog_route(
+    State(state): State<AppState>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(30);
+    match reflog_entries(&root, limit) {
+        Ok(mut value) => {
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "inProgress".to_string(),
+                    json!(history_operation_in_progress(&root)),
+                );
+            }
+            Json(value).into_response()
+        }
+        Err(message) => git_failure(message),
+    }
+}
+
+async fn undo_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    let root = match workspace_root(&state) {
+        Ok(root) => root,
+        Err(response) => return *response,
+    };
+    let selector = input.get("selector").and_then(Value::as_str).unwrap_or("");
+    let approve = approval(&input);
+    if let Some(response) = guard_user(
+        &state,
+        Action::Git,
+        &format!("undo {}", selector.trim()),
+        "",
+        approve,
+        "restore the branch to an earlier reflog entry",
+    ) {
+        return response;
+    }
+    match undo_history(&root, selector) {
+        Ok(value) => Json(value).into_response(),
+        Err((status, message)) => fail(status, message),
+    }
+}
+
 /// Routes are merged into `workspace::router`, so they inherit the same
 /// loopback-origin guard and body limit as every other workspace route.
 pub(crate) fn router() -> Router<AppState> {
@@ -3135,6 +3350,8 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/workspace/git/unstage-hunk", post(unstage_hunk_route))
         .route("/api/workspace/git/show", get(show_route))
         .route("/api/workspace/git/log", get(log_route))
+        .route("/api/workspace/git/reflog", get(reflog_route))
+        .route("/api/workspace/git/undo", post(undo_route))
 }
 
 #[cfg(test)]
@@ -3253,6 +3470,141 @@ mod tests {
             abort_merge(&root).is_err(),
             "with nothing in progress, abort must refuse"
         );
+    }
+
+    #[test]
+    fn reflog_lists_operations_newest_first_and_an_unborn_repository_lists_none() {
+        let Some(root) = temp_repo("reflog-list") else {
+            return;
+        };
+        // Before the first commit there is no reflog to read, and that is an
+        // empty list rather than an error.
+        let empty = reflog_entries(&root, 20).expect("an unborn branch is not an error");
+        assert_eq!(empty["entries"], json!([]));
+
+        commit_file(&root, "a.txt", "one\n", "first");
+        commit_file(&root, "b.txt", "two\n", "second");
+        let listing = reflog_entries(&root, 20).unwrap();
+        let entries = listing["entries"].as_array().unwrap();
+        assert!(entries.len() >= 2, "{listing}");
+        assert_eq!(entries[0]["selector"], json!("HEAD@{0}"));
+        assert_eq!(entries[1]["selector"], json!("HEAD@{1}"));
+        assert!(
+            entries[0]["action"].as_str().unwrap().contains("second"),
+            "{listing}"
+        );
+        assert!(
+            entries[1]["action"].as_str().unwrap().contains("first"),
+            "{listing}"
+        );
+        assert!(!entries[0]["hash"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn undo_restores_an_earlier_commit_and_the_reset_itself_can_be_undone() {
+        let Some(root) = branch_fixture("undo") else {
+            return;
+        };
+        commit_file(&root, "b.txt", "two\n", "second");
+        commit_file(&root, "c.txt", "three\n", "third");
+        let first = run_git(&root, &["rev-parse", "HEAD~2"]).trim().to_string();
+        let third = run_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        let undone = undo_history(&root, "HEAD@{2}").expect("undo runs");
+        assert_eq!(undone["ok"], json!(true));
+        assert_eq!(undone["branch"], json!("main"));
+        assert_eq!(undone["undone"]["hash"], json!(first));
+        assert_eq!(undone["replaced"]["hash"], json!(third));
+        assert_eq!(run_git(&root, &["rev-parse", "HEAD"]).trim(), first);
+        assert!(!root.join("b.txt").exists(), "the tree follows the branch back");
+        assert!(!root.join("c.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "base\n"
+        );
+
+        // The reset is itself the newest entry and the discarded commit is still
+        // below it, so the same list is the way forward again.
+        let listing = reflog_entries(&root, 20).unwrap();
+        assert!(
+            listing["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["hash"] == json!(third)),
+            "{listing}"
+        );
+        let redone = undo_history(&root, "HEAD@{1}").expect("the undo can be undone");
+        assert_eq!(redone["undone"]["hash"], json!(third));
+        assert_eq!(run_git(&root, &["rev-parse", "HEAD"]).trim(), third);
+        assert!(root.join("b.txt").exists());
+        assert!(root.join("c.txt").exists());
+    }
+
+    #[test]
+    fn undo_restores_the_commit_before_a_fast_forward_merge() {
+        let Some(root) = branch_fixture("undo-merge") else {
+            return;
+        };
+        let before = run_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+        run_git(&root, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(root.join("b.txt"), "two\n").unwrap();
+        run_git(&root, &["add", "-A"]);
+        run_git(&root, &["commit", "-q", "-m", "feature work"]);
+        run_git(&root, &["checkout", "-q", "main"]);
+        match merge_branch(&root, "feature").expect("merge runs") {
+            MergeOutcome::Merged { fast_forward, .. } => assert!(fast_forward),
+            MergeOutcome::Conflict { paths, .. } => panic!("unexpected conflict: {paths:?}"),
+        }
+        assert!(root.join("b.txt").exists());
+
+        // HEAD@{1} is main as it stood before the merge.
+        let undone = undo_history(&root, "HEAD@{1}").expect("undo runs");
+        assert_eq!(undone["undone"]["hash"], json!(before));
+        assert_eq!(run_git(&root, &["rev-parse", "HEAD"]).trim(), before);
+        assert!(
+            !root.join("b.txt").exists(),
+            "the merged file leaves main with the commit"
+        );
+    }
+
+    #[test]
+    fn undo_refuses_unknown_entries_uncommitted_work_and_unfinished_history() {
+        let Some(root) = branch_fixture("undo-refusals") else {
+            return;
+        };
+        commit_file(&root, "b.txt", "two\n", "second");
+        let head = run_git(&root, &["rev-parse", "HEAD"]).trim().to_string();
+
+        // Only the listed entries are accepted: a raw hash, another ref's reflog
+        // and a made-up index are all refused before git runs.
+        for selector in ["HEAD@{99}", "main@{1}", head.as_str(), ""] {
+            let error = undo_history(&root, selector).expect_err("refused");
+            assert_eq!(error.0, StatusCode::BAD_REQUEST, "{selector}");
+        }
+        // HEAD@{0} is where the branch already is.
+        let error = undo_history(&root, "HEAD@{0}").expect_err("refused");
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert_eq!(run_git(&root, &["rev-parse", "HEAD"]).trim(), head);
+
+        // Uncommitted tracked work would be discarded by the reset.
+        std::fs::write(root.join("b.txt"), "changed\n").unwrap();
+        let error = undo_history(&root, "HEAD@{1}").expect_err("refused");
+        assert_eq!(error.0, StatusCode::CONFLICT);
+        assert!(error.1.contains("Commit or stash"), "{}", error.1);
+        assert_eq!(run_git(&root, &["rev-parse", "HEAD"]).trim(), head);
+        run_git(&root, &["checkout", "--", "b.txt"]);
+
+        // An unfinished merge is reported by name. `MERGE_HEAD` is what git
+        // itself sets, so the fixture writes a real commit id there.
+        let first = run_git(&root, &["rev-parse", "HEAD~1"]).trim().to_string();
+        let merge_head = git_state_path(&root, "MERGE_HEAD").expect("git names its state path");
+        std::fs::write(&merge_head, format!("{first}\n")).unwrap();
+        assert_eq!(history_operation_in_progress(&root), Some("merge"));
+        let error = undo_history(&root, "HEAD@{1}").expect_err("refused");
+        assert_eq!(error.0, StatusCode::CONFLICT);
+        assert!(error.1.contains("merge is in progress"), "{}", error.1);
+        std::fs::remove_file(&merge_head).unwrap();
     }
 
     #[test]

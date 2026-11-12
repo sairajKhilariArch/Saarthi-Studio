@@ -178,6 +178,7 @@
       '<div class="scm-commit-row"><button id="scmCommit" class="tiny-toggle primary" type="button">Commit</button>',
       '<button id="scmBranchBtn" class="tiny-toggle" type="button">Branch…</button>',
       '<button id="scmHistoryBtn" class="tiny-toggle" type="button">History</button>',
+      '<button id="scmUndoBtn" class="tiny-toggle" type="button" title="Restore the branch to an earlier reflog entry">Undo…</button>',
       '<button id="scmSanityBtn" class="tiny-toggle" type="button">Check</button>',
       '<button id="scmMergeBtn" class="tiny-toggle" type="button">Merge…</button>',
       '<button id="scmRebaseBtn" class="tiny-toggle" type="button">Rebase…</button>',
@@ -1482,6 +1483,72 @@
     });
   }
 
+  // The reflog is the way back from a commit, merge, rebase or reset the person
+  // did not mean to keep. Rows come from the server, which resolves the posted
+  // selector against the same list it just served — a hash typed by hand is not
+  // a revision expression this pane can send.
+  async function toggleScmReflog() {
+    const box = $("scmBody");
+    if (!box) return;
+    const result = await api("/api/workspace/git/reflog?limit=20");
+    if (!result.ok) { toast(result.data.error || "Could not read the reflog."); return; }
+    const entries = result.data.entries || [];
+    const inProgress = String(result.data.inProgress || "");
+    const branch = (IDE.vcs && IDE.vcs.branch) || "this branch";
+    IDE.scmHistory = true;
+    IDE.diffKey = null;
+    box.innerHTML = "";
+    box.appendChild(el("div", "scm-group-label", `Undo history <span class="count">${entries.length}</span>`));
+    box.appendChild(el("p", "scm-hint", inProgress
+      ? `A ${inProgress} is in progress. Finish or abort it before restoring an earlier commit.`
+      : "Restoring moves the branch and resets the working tree to that commit, so commit or stash tracked changes first."));
+    if (!entries.length) {
+      box.appendChild(el("p", "empty-note", "No reflog entries yet."));
+    }
+    entries.forEach((entry, index) => {
+      const row = el("div", "scm-commit-line");
+      row.innerHTML = `<span class="short">${escapeHtml(entry.selector || "")}</span>` +
+        `<span class="subject">${escapeHtml(entry.action || "")}</span>` +
+        `<span class="author">${escapeHtml(entry.date || "")}</span>`;
+      row.title = `${entry.hash || ""}\n${entry.action || ""}\nRestore ${branch} to this commit`;
+      if (index === 0 || inProgress) {
+        row.classList.add("muted");
+        if (index === 0) row.title = "This is where the branch already is.";
+        box.appendChild(row);
+        return;
+      }
+      const restore = el("button", "tiny-toggle", "Restore");
+      restore.type = "button";
+      restore.addEventListener("click", () => void restoreReflogEntry(entry, branch));
+      row.appendChild(restore);
+      box.appendChild(row);
+    });
+    const back = el("button", "tiny-toggle", "Back to changes");
+    back.type = "button";
+    back.addEventListener("click", () => void refreshScm());
+    box.appendChild(back);
+  }
+
+  async function restoreReflogEntry(entry, branch) {
+    const selector = entry.selector || "";
+    const short = String(entry.hash || "").slice(0, 7);
+    const action = entry.action || "that operation";
+    if (!window.confirm(`Restore ${branch} to ${selector} (${short})?\n\nThis moves the branch and resets the working tree to "${action}". Uncommitted tracked changes would be discarded, so commit or stash them first.`)) return;
+    const result = await api("/api/workspace/git/undo", {
+      method: "POST",
+      body: JSON.stringify({ selector }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      toast(result.data.error || "Could not restore that commit.");
+      return;
+    }
+    const undone = result.data.undone || {};
+    toast(`Restored ${branch} to ${undone.short || short} (${undone.selector || selector})`);
+    await refreshScm();
+    setScmHint(`Undid ${undone.selector || selector}: ${undone.subject || "earlier commit"}`);
+  }
+
   async function showScmCommit(commit) {
     const result = await api(`/api/workspace/git/show?hash=${encodeURIComponent(commit.hash || "")}`);
     if (!result.ok) { toast(result.data.error || "Could not read that commit."); return; }
@@ -1833,6 +1900,7 @@
       if (!form.classList.contains("hidden")) $("scmBranchInput").focus();
     });
     $("scmHistoryBtn").addEventListener("click", () => void toggleScmHistory());
+    $("scmUndoBtn").addEventListener("click", () => void toggleScmReflog());
     $("scmSanityBtn").addEventListener("click", () => void checkRepoSanity());
     $("scmBranchCreate").addEventListener("click", () => void branchScm("create"));
     $("scmBranchSwitch").addEventListener("click", () => void branchScm("switch"));

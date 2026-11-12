@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.17.0
+## Remaining work at 3.18.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -53,7 +53,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, in-pane reflog undo. |
+| 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -335,15 +335,15 @@ watch mode; only the detected build/test presets can be run.
 replay is stuck on and continue with the next one (`POST
 /api/workspace/git/rebase/skip`, gated on `git`), returning the dropped subject.
 Unmerged markers are allowed here because that is git's own skip case, and the
-browser confirms first. In-pane reflog undo is still open.*
+browser confirms first. In-pane reflog undo arrived in 3.18.0.*
 
 *Delivered 1.66.0: the Git half — `app/src/git.rs` (diff, stage, unstage,
 discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it
 (inline diff, stage/unstage/discard, commit box, branch create/switch, history,
 conflict/staged/changed/untracked groups, ahead/behind). Remaining: editor engine
-(syntax highlighting, completion, formatting), debugger, watch mode, and in-pane
-reflog undo. Checkpoints, worktrees, merge/rebase, per-hunk staging and commit
+(syntax highlighting, completion, formatting), debugger and watch mode.
+Checkpoints, worktrees, merge/rebase, per-hunk staging and commit
 detail all shipped through 3.2.0.*
 
 *Delivered 1.67.0: the build/test loop — detected `cargo build`/`cargo test` and
@@ -361,8 +361,18 @@ resolves the posted id against that list, so a command line never comes from the
 request, and the same `command` gate is asked with the whole line as its target
 before the platform shell (`sh -c` / `cmd /C`) starts it. Settings has the
 `name :: command` box; the Problems pane has a picker and Run beside Build/Test,
-and one function runs either kind. Still open here: the editor engine, a
-debugger, watch mode and in-pane reflog undo.*
+and one function runs either kind. At 3.17.0 the editor engine, a debugger and
+watch mode remained.*
+
+*Delivered 3.18.0: reflog undo. `GET /api/workspace/git/reflog` lists the newest
+`HEAD@{n}` entries (selector, hash, action, date) and says whether a merge or
+rebase is in progress; `POST /api/workspace/git/undo` resets the branch to an
+entry the server itself listed — never a revision expression from the request —
+behind the `git` gate, refusing while that history work is unfinished or tracked
+files are modified because the reset takes the working tree with it. The reset is
+its own reflog entry, so the same list is the way forward again. The Source
+Control pane drives it from `Undo…`. Phase 9 is left with the editor engine, a
+debugger and watch mode.*
 
 *Delivered 1.68.0: the remote half — fetch with a resolved remote,
 fast-forward-only pull that refuses a diverged history with a 409, and push that
