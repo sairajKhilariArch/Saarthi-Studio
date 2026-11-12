@@ -184,7 +184,7 @@ pub(crate) fn detect(root: &Path) -> Vec<Preset> {
 
 /// Limits for a saved command, so both the config file and the Run panel stay
 /// legible.
-const MAX_CUSTOM_PRESETS: usize = 20;
+pub(crate) const MAX_CUSTOM_PRESETS: usize = 20;
 const MAX_PRESET_LABEL_CHARS: usize = 60;
 const MAX_PRESET_COMMAND_CHARS: usize = 500;
 

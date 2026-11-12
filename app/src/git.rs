@@ -51,7 +51,7 @@ const MAX_MESSAGE_CHARS: usize = 4000;
 const MAX_LOG_ENTRIES: usize = 200;
 /// Reflog entries one request may ask for. This is a recovery list rather than a
 /// log viewer: the newest handful is what an undo needs.
-const MAX_REFLOG_ENTRIES: usize = 50;
+pub(crate) const MAX_REFLOG_ENTRIES: usize = 50;
 /// A remote operation can wait on a server, a proxy or a credential helper, so
 /// it needs a ceiling a local command does not. Without one an unreachable host
 /// would hold the HTTP request (and the pane) open indefinitely.

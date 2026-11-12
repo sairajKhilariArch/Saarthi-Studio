@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import {
   EmbeddedServer,
   StudioConfig,
+  capabilitySummary,
   probeDesktop,
   startEmbeddedServer,
   normalizeBaseUrl,
@@ -348,8 +349,18 @@ async function setApiKey(): Promise<void> {
 async function showStatus(): Promise<void> {
   const chosen = await resolveBackend();
   const config = readConfig();
+  let capability = "Capability contract: unavailable";
+  try {
+    const response = await fetch(`${chosen.url}/api/capabilities`, { signal: AbortSignal.timeout(900) });
+    capability = `Capability contract: ${
+      response.ok ? capabilitySummary(await response.json().catch(() => null)) : `HTTP ${response.status}`
+    }`;
+  } catch {
+    // A backend built before the route existed is reported, not treated as an error.
+  }
   const lines = [
     `Backend: ${chosen.kind === "desktop" ? "desktop app" : "built-in server"} (${chosen.url})`,
+    capability,
     `Router: ${config.routerBaseUrl}`,
     `Model: ${config.model}`,
     `Context budget: ${config.contextBudgetTokens} tokens · ${config.historyMessages} messages`,

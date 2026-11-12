@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.20.0 (2026-11-12):** Phase 14's local negotiation gap narrows. The
+local API answers `GET /api/capabilities` with a versioned contract: 20 feature
+ids it implements, plus limits read from the constants the routes enforce. The
+VS Code extension's embedded server answers the same shape with its own subset
+(and `false` for what it lacks), and Show server status reports the match, a
+mismatch or an older backend instead of assuming. Android's existing v1 Host API
+handshake is unchanged. What remains is making every screen read the contract
+instead of gating by hand.
+
 **Revision 3.19.0 (2026-11-12):** The formatting gap closes. `cargo fmt` over
 `app/` reformatted 17 files without touching behaviour, `desktop-ci.yml` runs
 `cargo fmt --check` before its build, and `rust-host-api-ci.yml` now checks the
@@ -387,7 +396,7 @@ below carry the evidence.
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
 | 13 | Workflow builder | Working | browser layout test only; rendering and the drag gesture are harness-tested (3.16.0), a workflow cancel stops the child agent runs it started (3.15.0) |
-| 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
+| 14 | Cross-platform | Partial | Android/VS Code subsets; local contract shipped in 3.20.0, screens still gate by hand |
 | 15 | Extension ecosystem | Partial | provider adapters, UI extensions |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 | Observability | Working | — |
@@ -617,7 +626,7 @@ x/y, a 2px press writes nothing, a drag past the right edge clamps) while a real
 | Desktop Linux/Windows/macOS | Working | deb, AppImage, tarball, zip, macOS universal tarball |
 | Android client | Working (subset) | chat streaming, history, backup, remote agent runs via Host API; no router management, no local execution |
 | VS Code extension | Working (subset) | embedded Node server, agent port, runs webview |
-| Capability negotiation driving feature gates | Partial | `/api/host/v1/capabilities` exists; clients hand-gate a few screens |
+| Capability negotiation driving feature gates | Working (3.20.0) | Local API states 20 implemented ids plus enforced limits; the extension's embedded server states its honest subset and the status command reports the match. Android negotiates v1 over the Host API. Screens still hand-gate a few controls |
 | Pairing / TLS / sessions | Working | host token lifecycle + TLS transport |
 
 ## Phase 15 — Extension and plugin ecosystem

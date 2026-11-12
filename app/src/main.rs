@@ -31,6 +31,7 @@ mod breaker;
 mod browser;
 mod capabilities;
 mod context;
+mod contract;
 mod cost;
 mod deepsearch;
 mod diagnostics;
@@ -76,6 +77,9 @@ mod workflow;
 mod workspace;
 
 const APP_NAME: &str = "Sarthi Studio";
+/// The most agent runs that may work in one workspace together. Enforced by the
+/// config clamp and reported in the capability contract.
+pub(crate) const MAX_CONCURRENT_RUNS: i64 = 4;
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8765;
 const SYSTEM_PROMPT: &str = "You are a concise, helpful AI coding assistant. Be accurate and safe; never claim to run code unless you did.";
@@ -997,7 +1001,7 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     cfg.daily_budget_usd = cfg.daily_budget_usd.max(0.0);
     // Concurrency is a range, not a wish: zero active runs would stall the
     // queue forever, and past four the runs compete for one workspace anyway.
-    cfg.max_concurrent_runs = cfg.max_concurrent_runs.clamp(1, 4);
+    cfg.max_concurrent_runs = cfg.max_concurrent_runs.clamp(1, MAX_CONCURRENT_RUNS);
     // A saved command is trimmed, and an entry missing either half is dropped
     // rather than left runnable under a blank name.
     cfg.command_presets = cfg
@@ -3199,6 +3203,12 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// What this build can do, for any local client that would otherwise assume a
+/// feature exists because a route is compiled in.
+async fn capabilities() -> Json<Value> {
+    Json(contract::capabilities())
+}
+
 /// Set when the app is launched by an embedding host. Framing stays disabled
 /// by default and, when enabled, only a VS Code webview may frame the UI.
 fn embed_framing_allowed() -> bool {
@@ -4631,6 +4641,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/usage", get(usage))
         .route("/api/open", post(open_url))
         .route("/api/health", get(health))
+        .route("/api/capabilities", get(capabilities))
         .route("/api/health/providers", get(health::providers))
         .route("/api/update/check", get(update::check_route))
         .route("/api/update/stage", post(update::stage_route))

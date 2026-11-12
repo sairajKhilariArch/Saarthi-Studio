@@ -1,5 +1,44 @@
 # Changelog
 
+## 3.20.0
+
+Phase 14's negotiation gap narrows: the local API states what it can do, the
+extension states what its built-in server can do, and clients compare the two
+instead of assuming.
+
+- **One contract for the local API.** `GET /api/capabilities` answers
+  `{contract: 1, product, version, platform, arch, features, limits}`. The 20
+  feature ids are capabilities this build implements (`chat`, `agents`, `git`,
+  `git_reflog_undo`, `saved_commands`, …); an id is added only once the feature
+  works. `limits` comes from the same constants the routes enforce —
+  `MAX_CONCURRENT_RUNS` (4), `MAX_CUSTOM_PRESETS` (20) and
+  `MAX_REFLOG_ENTRIES` (50) — so it cannot drift from behaviour.
+- **The built-in server stops overclaiming.** The VS Code extension's embedded
+  server answers the same route with its own subset: what it serves is `true`,
+  ids the desktop has but it does not (MCP, memory, code index, Git, saved
+  commands, extensions) are `false`, and `version` is `null` instead of the
+  stale `1.19.0` the health route still carries. Both sides describe the same
+  shape, so a client reads one parser.
+- **The extension reads it.** `Sarthi Studio: Show server status` adds a
+  capability line: version and supported/total for a contract it understands,
+  the version mismatch when it does not, and "no capability contract" for an
+  older backend. `supportsCapability` refuses a contract version this build does
+  not read, so an unknown future contract never unlocks a command on a guess.
+- **Android is unchanged.** The companion already negotiates its own v1
+  handshake over `/api/host/v1/capabilities`, with
+  `HostDiscoveryPolicyTest`, and this commit documents that rather than
+  replacing it.
+
+Verified: `cargo test --locked` 577 passed, 1 ignored (2 new: the contract names
+this build with every id once, and its limits come from the enforced constants);
+clippy `--all-targets -D warnings` clean; `cargo fmt --check` clean; VS Code
+extension `npm test` 27 passed (1 new pure test, plus the embedded route asserted
+in the existing smoke); `test-frontend.sh` 48 passed; `test-version.sh` 20/20;
+`test-e2e.sh` 32 passed. Live headless: `/api/capabilities` answered contract 1,
+version 3.20.0, `windows`/`x86_64`, 20 features and limits 4/20/50 beside
+`/api/health` reporting 3.20.0. **Not run:** the status command inside a real
+VS Code host (its pure summary is tested) and any Android test (no SDK here).
+
 ## 3.19.0
 
 The Rust tree is formatted once, and the formatting check now covers all of it

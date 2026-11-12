@@ -7,7 +7,9 @@ import * as path from "node:path";
 
 import {
   ConversationStore,
+  CONTRACT_VERSION,
   MAX_BUDGET_TOKENS,
+  capabilitySummary,
   cleanupTemp,
   cropText,
   estimateTokens,
@@ -17,6 +19,7 @@ import {
   sanitizeConsolePath,
   startEmbeddedServer,
   stripAttachedCode,
+  supportsCapability,
   listDir,
   readTextFile,
   writeTextFile,
@@ -284,6 +287,14 @@ test("built-in server chats through the router and serves the workspace", async 
   const health = await (await fetch(`${embedded.url}/api/health`)).json();
   assert.equal(health.ok, true);
   assert.equal(health.embeddable, true);
+
+  const capabilities = await (await fetch(`${embedded.url}/api/capabilities`)).json();
+  assert.equal(capabilities.contract, CONTRACT_VERSION);
+  assert.equal(capabilities.features.chat, true);
+  assert.equal(capabilities.features.mcp, false);
+  assert.equal(supportsCapability(capabilities, "chat"), true);
+  assert.equal(supportsCapability(capabilities, "mcp"), false);
+  assert.match(capabilitySummary(capabilities), /contract 1/);
 
   const created = await post("/api/conversations", { title: "Smoke test" });
   assert.equal(created.status, 200);
@@ -935,4 +946,12 @@ test("agent runs: crew stage budgets skip an unfinished stage honestly", async (
   await embedded.close();
   cleanupTemp(workspace);
   cleanupTemp(storage);
+});
+test("capability summary names an older server instead of guessing", () => {
+  assert.equal(capabilitySummary(null), "no capability contract (older or different server)");
+  assert.match(capabilitySummary({ contract: 2, features: {} }), /this extension reads 1/);
+  assert.equal(supportsCapability({ contract: CONTRACT_VERSION, features: { chat: true } }, "chat"), true);
+  assert.equal(supportsCapability({ contract: CONTRACT_VERSION, features: { chat: true } }, "mcp"), false);
+  // A contract this client does not read never unlocks a command on a guess.
+  assert.equal(supportsCapability({ contract: 9, features: { chat: true } }, "chat"), false);
 });

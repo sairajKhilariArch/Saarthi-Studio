@@ -739,6 +739,98 @@ export async function callRouter(
 }
 
 /* ------------------------------------------------------------------ */
+/* capability contract                                                 */
+/* ------------------------------------------------------------------ */
+
+export const CONTRACT_VERSION = 1;
+
+export interface CapabilityContract {
+  contract: number;
+  product: string;
+  version: string | null;
+  platform: string;
+  features: Record<string, boolean>;
+  limits: Record<string, number>;
+}
+
+/**
+ * What the built-in server implements. Ids the desktop implements but this
+ * server does not are listed as false, so a client can say "not available
+ * here" instead of guessing; an absent id means the same thing. The built-in
+ * server has no release identity of its own, and the extension package version
+ * is the only one that exists, so `version` is null rather than a stale copy of
+ * the desktop's.
+ */
+export function embeddedCapabilities(): CapabilityContract {
+  return {
+    contract: CONTRACT_VERSION,
+    product: "Sarthi Studio",
+    version: null,
+    platform: "embedded",
+    features: {
+      chat: true,
+      chat_streaming: true,
+      conversations: true,
+      agents: true,
+      agent_runs: true,
+      skills: true,
+      projects: true,
+      workflows: true,
+      models: true,
+      terminal: true,
+      workspace_files: true,
+      usage: true,
+      attachments: true,
+      router_status: true,
+      router_console: true,
+      events: true,
+      agent_queue: false,
+      router_management: false,
+      git: false,
+      git_worktrees: false,
+      git_reflog_undo: false,
+      saved_commands: false,
+      mcp: false,
+      memory: false,
+      code_index: false,
+      extensions: false,
+      thinking: false,
+      openai_platform: false,
+      usage_cost: false,
+      diagnostics: false,
+    },
+    limits: {},
+  };
+}
+
+/** True only when a server answered with this contract version and the id. */
+export function supportsCapability(payload: unknown, id: string): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const value = payload as Partial<CapabilityContract>;
+  if (value.contract !== CONTRACT_VERSION) return false;
+  return Boolean(value.features && value.features[id] === true);
+}
+
+/** One line for a status report; an older server is named, not guessed at. */
+export function capabilitySummary(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "no capability contract (older or different server)";
+  }
+  const value = payload as Partial<CapabilityContract>;
+  if (typeof value.contract !== "number") {
+    return "no capability contract (older or different server)";
+  }
+  if (value.contract !== CONTRACT_VERSION) {
+    return `capability contract ${value.contract}; this extension reads ${CONTRACT_VERSION}`;
+  }
+  const features = value.features || {};
+  const total = Object.keys(features).length;
+  const supported = Object.values(features).filter((flag) => flag === true).length;
+  const version = typeof value.version === "string" && value.version ? `v${value.version} · ` : "";
+  return `${version}contract ${value.contract} · ${supported}/${total} features`;
+}
+
+/* ------------------------------------------------------------------ */
 /* desktop detection                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -1395,6 +1487,11 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           workspace: options.workspaceRoot || null,
           version: "1.19.0",
         });
+        return;
+      }
+
+      if (routePath === "/api/capabilities" && method === "GET") {
+        sendJson(response, 200, embeddedCapabilities());
         return;
       }
 

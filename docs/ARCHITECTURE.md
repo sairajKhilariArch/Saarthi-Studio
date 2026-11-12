@@ -41,6 +41,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `terminal.rs` | 318 | Real PTYs (`portable-pty`) — ConPTY on Windows, unix pty elsewhere; SSE streams; resize; close |
 | `host_transport.rs` | 245 | Listener binding, TLS material handling |
 | `context.rs` | 213 | Token-budgeted request packing (4 chars/token, 6 k default budget, 1 k–32 k clamp) |
+| `contract.rs` | 131 | The local capability contract: one server-side table of implemented feature ids, this build's version and platform, and limits read from the constants the routes enforce; served at `GET /api/capabilities` |
 | `capabilities.rs` | 280 | Model capabilities from provider-published metadata only (`/models` rows, Ollama `/api/show`); every unknown flag is `null`, never guessed |
 | `openai.rs` | 771 | Native OpenAI Platform provider: Responses API request/response/stream translation, `openai:` model ids, model catalog, key test, reasoning-rejection retry and its per-process memory |
 | `thinking.rs` | 351 | Thinking levels, fixed precedence (message > agent > project > global > provider default), `@Thinking` directive with a literal escape |
@@ -56,7 +57,7 @@ Loopback UI/API (`main.rs`):
 - `GET /`, `GET /static/*file`
 - `GET|POST /api/config`
 - `GET /api/conversations/:id/messages`, `POST /api/conversations/:id/delete`
-- `GET /api/usage`, `POST /api/open`, `GET /api/health`, `POST /api/test`
+- `GET /api/usage`, `POST /api/open`, `GET /api/health`, `GET /api/capabilities`, `POST /api/test`
 - `GET /api/router`, `POST /api/router/start`, `POST /api/router/stop`
 - `GET /api/omniroute`, `POST /api/omniroute/start`, `POST /api/omniroute/stop`
 
