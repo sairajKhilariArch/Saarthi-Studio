@@ -95,6 +95,12 @@ fi
 
 failed=0
 while IFS= read -r tag; do
+  # A tag is a URL path segment, so a line ending must never reach it. Python's
+  # text-mode stdout on Windows writes CRLF and the tag then read as `v1.2.3\r`,
+  # which curl rejected as a malformed URL; strip it (and any stray whitespace)
+  # here rather than trusting every reader's line ending.
+  tag="${tag%$'\r'}"
+  tag="$(printf '%s' "$tag" | tr -d '[:space:]')"
   [ -n "$tag" ] || continue
   version="${tag#v}"
   printf 'release audit: checking %s\n' "$tag"

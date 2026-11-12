@@ -272,6 +272,10 @@ pub(crate) struct RouterView {
 
 /// Combine capability with a measured probe. Kept pure so it is testable: the
 /// rule that matters is that a process which has not answered is not healthy.
+/// The local view of one router. Only the tests build a single view directly —
+/// the app goes through [`views`], which adds the remote probes — so it is
+/// compiled for tests only rather than tripping the dead-code lint.
+#[cfg(test)]
 pub(crate) fn view(capability: Capability, probe: Probe, auto_start: bool) -> RouterView {
     view_with_remote(capability, probe, auto_start, None)
 }
@@ -327,7 +331,7 @@ pub(crate) async fn views(state: &AppState) -> Vec<RouterView> {
         .collect();
     let remote_probes: BTreeMap<&'static str, Probe> =
         futures_util::future::join_all(remote.iter().map(|(id, url)| async move {
-            let spec = find(*id).expect("a spec taken from ROUTERS");
+            let spec = find(id).expect("a spec taken from ROUTERS");
             (*id, probe_remote(spec, url).await)
         }))
         .await
@@ -803,7 +807,15 @@ fn is_loopback_host(host: &str) -> bool {
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
     }
-    host.parse::<std::net::IpAddr>()
+    // `Url::host_str` keeps an IPv6 literal's brackets, and `IpAddr` does not
+    // parse them, so `[::1]` used to read as non-loopback and a plain-HTTP
+    // endpoint on the machine's own IPv6 loopback was refused.
+    let address = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(&host);
+    address
+        .parse::<std::net::IpAddr>()
         .map(|address| address.is_loopback())
         .unwrap_or(false)
 }
@@ -3078,18 +3090,18 @@ mod tests {
             version: String::new(),
             message: "Remote endpoint answered 200.".into(),
         };
-        let view = view_with_remote(
+                let remote = view_with_remote(
             capability(spec, "linux", "x86_64"),
             probe,
             true,
             Some("https://router.example.com".into()),
         );
-        assert!(view.remote);
+        assert!(remote.remote);
         assert_eq!(
-            view.remote_url.as_deref(),
+            remote.remote_url.as_deref(),
             Some("https://router.example.com")
         );
-        let value = serde_json::to_value(&view).unwrap();
+        let value = serde_json::to_value(&remote).unwrap();
         assert_eq!(value["remote"], true);
         assert_eq!(value["remote_url"], "https://router.example.com");
 

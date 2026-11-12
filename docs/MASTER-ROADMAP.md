@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.8.0
+## Remaining work at 3.9.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -55,7 +55,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | 4 — Thinking + OpenAI Platform | Tool calling and structured output through the `openai:` platform path. |
 | 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, arbitrary command presets, in-pane reflog undo. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
-| 15 — Extensions | Provider adapters, UI extensions, dependency-cycle detection, and re-checking an extension after an app upgrade. |
+| 15 — Extensions | Provider adapters, UI extensions, and re-checking an extension after an app upgrade. (Dependency cycles are detected and block a run since 3.9.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
 ### Smaller named gaps

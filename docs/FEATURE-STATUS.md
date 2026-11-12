@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.9.0 (2026-11-12):** Phase 15 gained dependency-cycle detection —
+discovery reports `dependencyCycle` and blocks a run whose chain closes on
+itself — so that named gap closes. The same commit repairs two type errors that
+3.8.0 shipped without a build (E0618 in `router_registry`'s test, E0597 in
+`agent::reorder`), accepts a plain-HTTP remote router on `[::1]`, and makes
+`audit-releases.sh` strip a CR from a listed tag. `cargo test --locked` is 557
+passed, 1 ignored and clippy is clean; the phase states below are otherwise
+unchanged, and the old percentage arithmetic stays retired.
+
 **Revision 3.8.0 (2026-11-11):** documentation correction. The ordered backlog
 now lives in `MASTER-ROADMAP.md` under "Remaining work at 3.8.0"; this report
 replaces the stale 2.1.0 percentage table with a qualitative phase state and
@@ -316,7 +325,7 @@ below carry the evidence.
 | 12 | Live monitoring | Working | — |
 | 13 | Workflow builder | Working | automated browser test; child agent cancellation |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; hand-wired capability gates |
-| 15 | Extension ecosystem | Partial | provider adapters, UI extensions, dependency cycles/upgrade recheck |
+| 15 | Extension ecosystem | Partial | provider adapters, UI extensions, upgrade recheck |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC, VSIX/APK smokes |
 | 17 | Observability | Working | — |
 | 18 | Installation and updates | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |

@@ -1151,10 +1151,15 @@ fn reorder_queued(
                 "SELECT id FROM agent_runs WHERE status=?1 ORDER BY priority DESC, created_at ASC",
             )
             .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
-        stmt.query_map([QUEUED], |row| row.get(0))
+        // Collected into its own binding: returning the chain directly keeps the
+        // borrowed rows alive past `stmt`, which the borrow checker rightly
+        // refuses.
+        let collected = stmt
+            .query_map([QUEUED], |row| row.get(0))
             .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?
             .collect::<rusqlite::Result<Vec<String>>>()
-            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?
+            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()))?;
+        collected
     };
     let Some(index) = queued.iter().position(|id| id == run_id) else {
         return Err((

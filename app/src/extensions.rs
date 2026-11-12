@@ -50,7 +50,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,6 +80,11 @@ const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
 const SUPPORTED_API_VERSION: u32 = 1;
 const MAX_PERMISSIONS: usize = 16;
 const MAX_DEPENDENCIES: usize = 16;
+/// How deep one dependency walk may go before it gives up. The installed set is
+/// local and small, but a hand-written chain must not be able to recurse without
+/// a bound; a chain longer than this is reported as no cycle rather than
+/// silently truncated.
+const MAX_DEPENDENCY_DEPTH: usize = 64;
 const MAX_TOOLS: usize = 16;
 const MAX_TOOL_DESCRIPTION_CHARS: usize = 400;
 const MAX_TOOL_SCHEMA_BYTES: usize = 8 * 1024;
@@ -519,6 +524,42 @@ fn missing_dependencies(manifest: &Manifest, installed: &[String]) -> Vec<String
         .collect()
 }
 
+/// The dependency chain that closes a cycle reachable from `id`, if there is
+/// one: the ids in order, with the repeated one last (`a → b → a`). A cycle
+/// anywhere in the reachable set counts, not only one that passes through the
+/// starting folder, because a chain that can never be satisfied blocks whatever
+/// depends on it. Each node is expanded once, so the walk is bounded by the
+/// installed folders even before [`MAX_DEPENDENCY_DEPTH`] applies.
+fn dependency_cycle(id: &str, graph: &HashMap<String, Vec<String>>) -> Option<Vec<String>> {
+    fn walk(
+        node: &str,
+        graph: &HashMap<String, Vec<String>>,
+        path: &mut Vec<String>,
+        done: &mut HashSet<String>,
+    ) -> Option<Vec<String>> {
+        if let Some(start) = path.iter().position(|seen| seen == node) {
+            let mut cycle = path[start..].to_vec();
+            cycle.push(node.to_string());
+            return Some(cycle);
+        }
+        if path.len() >= MAX_DEPENDENCY_DEPTH || done.contains(node) {
+            return None;
+        }
+        path.push(node.to_string());
+        if let Some(dependencies) = graph.get(node) {
+            for dependency in dependencies {
+                if let Some(cycle) = walk(dependency, graph, path, done) {
+                    return Some(cycle);
+                }
+            }
+        }
+        path.pop();
+        done.insert(node.to_string());
+        None
+    }
+    walk(id, graph, &mut Vec::new(), &mut HashSet::new())
+}
+
 /// Why the runner cannot run this manifest, if it cannot. A wasm extension is
 /// runnable when every permission it declares is one the runner provides (ADR
 /// 0001); a capability with no host function behind it is refused here.
@@ -552,6 +593,7 @@ fn invalid(folder: &str, error: String) -> Value {
         "requiresStudio": Value::Null,
         "dependencies": [],
         "missingDependencies": [],
+        "dependencyCycle": [],
         "tools": [],
         "permissions": [],
         "valid": false,
@@ -848,18 +890,31 @@ fn inspect(dir: &Path) -> Vec<Value> {
         .iter()
         .filter_map(|(_, manifest)| manifest.as_ref().ok().map(|manifest| manifest.id.clone()))
         .collect();
+    // The same readable set as a dependency graph, so a cycle is judged against
+    // the folders that really exist rather than against every declared id.
+    let graph: HashMap<String, Vec<String>> = listed
+        .iter()
+        .filter_map(|(_, manifest)| manifest.as_ref().ok())
+        .map(|manifest| (manifest.id.clone(), manifest.dependencies.clone()))
+        .collect();
     listed
         .drain(..)
         .map(|(name, parsed)| match parsed {
             Ok(manifest) => {
                 let incompatible = compatibility_block(&manifest, app_version);
                 let missing = missing_dependencies(&manifest, &installed);
+                let cycle = dependency_cycle(&manifest.id, &graph);
                 let blocked = incompatible.clone().or_else(|| {
                     if missing.is_empty() {
                         None
                     } else {
                         Some(format!("Needs {} installed first.", missing.join(", ")))
                     }
+                });
+                let blocked = blocked.or_else(|| {
+                    cycle
+                        .as_ref()
+                        .map(|chain| format!("Dependency cycle: {}.", chain.join(" → ")))
                 });
                 let blocked = blocked.or_else(|| run_block(&manifest));
                 let tools: Vec<Value> = manifest
@@ -886,6 +941,7 @@ fn inspect(dir: &Path) -> Vec<Value> {
                     "requiresStudio": manifest.requires_studio,
                     "dependencies": manifest.dependencies,
                     "missingDependencies": missing,
+                    "dependencyCycle": cycle.unwrap_or_default(),
                     "tools": tools,
                     "permissions": manifest.permissions,
                     "valid": true,
@@ -2101,6 +2157,111 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("base-tools"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_dependency_cycle_is_found_and_named() {
+        fn graph(edges: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+            edges
+                .iter()
+                .map(|(id, deps)| {
+                    (
+                        id.to_string(),
+                        deps.iter().map(|dep| dep.to_string()).collect::<Vec<_>>(),
+                    )
+                })
+                .collect()
+        }
+        // Two folders that need each other.
+        let pair = graph(&[("a-tools", &["b-tools"]), ("b-tools", &["a-tools"])]);
+        assert_eq!(
+            dependency_cycle("a-tools", &pair),
+            Some(vec![
+                "a-tools".to_string(),
+                "b-tools".to_string(),
+                "a-tools".to_string()
+            ])
+        );
+        // A three-hop cycle is reachable from a folder outside it.
+        let long = graph(&[
+            ("outer-tools", &["a-tools"]),
+            ("a-tools", &["b-tools"]),
+            ("b-tools", &["c-tools"]),
+            ("c-tools", &["a-tools"]),
+        ]);
+        assert_eq!(
+            dependency_cycle("outer-tools", &long),
+            Some(vec![
+                "a-tools".to_string(),
+                "b-tools".to_string(),
+                "c-tools".to_string(),
+                "a-tools".to_string()
+            ])
+        );
+        // A diamond is a shared dependency, not a cycle.
+        let diamond = graph(&[
+            ("top-tools", &["left-tools", "right-tools"]),
+            ("left-tools", &["base-tools"]),
+            ("right-tools", &["base-tools"]),
+            ("base-tools", &[]),
+        ]);
+        assert_eq!(dependency_cycle("top-tools", &diamond), None);
+        // An id that is not in the graph at all cannot close a cycle.
+        assert_eq!(dependency_cycle("missing-tools", &pair), None);
+    }
+
+    #[test]
+    fn a_dependency_cycle_blocks_a_run_and_says_which_folders() {
+        let root = scratch("dependency-cycle");
+        let folder = |id: &str, dependencies: &str| {
+            let dir = root.join(id);
+            fs::create_dir_all(&dir).expect("folder");
+            fs::write(
+                dir.join("manifest.json"),
+                format!(
+                    r#"{{"id":"{id}","name":"{id}","version":"1.0.0","runtime":"wasm","entry":"tool.wasm","dependencies":{dependencies}}}"#
+                ),
+            )
+            .expect("manifest");
+            fs::write(dir.join("tool.wasm"), b"\0asm").expect("entry");
+        };
+        folder("a-tools", r#"["b-tools"]"#);
+        folder("b-tools", r#"["a-tools"]"#);
+        folder("plain-tools", "[]");
+
+        let entries = inspect(&root);
+        let by_id = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap_or_else(|| panic!("entry {id}"))
+        };
+        for id in ["a-tools", "b-tools"] {
+            let entry = by_id(id);
+            assert_eq!(entry["valid"], true, "{id}");
+            // Both folders are present, so nothing is missing: the cycle is the
+            // reason this chain cannot run.
+            assert_eq!(entry["missingDependencies"], json!([]), "{id}");
+            assert_eq!(entry["runnable"], false, "{id}");
+            // The chain is reported from the folder that asked, so a cycle is
+            // the same set of folders only rotated; it must still close on
+            // itself and name both of them.
+            let chain = entry["dependencyCycle"].as_array().cloned().unwrap_or_default();
+            assert_eq!(chain.len(), 3, "{id}: {chain:?}");
+            assert_eq!(chain.first(), chain.last(), "{id}: {chain:?}");
+            assert!(
+                chain.iter().any(|node| node == "a-tools")
+                    && chain.iter().any(|node| node == "b-tools"),
+                "{id}: {chain:?}"
+            );
+            let reason = entry["blockedReason"].as_str().unwrap_or("");
+            assert!(reason.contains("Dependency cycle"), "{id}: {reason}");
+            assert!(reason.contains("a-tools") && reason.contains("b-tools"), "{id}: {reason}");
+        }
+        // A folder outside the cycle is unaffected.
+        assert_eq!(by_id("plain-tools")["runnable"], true);
+        assert_eq!(by_id("plain-tools")["dependencyCycle"], json!([]));
         let _ = fs::remove_dir_all(&root);
     }
 

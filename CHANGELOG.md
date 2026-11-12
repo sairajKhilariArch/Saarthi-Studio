@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.9.0
+
+Phase 15 dependency cycles, and the 3.8.0 tree builds again. Two type errors had
+shipped because that commit was made without a build, and a remote router on the
+machine's own IPv6 loopback was refused.
+
+- **A dependency cycle now blocks a run instead of looking healthy.**
+  `extensions::dependency_cycle` walks the dependency graph of the folders that
+  really are installed — each node expanded once, with a depth cap — and discovery
+  reports the chain as `dependencyCycle` beside `missingDependencies`. A folder
+  whose chain closes on itself is `runnable: false` with
+  "Dependency cycle: a-tools → b-tools → a-tools." in `blockedReason`, which the
+  Settings panel already shows. The cycle is a run block, not an install block,
+  exactly like a missing dependency, because the folders involved can still be
+  installed, updated or removed. A cycle reachable through another folder blocks
+  that folder too; a folder outside the cycle is untouched, and a diamond (two
+  dependents sharing one dependency) is not reported as a cycle.
+- **The tree compiles again.** `router_registry`'s remote-view test bound its
+  result to a local named `view`, shadowing the `view` function it had just
+  called (E0618); `agent::reorder` returned a `MappedRows` iterator that borrowed
+  a statement it outlived (E0597). Both are fixed, the `view` only the tests call
+  is `#[cfg(test)]` so the dead-code lint is not tripped, and an explicit auto
+  dereference in the remote probe is gone. `cargo test --locked` is 557 passed, 1
+  ignored; `cargo clippy --locked --all-targets -D warnings` is clean.
+- **A plain-HTTP remote router on `[::1]` is accepted again.** `Url::host_str`
+  keeps an IPv6 literal's brackets and `IpAddr` does not parse them, so the
+  loopback test rejected the address and demanded TLS for a connection that never
+  leaves the machine. The brackets are stripped before the parse.
+- **The release audit survives a CRLF reader.** `audit-releases.sh` now strips a
+  carriage return and stray whitespace from every tag it lists: Python's
+  text-mode stdout on Windows writes CRLF, so the tag read as `v9.9.9\r` and
+  curl rejected it as a malformed URL. This is the same class as the v1.26.1
+  failure, fixed at the point the value is used.
+- **`app/src/router_registry.rs` is normalised to LF in the working tree.** The
+  file carried doubled carriage returns, which rustc refuses as a bare CR in a
+  doc comment; the tree git stores was already LF.
+
+Verified with `cargo test --locked` (557 passed, 1 ignored), clippy with
+`-D warnings`, `scripts/ci/test-version.sh` (20/20), `scripts/ci/test-release.sh`
+(5/5, up from 4/6) and `scripts/ci/test-frontend.sh`. Not run: the end-to-end
+harness and any browser check; `cargo fmt --check` still reports the tree's
+pre-existing formatting diffs, which this commit does not change.
+
 ## 3.8.0
 
 Documentation correction: the remaining-work sections now describe the current
