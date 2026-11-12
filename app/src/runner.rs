@@ -299,14 +299,14 @@ fn spawn_command(preset: &Preset) -> Command {
     command
 }
 
-struct Capture {
-    text: String,
-    truncated: bool,
+pub(crate) struct Capture {
+    pub(crate) text: String,
+    pub(crate) truncated: bool,
 }
 
 /// Drain a pipe, keeping at most `cap` bytes of it. The rest is still read so
 /// the child never blocks on a full pipe.
-fn read_capped(mut reader: impl Read, cap: usize) -> Capture {
+pub(crate) fn read_capped(mut reader: impl Read, cap: usize) -> Capture {
     let mut buffer = vec![0u8; 16 * 1024];
     let mut text = String::new();
     let mut truncated = false;

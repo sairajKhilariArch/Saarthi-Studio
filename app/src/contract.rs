@@ -30,6 +30,7 @@ const FEATURES: &[&str] = &[
     "git",
     "git_worktrees",
     "git_reflog_undo",
+    "editor_format",
     "saved_commands",
     "watch",
     "skills",

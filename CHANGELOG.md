@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.23.0
+
+Phase 9 gains formatting. The editor can format the active buffer with the
+project's own tool, and the result is handed back as text — the normal save path
+still decides whether it may be written.
+
+- **`POST /api/workspace/format {path, content}`** answers
+  `{formatter, content, changed, bytes}`. It never opens or writes the file, so a
+  new unsaved buffer formats too, and an editor action cannot bypass the
+  permission and file-claim checks a save follows.
+- **Only fixed formatters, chosen by extension.** `.rs` runs
+  `rustfmt --emit stdout --edition 2021` (project `rustfmt.toml` is honoured
+  through the working directory); `.go` runs `gofmt`; JS/TS/JSON/CSS/SCSS/HTML/
+  Markdown/YAML run Prettier from the folder's `node_modules/.bin` first, then
+  PATH, with `--stdin-filepath` so the parser is inferred from the real path.
+- **Failures never replace the buffer.** An unknown extension, a missing tool, a
+  parse error, a 20-second timeout or a formatter that prints nothing is a 400
+  naming the tool or reason. Output is capped at 2 MiB, like the input.
+- **The path is workspace-relative and validated.** Absolute names, `..`
+  segments, drive letters and control characters are refused; the file does not
+  have to exist because the buffer is what is formatted.
+- **The editor.** A Format button and `File: Format buffer` in the palette send
+  the current buffer, mark the result unsaved (Ctrl+S writes it) and say which
+  tool ran. Scratch pads are refused. The contract gained `editor_format`
+  (24 ids), which the extension's built-in server reports false, so the button
+  is hidden there.
+
+Verified: `cargo test --locked` 584 passed, 1 ignored (5 new: path refusal,
+formatter selection by extension, local Prettier precedence, a real rustfmt run
+that writes nothing, and a missing tool named in the error); clippy
+`--all-targets -D warnings` clean; `cargo fmt --check` clean; `node --check`
+clean; `test-frontend.sh` 50 passed; `test-version.sh` 20/20; `test-e2e.sh` 32
+passed; extension `npm test` 27 passed. Live headless: a buffer formatted to
+rustfmt output while the file on disk stayed byte-for-byte unchanged, an unknown
+extension and an escaping path were 400, and `prettier`/`gofmt` missing from
+PATH were named instead of guessed at. **Not run:** the Format button in a
+browser, and Prettier/Go formatting itself (neither tool is installed here).
+
 ## 3.22.0
 
 The shared UI now reads the capability contract it was given: a server that says

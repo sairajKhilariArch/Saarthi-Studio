@@ -40,6 +40,7 @@ mod events;
 mod extension_run;
 mod extensions;
 mod filelock;
+mod format;
 mod git;
 #[cfg(feature = "gui")]
 mod gui;

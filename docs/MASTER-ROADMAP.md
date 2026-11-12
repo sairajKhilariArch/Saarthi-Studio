@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.22.0
+## Remaining work at 3.23.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -53,7 +53,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting) and a debugger. |
+| 9 — Developer environment | Editor engine completion/diagnostics and a debugger. Formatting shipped in 3.23.0. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 23 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -393,6 +393,18 @@ and `error`; Stop kills the command at the next 120 ms poll — including the
 shell's children on Windows — instead of waiting out the 300 s ceiling. Opening
 or closing a folder stops the watcher. Phase 9 is left with the editor engine
 and a debugger.*
+
+*Delivered 3.23.0: buffer formatting. `POST /api/workspace/format {path,
+content}` runs one fixed formatter chosen by extension — rustfmt through stdin
+(edition 2021, the folder's `rustfmt.toml` honoured), gofmt, or Prettier from the
+folder's `node_modules/.bin` then PATH with `--stdin-filepath` — and returns the
+text without touching the file. The editor marks it unsaved, so Ctrl+S goes
+through the normal permission and claim checks. Unknown extensions, missing
+tools, parse errors, a 20 s timeout, empty output and output over 2 MiB are 400s
+that name the reason; paths are workspace-relative and escapes are refused; a
+new unsaved buffer is allowed. The Format button and `File: Format buffer` are
+gated by the new `editor_format` capability (24 ids), false in the embedded
+server. Phase 9 is left with completion/diagnostics and a debugger.*
 
 *Delivered 1.68.0: the remote half — fetch with a resolved remote,
 fast-forward-only pull that refuses a diverged history with a 409, and push that
@@ -868,7 +880,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
 | 8 Memory and RAG | Working | semantic search is a router proxy, not a local embedding index |
-| 9 Developer environment | Partial | no editor engine or debugger; watch mode shipped in 3.21.0 |
+| 9 Developer environment | Partial | no editor engine (completion/diagnostics) or debugger; watch 3.21.0, formatting 3.23.0 |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |

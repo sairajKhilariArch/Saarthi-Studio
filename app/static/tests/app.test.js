@@ -497,6 +497,7 @@ test("every control the contract can hide carries its feature id", () => {
     ['id="modeIndex"', "code_index"],
     ['id="memoryPane"', "memory"],
     ['id="modeMemory"', "memory"],
+    ['id="formatBtn"', "editor_format"],
   ];
   for (const [needle, feature] of pairs) {
     const start = html.indexOf(needle);

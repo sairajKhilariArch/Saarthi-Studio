@@ -1500,6 +1500,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
         .merge(crate::git::router())
         .merge(crate::runner::router())
         .merge(crate::watch::router())
+        .merge(crate::format::router())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(
             LocalOriginGuard { port },

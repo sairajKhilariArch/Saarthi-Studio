@@ -17,6 +17,19 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.23.0 (2026-11-12):** Phase 9 gains formatting. The editor's Format
+button and `File: Format buffer` send the current buffer to
+`POST /api/workspace/format {path, content}` and receive text only; the normal
+save path still writes it, so permissions and file claims are unchanged. Fixed
+formatters are selected by extension — rustfmt (stdin, edition 2021, project
+config), gofmt, and Prettier from the folder's `node_modules/.bin` then PATH with
+`--stdin-filepath`. Unknown extensions, missing tools, parse errors, timeouts and
+empty output are 400s that name the reason and leave the buffer alone; input and
+output are capped at 2 MiB. The path is workspace-relative and escapes/absolute
+names are refused; a new unsaved buffer is allowed. The contract gained
+`editor_format` (24 ids), false in the extension's built-in server. What remains
+in Phase 9 is completion/diagnostics in the editor and a debugger.
+
 **Revision 3.22.0 (2026-11-12):** Phase 14's local contract now drives the UI.
 The contract gained `permissions`, `deep_search` and `watch` (23 desktop ids),
 and the shared UI fetches `/api/capabilities` at boot. Only an explicit `false`
@@ -413,7 +426,7 @@ below carry the evidence.
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
 | 8 | Memory and RAG | Working | semantic search is a router proxy, not a local index |
-| 9 | Developer environment | Partial | editor engine, debugger |
+| 9 | Developer environment | Partial | editor engine (completion/diagnostics), debugger; formatting shipped in 3.23.0 |
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
@@ -568,7 +581,8 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Git rebase, continue, skip and abort | Working (3.2.0) | `POST /api/workspace/git/rebase` (body `branch`) replays the checked-out branch's commits on top of another branch; `/rebase/abort` restores the branch where the rebase started. A dirty tracked tree and the already-checked-out branch are refused (untracked files are ignored, as git ignores them), the branch name is narrowed before argv, and both routes are gated on `git`. Success answers `{branch, current, summary}`; a conflict answers 409 `{conflicted, output, inProgress}` and leaves the tree to finish or abort; abort is a 409 when nothing is in progress. A resolved conflict is staged and finished with `/rebase/continue` (a 409 names any still-unmerged path, a second conflict is reported, and a finished rebase refuses; `-c core.editor=true` keeps a terminal-less git off an editor). Skip (`/rebase/skip`) runs `git rebase --skip` behind the same `git` gate, refuses with no rebase in progress, reads the dropped subject from `REBASE_HEAD` and reports the next conflict or a still-in-progress rebase like Continue. UI: Rebase… form, Continue, Skip commit and Abort rebase controls, conflicted files named in the toast |
 | Git worktree per run | Working (2.1.0) | a writing run gets `<repo>-run-<id>` on a `run/<id>` branch, can be applied back and cleaned up (2.0.0); read-only runs and non-git folders keep the shared root |
 | Git reflog undo | Working (3.18.0) | `GET /api/workspace/git/reflog` lists the newest 50 `HEAD@{n}` entries (`hash`, `selector`, `action`, `date`) and `inProgress`; an unborn branch answers an empty list. `POST /api/workspace/git/undo` takes a selector the server itself listed, resolves the commit from that entry (a raw hash, another ref's reflog or `HEAD@{0}` is a 400) and runs `git reset --hard` behind the `git` action. It refuses 409 while a merge or rebase is unfinished or tracked files are modified, because the tree is reset with the branch; untracked files are ignored. The reset is itself a reflog entry, so the same list redoes it. The pane's `Undo…` lists the entries, marks the current one, disables Restore during a merge or rebase, and confirms branch, selector, short hash and action |
-| Syntax highlighting, diagnostics, completion, formatting | Missing | no editor engine, by design |
+| Format buffer | Working (3.23.0) | `POST /api/workspace/format {path, content}` returns formatted text only, never a write: rustfmt (stdin, edition 2021, project config), gofmt, or Prettier (folder `node_modules/.bin` first, then PATH, `--stdin-filepath`). Unknown extensions, missing tools, parse errors, 20 s timeouts, empty output and output over 2 MiB are 400s naming the reason; the buffer is marked unsaved and Ctrl+S uses the normal gated save. Workspace-relative paths only. The editor has a Format button and palette command; the contract id `editor_format` hides it where the server cannot serve it |
+| Syntax highlighting, diagnostics, completion | Missing | no editor engine, by design |
 | Build/test runner + diagnostics in the Problems panel | Working (1.73.0) | `app/src/runner.rs`: detects `cargo build`/`cargo test` from `Cargo.toml`, and `build`/`test` scripts from `package.json` through npm/pnpm/yarn. `GET /api/workspace/runner`, `POST /api/workspace/run` (preset id only, never a command line; gated on `command`; one run at a time; 300 s ceiling; 1 MiB per stream, last 200 000 chars returned). Parses Rust, TypeScript and generic `path:line:col` diagnostics, dedupes, caps at 200, drops paths outside the folder. The Problems pane runs them, shows the raw output, and opens a diagnostic at its real line. Since 1.73.0 a test run also reports counts: `tests {framework,total,passed,failed,ignored,failures}` parsed from libtest's per-binary result lines, Jest, Vitest and node's TAP summary, shown in the pane header with the failing names in its tooltip. A build is never searched and a summary-less test run reports `null`, so zeroes are never invented. Since 3.17.0 the same list carries commands saved in Settings (`kind: custom`, ids `custom-<slug>`, at most 20, each a `name :: command` line run through the platform shell) and the pane has a picker and Run for them; the request still sends an id, never a command line |
 | Watch mode | Working (3.21.0) | `POST /api/workspace/watch/start` takes a preset id resolved from `runner::all` (never a command line) and asks the `command` permission once with the full line; that decision covers the session because a background thread cannot prompt. The loop reuses `workspace::fingerprint_tree` every 700 ms and takes a new baseline after each run, so generated output cannot retrigger it. A watch holds the runner's only slot, so manual runs are refused meanwhile. `GET /api/workspace/watch` returns the preset, run count, last real run (exit code, duration, problems, bounded output tail, test summary), `truncated` and `error`; `POST /api/workspace/watch/stop` signals, and the runner kills the command at its next 120 ms poll (with `taskkill /T` on Windows) instead of waiting up to 300 s. Opening or closing a folder stops it. The Problems pane has Watch / Stop watching, polls every 1.2 s, reuses the manual run renderer and restores its state after a reload |
 | Debugger | **Missing** | there is no debug adapter. A user-defined command preset (3.17.0) still covers the "run any command" case, and watch mode (3.21.0) reruns it on changes |

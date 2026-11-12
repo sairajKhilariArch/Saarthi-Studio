@@ -3213,6 +3213,30 @@ function syncTabDirty() {
   if (dot && file) dot.classList.toggle("hidden", file.content === file.original);
 }
 
+/* Format only returns text. The buffer is marked dirty and the normal save
+   path decides whether it may be written. */
+async function formatActiveFile() {
+  const file = activeFile();
+  if (!file) { toast("Open a file first."); return; }
+  if (file.scratch) { toast("Scratch pads have no formatter."); return; }
+  const result = await api("/api/workspace/format", {
+    method: "POST",
+    body: JSON.stringify({ path: file.path, content: file.content }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not format this file.");
+    return;
+  }
+  if (!result.data.changed) {
+    toast(`${basename(file.path)} is already formatted.`);
+    return;
+  }
+  file.content = result.data.content;
+  renderEditor();
+  syncTabDirty();
+  toast(`Formatted with ${result.data.formatter}. Save to write it.`);
+}
+
 async function saveActiveFile() {
   const file = activeFile();
   if (!file || file.scratch) {
@@ -7713,6 +7737,7 @@ function bindEvents() {
   $("deleteBtn").addEventListener("click", deleteSelected);
 
   $("saveBtn").addEventListener("click", saveActiveFile);
+  $("formatBtn").addEventListener("click", formatActiveFile);
   $("revertBtn").addEventListener("click", revertActiveFile);
   $("attachFileBtn").addEventListener("click", attachActiveToChat);
   $("copyPathBtn").addEventListener("click", () => {
