@@ -87,7 +87,7 @@
   const ACTIVITIES = [
     { id: "explorer", icon: "folder", label: "Explorer", pane: "files" },
     { id: "search", icon: "search", label: "Search", pane: "search" },
-    { id: "scm", icon: "branch", label: "Source control", pane: "scm" },
+    { id: "scm", icon: "branch", label: "Source control", pane: "scm", feature: "git" },
     { id: "run", icon: "play", label: "Run and task history", view: "runs" },
     { id: "modules", icon: "cube", label: "Modules and connections", view: "integrations" },
     { id: "agents", icon: "user", label: "Agents", view: "agents" },
@@ -107,6 +107,9 @@
       const button = el("button", "activity-btn", svg(activity.icon));
       button.type = "button";
       button.dataset.activity = activity.id;
+      // The capability layer hides this button when the connected server has
+      // no git routes (the VS Code extension's built-in server).
+      if (activity.feature) button.dataset.feature = activity.feature;
       button.title = activity.label;
       button.setAttribute("aria-label", activity.label);
       button.setAttribute("aria-pressed", "false");
@@ -304,12 +307,17 @@
       '<span id="runnerTests" class="muted"></span>' +
       '<select id="runPresetSelect" aria-label="Command to run"></select>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runPreset">Run</button>' +
-      '<button type="button" class="btn btn-quiet btn-small" id="watchPreset" title="Rerun the chosen command when files change">Watch</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="watchPreset" data-feature="watch" title="Rerun the chosen command when files change">Watch</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runBuild">Build</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runTest">Test</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
       "No problems. Failed saves and requests, and build or test diagnostics, land here.");
     problemsPane.insertAdjacentHTML("beforeend", '<pre id="runnerOutput" class="runner-output hidden" aria-label="Build output"></pre>');
+    // Capabilities normally arrive after this pane is built; when they were
+    // already read (a cached answer), hide the watch control here as well.
+    if ($("watchPreset") && !capabilitiesAllow(state.capabilities, "watch")) {
+      $("watchPreset").classList.add("hidden");
+    }
     body.appendChild(problemsPane);
     body.appendChild(makePane("runsPane", "runsBody",
       '<span>Agent runs on this machine</span><button type="button" class="btn btn-quiet btn-small" id="runsRefresh">Refresh</button>',
@@ -2591,6 +2599,13 @@
   function boot() {
     injectBranchSymbol();
     buildActivityBar();
+    // Capabilities arrive after this shell is built, so a pane that becomes
+    // unavailable leaves the activity it was showing instead of staying open
+    // with no button to come back to.
+    window.addEventListener("sarthi:capabilities", () => {
+      const active = document.querySelector(`.activity-btn[data-activity="${IDE.activity}"]`);
+      if (active && active.classList.contains("hidden")) openActivity("explorer");
+    });
     buildSidebarPanes();
     buildDock();
     buildBottom();

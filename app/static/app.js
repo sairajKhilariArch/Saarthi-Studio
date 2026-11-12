@@ -32,6 +32,12 @@ function setupThemeToggle() {
 /* ---- settings: section navigation + appearance ------------------- */
 
 function setSettingsSection(name) {
+  // A section the connected server cannot serve is never shown, even if a
+  // palette entry or a remembered section asks for it.
+  const wanted = document.getElementById(`settings-${name}`);
+  if (wanted && wanted.dataset.feature && !capabilitiesAllow(state.capabilities, wanted.dataset.feature)) {
+    name = "connection";
+  }
   let found = false;
   document.querySelectorAll(".settings-section").forEach((section) => {
     const active = section.id === `settings-${name}`;
@@ -61,6 +67,47 @@ function setSettingsSection(name) {
     void loadUninstallPreview();
   }
   try { localStorage.setItem("freeai-settings-section", name); } catch { /* private mode */ }
+}
+
+/* ---- server capabilities ----------------------------------------- */
+
+/* The contract version this UI understands. A server answering a different
+   number is treated as unknown, not as a set of missing features. */
+const CAPABILITY_CONTRACT = 1;
+
+/* Should this control be offered? `false` is the only hiding signal: a missing
+   table, a missing id, an older server and a future contract all keep the
+   control, so an upgrade never silently removes the UI. */
+function capabilitiesAllow(capabilities, feature) {
+  if (!capabilities || capabilities.contract !== CAPABILITY_CONTRACT) return true;
+  if (!capabilities.features || typeof capabilities.features !== "object") return true;
+  return capabilities.features[feature] !== false;
+}
+
+function applyCapabilities() {
+  document.querySelectorAll("[data-feature]").forEach((element) => {
+    element.classList.toggle("hidden", !capabilitiesAllow(state.capabilities, element.dataset.feature));
+  });
+  const active = document.querySelector("button[data-settings-section].active");
+  if (active && active.dataset.feature && !capabilitiesAllow(state.capabilities, active.dataset.feature)) {
+    setSettingsSection("connection");
+  }
+  // The activity shell builds its buttons before this answer arrives; it uses
+  // the same event to leave a pane that is now hidden.
+  window.dispatchEvent(new CustomEvent("sarthi:capabilities"));
+}
+
+async function loadCapabilities() {
+  try {
+    const response = await fetch("/api/capabilities", { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (!payload || typeof payload !== "object") return;
+    state.capabilities = payload;
+    applyCapabilities();
+  } catch {
+    // No contract endpoint (an older server): every control stays as it was.
+  }
 }
 
 const ACCENTS = [
@@ -898,6 +945,9 @@ const state = {
   thinking: (() => { try { return localStorage.getItem("freeai-thinking") || ""; } catch { return ""; } })(),
   thinkingLevels: null,
   platformModels: null,
+  /* capabilities: `/api/capabilities`, or null when the server has no contract.
+     Never a guess: only an explicit false hides a control. */
+  capabilities: null,
   contextBudget: 6000,
   lastContextTokens: null,
   /* projects: real server-side scoping — the active project filters every
@@ -8897,6 +8947,7 @@ async function cancelAgentRun(runId) {
   setupSettingsNav();
   renderAccentPicker();
   setSettingsSection(localStorage.getItem("freeai-settings-section") || "connection");
+  void loadCapabilities();
   bindEvents();
   setupLocalControls();
   $("runsForm").addEventListener("submit", submitRun);

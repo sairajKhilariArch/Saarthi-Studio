@@ -74,9 +74,9 @@
     <div class="segmented" role="tablist" aria-label="Sidebar view">
       <button id="modeThreads" class="segmented-btn active" role="tab" aria-selected="true">Threads</button>
       <button id="modeFiles" class="segmented-btn" role="tab" aria-selected="false">Files</button>
-      <button id="modeIndex" class="segmented-btn" role="tab" aria-selected="false">Index</button>
+      <button id="modeIndex" class="segmented-btn" role="tab" aria-selected="false" data-feature="code_index">Index</button>
       <button id="modeSkills" class="segmented-btn" role="tab" aria-selected="false">Skills</button>
-      <button id="modeMemory" class="segmented-btn" role="tab" aria-selected="false">Memory</button>
+      <button id="modeMemory" class="segmented-btn" role="tab" aria-selected="false" data-feature="memory">Memory</button>
     </div>
 
     <section id="threadsPane" class="pane">
@@ -116,7 +116,7 @@
       </div>
     </section>
 
-    <section id="memoryPane" class="pane hidden">
+    <section id="memoryPane" class="pane hidden" data-feature="memory">
       <p class="pane-label">Remembered for this project</p>
       <div id="memoryList" class="skill-list">
         <p class="empty-note">Loading memory…</p>
@@ -144,7 +144,7 @@
       </details>
     </section>
 
-    <section id="indexPane" class="pane hidden">
+    <section id="indexPane" class="pane hidden" data-feature="code_index">
       <div class="pane-head">
         <p class="pane-label" id="indexStatus">Index not read yet</p>
         <button id="indexRefreshBtn" class="tiny-toggle" title="Walk the open folder again and re-read changed files">Refresh</button>
@@ -671,12 +671,12 @@
           <button type="button" data-settings-section="connection" class="active" aria-selected="true">Connection</button>
           <button type="button" data-settings-section="appearance" aria-selected="false">Appearance</button>
           <button type="button" data-settings-section="context" aria-selected="false">Chat context</button>
-          <button type="button" data-settings-section="search" aria-selected="false">Deep search</button>
-          <button type="button" data-settings-section="openai" aria-selected="false">OpenAI Platform</button>
-          <button type="button" data-settings-section="permissions" aria-selected="false">Permissions</button>
-          <button type="button" data-settings-section="mcp" aria-selected="false">MCP</button>
-          <button type="button" data-settings-section="diagnostics" aria-selected="false">Diagnostics</button>
-          <button type="button" data-settings-section="extensions" aria-selected="false">Extensions</button>
+          <button type="button" data-settings-section="search" data-feature="deep_search" aria-selected="false">Deep search</button>
+          <button type="button" data-settings-section="openai" data-feature="openai_platform" aria-selected="false">OpenAI Platform</button>
+          <button type="button" data-settings-section="permissions" data-feature="permissions" aria-selected="false">Permissions</button>
+          <button type="button" data-settings-section="mcp" data-feature="mcp" aria-selected="false">MCP</button>
+          <button type="button" data-settings-section="diagnostics" data-feature="diagnostics" aria-selected="false">Diagnostics</button>
+          <button type="button" data-settings-section="extensions" data-feature="extensions" aria-selected="false">Extensions</button>
           <button type="button" data-settings-section="privacy" aria-selected="false">Privacy</button>
           <button type="button" data-settings-section="about" aria-selected="false">Privacy &amp; about</button>
         </nav>
@@ -714,7 +714,7 @@
           </div>
           </section>
 
-          <section id="settings-openai" class="settings-section card form-card-inner hidden">
+          <section id="settings-openai" class="settings-section card form-card-inner hidden" data-feature="openai_platform">
           <h2 class="form-group-title">OpenAI Platform</h2>
           <p>Native platform access through its own <code>/responses</code> API. This is separate from the router above: the key stays on this computer, and the browser only ever learns whether one is saved.</p>
           <label class="field">
@@ -779,7 +779,7 @@
             </label>
           </div>
           <div class="form-row">
-            <label class="field field-wide">
+            <label class="field field-wide" data-feature="saved_commands">
               <span>Saved commands</span>
               <textarea id="commandPresets" rows="4" spellcheck="false" placeholder="Lint everything :: npm run lint&#10;Release build :: cargo build --release"></textarea>
               <small>One command per line as <code>name :: command</code>. They appear in the Run panel beside the detected build and test commands and go through the same permission check, which shows the whole line before it runs. Each command runs in the open folder through the platform shell.</small>
@@ -791,7 +791,7 @@
           </div>
           </section>
 
-          <section id="settings-diagnostics" class="settings-section card form-card-inner hidden">
+          <section id="settings-diagnostics" class="settings-section card form-card-inner hidden" data-feature="diagnostics">
           <h2 class="form-group-title">Diagnostics</h2>
           <h3>Readiness</h3>
           <p class="muted">Whether Studio can work right now. The database and a writable data directory are required; a provider without a key, a failed router install or an unhealthy MCP server changes what works, not whether the app runs. Nothing here probes the network &mdash; measured state lives in the Router view and the Provider health card.</p>
@@ -835,7 +835,7 @@
           <ul id="diagLog" class="perm-audit"></ul>
           </section>
 
-          <section id="settings-extensions" class="settings-section card form-card-inner hidden">
+          <section id="settings-extensions" class="settings-section card form-card-inner hidden" data-feature="extensions">
           <h2 class="form-group-title">Extensions</h2>
           <p>Folders with a <code>manifest.json</code> in the directory below. Installing means putting a folder in place. A <code>runtime: "wasm"</code> extension runs in a sandbox with no network or clock access; it can reach the open folder only through <code>workspace.read</code> / <code>workspace.write</code> and its own data folder through <code>data_read</code> / <code>data_write</code>, and every call is checked against the rules in Permissions and audited. A write needs an allow rule there, because an extension cannot answer a prompt. Capabilities without a sandbox function are listed with the reason they cannot run yet. A manifest may also declare <code>tools</code>: each is a module run on demand with its JSON arguments, which answers once through the tool ABI. Calling one needs an <code>extension_tool</code> allow rule, because a call has no prompt to answer. One run per extension is allowed; while it is in flight the row shows Running… and a Cancel action, which stops the module at its next host call — a module that only computes still ends at its fuel limit.</p>
           <p class="muted" id="extensionsDirectory"></p>
@@ -853,7 +853,7 @@
           <div id="extensionRuns" class="list-block"></div>
           </section>
 
-          <section id="settings-permissions" class="settings-section card form-card-inner hidden">
+          <section id="settings-permissions" class="settings-section card form-card-inner hidden" data-feature="permissions">
           <h2 class="form-group-title">Permissions</h2>
           <p>Rules saved here decide what the agent and the router manager may do. A rule can only make an action <em>stricter</em>: a run started without write access still cannot write, even where a rule allows it. Reads default to allowed; anything that can destroy, spend or expose asks first.</p>
           <div class="form-row">
@@ -899,7 +899,7 @@
           <ul id="permAudit" class="perm-audit"></ul>
           </section>
 
-          <section id="settings-mcp" class="settings-section card form-card-inner hidden">
+          <section id="settings-mcp" class="settings-section card form-card-inner hidden" data-feature="mcp">
           <h2 class="form-group-title">MCP servers</h2>
           <p>Local Model Context Protocol servers this computer may run or reach. A server is a local command or a remote <code>http(s)</code> endpoint; its tools are checked against <a href="#" data-goto-settings="permissions">Permissions</a> before anything runs, so an unlisted tool asks first.</p>
           <div class="form-row">
@@ -1037,7 +1037,7 @@
           </div>
           </section>
 
-          <section id="settings-search" class="settings-section card form-card-inner hidden">
+          <section id="settings-search" class="settings-section card form-card-inner hidden" data-feature="deep_search">
           <h2 class="form-group-title">Deep search</h2>
           <div class="field deep-field">
             <span>Deep search</span>

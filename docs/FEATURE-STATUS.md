@@ -17,6 +17,18 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.22.0 (2026-11-12):** Phase 14's local contract now drives the UI.
+The contract gained `permissions`, `deep_search` and `watch` (23 desktop ids),
+and the shared UI fetches `/api/capabilities` at boot. Only an explicit `false`
+hides a control: Source control (`git`), Index (`code_index`), Memory (`memory`),
+Watch (`watch`), Saved commands (`saved_commands`) and the Settings sections for
+Deep search, OpenAI Platform, Permissions, MCP, Diagnostics and Extensions. An
+older server, a missing table or a future contract keeps everything visible, and
+a hidden remembered section falls back to Connection. The built-in server in the
+VS Code extension reports the three new ids `false`, so those controls no longer
+sit there failing against routes it does not serve. Android's Host API handshake
+is unchanged.
+
 **Revision 3.21.0 (2026-11-12):** Phase 9's watch mode ships. The Problems pane
 can watch one preset and rerun it when the open folder changes: the server
 start resolves the id from the same preset list (never a command line), asks the
@@ -406,7 +418,7 @@ below carry the evidence.
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
 | 13 | Workflow builder | Working | browser layout test only; rendering and the drag gesture are harness-tested (3.16.0), a workflow cancel stops the child agent runs it started (3.15.0) |
-| 14 | Cross-platform | Partial | Android/VS Code subsets; local contract shipped in 3.20.0, screens still gate by hand |
+| 14 | Cross-platform | Partial | Android/VS Code subsets; contract-driven UI gating shipped in 3.22.0 |
 | 15 | Extension ecosystem | Partial | provider adapters, UI extensions |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 | Observability | Working | — |
@@ -637,7 +649,7 @@ x/y, a 2px press writes nothing, a drag past the right edge clamps) while a real
 | Desktop Linux/Windows/macOS | Working | deb, AppImage, tarball, zip, macOS universal tarball |
 | Android client | Working (subset) | chat streaming, history, backup, remote agent runs via Host API; no router management, no local execution |
 | VS Code extension | Working (subset) | embedded Node server, agent port, runs webview |
-| Capability negotiation driving feature gates | Working (3.20.0) | Local API states 20 implemented ids plus enforced limits; the extension's embedded server states its honest subset and the status command reports the match. Android negotiates v1 over the Host API. Screens still hand-gate a few controls |
+| Capability negotiation driving feature gates | Working (3.22.0) | The local API states 23 implemented ids plus enforced limits; the extension's embedded server states its honest subset and its status command reports the match. Since 3.22.0 the shared UI fetches the contract at boot and hides exactly the controls a known contract marks `false` (Source control, Index, Memory, Watch, Saved commands and six Settings sections), keeping everything on an older/unknown server. Android negotiates v1 over the Host API |
 | Pairing / TLS / sessions | Working | host token lifecycle + TLS transport |
 
 ## Phase 15 — Extension and plugin ecosystem

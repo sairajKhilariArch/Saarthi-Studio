@@ -31,6 +31,7 @@ const FEATURES: &[&str] = &[
     "git_worktrees",
     "git_reflog_undo",
     "saved_commands",
+    "watch",
     "skills",
     "mcp",
     "memory",
@@ -39,6 +40,8 @@ const FEATURES: &[&str] = &[
     "extensions",
     "thinking",
     "openai_platform",
+    "permissions",
+    "deep_search",
     "usage_cost",
     "diagnostics",
 ];

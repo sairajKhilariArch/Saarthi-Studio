@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.22.0
+
+The shared UI now reads the capability contract it was given: a server that says
+it cannot do something no longer gets a button for it.
+
+- **The contract names three more real capabilities.** `permissions` and
+  `deep_search` have desktop routes and are now declared, and `watch` was added
+  with 3.21.0. The desktop reports 23 features; the VS Code extension's built-in
+  server reports its own subset and marks these three `false` as well.
+- **The UI asks before it draws.** Boot fetches `/api/capabilities` and hides a
+  `[data-feature]` control only when a contract this UI reads says `false`. An
+  older server with no route, a missing feature table, a missing id or a future
+  contract version keeps every control visible — nothing disappears on a guess.
+- **What is gated:** the Source control activity (`git`), the Index pane
+  (`code_index`), the Memory pane (`memory`), Watch (`watch`), the Saved commands
+  field (`saved_commands`), and the Settings sections Deep search, OpenAI
+  Platform, Permissions, MCP, Diagnostics and Extensions. If the remembered or
+  active section becomes unavailable, Settings falls back to Connection instead
+  of showing an empty panel; the activity shell leaves a pane whose button was
+  hidden.
+- **Tests without a browser.** The frontend suite checks the allow/deny rule
+  (unknown servers and future contracts keep everything) and reads
+  `index.html`/`ide.js` to prove every gated control carries its feature id.
+
+Verified: `test-frontend.sh` 50 passed (2 new); `node --check` on both scripts;
+`cargo test --locked` 579 passed, 1 ignored; clippy `--all-targets -D warnings`
+clean; `cargo fmt --check` clean; `test-version.sh` 20/20; `test-e2e.sh` 32
+passed; extension `npm test` 27 passed. Live headless: `/api/capabilities`
+returned contract 1, version 3.22.0 and 23 features, including the three new
+ids. **Not run:** the hidden state was not viewed in a browser — the DOM rule is
+covered by the wiring test, not by a rendered page.
+
 ## 3.21.0
 
 Phase 9's watch mode: the Problems pane reruns one command whenever the open

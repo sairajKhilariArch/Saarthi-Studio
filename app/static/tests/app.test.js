@@ -464,3 +464,51 @@ test("the file tree refreshes only when the fingerprint actually moves", () => {
   // A real edit: refresh.
   assert.equal(call("treeNeedsRefresh('abc', 'def')"), true);
 });
+
+test("capabilities hide only what a contract this UI reads reports false", () => {
+  assert.equal(call("capabilitiesAllow(null, 'mcp')"), true);
+  assert.equal(call("capabilitiesAllow({}, 'mcp')"), true);
+  // A future contract is not guessed at: every control stays where it was.
+  assert.equal(call("capabilitiesAllow({ contract: 2, features: { mcp: false } }, 'mcp')"), true);
+  assert.equal(call("capabilitiesAllow({ contract: 1 }, 'mcp')"), true);
+  assert.equal(call("capabilitiesAllow({ contract: 1, features: {} }, 'mcp')"), true);
+  assert.equal(call("capabilitiesAllow({ contract: 1, features: { mcp: false } }, 'mcp')"), false);
+  assert.equal(call("capabilitiesAllow({ contract: 1, features: { mcp: true } }, 'mcp')"), true);
+});
+
+test("every control the contract can hide carries its feature id", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const pairs = [
+    ['data-settings-section="search"', "deep_search"],
+    ['data-settings-section="openai"', "openai_platform"],
+    ['data-settings-section="permissions"', "permissions"],
+    ['data-settings-section="mcp"', "mcp"],
+    ['data-settings-section="diagnostics"', "diagnostics"],
+    ['data-settings-section="extensions"', "extensions"],
+    ['id="settings-search"', "deep_search"],
+    ['id="settings-openai"', "openai_platform"],
+    ['id="settings-permissions"', "permissions"],
+    ['id="settings-mcp"', "mcp"],
+    ['id="settings-diagnostics"', "diagnostics"],
+    ['id="settings-extensions"', "extensions"],
+    ['id="indexPane"', "code_index"],
+    ['id="modeIndex"', "code_index"],
+    ['id="memoryPane"', "memory"],
+    ['id="modeMemory"', "memory"],
+  ];
+  for (const [needle, feature] of pairs) {
+    const start = html.indexOf(needle);
+    assert.ok(start >= 0, `${needle} exists`);
+    const end = html.indexOf(">", start);
+    assert.ok(
+      html.slice(start, end).includes(`data-feature="${feature}"`),
+      `${needle} is gated on ${feature}`,
+    );
+  }
+  assert.ok(html.includes('data-feature="saved_commands"'), "the saved-commands field is gated");
+  const ide = fs.readFileSync(path.join(__dirname, "..", "ide.js"), "utf8");
+  assert.match(ide, /id: "scm"[^}]*feature: "git"/, "the Source control activity is gated on git");
+  assert.match(ide, /id="watchPreset"[^>]*data-feature="watch"/, "the Watch button is gated on watch");
+});

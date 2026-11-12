@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.21.0
+## Remaining work at 3.22.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -54,7 +54,7 @@ This is the ordered backlog for the current tree. It supersedes older
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
 | 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting) and a debugger. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract shipped in 3.20.0 (20 ids plus limits, the extension's subset and a status read); what remains is making every screen read it instead of gating by hand. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 23 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
@@ -542,8 +542,15 @@ contract, and the VS Code extension's embedded server answers the same shape
 with its own subset; its status command reports a match, a mismatch or an older
 backend. Android keeps its separate v1 handshake over the Host API. The feature
 ids are a promise about this build, not a wish list, and the limits are read
-from the constants the routes enforce. The next step is every local screen
-reading the contract instead of hiding a control by hand.
+from the constants the routes enforce.
+
+Since 3.22.0 the shared UI reads it: boot fetches the contract and hides the
+controls whose feature is explicitly `false` — Source control, Index, Memory,
+Watch, Saved commands and six Settings sections — while an older server, a
+missing table or a future contract keeps everything visible. A remembered
+section that is no longer available falls back to Connection. The contract
+gained `permissions`, `deep_search` and `watch`; the extension's built-in server
+marks all three false because it does not serve those routes.
 
 ## Phase 15 — Extension ecosystem
 
@@ -866,7 +873,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |
 | 13 Workflows | Working | automated browser coverage; child agent cancellation |
-| 14 Cross-platform | Partial | Android/VS Code subsets; local contract in 3.20.0, screens still gate by hand |
+| 14 Cross-platform | Partial | Android/VS Code subsets; contract-driven UI gating in 3.22.0 |
 | 15 Extensions | Partial | provider adapters and UI extensions |
 | 16 Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 Observability | Working | — |
