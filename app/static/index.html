@@ -778,6 +778,13 @@
               <small>How many agent runs may work in the same workspace together (1-4). Further runs wait in the queue. 1 is the safe default: runs share one folder and nothing locks the files they edit.</small>
             </label>
           </div>
+          <div class="form-row">
+            <label class="field field-wide">
+              <span>Saved commands</span>
+              <textarea id="commandPresets" rows="4" spellcheck="false" placeholder="Lint everything :: npm run lint&#10;Release build :: cargo build --release"></textarea>
+              <small>One command per line as <code>name :: command</code>. They appear in the Run panel beside the detected build and test commands and go through the same permission check, which shows the whole line before it runs. Each command runs in the open folder through the platform shell.</small>
+            </label>
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save all settings</button>
             <button type="button" id="testOpenAI" class="btn btn-quiet">Test platform key</button>

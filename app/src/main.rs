@@ -179,6 +179,27 @@ struct Config {
     /// runs start as slots free.
     #[serde(default = "default_max_concurrent_runs")]
     max_concurrent_runs: i64,
+    /// Commands the user saved for the Run panel: a name and a command line.
+    /// Only these and the detected presets can run — the run route never takes a
+    /// command line from the request.
+    #[serde(default)]
+    command_presets: Vec<CommandPreset>,
+}
+
+/// One command the user saved for the Run panel.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct CommandPreset {
+    pub(crate) label: String,
+    pub(crate) command: String,
+}
+
+/// The saved commands, as the runner needs them: a name and a command line.
+pub(crate) fn command_presets(state: &AppState) -> Vec<(String, String)> {
+    load_config(state)
+        .command_presets
+        .into_iter()
+        .map(|preset| (preset.label, preset.command))
+        .collect()
 }
 
 fn default_max_concurrent_runs() -> i64 {
@@ -232,6 +253,7 @@ impl Config {
             fallback_models: Vec::new(),
             daily_budget_usd: 0.0,
             max_concurrent_runs: default_max_concurrent_runs(),
+            command_presets: Vec::new(),
         }
     }
 }
@@ -976,6 +998,17 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     // Concurrency is a range, not a wish: zero active runs would stall the
     // queue forever, and past four the runs compete for one workspace anyway.
     cfg.max_concurrent_runs = cfg.max_concurrent_runs.clamp(1, 4);
+    // A saved command is trimmed, and an entry missing either half is dropped
+    // rather than left runnable under a blank name.
+    cfg.command_presets = cfg
+        .command_presets
+        .into_iter()
+        .map(|preset| CommandPreset {
+            label: preset.label.trim().to_string(),
+            command: preset.command.trim().to_string(),
+        })
+        .filter(|preset| !preset.label.is_empty() && !preset.command.is_empty())
+        .collect();
 
     cfg.context_budget_tokens = cfg
         .context_budget_tokens
@@ -1669,6 +1702,7 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "fallback_models": cfg.fallback_models,
         "daily_budget_usd": cfg.daily_budget_usd,
         "max_concurrent_runs": cfg.max_concurrent_runs,
+        "command_presets": cfg.command_presets,
     }))
 }
 
@@ -2338,6 +2372,19 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Some(limit) = input.get("max_concurrent_runs").and_then(Value::as_i64) {
         cfg.max_concurrent_runs = limit;
     }
+    // Saved commands replace wholesale, like the other list settings: the UI
+    // posts the whole list, so removing one takes effect immediately.
+    if let Some(list) = input.get("command_presets").and_then(Value::as_array) {
+        match crate::runner::validate_custom(list) {
+            Ok(presets) => {
+                cfg.command_presets = presets
+                    .into_iter()
+                    .map(|(label, command)| CommandPreset { label, command })
+                    .collect();
+            }
+            Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
+        }
+    }
     cfg.base_url = base_url;
     cfg.model = model;
     let cfg = match validate_config(cfg) {
@@ -2347,7 +2394,7 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Err(e) = save_config_file(&state.config_path, &cfg) {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     }
-    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models, "daily_budget_usd": cfg.daily_budget_usd, "max_concurrent_runs": cfg.max_concurrent_runs})).into_response()
+    Json(json!({"ok": true, "base_url": cfg.base_url, "model": cfg.model, "has_api_key": !cfg.api_key.is_empty(), "context_budget_tokens": cfg.context_budget_tokens, "history_messages": cfg.history_messages, "send_workspace_outline": cfg.send_workspace_outline, "adaptive_routing": cfg.adaptive_routing, "cheap_model": cfg.cheap_model, "strong_model": cfg.strong_model, "has_openai_key": !cfg.openai_api_key.is_empty(), "openai_base_url": cfg.openai_base_url, "thinking_level": cfg.thinking_level, "run_thinking_level": cfg.run_thinking_level, "agent_model": cfg.agent_model, "fallback_models": cfg.fallback_models, "daily_budget_usd": cfg.daily_budget_usd, "max_concurrent_runs": cfg.max_concurrent_runs, "command_presets": cfg.command_presets})).into_response()
 }
 
 /// Remove one saved credential entirely — keychain entry first, then the

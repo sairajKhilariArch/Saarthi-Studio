@@ -10,10 +10,12 @@
 //!
 //! Three deliberate limits:
 //!
-//! * **Only detected presets run.** The request names a preset id, never a
-//!   command line, so this route cannot be used to execute arbitrary text. The
-//!   `command` permission action still gates it, with the exact command line as
-//!   the target.
+//! * **Only presets run, never request text.** The request names a preset id —
+//!   one detected from the project, or one the user saved in Settings — and the
+//!   id is resolved against the same list the UI was shown. A saved command is a
+//!   command line (the user wrote one), so it runs through the platform shell,
+//!   but it comes from the settings file and never from the request. The
+//!   `command` permission action still gates it, with the exact line as target.
 //! * **One run at a time.** A second request while a build is in flight is a
 //!   409 rather than two compilers fighting over the same `target/` directory.
 //! * **Output is real and bounded.** Both streams are captured, capped at
@@ -49,13 +51,14 @@ const MAX_PROBLEMS: usize = 200;
 /// Failing test names carried in one response.
 const MAX_FAILURES: usize = 20;
 
-/// One build/test command for the detected project.
+/// One command the Run panel can start: detected from the project, or saved by
+/// the user in Settings.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Preset {
-    /// Stable id the UI posts back: `cargo-build`, `npm-test`, ...
+    /// Stable id the UI posts back: `cargo-build`, `npm-test`, `custom-lint`…
     pub id: String,
     pub label: String,
-    /// `build` or `test`.
+    /// `build`, `test` or `custom`.
     pub kind: String,
     /// The command line as displayed, audited and used as the permission target.
     pub command: String,
@@ -176,6 +179,102 @@ pub(crate) fn detect(root: &Path) -> Vec<Preset> {
             ));
         }
     }
+    presets
+}
+
+/// Limits for a saved command, so both the config file and the Run panel stay
+/// legible.
+const MAX_CUSTOM_PRESETS: usize = 20;
+const MAX_PRESET_LABEL_CHARS: usize = 60;
+const MAX_PRESET_COMMAND_CHARS: usize = 500;
+
+/// A stable id for a saved command, derived from its name: `custom-lint-fix`.
+/// Two names that slug the same are refused at save time, so one id never means
+/// two different commands.
+pub(crate) fn custom_id(label: &str) -> String {
+    let mut slug = String::new();
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.extend(ch.to_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug.trim_end_matches('-').chars().take(40).collect();
+    if slug.is_empty() {
+        "custom-command".to_string()
+    } else {
+        format!("custom-{slug}")
+    }
+}
+
+/// Validate what the settings form posts: one entry per command, trimmed, free of
+/// control characters, capped, and with no two names that would share an id.
+pub(crate) fn validate_custom(values: &[Value]) -> Result<Vec<(String, String)>, String> {
+    if values.len() > MAX_CUSTOM_PRESETS {
+        return Err(format!("Save at most {MAX_CUSTOM_PRESETS} commands."));
+    }
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    for value in values {
+        let label = value
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let command = value
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if label.is_empty() || command.is_empty() {
+            return Err("Every saved command needs a name and a command line.".into());
+        }
+        if label.chars().count() > MAX_PRESET_LABEL_CHARS {
+            return Err(format!(
+                "A command name is longer than {MAX_PRESET_LABEL_CHARS} characters."
+            ));
+        }
+        if command.chars().count() > MAX_PRESET_COMMAND_CHARS {
+            return Err(format!(
+                "A command line is longer than {MAX_PRESET_COMMAND_CHARS} characters."
+            ));
+        }
+        if label.chars().chain(command.chars()).any(char::is_control) {
+            return Err("A saved command cannot contain control characters or line breaks.".into());
+        }
+        let id = custom_id(label);
+        if ids.contains(&id) {
+            return Err(format!(
+                "Two commands are named \"{label}\"; give one a different name."
+            ));
+        }
+        ids.push(id);
+        out.push((label.to_string(), command.to_string()));
+    }
+    Ok(out)
+}
+
+/// The saved commands as runnable presets. They go through the platform shell
+/// (`sh -c` / `cmd /C`) because the user wrote a command line, not an argv, and
+/// the permission prompt shows exactly that line before it runs.
+pub(crate) fn custom(pairs: &[(String, String)]) -> Vec<Preset> {
+    pairs
+        .iter()
+        .map(|(label, command)| {
+            #[cfg(target_os = "windows")]
+            let (program, args) = ("cmd", ["/C", command.as_str()]);
+            #[cfg(not(target_os = "windows"))]
+            let (program, args) = ("sh", ["-c", command.as_str()]);
+            Preset::new(&custom_id(label), label, "custom", command, program, &args, false)
+        })
+        .collect()
+}
+
+/// Every command this folder can run: what it detects plus what the user saved.
+pub(crate) fn all(root: &Path, saved: &[(String, String)]) -> Vec<Preset> {
+    let mut presets = detect(root);
+    presets.extend(custom(saved));
     presets
 }
 
@@ -768,7 +867,10 @@ async fn presets_route(State(state): State<AppState>) -> Response {
         Ok(root) => root,
         Err(response) => return *response,
     };
-    let list: Vec<Value> = detect(&root).iter().map(Preset::to_json).collect();
+    let list: Vec<Value> = all(&root, &crate::command_presets(&state))
+        .iter()
+        .map(Preset::to_json)
+        .collect();
     let running = RUNNING.lock().map(|flag| *flag).unwrap_or(false);
     Json(json!({ "presets": list, "running": running })).into_response()
 }
@@ -779,8 +881,11 @@ async fn run_route(State(state): State<AppState>, Json(input): Json<Value>) -> R
         Err(response) => return *response,
     };
     let id = input.get("id").and_then(Value::as_str).unwrap_or("");
-    let Some(preset) = detect(&root).into_iter().find(|preset| preset.id == id) else {
-        return bad("Pick one of the detected build or test commands.");
+    let Some(preset) = all(&root, &crate::command_presets(&state))
+        .into_iter()
+        .find(|preset| preset.id == id)
+    else {
+        return bad("Pick one of the detected or saved commands.");
     };
     if let Some(response) = guard_user(
         &state,
@@ -788,14 +893,14 @@ async fn run_route(State(state): State<AppState>, Json(input): Json<Value>) -> R
         &preset.command,
         "",
         approval(&input),
-        "run a build or test command",
+        "run a command in this folder",
     ) {
         return response;
     }
     let Some(_slot) = acquire_slot() else {
         return fail(
             StatusCode::CONFLICT,
-            "A build or test is already running in this folder. Wait for it to finish.",
+            "A command is already running in this folder. Wait for it to finish.",
         );
     };
     let root_for_task = root.clone();
@@ -872,6 +977,89 @@ mod tests {
         // Only declared scripts become presets.
         std::fs::write(dir.join("package.json"), r#"{"scripts":{"lint":"eslint"}}"#).unwrap();
         assert!(detect(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_commands_get_stable_ids_and_run_through_the_platform_shell() {
+        let pairs = vec![
+            ("Lint the tree".to_string(), "echo lint".to_string()),
+            ("Two  words -- here".to_string(), "echo two".to_string()),
+        ];
+        let presets = custom(&pairs);
+        assert_eq!(
+            presets.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["custom-lint-the-tree", "custom-two-words-here"]
+        );
+        assert_eq!(presets[0].label, "Lint the tree");
+        assert_eq!(presets[0].command, "echo lint");
+        assert_eq!(presets[0].kind, "custom", "never mistaken for a build or test");
+        // The user wrote a command line, so it goes to the platform shell.
+        #[cfg(target_os = "windows")]
+        assert_eq!((presets[0].program.as_str(), presets[0].args.as_slice()), ("cmd", &["/C".to_string(), "echo lint".to_string()][..]));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!((presets[0].program.as_str(), presets[0].args.as_slice()), ("sh", &["-c".to_string(), "echo lint".to_string()][..]));
+        // A name with nothing alphanumeric still gets an id, not a panic.
+        assert_eq!(custom(&[("!!!".into(), "echo".into())])[0].id, "custom-command");
+    }
+
+    #[test]
+    fn a_saved_command_is_refused_when_it_is_blank_duplicated_or_oversized() {
+        assert!(validate_custom(&[json!({ "label": "lint", "command": "npm run lint" })]).is_ok());
+
+        // Both halves are required, after trimming.
+        for entry in [
+            json!({ "label": "  ", "command": "npm run lint" }),
+            json!({ "label": "lint", "command": "" }),
+            json!({ "command": "npm run lint" }),
+        ] {
+            let error = validate_custom(&[entry]).expect_err("blank entry");
+            assert!(error.contains("name and a command line"), "{error}");
+        }
+
+        // A line break would split one saved command into two, so it is refused.
+        let error = validate_custom(&[json!({ "label": "lint", "command": "npm run lint\nnpm test" })])
+            .expect_err("control character");
+        assert!(error.contains("control characters"), "{error}");
+
+        // Two names that slug the same would share an id, so the second is refused.
+        let error = validate_custom(&[
+            json!({ "label": "Lint", "command": "npm run lint" }),
+            json!({ "label": "lint!", "command": "npm run lint:fix" }),
+        ])
+        .expect_err("duplicate id");
+        assert!(error.contains("different name"), "{error}");
+
+        // Lengths are bounded so neither the config nor the panel grows without limit.
+        let long = "x".repeat(501);
+        assert!(validate_custom(&[json!({ "label": "lint", "command": long })]).is_err());
+        let many: Vec<Value> = (0..21)
+            .map(|index| json!({ "label": format!("c{index}"), "command": "echo" }))
+            .collect();
+        let error = validate_custom(&many).expect_err("count");
+        assert!(error.contains("at most 20"), "{error}");
+    }
+
+    #[test]
+    fn a_saved_command_runs_and_returns_its_output() {
+        let dir = temp_dir("custom");
+        let presets = custom(&[("Say hi".to_string(), "echo hi".to_string())]);
+        let result = run_preset(&dir, &presets[0]).expect("a saved command runs");
+        assert_eq!(result["success"], json!(true), "{result}");
+        assert_eq!(result["command"], json!("echo hi"));
+        assert!(result["output"].as_str().unwrap_or("").contains("hi"), "{result}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_commands_are_listed_after_the_detected_ones() {
+        let dir = temp_dir("merge");
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let ids: Vec<String> = all(&dir, &[("Lint".to_string(), "echo lint".to_string())])
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(ids, vec!["cargo-build", "cargo-test", "custom-lint"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

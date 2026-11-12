@@ -300,6 +300,8 @@
     const problemsPane = makePane("problemsPane", "problemsBody",
       '<span id="runnerStatus">No build run yet</span>' +
       '<span id="runnerTests" class="muted"></span>' +
+      '<select id="runPresetSelect" aria-label="Command to run"></select>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="runPreset">Run</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runBuild">Build</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runTest">Test</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
@@ -318,6 +320,7 @@
     panel.appendChild(body);
 
     $("problemsClear").addEventListener("click", () => { IDE.problems = []; renderProblems(); updateProblemCounts(); });
+    $("runPreset").addEventListener("click", () => void runChosen());
     $("runBuild").addEventListener("click", () => void runBuild("build"));
     $("runTest").addEventListener("click", () => void runBuild("test"));
     $("outputClear").addEventListener("click", () => { IDE.output = []; renderOutput(); });
@@ -1572,11 +1575,38 @@
       button.disabled = IDE.runner.running || !preset;
       button.title = preset ? `Run ${preset.command}` : `No ${kind} command detected in this folder`;
     });
+    // The picker covers everything: the detected presets and the saved commands.
+    const has = IDE.runner.presets.length > 0;
+    if ($("runPresetSelect")) {
+      $("runPresetSelect").disabled = IDE.runner.running || !has;
+      $("runPresetSelect").classList.toggle("hidden", !has);
+    }
+    if ($("runPreset")) {
+      $("runPreset").disabled = IDE.runner.running || !has;
+      $("runPreset").classList.toggle("hidden", !has);
+    }
+  }
+
+  // Options come from the server, so a saved command is shown as its own text
+  // (never as HTML) and keeps its selection across a reload.
+  function renderRunPresets() {
+    const select = $("runPresetSelect");
+    if (!select) return;
+    const previous = select.value;
+    select.replaceChildren();
+    IDE.runner.presets.forEach((preset) => {
+      const option = document.createElement("option");
+      option.value = preset.id;
+      option.textContent = `${preset.label} — ${preset.command}`;
+      select.appendChild(option);
+    });
+    if (IDE.runner.presets.some((preset) => preset.id === previous)) select.value = previous;
   }
 
   async function loadRunnerPresets() {
     if (!state.workspace) {
       IDE.runner = { presets: [], running: false };
+      renderRunPresets();
       updateRunnerButtons();
       return;
     }
@@ -1586,11 +1616,12 @@
       return;
     }
     IDE.runner = { presets: result.data.presets || [], running: Boolean(result.data.running) };
+    renderRunPresets();
     updateRunnerButtons();
     const shown = $("runnerStatus") ? $("runnerStatus").textContent : "";
     const untouched = !shown || shown === "No build run yet" || shown.startsWith("No build or test command");
     if (!IDE.runner.presets.length) {
-      setRunnerStatus("No build or test command detected. Add Cargo.toml or a package.json script.");
+      setRunnerStatus("No build or test command detected. Add Cargo.toml or a package.json script, or save a command in Settings.");
     } else if (!IDE.runner.running && untouched) {
       setRunnerStatus(IDE.runner.presets.map((preset) => preset.label).join(" · "));
     }
@@ -1607,10 +1638,24 @@
     pre.scrollTop = 0;
   }
 
+  async function runChosen() {
+    const select = $("runPresetSelect");
+    if (!select || !select.value) { toast("No command to run in this folder."); return; }
+    await runPreset(select.value);
+  }
+
   async function runBuild(kind) {
     const preset = IDE.runner.presets.find((entry) => entry.kind === kind);
     if (!preset) { toast(`No ${kind} command detected in this folder.`); return; }
-    if (IDE.runner.running) { toast("A build or test is already running."); return; }
+    await runPreset(preset.id);
+  }
+
+  // One path for every preset, detected or saved: the server decides what the id
+  // means and gates it on the `command` permission with the whole line as target.
+  async function runPreset(id) {
+    const preset = IDE.runner.presets.find((entry) => entry.id === id);
+    if (!preset) { toast("That command is no longer in this folder's list."); return; }
+    if (IDE.runner.running) { toast("A command is already running."); return; }
     IDE.runner.running = true;
     updateRunnerButtons();
     setRunnerStatus(`${preset.command} …`);

@@ -4234,6 +4234,7 @@ async function loadSettings() {
   $("fallbackModels").value = (result.data.fallback_models || []).join(", ");
   $("dailyBudget").value = result.data.daily_budget_usd ? String(result.data.daily_budget_usd) : "";
   $("maxConcurrentRuns").value = String(result.data.max_concurrent_runs || 2);
+  $("commandPresets").value = formatCommandPresets(result.data.command_presets || []);
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
@@ -5081,6 +5082,31 @@ function settingsNotice(message, ok) {
   box.className = "notice " + (ok ? "success" : "error");
 }
 
+/* ---- commands saved for the Run panel ---------------------------- */
+
+// One line per saved command: `name :: command`. The separator is `::` because a
+// shell command uses `=`, `|` and `;` freely while a name never needs it. This
+// only decides what the form sends: the server re-validates every entry, and a
+// line without either half is dropped rather than guessed at.
+function parseCommandPresets(text) {
+  const presets = [];
+  String(text || "").split("\n").forEach((line) => {
+    const at = line.indexOf("::");
+    if (at < 0) return;
+    const label = line.slice(0, at).trim();
+    const command = line.slice(at + 2).trim();
+    if (!label || !command) return;
+    presets.push({ label, command });
+  });
+  return presets;
+}
+
+function formatCommandPresets(list) {
+  return (list || [])
+    .map((preset) => `${preset.label || ""} :: ${preset.command || ""}`)
+    .join("\n");
+}
+
 async function saveSettings(event) {
   if (event) event.preventDefault();
   const payload = {
@@ -5101,6 +5127,7 @@ async function saveSettings(event) {
     fallback_models: $("fallbackModels").value.split(",").map((s) => s.trim()).filter(Boolean),
     daily_budget_usd: Number($("dailyBudget").value) || 0,
     max_concurrent_runs: Number($("maxConcurrentRuns").value) || 2,
+    command_presets: parseCommandPresets($("commandPresets").value),
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();

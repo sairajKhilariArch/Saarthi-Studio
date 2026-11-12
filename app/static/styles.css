@@ -918,6 +918,8 @@ kbd {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
 }
+/* A field that needs the whole row, such as a multi-line command list. */
+.form-row .field-wide { grid-column: 1 / -1; }
 .field select {
   background: var(--surface);
   border: 1px solid var(--line);

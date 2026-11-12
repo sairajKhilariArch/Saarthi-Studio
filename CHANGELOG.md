@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.17.0
+
+Phase 9's "arbitrary command presets": the Run panel can start a command the
+user saved, not only the build and test commands detected from the folder.
+
+- **A saved command is configuration, not request text.** `Config` gained
+  `command_presets` (`[{label, command}]`, at most 20 entries, a name of 60
+  characters and a line of 500, no control characters, and no two names that
+  slug to the same id). `GET /api/config` returns them and `POST /api/config`
+  replaces the whole list, so removing one takes effect on the next listing.
+- **The run route still never takes a command line from the browser.**
+  `GET /api/workspace/runner` lists the detected presets followed by the saved
+  ones (`kind: "custom"`, ids `custom-<slug>`), and `POST /api/workspace/run`
+  resolves the posted id against that same list. An id that is not there is a
+  400, so a saved command can only run from the settings file.
+- **The permission gate is unchanged and sees the whole line.** A custom command
+  goes through the platform shell (`sh -c` / `cmd /C`) because the user wrote a
+  command line rather than an argv, and `Action::Command` is asked with that line
+  as its target before anything starts. The prompt now says "run a command in
+  this folder" instead of naming only builds and tests.
+- **The UI is the settings box plus the Run panel.** The runs section of Settings
+  has a "Saved commands" field, one `name :: command` per line (`::` because a
+  shell command uses `=`, `|` and `;` freely), and the Problems pane gained a
+  picker and Run button beside Build/Test. The picker lists detected and saved
+  commands, keeps its selection across a reload, and is hidden while the list is
+  empty; Build and Test still jump straight to their own presets.
+- **A saved command runs like any other.** Output, exit code, duration, problems
+  and the test summary come back through the same response, and only one command
+  runs at a time in a folder (409), detected or saved.
+
+Verified: `cargo test --locked` 571 passed, 1 ignored (4 new: stable ids and the
+platform-shell argv, blank/duplicate/oversized/control-character refusals, a
+saved `echo` through the real capture path, and saved presets ordered after the
+detected ones); clippy `--all-targets -D warnings` clean; `test-frontend.sh` 48
+passed (2 new: the form round trip and malformed lines dropped);
+`test-version.sh` 20/20; `test-e2e.sh` 32 passed. Live headless on a scratch
+home: the config served the saved command, the runner listed
+`cargo-build,cargo-test,custom-say-hi`, the run answered 200 with
+`hi-from-preset`, an unlisted id was a 400, 21 entries a 400 naming the limit, an
+escaped newline a 400 naming control characters with nothing written, and the
+command survived a restart. **Not run:** the settings box and the picker were not
+seen in a browser, so their layout is unverified.
+
 ## 3.16.0
 
 Phase 13's canvas gap narrows to layout: the drag gesture that places a card is

@@ -28,7 +28,7 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.16.0
+## Remaining work at 3.17.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
@@ -53,7 +53,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, arbitrary command presets, in-pane reflog undo. |
+| 9 — Developer environment | Editor engine (syntax highlighting, completion, formatting), debugger, watch mode, in-pane reflog undo. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity; replace the hand-wired capability gates with negotiated gates. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -342,15 +342,27 @@ discard, commit, branches, log) behind the `git` permission action with paths
 validated before argv, plus the Source Control pane that drives all of it
 (inline diff, stage/unstage/discard, commit box, branch create/switch, history,
 conflict/staged/changed/untracked groups, ahead/behind). Remaining: editor engine
-(syntax highlighting, completion, formatting), debugger, watch mode, arbitrary
-command presets, and in-pane reflog undo. Checkpoints, worktrees, merge/rebase,
-per-hunk staging and commit detail all shipped through 3.2.0.*
+(syntax highlighting, completion, formatting), debugger, watch mode, and in-pane
+reflog undo. Checkpoints, worktrees, merge/rebase, per-hunk staging and commit
+detail all shipped through 3.2.0.*
 
 *Delivered 1.67.0: the build/test loop — detected `cargo build`/`cargo test` and
 `package.json` build/test scripts run from the Problems pane, stdout/stderr
 captured with a timeout and bounded output, and Rust/TypeScript/generic
 diagnostics parsed into clickable `path:line:col` problems. Still open: a
-debugger, watch mode, and arbitrary command presets.*
+debugger and watch mode. Saved command presets arrived in 3.17.0.*
+
+*Delivered 3.17.0: saved commands. The runner no longer stops at what `detect`
+recognises — `Config::command_presets` holds up to 20 `name :: command` entries,
+validated on save (name and line non-empty and bounded, no control characters, no
+two names that slug to one id), and `runner::all` lists them after the detected
+presets with `kind: "custom"` and ids `custom-<slug>`. `/api/workspace/run` still
+resolves the posted id against that list, so a command line never comes from the
+request, and the same `command` gate is asked with the whole line as its target
+before the platform shell (`sh -c` / `cmd /C`) starts it. Settings has the
+`name :: command` box; the Problems pane has a picker and Run beside Build/Test,
+and one function runs either kind. Still open here: the editor engine, a
+debugger, watch mode and in-pane reflog undo.*
 
 *Delivered 1.68.0: the remote half — fetch with a resolved remote,
 fast-forward-only pull that refuses a diverged history with a 409, and push that
@@ -811,7 +823,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
 | 8 Memory and RAG | Working | semantic search is a router proxy, not a local embedding index |
-| 9 Developer environment | Partial | no editor engine, debugger, watch mode or custom command presets |
+| 9 Developer environment | Partial | no editor engine, debugger or watch mode |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |
