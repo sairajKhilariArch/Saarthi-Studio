@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.24.0 (2026-11-13):** Phase 8's semantic index can embed through the
+runtime on this machine. An embedding model named `local:<model>` goes to the
+configured Ollama endpoint instead of the router, so search by meaning works with
+no router key; `/api/embed` carries the whole batch and an older runtime's
+one-prompt `/api/embeddings` is its fallback. The cache key is the model string as
+typed, so the two backends never share vectors, and every failure (missing model,
+short answer, unreachable endpoint, runtime refusal) is reported rather than
+turned into a word search. The Index pane's field and note name the prefix; the
+route, its answer shape and the contract are unchanged.
+
 **Revision 3.23.0 (2026-11-12):** Phase 9 gains formatting. The editor's Format
 button and `File: Format buffer` send the current buffer to
 `POST /api/workspace/format {path, content}` and receive text only; the normal
@@ -425,7 +435,7 @@ below carry the evidence.
 | 5 | Agent execution | Working | named caveats only |
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
-| 8 | Memory and RAG | Working | semantic search is a router proxy, not a local index |
+| 8 | Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
 | 9 | Developer environment | Partial | editor engine (completion/diagnostics), debugger; formatting shipped in 3.23.0 |
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
@@ -561,8 +571,8 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 |---|---|---|
 | Conversation history persistence | Working | `conversations`/`messages`, Android mirror |
 | Workspace text search | Working | `/api/workspace/search` |
-| Embeddings *probe* | Partial | `media.rs` proxies one `/api/embeddings` call; nothing is stored or indexed |
-| Semantic search over the code index | Working (1.63.0) | `app/src/embeddings.rs`: indexed symbols are embedded through the configured router and cached in `embedding_cache` by model + symbol + file digest, ranked by cosine similarity, served by `GET /api/index/semantic?q=`. Off until `embedding_model` is set (the route then answers 400), a provider error is a 502 rather than a silent fallback to the word search, and one search embeds at most 128 new documents, reporting the rest as `pending`. The Index sidebar tab (1.64.0) shows what the index holds, refreshes it, searches by words or by meaning, opens a hit's file, and carries the embedding-model field. Browser-checked in 1.65.0 (word and meaning search, model save, hit-to-file, refresh); its segmented control now auto-fits five tabs |
+| Embeddings *probe* | Superseded (3.24.0) | `media.rs` still proxies one `/api/embeddings` call for its own use; the semantic search below stores and reuses real vectors, through the router or a local `local:` model |
+| Semantic search over the code index | Working (1.63.0, local backend 3.24.0) | `app/src/embeddings.rs`: indexed symbols are embedded through the configured router, or by the runtime on this machine when the model carries a `local:` prefix (`local::embed_texts`, `/api/embed` batch with an older per-prompt `/api/embeddings` fallback, no router key needed) and cached in `embedding_cache` by model + symbol + file digest, ranked by cosine similarity, served by `GET /api/index/semantic?q=`. Off until `embedding_model` is set (the route then answers 400), a provider error is a 502 rather than a silent fallback to the word search, and one search embeds at most 128 new documents, reporting the rest as `pending`. The Index sidebar tab (1.64.0) shows what the index holds, refreshes it, searches by words or by meaning, opens a hit's file, and carries the embedding-model field. Browser-checked in 1.65.0 (word and meaning search, model save, hit-to-file, refresh); its segmented control now auto-fits five tabs |
 | Codebase indexing / symbols / incremental updates | Working (1.59.0) | `app/src/index.rs`: bounded walk skipping build/dependency folders, secret-shaped files never read, privacy exclusions applied before reading, 1 MiB and NUL-byte skips, 5,000-file ceiling reported as `truncated`; symbols per language family with path + line + kind + name; refresh by content digest (unchanged untouched, changed re-extracted, deleted dropped); ranked search over names and paths; `GET /api/index`, `POST /api/index/refresh`, `GET /api/index/search?q=`. No UI yet and symbols are line scans, not a parser |
 | RAG over the project | Working (1.60.0) | chat turns carry the index's ranked matches: one snippet per file, the declaration plus its opening lines read from disk at request time, labelled `path:line — kind name`, 4 snippets / 700 tokens, reported as `retrieved` in the reply meta. Word-based, so no embeddings are involved; `deepsearch.rs` remains web research, a different thing. Agent runs open with the same two blocks through `agent::run_background` (1.61.0), with memory read quietly so a run's repeated asks leave `uses` alone, and the block is stored on the run at promotion (1.62.0): `context` on the run carries the memory and code labels, the card says `given 1 memory + 1 code`, the expanded run names them, and the steps read the stored block back instead of recalling again |
 | Memory records + management UI | Working (1.58.0) | `app/src/memory.rs`: `memory_records` with kinds decision/preference/task/fact, a required title, optional details and a scope (one project or every project); `GET /api/memory`, `POST /api/memory`, `POST /api/memory/:id/delete`, local-origin guarded; recall by shared words (title 3, body 1, floor 2, 6 records / 900 tokens) with `uses`/`last_used_at` and `memory_used` in the reply meta; sidebar Memory pane with form, list and forget. The model never writes a record |

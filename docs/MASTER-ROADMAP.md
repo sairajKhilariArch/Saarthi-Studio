@@ -64,7 +64,7 @@ This is the ordered backlog for the current tree. It supersedes older
   provider supplies it.
 - Phase 6: per-skill permissions remain absent; a skill is prompt text and is not
   executed, so this only matters if that changes.
-- Phase 8: semantic search uses the router; there is no local embedding index.
+- Phase 8: semantic search embeds through the router, or through the runtime on this machine with a `local:` model (3.24.0); nothing else in the phase is open.
 - Phase 12: no workstream remains open; Move up/Move down covers one-step queue
   reordering, but drag-and-drop is not promised.
 - Phase 13: add an automated browser test for the canvas layout. Rendering and
@@ -879,7 +879,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 5 Agent execution | Working | — |
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
-| 8 Memory and RAG | Working | semantic search is a router proxy, not a local embedding index |
+| 8 Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
 | 9 Developer environment | Partial | no editor engine (completion/diagnostics) or debugger; watch 3.21.0, formatting 3.23.0 |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |

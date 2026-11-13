@@ -1,12 +1,14 @@
 //! Semantic search over the code index.
 //!
 //! The index stores symbols, not meaning: its own search matches words. This
-//! module asks the configured router for embeddings, caches them beside the index
-//! (keyed by model, symbol and the file's digest) and ranks symbols by cosine
-//! similarity. Nothing here runs on its own: a semantic search happens only when
-//! the user asks for one and an embedding model is configured, and a provider
-//! failure is reported as an error rather than papered over with the word
-//! ranking, so a result never claims more than it did.
+//! module embeds those symbols, caches the vectors beside the index (keyed by
+//! model, symbol and the file's digest) and ranks symbols by cosine similarity.
+//! Two backends can embed: the configured router (an OpenAI-shaped
+//! `/embeddings` call) or the runtime on this machine, chosen with a `local:`
+//! prefix on the model name. Nothing here runs on its own: a semantic search
+//! happens only when the user asks for one and an embedding model is configured,
+//! and a provider failure is reported as an error rather than papered over with
+//! the word ranking, so a result never claims more than it did.
 
 use crate::AppState;
 use axum::{
@@ -33,6 +35,28 @@ const EMBED_PER_SEARCH: usize = 128;
 const DOC_CHARS: usize = 400;
 /// How many hits a semantic search returns.
 const MAX_HITS: usize = 20;
+/// A `local:` prefix sends the request to the Ollama runtime on this machine
+/// instead of the router, so a semantic index needs no router and no API key.
+/// The cache scope stays the model string as typed, so switching backend
+/// re-embeds instead of comparing vectors from two different models.
+pub(crate) const LOCAL_PREFIX: &str = "local:";
+
+/// The runtime model name behind a `local:` prefix, `None` for a router model.
+/// A bare `local:` is not a model: it is treated as a router name so the
+/// request fails visibly instead of embedding with an empty model.
+fn local_model(model: &str) -> Option<String> {
+    let trimmed = model.trim();
+    let head = trimmed.get(..LOCAL_PREFIX.len())?;
+    if !head.eq_ignore_ascii_case(LOCAL_PREFIX) {
+        return None;
+    }
+    let name = trimmed[LOCAL_PREFIX.len()..].trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
 
 pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
@@ -175,6 +199,10 @@ fn documents(db: &FsPath) -> Result<Vec<Doc>, String> {
 /// a short or empty `data` array is an error, never a silently shorter list.
 async fn embed(state: &AppState, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
     let cfg = crate::load_config(state);
+    if let Some(name) = local_model(model) {
+        let base = crate::local::effective_base_url(&cfg.local_base_url);
+        return crate::local::embed_texts(&base, &name, texts).await;
+    }
     if cfg.api_key.trim().is_empty() {
         return Err("Add your router's unified API key in Settings first.".to_string());
     }
@@ -240,7 +268,9 @@ async fn search(state: &AppState, query: &str) -> Result<Value, (StatusCode, Str
     if model.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Set an embedding model before searching by meaning — the word search needs none."
+            "Set an embedding model before searching by meaning — `text-embedding-3-small` \
+             through the router, or `local:nomic-embed-text` through a runtime on this machine. \
+             The word search needs none."
                 .to_string(),
         ));
     }
@@ -354,6 +384,39 @@ mod tests {
         path
     }
 
+    /// A real state for the open path: the config file names the model and the
+    /// endpoint, and the router key is deliberately empty so a test that reaches
+    /// a provider through it would fail.
+    fn runtime_state(tag: &str, local_base_url: &str) -> (AppState, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "free-ai-studio-embedding-e2e-{tag}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState {
+            config_path: root.join("config.json"),
+            database_path: root.join("studio.db"),
+            static_dir: root.join("static"),
+            workspace: crate::workspace::WorkspaceStore::load(root.join("workspace.json")),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            terminal: crate::terminal::hub(),
+            events: crate::events::Hub::new(),
+            models_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+        };
+        crate::ensure_setup(&state).expect("setup");
+        let mut cfg = crate::load_config(&state);
+        cfg.local_base_url = local_base_url.to_string();
+        cfg.embedding_model = "local:nomic-embed-text".to_string();
+        cfg.api_key = String::new();
+        crate::save_config_file(&state.config_path, &cfg).expect("config");
+        (state, root)
+    }
+
     fn indexed(db: &FsPath, path: &str, line: i64, name: &str, digest: &str) {
         let conn = open_db(db).unwrap();
         conn.execute(
@@ -411,6 +474,92 @@ mod tests {
             cached(&db, "model-a", "src/lib.rs:1:f", "d2"),
             Some(vec![1.0, 0.0])
         );
+    }
+
+    #[test]
+    fn only_a_named_local_model_leaves_the_router() {
+        assert_eq!(
+            local_model("local:nomic-embed-text"),
+            Some("nomic-embed-text".to_string())
+        );
+        assert_eq!(
+            local_model("  LOCAL: nomic-embed-text  "),
+            Some("nomic-embed-text".to_string())
+        );
+        // A bare prefix is not a model, and a router model is not local.
+        assert_eq!(local_model("local:"), None);
+        assert_eq!(local_model("local:   "), None);
+        assert_eq!(local_model("text-embedding-3-small"), None);
+        assert_eq!(local_model("mylocal:nomic"), None);
+    }
+
+    #[tokio::test]
+    async fn a_local_model_embeds_through_the_runtime_with_no_router_key() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/embed",
+            axum::routing::post(|Json(body): Json<Value>| async move {
+                assert_eq!(body["model"], "nomic-embed-text");
+                let inputs = body["input"].as_array().cloned().unwrap_or_default();
+                let vectors: Vec<Value> = inputs
+                    .iter()
+                    .map(|input| {
+                        if input.as_str().unwrap_or("").contains("login") {
+                            json!([1.0, 0.0])
+                        } else {
+                            json!([0.0, 1.0])
+                        }
+                    })
+                    .collect();
+                Json(json!({ "embeddings": vectors }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let (state, root) = runtime_state("local", &format!("http://{address}"));
+        indexed(&state.database_path, "src/auth.rs", 3, "login", "d1");
+        indexed(&state.database_path, "src/session.rs", 9, "logout", "d2");
+
+        let payload = search(&state, "auth login").await.expect("local search");
+        assert_eq!(payload["model"], "local:nomic-embed-text");
+        assert_eq!(payload["embedded"], 2, "{payload}");
+        assert_eq!(payload["pending"], 0, "{payload}");
+        let hits = payload["hits"].as_array().cloned().unwrap_or_default();
+        assert_eq!(hits[0]["name"], "login", "{payload}");
+
+        // The cache answers for an unchanged index: only the query is embedded.
+        let again = search(&state, "auth login").await.expect("cached search");
+        assert_eq!(again["cached"], 2, "{again}");
+        assert_eq!(again["embedded"], 0, "{again}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_runtime_refusal_is_an_error_not_a_word_search() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/embed",
+            axum::routing::post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "the model failed to load" })),
+                )
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let (state, root) = runtime_state("refusal", &format!("http://{address}"));
+        indexed(&state.database_path, "src/auth.rs", 3, "login", "d1");
+        let (status, message) = search(&state, "auth").await.expect_err("must fail");
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(message.contains("the model failed to load"), "{message}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

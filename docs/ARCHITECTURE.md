@@ -31,7 +31,8 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `format.rs` | 406 | Format one editor buffer with a fixed formatter chosen by extension (rustfmt/gofmt/Prettier), returning text only — the normal save path writes it; failures name the tool and never replace the buffer |
 | `watch.rs` | 416 | Watch mode: one preset reruns when the open folder's fingerprint moves (700 ms, the explorer's hash), behind one `command` approval; holds the runner's only slot, reports the last real run, and Stop kills the command and its shell's children on Windows |
 | `runner.rs` | 817 | Detected build/test presets, bounded process capture (separate stdout/stderr threads, 300 s ceiling, 1 MiB per stream) and compiler/test output parsed into clickable `path:line:col` problems |
-| `local.rs` | 1167 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
+| `local.rs` | 1422 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
+| `embeddings.rs` | 579 | Semantic search over the code index: symbols are embedded through the router, or by the local runtime when the model carries a `local:` prefix, cached in `embedding_cache` by model + symbol + file digest and ranked by cosine similarity; a provider failure is an error, never a silent word search |
 | `deepsearch.rs` | 714 | Research answers: provider-native grounding (Gemini, OpenAI `web_search`) or Exa/Tavily loop; bounded queries; SSE steps; citations |
 | `host_auth.rs` | 595 | Host token lifecycle (issue/redeem/rotate/revoke), paired-device records |
 | `router.rs` | 545 | FreeLLMAPI lifecycle: compose dir/port discovery, ownership file, start/stop/status, stop-only-if-owned on exit |

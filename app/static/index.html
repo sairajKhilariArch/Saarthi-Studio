@@ -157,10 +157,10 @@
         <button type="button" id="indexMeaningBtn" class="btn btn-accent btn-small">By meaning</button>
       </div>
       <label class="field"><span>Embedding model</span>
-        <input id="indexEmbeddingModel" type="text" placeholder="text-embedding-3-small" autocomplete="off">
+        <input id="indexEmbeddingModel" type="text" placeholder="text-embedding-3-small or local:nomic-embed-text" autocomplete="off">
       </label>
       <div class="form-actions"><button type="button" id="indexEmbeddingSave" class="btn btn-quiet btn-small">Save model</button></div>
-      <small class="muted">Searching by meaning needs an embedding model and your router key; symbols are embedded once and cached. Empty turns it off, and the word search always works.</small>
+      <small class="muted">Searching by meaning needs an embedding model; symbols are embedded once and cached. A <code>local:</code> prefix embeds through the runtime on this machine instead of the router, so no router key is needed. Empty turns it off, and the word search always works.</small>
       <div id="indexResults" class="skill-list">
         <p class="empty-note">Enter a query to search the indexed symbols.</p>
       </div>

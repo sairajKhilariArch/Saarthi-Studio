@@ -28,6 +28,9 @@ use crate::AppState;
 /// client is capped at 120s, too short for local generation).
 const CHAT_TIMEOUT: Duration = Duration::from_secs(600);
 const DETECT_TIMEOUT: Duration = Duration::from_secs(4);
+/// Embedding one batch is fast next to generation, but a cold model still has to
+/// load before it answers.
+const EMBED_TIMEOUT: Duration = Duration::from_secs(120);
 const PULL_TIMEOUT_ALL_TURNS: Duration = Duration::from_secs(1800);
 
 fn client() -> &'static reqwest::Client {
@@ -127,6 +130,132 @@ pub(crate) async fn fetch_show(base_url: &str, model: &str) -> Result<Value, Str
         ));
     }
     Ok(body)
+}
+
+/// One embedding vector from a provider-shaped `embedding`/`embeddings` value.
+fn vector_of(value: Option<&Value>) -> Option<Vec<f32>> {
+    let list = value?.as_array()?;
+    let vector: Vec<f32> = list
+        .iter()
+        .filter_map(Value::as_f64)
+        .map(|value| value as f32)
+        .collect();
+    if vector.is_empty() {
+        None
+    } else {
+        Some(vector)
+    }
+}
+
+/// The runtime's own refusal, named for a user: a missing model is told the pull
+/// command, anything else keeps the runtime's HTTP status and its sentence.
+fn embed_error(model: &str, status: u16, body: &Value) -> String {
+    let detail = body
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if detail.to_lowercase().contains("not found") {
+        return format!("The local runtime does not have {model} — run `ollama pull {model}`.");
+    }
+    if detail.is_empty() {
+        format!("The local runtime answered HTTP {status} when asked to embed with {model}.")
+    } else {
+        format!("The local runtime answered HTTP {status} for {model}: {detail}")
+    }
+}
+
+fn missing_embedding(model: &str) -> String {
+    format!(
+        "The local runtime returned no embedding for {model} — is `{model}` an embedding \
+         model? (`ollama pull {model}`)"
+    )
+}
+
+/// Embed text through the runtime on this machine, so semantic indexing works
+/// with no router and no API key.
+///
+/// Ollama's current shape is one `POST /api/embed` with every input and one
+/// array back per input. An older build answers that path 404 and listens only
+/// on `/api/embeddings`, one prompt per request; a 404 that does not name a
+/// missing model falls back to it rather than failing a machine whose model
+/// works. A missing model is not retried the other way, and a short or empty
+/// answer is an error instead of a silently shorter list.
+pub(crate) async fn embed_texts(
+    base_url: &str,
+    model: &str,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, String> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = format!("{base_url}/api/embed");
+    let response = client()
+        .post(&url)
+        .timeout(EMBED_TIMEOUT)
+        .json(&json!({ "model": model, "input": texts }))
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach the local runtime at {base_url}: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if status.as_u16() == 404 {
+        let named = body
+            .get("error")
+            .and_then(Value::as_str)
+            .map(|error| error.to_lowercase().contains("not found"))
+            .unwrap_or(false);
+        if !named {
+            return embed_one_by_one(base_url, model, texts).await;
+        }
+    }
+    if !status.is_success() {
+        return Err(embed_error(model, status.as_u16(), &body));
+    }
+    let items = body
+        .get("embeddings")
+        .and_then(Value::as_array)
+        .ok_or_else(|| missing_embedding(model))?;
+    if items.len() != texts.len() {
+        return Err(format!(
+            "The local runtime returned {} embeddings for {} inputs.",
+            items.len(),
+            texts.len()
+        ));
+    }
+    let mut vectors = Vec::with_capacity(items.len());
+    for item in items {
+        vectors.push(vector_of(Some(item)).ok_or_else(|| missing_embedding(model))?);
+    }
+    Ok(vectors)
+}
+
+/// The pre-`/api/embed` shape: `{model, prompt}` in, `{embedding}` out, one
+/// input at a time. Sequential on purpose — an old runtime is a small machine
+/// and the caller's batch is already capped.
+async fn embed_one_by_one(
+    base_url: &str,
+    model: &str,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, String> {
+    let url = format!("{base_url}/api/embeddings");
+    let mut vectors = Vec::with_capacity(texts.len());
+    for text in texts {
+        let response = client()
+            .post(&url)
+            .timeout(EMBED_TIMEOUT)
+            .json(&json!({ "model": model, "prompt": text }))
+            .send()
+            .await
+            .map_err(|e| format!("Cannot reach the local runtime at {base_url}: {e}"))?;
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Err(embed_error(model, status.as_u16(), &body));
+        }
+        vectors.push(vector_of(body.get("embedding")).ok_or_else(|| missing_embedding(model))?);
+    }
+    Ok(vectors)
 }
 
 /// One /api/tags entry, normalized for the UI. Pure so it is testable.
@@ -1163,5 +1292,131 @@ mod tests {
     #[test]
     fn setup_hint_mentions_the_install_path() {
         assert!(setup_hint("http://127.0.0.1:11434").contains("ollama.com/download"));
+    }
+
+    #[tokio::test]
+    async fn embedding_uses_the_batch_endpoint_and_keeps_input_order() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/embed",
+            axum::routing::post(|body: axum::Json<Value>| async move {
+                assert_eq!(body["model"], "nomic-embed-text");
+                let inputs = body["input"].as_array().cloned().unwrap_or_default();
+                assert_eq!(inputs.len(), 2, "both inputs go in one request");
+                axum::Json(json!({ "embeddings": [[1.0, 0.0], [0.0, 1.0]] }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let vectors = embed_texts(
+            &format!("http://{address}"),
+            "nomic-embed-text",
+            &["fn login".to_string(), "fn logout".to_string()],
+        )
+        .await
+        .expect("embeddings");
+        assert_eq!(vectors, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+    }
+
+    #[tokio::test]
+    async fn an_older_runtime_is_embedded_one_prompt_at_a_time() {
+        // Only the pre-`/api/embed` path exists. The 404 for the newer route has
+        // an empty body, so it must be read as an old runtime and not as a
+        // missing model.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/embeddings",
+            axum::routing::post(|body: axum::Json<Value>| async move {
+                assert_eq!(body["model"], "nomic-embed-text");
+                let prompt = body["prompt"].as_str().unwrap_or("");
+                if prompt.contains("login") {
+                    axum::Json(json!({ "embedding": [0.5, 0.5] }))
+                } else {
+                    axum::Json(json!({ "embedding": [1.0, 0.0] }))
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let vectors = embed_texts(
+            &format!("http://{address}"),
+            "nomic-embed-text",
+            &["fn login".to_string(), "fn logout".to_string()],
+        )
+        .await
+        .expect("legacy embeddings");
+        assert_eq!(vectors, vec![vec![0.5, 0.5], vec![1.0, 0.0]]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_embedding_model_names_the_pull_command() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/embed",
+            axum::routing::post(|| async {
+                (
+                    axum::http::StatusCode::NOT_FOUND,
+                    axum::Json(
+                        json!({ "error": "model \"nope\" not found, try pulling it first" }),
+                    ),
+                )
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let error = embed_texts(&format!("http://{address}"), "nope", &["x".to_string()])
+            .await
+            .unwrap_err();
+        assert!(error.contains("ollama pull nope"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn a_short_embedding_answer_is_never_accepted() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/api/embed",
+            axum::routing::post(|| async { axum::Json(json!({ "embeddings": [[1.0, 0.0]] })) }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let error = embed_texts(
+            &format!("http://{address}"),
+            "nomic-embed-text",
+            &["a".to_string(), "b".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("1 embeddings for 2 inputs"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_embed_endpoint_is_named() {
+        let error = embed_texts(
+            "http://127.0.0.1:19999",
+            "nomic-embed-text",
+            &["x".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("Cannot reach the local runtime"),
+            "got: {error}"
+        );
+        assert!(embed_texts("http://127.0.0.1:19999", "m", &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

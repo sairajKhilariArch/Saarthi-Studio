@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.24.0
+
+Phase 8's semantic index no longer needs a router. An embedding model named
+`local:<model>` is embedded by the Ollama runtime on this machine, so searching
+the code by meaning works with no router key at all.
+
+- **`local:` chooses the backend, not a new route.** `GET /api/index/semantic`
+  is unchanged; the model string decides who embeds. `local:nomic-embed-text`
+  calls the configured local endpoint, anything else calls the router's
+  `/embeddings` as before, and the cache scope is the model string as typed — so
+  switching backend re-embeds instead of comparing vectors from two models. A
+  bare `local:` is not a model and falls through to the router path, where the
+  failure is visible.
+- **Both Ollama shapes work.** `POST /api/embed` takes the whole 32-document
+  batch and answers one array per input; a 404 there that does not name a missing
+  model is read as an older runtime and the same texts go one prompt at a time
+  through `POST /api/embeddings`. A missing model is answered with
+  ``ollama pull <model>`` and is never retried the other way.
+- **Nothing is guessed.** A short or empty embedding list, an unreachable
+  endpoint and a runtime refusal are errors that name the runtime and its
+  sentence, never a quiet fall back to the word search. The local path needs no
+  router key; the router path still asks for one.
+- **The Index pane says so.** The embedding-model field's placeholder and its
+  note name the prefix. No contract id changed: route and answer shape are the
+  same, so the VS Code extension's embedded server reports the same subset.
+
+Verified: `cargo test --locked` 592 passed, 1 ignored (8 new: the prefix rules,
+a full local search that embeds two symbols and then serves both from cache with
+an empty router key, a runtime refusal as a 502, the batch request shape, the
+legacy one-prompt fallback, a missing model naming `ollama pull`, a short answer
+refused, and an unreachable endpoint named); clippy `--all-targets -D warnings`
+clean; `cargo fmt --check` clean; `test-version.sh` 20/20; `test-frontend.sh` 50
+passed; `test-e2e.sh` 32 passed. Live headless against a stand-in Ollama
+endpoint: a `local:` model indexed this repository (128 symbols embedded per
+search, 3,876 still pending), the second search reused the first 128, each batch
+carried 32 documents, and no router request was made. **Not run:** a real Ollama
+embedding model — none is installed on this machine, where an absent model
+answers the `ollama pull` message — and the Index pane's new note was not seen in
+a browser.
+
 ## 3.23.0
 
 Phase 9 gains formatting. The editor can format the active buffer with the
