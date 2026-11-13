@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.35.0
+
+Phase 9 asks for search and replace; the editor had find (Ctrl+F, F3, a match
+count) and no way to change what it found.
+
+- The find bar gained a Replace field and two actions: **Replace** (`Enter` in
+  the field) rewrites the match the selection is on, or the one the bar is
+  standing on, then selects the next; **All** (`Shift+Enter`) rewrites every
+  occurrence and reports the count. `Ctrl+H` opens the bar focused on the
+  replace field.
+- The edit writes through the same real `input` event the completion popup
+  uses, so the tab is marked unsaved, the draft mirror sees it and the
+  highlight layer repaints.
+- `app/static/replace.js` is a literal scan, not a RegExp built from the
+  needle: the replacement is inserted as text (`$&` and `$1` stay as typed) and
+  matching is case-insensitive on non-overlapping occurrences, the same rule the
+  find count uses. No route, dependency or contract id changed.
 ## 3.34.1
 
 Clippy ran only on Ubuntu, so a warning in a `#[cfg(windows)]` block could reach

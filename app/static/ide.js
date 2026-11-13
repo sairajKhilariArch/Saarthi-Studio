@@ -412,7 +412,11 @@
       '<span class="find-count" id="findCount">0 of 0</span>' +
       `<button type="button" class="icon-btn" id="findPrev" title="Previous match (Shift+F3)" aria-label="Previous match">${svg("chevron")}</button>` +
       `<button type="button" class="icon-btn" id="findNext" title="Next match (F3)" aria-label="Next match">${svg("arrow")}</button>` +
-      `<button type="button" class="icon-btn" id="findClose" title="Close (Esc)" aria-label="Close find">${svg("close")}</button>`;
+      `<button type="button" class="icon-btn" id="findClose" title="Close (Esc)" aria-label="Close find">${svg("close")}</button>` +
+      '<span class="find-sep" aria-hidden="true"></span>' +
+      '<input id="replaceInput" type="search" placeholder="Replace with" aria-label="Replace with" autocomplete="off">' +
+      '<button type="button" class="btn btn-quiet btn-find" id="replaceOne" title="Replace this match (Enter)">Replace</button>' +
+      '<button type="button" class="btn btn-quiet btn-find" id="replaceAll" title="Replace every match (Shift+Enter)">All</button>';
     view.insertBefore(bar, toolbar.nextSibling);
     $("findPrev").addEventListener("click", () => jumpMatch(-1));
     $("findNext").addEventListener("click", () => jumpMatch(1));
@@ -420,6 +424,16 @@
     $("findInput").addEventListener("input", () => runFind(true));
     $("findInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); jumpMatch(event.shiftKey ? -1 : 1); }
+      if (event.key === "Escape") { event.preventDefault(); closeFind(); }
+    });
+    $("replaceOne").addEventListener("click", () => replaceCurrent());
+    $("replaceAll").addEventListener("click", () => replaceAllMatches());
+    $("replaceInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (event.shiftKey) replaceAllMatches();
+        else replaceCurrent();
+      }
       if (event.key === "Escape") { event.preventDefault(); closeFind(); }
     });
   }
@@ -2176,7 +2190,7 @@
     updateStatusPosition();
   }
 
-  function openFind() {
+  function openFind(replace = false) {
     $("findBar").classList.remove("hidden");
     const input = $("findInput");
     const area = $("codeArea");
@@ -2184,8 +2198,12 @@
       const selected = area.value.slice(area.selectionStart, area.selectionEnd);
       if (selected && !/\n/.test(selected)) input.value = selected;
     }
-    input.focus();
-    input.select();
+    if (replace) {
+      $("replaceInput").focus();
+    } else {
+      input.focus();
+      input.select();
+    }
     runFind(true);
   }
 
@@ -2235,6 +2253,55 @@
     area.focus();
     area.setSelectionRange(start, start + $("findInput").value.length);
     updateFindCount();
+  }
+
+  /* Replace writes the whole buffer through the same input event the
+     completion popup uses, so app.js re-reads it, marks the tab unsaved and the
+     highlight layer repaints. A programmatic value write has no native undo
+     step; the completion popup and Format already behave this way. */
+  function applyEditorText(text, caret) {
+    const area = $("codeArea");
+    const file = activeFile();
+    if (!area || !file) return false;
+    area.value = text;
+    area.selectionStart = area.selectionEnd = Math.max(0, Math.min(text.length, caret));
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    renderTabs();
+    updateCursor();
+    return true;
+  }
+
+  /* The match under the caret if the selection is on one, else the one the
+     find bar is standing on. Case-insensitive, exactly like findMatches. */
+  function replaceCurrent() {
+    const bar = $("findBar");
+    if (!bar || bar.classList.contains("hidden")) { openFind(true); return; }
+    const area = $("codeArea");
+    const needle = $("findInput").value;
+    if (!area || !needle) return;
+    const matches = findMatches();
+    if (!matches.length) { updateFindCount(); return; }
+    let at = matches.indexOf(area.selectionStart);
+    if (at === -1) at = Math.min(FIND.index, matches.length - 1);
+    const start = matches[at];
+    const replacement = $("replaceInput").value;
+    const next = area.value.slice(0, start) + replacement + area.value.slice(start + needle.length);
+    FIND.index = at;
+    if (!applyEditorText(next, start + replacement.length)) return;
+    runFind(true);
+    jumpMatch(0);
+  }
+
+  function replaceAllMatches() {
+    const area = $("codeArea");
+    const needle = $("findInput").value;
+    if (!area || !needle) return;
+    const result = replaceLiteral(area.value, needle, $("replaceInput").value, null);
+    if (!result.count) { updateFindCount(); toast("Nothing to replace."); return; }
+    if (!applyEditorText(result.text, result.end)) return;
+    runFind(true);
+    updateFindCount();
+    toast(`Replaced ${result.count} ${result.count === 1 ? "match" : "matches"}.`);
   }
 
   function showMenu(x, y, items) {
@@ -2497,6 +2564,7 @@
       if (mod && event.shiftKey && key === "p") { event.preventDefault(); openPalette(); return; }
       if (mod && event.shiftKey && key === "f") { event.preventDefault(); openActivity("search"); return; }
       if (mod && key === "f" && activeFile()) { event.preventDefault(); openFind(); return; }
+      if (mod && key === "h" && activeFile()) { event.preventDefault(); openFind(true); return; }
       if (mod && key === "s") { event.preventDefault(); void saveActiveFile(); return; }
       if (mod && key === "b") { event.preventDefault(); togglePanel("left"); return; }
       if (mod && key === "j") { event.preventDefault(); togglePanel("bottom"); return; }

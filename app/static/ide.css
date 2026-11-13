@@ -297,9 +297,11 @@ body.no-right { --right-w: 0px; }
 #statusBranch { font-family: var(--mono); font-size: 10.5px; }
 
 /* ---------- in-file find, menus, palette ---------- */
-.find-bar { display: flex; align-items: center; gap: 6px; flex: none; padding: 5px 10px; border-bottom: 1px solid var(--line-soft); background: var(--bg-soft); }
+.find-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: none; padding: 5px 10px; border-bottom: 1px solid var(--line-soft); background: var(--bg-soft); }
 .find-bar.hidden { display: none; }
-.find-bar input { flex: 1; min-width: 80px; max-width: 320px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px; }
+.find-bar input { flex: 1 1 150px; min-width: 80px; max-width: 320px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px; }
+.find-sep { flex: none; width: 1px; height: 18px; margin: 0 2px; background: var(--line); }
+.find-bar .btn-find { flex: none; font-size: 11px; padding: 3px 8px; }
 .find-bar input:focus { outline: none; border-color: var(--accent); }
 .find-count { font-family: var(--mono); font-size: 10.5px; color: var(--mute); min-width: 54px; }
 .find-bar .icon-btn { width: 24px; height: 24px; }

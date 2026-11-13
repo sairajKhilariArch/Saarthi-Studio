@@ -436,6 +436,13 @@ calls and comments the symbol table never saw, and knows nothing about scope.
 The contract gained `editor_references` (28 ids) and `max_references`. Phase 9 is
 left with a debugger and everything a language server would know.*
 
+*Delivered 3.35.0: replace in file. The find bar gained a Replace field, a
+Replace action (Enter: the match under the selection, else the bar's current
+one, then the next) and All (Shift+Enter: every occurrence, with a count),
+opened on the field by Ctrl+H. The edit is a real input event, so the tab turns
+unsaved and the highlight layer repaints; `app/static/replace.js` scans
+literally, keeps `$&` as typed and matches case-insensitively without
+overlapping, exactly as the find count does.*
 *Delivered 3.33.0: crash recovery for unsaved buffers. A dirty buffer is mirrored
 1.2 s after the last keystroke into the app's own database — never the
 workspace — and cleared when the file is saved, reverted or a tab is closed with
