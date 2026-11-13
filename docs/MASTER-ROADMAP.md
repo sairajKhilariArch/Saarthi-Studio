@@ -28,11 +28,13 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.23.0
+## Remaining work at 3.50.0
 
 This is the ordered backlog for the current tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
 `docs/FEATURE-STATUS.md`, and the defect ledger is `docs/KNOWN-ISSUES.md`.
+Re-checked at 3.50.0: the Phase 5, 9, 12, 13, 14, 15 and 18 entries were verified
+against the tree, and the Phase 15 log's stale dependency note was corrected.
 
 ### Phase 1 — release reliability (blocker)
 
@@ -53,6 +55,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
+| 5 — Run queue | Cross-process admission closed in 3.50.0: promotion claims its slot inside one conditional UPDATE, so the live count and the promotion cannot be separated by another process. Left: an editor save still bypasses the lease until the run's next write fingerprint, and a checkout that is never applied stays on disk. |
 | 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0) and language-server diagnostics (3.49.0) are done. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level (3.47.0) and runs stdio MCP servers (3.48.0); remote transports, OAuth, agent-run reasoning and MCP tools in agent prompts remain missing there. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
@@ -858,8 +861,12 @@ because the route has no prompt, and records the call in `extension_runs`.
 Remaining: no provider adapters and no UI extensions. Installing grants no
 capability by itself; the reachable surface is the two workspace pairs, the
 extension's own data folder, the tool ABI and `last_error`. A dependency is
-checked for presence, not its own compatibility, and no dependency cycle is
-detected; an app upgrade does not re-check installed folders.
+judged on presence, and since 3.9.0 a dependency cycle is detected and blocks a
+run with the chain in `blockedReason`. Since 3.14.0 a dependency's own
+compatibility is judged too (`incompatibleDependencies`), and every listing
+re-judges the whole folder against the running build, so an app upgrade frees a
+folder it previously refused
+(`a_folder_is_re_judged_on_every_listing_so_an_upgrade_frees_it`).
 
 Custom tools in the agent loop (2.27.0): building a run's prompt reads every
 valid, runnable folder's declared tools from disk and pushes them as a labelled

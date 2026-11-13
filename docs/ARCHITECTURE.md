@@ -25,11 +25,12 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | Module | Lines | Responsibility |
 |---|---|---|
 | `main.rs` | 3628 | App state, config load/save, SQLite open/migrate, chat + streaming chat, Thinking resolution, conversations, usage, router/omniroute status, static serving, listener setup |
-| `agent.rs` | 3591 | Bounded autonomous run loop: one JSON action per model step (`think`/`list`/`read`/`write`/`command`/`done`/`fail`), permissions, approval pauses, checkpoints, diffs, cancellation, `agent_runs`/`agent_steps` persistence |
+| `agent.rs` | 8453 | Bounded autonomous run loop: one JSON action per model step (`think`/`list`/`read`/`write`/`command`/`done`/`fail`), permissions, approval pauses, checkpoints, diffs, cancellation, `agent_runs`/`agent_steps` persistence |
 | `host_api.rs` | 1807 | Authenticated router for the Android companion (health, capabilities, models, chat, conversations, messages) |
 | `workspace.rs` | 1699 | Path-confined folder workspace: entries, read/write, create/rename/delete, search, and the read-only `git status` the Source Control pane loads |
-| `git.rs` | 1785 | Real Git operations in the open folder: diff, stage, unstage, discard, commit, branches, log, fetch, fast-forward pull, push, per-hunk staging and a commit-detail diff. Argv-only invocations, validated workspace-relative paths and remote names, every mutation behind the `git` permission action. Remote commands have a 90 s deadline, no terminal prompt, and drained, bounded streams; hunk patches are built server-side and sent on stdin |
+| `git.rs` | 4841 | Real Git operations in the open folder: diff, stage, unstage, discard, commit, branches, log, fetch, fast-forward pull, push, per-hunk staging and a commit-detail diff. Argv-only invocations, validated workspace-relative paths and remote names, every mutation behind the `git` permission action. Remote commands have a 90 s deadline, no terminal prompt, and drained, bounded streams; hunk patches are built server-side and sent on stdin |
 | `format.rs` | 406 | Format one editor buffer with a fixed formatter chosen by extension (rustfmt/gofmt/Prettier), returning text only — the normal save path writes it; failures name the tool and never replace the buffer |
+| `lsp.rs` | 869 | Language-server diagnostics: discovery of rust-analyzer / typescript-language-server / pylsp / gopls / clangd on `PATH`, LSP over stdio (initialize, `didOpen`, a bounded wait for `publishDiagnostics`, shutdown, the child killed on drop), one file's diagnostics mapped to 1-based line/column with named severities behind `POST /api/workspace/language-diagnostics`, and the server list behind `GET /api/lsp/servers` |
 | `watch.rs` | 416 | Watch mode: one preset reruns when the open folder's fingerprint moves (700 ms, the explorer's hash), behind one `command` approval; holds the runner's only slot, reports the last real run, and Stop kills the command and its shell's children on Windows |
 | `runner.rs` | 817 | Detected build/test presets, bounded process capture (separate stdout/stderr threads, 300 s ceiling, 1 MiB per stream) and compiler/test output parsed into clickable `path:line:col` problems |
 | `local.rs` | 1422 | Ollama adapter: detect, models, hardware, select, pull (progress over SSE), one model's real capabilities (`/api/show`), 600 s chat timeout, no silent remote fallback |
@@ -110,7 +111,10 @@ string is "Sarthi Studio", internal `free-ai-studio` paths stay).
 - **VS Code** (`vscode-extension/`, TypeScript): `extension.ts` (commands/webview),
   `lib.ts` (context packing, conversation store, workspace API, embedded Node
   HTTP server implementing a subset of the desktop routes), `agent.ts` (a port
-  of the Rust run loop). Node `--test` suite under `test/`.
+  of the Rust run loop), `mcp.ts` (a stdio MCP client: spawn, JSON-RPC handshake
+  per operation, tool discovery, health and call routes). The embedded server
+  also resolves a reasoning level and a `freeAiStudio.thinkingLevel` setting
+  (3.47.0). Node `--test` suite under `test/`.
 
 ## 6. Delivery
 

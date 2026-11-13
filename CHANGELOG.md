@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.50.1
+
+Documentation only; no behaviour changes. The `docs/` set was re-verified against
+the tree at 3.50.0 and the drift that had accumulated since 3.23.0 was corrected.
+
+- `PROGRESS.md`: the "Next up" list is re-verified at 3.50.0 and gained a
+  reconciliation note. Phase 5's cross-process admission is closed (3.50.0),
+  Phase 13's positioning and schedule claim shipped (2.47.0/2.48.0), Phase 15's
+  dependency compatibility and per-listing re-check shipped (3.14.0), and Phase
+  18's MSI, `.app`, update path and uninstall shipped (2.36.0–2.44.0), leaving
+  signing, a `.dmg` and a per-machine MSI.
+- `MASTER-ROADMAP.md`: the backlog is retitled to 3.50.0, Phase 5 gained a row,
+  and the Phase 15 log no longer claims that a dependency's compatibility is
+  unchecked, that cycles go undetected, or that an upgrade does not re-check
+  installed folders — all three are shipped and tested.
+- `TESTING-STRATEGY.md`: records the current test count, the language-server and
+  run-admission suites, the extension's MCP coverage, and marks the failure
+  injection, install smokes and platform matrix as done (2.30.0–2.34.0), leaving
+  a privileged ENOSPC and a real-browser layout check.
+- `ARCHITECTURE.md`: adds `lsp.rs` and the extension's `mcp.ts` to the module
+  maps and refreshes the `agent.rs`/`git.rs` line counts.
+- `FEATURE-STATUS.md`: header now reads through 3.50.0.
+
 ## 3.50.0
 
 Phase 5's queue admitted runs with a read followed by a write: `dispatch` counted
