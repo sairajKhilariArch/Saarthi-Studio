@@ -3094,7 +3094,12 @@ function closeAllFileTabs(silent = false) {
   if (!silent && dirty.length && !confirm(`${dirty.length} tab(s) have unsaved changes. Close them anyway?`)) {
     return false;
   }
-  [...state.files.values()].forEach((file) => { void discardDraft(file.path); });
+  // A silent close is a project switch, not a discard decision: keep the drafts
+  // under the old project's folder, so returning to it offers the buffers back.
+  // Only the explicit close-all, where the folder switch was confirmed, discards.
+  if (!silent) {
+    [...state.files.values()].forEach((file) => { void discardDraft(file.path); });
+  }
   state.files.clear();
   state.openTabs = [chatTabKey()];
   state.activeKey = chatTabKey();

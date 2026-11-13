@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.33.2
+
+Switching projects closes every tab silently, and 3.33.0 had that close delete
+each tab's draft, so a project switch threw away unsaved text with no prompt and
+no copy left to recover from.
+
+- `closeAllFileTabs` discards drafts only when the close is an explicit decision:
+  the folder-switch prompt that says changes will be discarded. A silent close —
+  what a project switch does — leaves the drafts under the old project's folder,
+  so switching back and opening the file offers the buffer again.
+- A single tab's close still discards its draft, because "close without saving?"
+  is the reader answering that question.
 ## 3.33.1
 
 3.33.0 moved a renamed tab's path but left its draft row behind, so renaming a

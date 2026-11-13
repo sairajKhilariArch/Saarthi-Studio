@@ -41,6 +41,12 @@ test("the editor mirrors a dirty buffer and clears it on save, revert and close"
   assert.match(app, /await restoreDraft\(file\);/);
 });
 
+test("a silent project switch keeps drafts; an explicit close-all discards them", () => {
+  const app = read("app.js");
+  const body = app.slice(app.indexOf("function closeAllFileTabs("), app.indexOf("function closeAllFileTabs(") + 1200);
+  assert.match(body, /if \(!silent\) \{\n    \[\.\.\.state\.files\.values\(\)\]\.forEach\(\(file\) => \{ void discardDraft\(file\.path\); \}\);/);
+});
+
 test("a rename carries a dirty buffer's draft to its new path", () => {
   const app = read("app.js");
   assert.match(app, /async function moveDraft\(from, to\)/);
