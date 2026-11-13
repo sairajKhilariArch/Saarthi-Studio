@@ -3158,6 +3158,7 @@ function renderEditor() {
   $("editorLang").textContent = file.language;
   $("editorSize").textContent = formatBytes(new Blob([file.content]).size);
   if ($("codeArea").value !== file.content) $("codeArea").value = file.content;
+  renderHighlight();
   const dirty = file.content !== file.original;
   $("editorDirty").classList.toggle("hidden", !dirty);
   $("editorState").textContent = file.scratch
@@ -3173,6 +3174,35 @@ function renderEditor() {
     $("gutter").scrollTop = 0;
     renderedPath = file.path;
   }
+}
+
+/* The gutter and the colour layer follow the textarea's own scroll: three
+   elements, one scroll position. */
+function syncEditorScroll() {
+  const area = $("codeArea");
+  if (!area) return;
+  if ($("gutter")) $("gutter").scrollTop = area.scrollTop;
+  if ($("highlight")) {
+    $("highlight").scrollTop = area.scrollTop;
+    $("highlight").scrollLeft = area.scrollLeft;
+  }
+}
+
+/* The buffer, escaped and coloured, drawn behind the transparent textarea. An
+   unknown language or an oversized buffer comes back as plain escaped text; a
+   missing highlighter clears the layer rather than leaving stale colour. */
+function renderHighlight() {
+  const layer = $("highlight");
+  const area = $("codeArea");
+  if (!layer || !area) return;
+  const file = activeFile();
+  const language = file ? file.language : "text";
+  if (typeof highlightCode !== "function") {
+    layer.textContent = "";
+    return;
+  }
+  layer.innerHTML = highlightCode(area.value, language);
+  syncEditorScroll();
 }
 
 function updateGutter() {
@@ -3204,6 +3234,7 @@ function onEditorInput() {
   $("revertBtn").disabled = !dirty;
   $("editorSize").textContent = formatBytes(new Blob([file.content]).size);
   updateGutter();
+  renderHighlight();
   updateCursor();
   syncTabDirty();
 }
@@ -3284,8 +3315,10 @@ function positionCompletions() {
   const before = area.value.slice(0, area.selectionStart);
   const line = before.split("\n").length - 1;
   const column = before.length - before.lastIndexOf("\n") - 1;
+  const stack = area.closest ? area.closest(".code-stack") : null;
+  const origin = stack ? stack.offsetLeft : 0;
   const top = 14 + (line + 1) * lineHeight - area.scrollTop;
-  const left = 14 + column * completionCharWidth(area) - area.scrollLeft;
+  const left = origin + 14 + column * completionCharWidth(area) - area.scrollLeft;
   const widest = Math.max(6, body.clientWidth - 280);
   box.style.top = `${Math.min(Math.max(6, top), Math.max(6, body.clientHeight - 44))}px`;
   box.style.left = `${Math.min(Math.max(6, left), widest)}px`;
@@ -7990,7 +8023,7 @@ function bindEvents() {
     }
   });
   ["click", "keyup"].forEach((type) => $("codeArea").addEventListener(type, updateCursor));
-  $("codeArea").addEventListener("scroll", () => { $("gutter").scrollTop = $("codeArea").scrollTop; });
+  $("codeArea").addEventListener("scroll", syncEditorScroll);
 
   $("messages").addEventListener("click", (event) => {
     const button = event.target.closest("[data-copy-code]");

@@ -46,6 +46,17 @@
   --code-bg: #0a0a0e;
   --code-ink: #d5d5df;
   --gutter-ink: #7d7d88;
+  /* Syntax colours: one token per class the highlighter emits. */
+  --tok-comment: #6f7480;
+  --tok-string: #9ecb8a;
+  --tok-number: #e5b567;
+  --tok-keyword: #ff9a54;
+  --tok-type: #7dc4e4;
+  --tok-fn: #c8a2ff;
+  --tok-prop: #9ecb8a;
+  --tok-tag: #f07178;
+  --tok-attr: #e5b567;
+  --tok-punct: #8a8a95;
   --dir-ink: #d7a26a;
   --dot-idle: #6b6b75;
   --scrim: rgba(0, 0, 0, 0.55);
@@ -107,6 +118,16 @@
   --code-bg: #fafafd;
   --code-ink: #26262e;
   --gutter-ink: #6a6a77;
+  --tok-comment: #8a8a95;
+  --tok-string: #2f7a3f;
+  --tok-number: #a35a00;
+  --tok-keyword: #b34a00;
+  --tok-type: #1c6b8a;
+  --tok-fn: #6a3fb3;
+  --tok-prop: #2f7a3f;
+  --tok-tag: #b3261e;
+  --tok-attr: #a35a00;
+  --tok-punct: #6a6a77;
   --dir-ink: #9a5b12;
   --dot-idle: #85858f;
   --scrim: rgba(20, 18, 25, 0.45);
@@ -794,12 +815,34 @@ kbd {
   background: var(--code-bg); border-right: 1px solid var(--line-soft);
   overflow: hidden; user-select: none;
 }
+/* The textarea is transparent and the coloured buffer sits behind it. Both
+   layers carry the same metrics, or the caret would drift from the glyphs. */
+.code-stack { position: relative; flex: 1; min-width: 0; display: flex; }
+.code-highlight {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  margin: 0; border: 0; padding: 14px 16px 40px; color: var(--code-ink);
+  font-family: var(--mono); font-size: 12.5px; line-height: 20px;
+  tab-size: 2; white-space: pre;
+}
 .code-area {
+  position: relative; z-index: 1;
   flex: 1; min-width: 0; margin: 0; border: 0; resize: none;
-  background: var(--code-bg); color: var(--code-ink); padding: 14px 16px 40px;
+  background: transparent; color: transparent; caret-color: var(--code-ink);
+  padding: 14px 16px 40px;
   font-family: var(--mono); font-size: 12.5px; line-height: 20px;
   tab-size: 2; white-space: pre; overflow: auto;
 }
+.code-area::selection { background: var(--accent-soft); }
+.tok-comm { color: var(--tok-comment); font-style: italic; }
+.tok-str { color: var(--tok-string); }
+.tok-num { color: var(--tok-number); }
+.tok-kw { color: var(--tok-keyword); }
+.tok-type { color: var(--tok-type); }
+.tok-fn { color: var(--tok-fn); }
+.tok-prop { color: var(--tok-prop); }
+.tok-tag { color: var(--tok-tag); }
+.tok-attr { color: var(--tok-attr); }
+.tok-punct { color: var(--tok-punct); }
 .code-area::placeholder { color: var(--placeholder); }
 .editor-status {
   display: flex; align-items: center; gap: 16px; padding: 6px 14px;

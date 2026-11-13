@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.26.0
+
+Phase 9 gains syntax highlighting. The editor was one flat colour; the buffer is
+now coloured behind a transparent textarea by a tokenizer in the shared UI, so the
+desktop and the VS Code webview read code the same way.
+
+- **`app/static/highlight.js` is pure**: text and a language in, escaped HTML out.
+  Grammars cover Rust, JavaScript/TypeScript, JSON, Python, Go, Java, Kotlin, C,
+  C++, C#, Ruby, PHP, Swift, SQL, Bash, YAML, TOML, CSS/SCSS, HTML/XML and
+  Markdown; an unknown language (or `text`) comes back escaped and uncoloured.
+  Every piece is escaped before it is wrapped, so a buffer holding `<script>`
+  cannot introduce markup, and a test asserts exactly that.
+- **Rules that matter.** Comments are read before strings, so `"http://x"` stays a
+  string; an unterminated string stops at the newline instead of swallowing the
+  rest of the file; a Rust lifetime stays plain while `'x'` is a character; SQL
+  keywords match regardless of case; JSON, YAML and CSS keys are properties rather
+  than values; a Markdown fence ends where it closes and the next heading is a
+  heading again.
+- **The editor.** The same buffer is drawn in a `<pre>` behind a transparent
+  textarea with identical padding, font, line height and tab size; the caret and
+  selection colours are kept, and the gutter and colour layer follow the
+  textarea's scroll. The completion popup now measures from the editor stack, so
+  its left edge is the caret's rather than the gutter's.
+- **Bounded on purpose.** Past 200,000 characters a buffer is shown escaped and
+  plain rather than retokenised on every keystroke. No route, no dependency and no
+  contract id changed: the highlighter ships with the static UI both servers
+  already serve.
+
+Verified: `test-frontend.sh` 65 passed (12 new: keyword/type/number/comment
+colouring, lifetime versus character, escaping and `<script>` injection, a URL in
+a string, an unterminated string, JSON keys, CSS hex and properties, tag and
+attribute colouring, Markdown fences and links, the unknown-language and
+over-cap paths, and SQL case folding); `node --check` clean on `app.js` and
+`highlight.js`; `test-version.sh` 20/20; `test-e2e.sh` 32 passed; the Rust suite
+is unchanged at 594 passed, 1 ignored. Live headless: the server answers
+`/static/highlight.js` with a JavaScript content type and `index.html` loads it
+before `app.js`. **Not run:** the overlay in a browser — alignment against the
+textarea, caret position, scroll sync and the palette under both themes are
+unverified; only the token rules and the wiring are tested.
+
 ## 3.25.0
 
 Phase 9 gains a completion engine. The editor completes the name being typed from

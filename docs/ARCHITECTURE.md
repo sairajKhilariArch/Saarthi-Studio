@@ -17,7 +17,8 @@ serves everything:
 `gui` feature (default) adds a Tauri v2 window (`gui.rs`, `tauri = "=2.12.5"`).
 `--no-default-features` builds the headless server used by the `.deb` job.
 The UI is static files from `app/static/` (`index.html`, `app.js`,
-`styles.css`, `ide.js`, `ide.css`, `skills/`) with no build step.
+`highlight.js` — the editor's pure tokenizer, `styles.css`, `ide.js`,
+`ide.css`, `skills/`) with no build step.
 
 ## 2. Modules and responsibilities
 
