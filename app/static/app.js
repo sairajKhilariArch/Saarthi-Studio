@@ -3152,6 +3152,7 @@ let renderedPath = null;
 function renderEditor() {
   const file = activeFile();
   if (!file) return;
+  closeCompletions();
   $("editorPath").textContent = file.scratch ? "Scratch pad" : file.path;
   $("editorPath").title = file.scratch ? "Scratch pad (not saved to disk)" : file.path;
   $("editorLang").textContent = file.language;
@@ -3215,6 +3216,194 @@ function syncTabDirty() {
 
 /* Format only returns text. The buffer is marked dirty and the normal save
    path decides whether it may be written. */
+/* ---- symbol completion ----------------------------------------------------
+   The index already knows every symbol in the folder; the editor asks it for the
+   word being typed. The pure pieces are separate so the harness can exercise
+   them without a DOM, and nothing here writes a file: accepting a suggestion is
+   an ordinary edit that still needs the normal save. */
+const COMPLETION_MIN_PREFIX = 2;
+let completions = { open: false, items: [], active: 0, start: 0, note: "" };
+let completionTimer = 0;
+let completionMetrics = null;
+
+/* The identifier immediately before the caret, or "" when there is too little
+   of one to complete (a single letter matches most of the index). */
+function completionPrefix(text, caret) {
+  const start = Math.max(0, Math.min(caret, text.length));
+  let index = start;
+  while (index > 0 && /[A-Za-z0-9_$]/.test(text[index - 1])) index -= 1;
+  const prefix = text.slice(index, start);
+  return prefix.length >= COMPLETION_MIN_PREFIX ? prefix : "";
+}
+
+/* Replace the word before the caret with `name`; the rest of the buffer and the
+   caret position come back as plain values. */
+function completionEdit(text, caret, name) {
+  const start = Math.max(0, Math.min(caret, text.length));
+  const prefix = completionPrefix(text, start);
+  const begin = start - prefix.length;
+  return {
+    value: `${text.slice(0, begin)}${name}${text.slice(start)}`,
+    caret: begin + name.length,
+  };
+}
+
+function closeCompletions() {
+  if (!completions.open) return;
+  completions = { open: false, items: [], active: 0, start: 0, note: "" };
+  const box = $("completions");
+  if (!box) return;
+  box.classList.add("hidden");
+  box.replaceChildren();
+}
+
+/* Width of one character in the editor's own font, measured once per font: the
+   popup sits at the caret, and a textarea exposes no rectangle for it. */
+function completionCharWidth(area) {
+  const style = getComputedStyle(area);
+  const key = `${style.fontSize}|${style.fontFamily}`;
+  if (!completionMetrics || completionMetrics.key !== key) {
+    const canvas = completionMetrics?.canvas || document.createElement("canvas");
+    const context = canvas.getContext ? canvas.getContext("2d") : null;
+    let width = 7;
+    if (context) {
+      context.font = `${style.fontSize} ${style.fontFamily}`;
+      width = context.measureText("M").width || 7;
+    }
+    completionMetrics = { key, canvas, width };
+  }
+  return completionMetrics.width;
+}
+
+function positionCompletions() {
+  const box = $("completions");
+  const area = $("codeArea");
+  const body = area && area.closest ? area.closest(".editor-body") : null;
+  if (!box || !area || !body) return;
+  const lineHeight = parseFloat(getComputedStyle(area).lineHeight) || 20;
+  const before = area.value.slice(0, area.selectionStart);
+  const line = before.split("\n").length - 1;
+  const column = before.length - before.lastIndexOf("\n") - 1;
+  const top = 14 + (line + 1) * lineHeight - area.scrollTop;
+  const left = 14 + column * completionCharWidth(area) - area.scrollLeft;
+  const widest = Math.max(6, body.clientWidth - 280);
+  box.style.top = `${Math.min(Math.max(6, top), Math.max(6, body.clientHeight - 44))}px`;
+  box.style.left = `${Math.min(Math.max(6, left), widest)}px`;
+}
+
+function renderCompletions() {
+  const box = $("completions");
+  if (!box) return;
+  box.replaceChildren();
+  if (!completions.open) {
+    box.classList.add("hidden");
+    return;
+  }
+  if (!completions.items.length) {
+    const note = document.createElement("p");
+    note.className = "completion-note";
+    note.textContent = completions.note || "Nothing in the index matches.";
+    box.appendChild(note);
+  } else {
+    completions.items.forEach((item, index) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `completion-item${index === completions.active ? " active" : ""}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", index === completions.active ? "true" : "false");
+      const name = document.createElement("span");
+      name.className = "completion-name";
+      name.textContent = item.name;
+      const where = document.createElement("span");
+      where.className = "completion-where";
+      where.textContent = `${item.kind} · ${item.path}:${item.line}`;
+      row.append(name, where);
+      row.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        acceptCompletion(index);
+      });
+      box.appendChild(row);
+    });
+    const active = box.querySelector(".completion-item.active");
+    if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest" });
+  }
+  box.classList.remove("hidden");
+  positionCompletions();
+}
+
+async function requestCompletions() {
+  const file = activeFile();
+  const area = $("codeArea");
+  if (!file || !area) {
+    closeCompletions();
+    return;
+  }
+  if (!capabilitiesAllow(state.capabilities, "editor_complete")) {
+    toast("This server cannot complete symbols from the index.");
+    return;
+  }
+  const prefix = completionPrefix(area.value, area.selectionStart);
+  if (!prefix) {
+    closeCompletions();
+    toast("Type at least two characters of a name, then press Ctrl+Space.");
+    return;
+  }
+  const caret = area.selectionStart;
+  const params = new URLSearchParams({ prefix });
+  if (!file.scratch) params.set("path", file.path);
+  const result = await api(`/api/index/complete?${params.toString()}`);
+  // The buffer moved while the request was out: a stale list must not land.
+  if (area.selectionStart !== caret || completionPrefix(area.value, caret) !== prefix) return;
+  if (!result.ok) {
+    completions = {
+      open: true,
+      items: [],
+      active: 0,
+      start: caret - prefix.length,
+      note: result.data.error || "Completion is unavailable.",
+    };
+    renderCompletions();
+    return;
+  }
+  const items = Array.isArray(result.data.items) ? result.data.items : [];
+  completions = {
+    open: true,
+    items,
+    active: 0,
+    start: caret - prefix.length,
+    note: result.data.note || "",
+  };
+  if (!items.length && !completions.note) {
+    closeCompletions();
+    return;
+  }
+  renderCompletions();
+}
+
+function moveCompletion(step) {
+  if (!completions.items.length) return;
+  completions.active =
+    (completions.active + step + completions.items.length) % completions.items.length;
+  renderCompletions();
+}
+
+function acceptCompletion(index = completions.active) {
+  const item = completions.items[index];
+  const area = $("codeArea");
+  const file = activeFile();
+  if (!item || !area || !file) {
+    closeCompletions();
+    return;
+  }
+  const edit = completionEdit(area.value, area.selectionStart, item.name);
+  area.value = edit.value;
+  area.selectionStart = area.selectionEnd = edit.caret;
+  closeCompletions();
+  onEditorInput();
+  renderTabs();
+  updateCursor();
+}
+
 async function formatActiveFile() {
   const file = activeFile();
   if (!file) { toast("Open a file first."); return; }
@@ -7744,8 +7933,37 @@ function bindEvents() {
     const file = activeFile();
     if (file) copyText(file.scratch ? "Scratch pad" : file.path, "Path copied.");
   });
-  $("codeArea").addEventListener("input", onEditorInput);
+  $("codeArea").addEventListener("input", () => {
+    onEditorInput();
+    // An open list follows the word being typed; a closed one stays shut until
+    // Ctrl+Space asks again.
+    if (!completions.open) return;
+    clearTimeout(completionTimer);
+    completionTimer = setTimeout(() => { void requestCompletions(); }, 120);
+  });
   $("codeArea").addEventListener("keydown", (event) => {
+    if (completions.open) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        moveCompletion(event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        acceptCompletion();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCompletions();
+        return;
+      }
+    }
+    if (event.code === "Space" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      void requestCompletions();
+      return;
+    }
     if (event.key === "Tab") {
       event.preventDefault();
       const area = $("codeArea");

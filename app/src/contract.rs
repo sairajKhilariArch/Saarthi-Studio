@@ -31,6 +31,7 @@ const FEATURES: &[&str] = &[
     "git_worktrees",
     "git_reflog_undo",
     "editor_format",
+    "editor_complete",
     "saved_commands",
     "watch",
     "skills",
@@ -66,6 +67,7 @@ pub(crate) fn capabilities() -> Value {
             "max_concurrent_runs": crate::MAX_CONCURRENT_RUNS,
             "max_saved_commands": crate::runner::MAX_CUSTOM_PRESETS,
             "max_reflog_entries": crate::git::MAX_REFLOG_ENTRIES,
+            "max_completions": crate::index::MAX_COMPLETIONS,
         },
     })
 }
@@ -100,6 +102,7 @@ mod tests {
         // fall behind the tree.
         assert!(features.contains_key("saved_commands"));
         assert!(features.contains_key("git_reflog_undo"));
+        assert!(features.contains_key("editor_complete"));
     }
 
     #[test]
@@ -116,6 +119,10 @@ mod tests {
         assert_eq!(
             value["limits"]["max_reflog_entries"],
             json!(crate::git::MAX_REFLOG_ENTRIES)
+        );
+        assert_eq!(
+            value["limits"]["max_completions"],
+            json!(crate::index::MAX_COMPLETIONS)
         );
     }
 }

@@ -787,7 +787,7 @@ kbd {
 .editor-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
 .editor-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.editor-body { flex: 1; display: flex; min-height: 0; background: var(--code-bg); }
+.editor-body { flex: 1; display: flex; min-height: 0; background: var(--code-bg); position: relative; }
 .gutter {
   margin: 0; padding: 14px 10px 40px; min-width: 46px; text-align: right;
   font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--gutter-ink);
@@ -806,6 +806,20 @@ kbd {
   border-top: 1px solid var(--line); background: var(--bg-soft);
   font-size: 11px; color: var(--mute); font-family: var(--mono);
 }
+.completions {
+  position: absolute; z-index: 40; min-width: 220px; max-width: 460px; max-height: 216px;
+  overflow: auto; padding: 4px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-soft); box-shadow: 0 12px 30px rgb(0 0 0 / 28%);
+}
+.completion-item {
+  display: flex; gap: 12px; align-items: baseline; width: 100%; padding: 5px 8px;
+  border: 0; border-radius: 5px; background: none; color: var(--code-ink); text-align: left;
+  font-family: var(--mono); font-size: 12px; cursor: pointer;
+}
+.completion-item:hover { background: var(--surface-2); }
+.completion-item.active { background: var(--accent-soft); }
+.completion-where { margin-left: auto; color: var(--mute); font-size: 11px; white-space: nowrap; }
+.completion-note { margin: 0; padding: 6px 8px; color: var(--mute); font-size: 11.5px; }
 .editor-state { margin-left: auto; }
 .editor-state.dirty { color: var(--accent); }
 .editor-hint { font-family: var(--sans); color: var(--faint); }

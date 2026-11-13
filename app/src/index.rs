@@ -739,11 +739,142 @@ async fn search_index(
     }
 }
 
+/// How many candidates a completion request answers with unless it asks for
+/// fewer; a popup shows a handful, and the index can hold thousands of symbols.
+pub(crate) const MAX_COMPLETIONS: usize = 20;
+/// The most one request may ask for, so a client cannot pull the whole index
+/// into a keystroke.
+const MAX_COMPLETION_LIMIT: usize = 50;
+/// One character is not enough to know what is being typed.
+const MIN_COMPLETION_PREFIX: usize = 2;
+
+/// Symbols whose name contains `prefix`, best first. A name declared more than
+/// once is one suggestion, shown at the place closest to the buffer being
+/// edited: the same file beats the same folder, which beats the rest, and a
+/// name that starts with the prefix beats one that only contains it.
+fn complete(db: &FsPath, prefix: &str, path: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let prefix = prefix.trim();
+    if prefix.chars().count() < MIN_COMPLETION_PREFIX {
+        return Err(format!(
+            "Type at least {MIN_COMPLETION_PREFIX} characters to complete from the index."
+        ));
+    }
+    let wanted = prefix.to_lowercase();
+    let conn = open_db(db).map_err(|e| e.to_string())?;
+    // Matched in Rust rather than with `LIKE`: the name is compared as plain
+    // text, so a `%` or `_` the caller typed is a character, not a wildcard.
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.name, s.kind, s.path, s.line, f.language
+             FROM code_index_symbols s JOIN code_index_files f ON f.path = s.path
+             ORDER BY s.name, s.path, s.line",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let directory = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let mut best: HashMap<String, (usize, Value)> = HashMap::new();
+    for row in rows.flatten() {
+        let (name, kind, symbol_path, line, language) = row;
+        let lower = name.to_lowercase();
+        if !lower.contains(&wanted) {
+            continue;
+        }
+        let mut score = if lower.starts_with(&wanted) { 3 } else { 1 };
+        if !path.is_empty() {
+            if symbol_path == path {
+                score += 2;
+            } else if symbol_path
+                .rsplit_once('/')
+                .map(|(dir, _)| dir)
+                .unwrap_or("")
+                == directory
+            {
+                score += 1;
+            }
+        }
+        let entry = (
+            score,
+            json!({
+                "name": name,
+                "kind": kind,
+                "path": symbol_path,
+                "line": line,
+                "language": language,
+            }),
+        );
+        match best.get(&name) {
+            Some((seen, _)) if *seen >= score => {}
+            _ => {
+                best.insert(name, entry);
+            }
+        }
+    }
+    let mut items: Vec<(usize, Value)> = best.into_values().collect();
+    items.sort_by(|a, b| {
+        let (left, right) = (
+            a.1["name"].as_str().unwrap_or(""),
+            b.1["name"].as_str().unwrap_or(""),
+        );
+        b.0.cmp(&a.0)
+            .then_with(|| left.len().cmp(&right.len()))
+            .then_with(|| left.cmp(right))
+    });
+    items.truncate(limit.clamp(1, MAX_COMPLETION_LIMIT));
+    Ok(items.into_iter().map(|(_, item)| item).collect())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CompleteQuery {
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn complete_symbols(
+    State(state): State<AppState>,
+    Query(query): Query<CompleteQuery>,
+) -> Response<Body> {
+    let limit = query.limit.unwrap_or(MAX_COMPLETIONS);
+    match complete(&state.database_path, &query.prefix, &query.path, limit) {
+        Ok(items) => {
+            // An empty answer is not an error: an unrefreshed index is the
+            // common cause, so it is named instead of leaving a blank popup.
+            let note = if items.is_empty() {
+                "Nothing in the index matches — refresh the index or keep typing."
+            } else {
+                ""
+            };
+            Json(json!({
+                "ok": true,
+                "prefix": query.prefix.trim(),
+                "items": items,
+                "note": note,
+            }))
+            .into_response()
+        }
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/index", get(get_status))
         .route("/api/index/refresh", post(refresh_index))
         .route("/api/index/search", get(search_index))
+        .route("/api/index/complete", get(complete_symbols))
         .route(
             "/api/index/semantic",
             get(crate::embeddings::semantic_endpoint),
@@ -942,6 +1073,73 @@ mod tests {
         // quoted from memory.
         fs::remove_file(dir.join("src/auth.rs")).unwrap();
         assert!(retrieve(&dir, &db, "auth login").is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completion_prefers_the_open_file_then_the_prefix() {
+        let dir = scratch("complete");
+        let db = database(&dir);
+        write(
+            &dir,
+            "src/auth.rs",
+            "pub fn login(user: &str) -> bool { true }\npub fn logout() {}\n",
+        );
+        write(
+            &dir,
+            "src/session.rs",
+            "fn login() {}\nfn login_token() {}\n",
+        );
+        refresh(&db, &dir, &[]).unwrap();
+
+        // `login` is declared twice; the copy in the buffer being edited wins,
+        // and the same prefix from the other file picks that copy instead.
+        let items = complete(&db, "log", "src/session.rs", MAX_COMPLETIONS).unwrap();
+        assert_eq!(items[0]["name"], "login");
+        assert_eq!(items[0]["path"], "src/session.rs");
+        let items = complete(&db, "log", "src/auth.rs", MAX_COMPLETIONS).unwrap();
+        assert_eq!(items[0]["path"], "src/auth.rs");
+        // A name that starts with the prefix outranks one that only contains it.
+        let items = complete(&db, "log", "", MAX_COMPLETIONS).unwrap();
+        assert_eq!(items[0]["name"], "login", "{items:?}");
+
+        // One character, or none, is refused rather than answered with the
+        // whole index.
+        assert!(complete(&db, "l", "", MAX_COMPLETIONS).is_err());
+        assert!(complete(&db, "", "", MAX_COMPLETIONS).is_err());
+        // A wildcard character is literal text: `%%` matches nothing, where a
+        // pattern would match every symbol in the index.
+        assert!(complete(&db, "%%", "", MAX_COMPLETIONS).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completion_caps_the_answer_and_clamps_what_it_is_asked_for() {
+        let dir = scratch("complete-limit");
+        let db = database(&dir);
+        let mut text = String::new();
+        for index in 0..30 {
+            text.push_str(&format!("fn token_{index}() {{}}\n"));
+        }
+        write(&dir, "src/many.rs", &text);
+        refresh(&db, &dir, &[]).unwrap();
+
+        assert_eq!(
+            complete(&db, "tok", "", MAX_COMPLETIONS).unwrap().len(),
+            MAX_COMPLETIONS
+        );
+        // Under the hard cap every match is returned, and a zero ask is one
+        // item rather than an empty popup that looks like a failure.
+        assert_eq!(
+            complete(&db, "tok", "", MAX_COMPLETION_LIMIT)
+                .unwrap()
+                .len(),
+            30
+        );
+        assert_eq!(complete(&db, "tok", "", 0).unwrap().len(), 1);
+        // Equal scores fall back to the shorter name, then the alphabet.
+        let items = complete(&db, "tok", "", 2).unwrap();
+        assert_eq!(items[0]["name"], "token_0");
         let _ = fs::remove_dir_all(&dir);
     }
 }

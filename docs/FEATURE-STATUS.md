@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.25.0 (2026-11-13):** Phase 9 gains symbol completion.
+`GET /api/index/complete` reads the existing code index and ranks names near the
+caret (prefix above contains, the buffer's own file above its folder, one entry
+per name); the editor's Ctrl+Space listbox inserts one as an ordinary edit, so the
+permission-checked save still decides what reaches disk. Names are matched in Rust
+so a `%` is a character, not a wildcard, and the answer caps at 20 by default,
+50 at most. The contract gained `editor_complete` (25 ids) and `max_completions`;
+the VS Code embedded server reports it false. Syntax highlighting and a debugger
+remain the phase's open work.
+
 **Revision 3.24.0 (2026-11-13):** Phase 8's semantic index can embed through the
 runtime on this machine. An embedding model named `local:<model>` goes to the
 configured Ollama endpoint instead of the router, so search by meaning works with
@@ -436,7 +446,7 @@ below carry the evidence.
 | 6 | Skills | Working | per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
 | 8 | Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
-| 9 | Developer environment | Partial | editor engine (completion/diagnostics), debugger; formatting shipped in 3.23.0 |
+| 9 | Developer environment | Partial | syntax highlighting and a debugger; symbol completion shipped in 3.25.0, formatting in 3.23.0 |
 | 10 | Safety and permissions | Working | — |
 | 11 | Token, context, cost | Working | cost only where the provider reports usage |
 | 12 | Live monitoring | Working | — |
@@ -592,7 +602,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Git worktree per run | Working (2.1.0) | a writing run gets `<repo>-run-<id>` on a `run/<id>` branch, can be applied back and cleaned up (2.0.0); read-only runs and non-git folders keep the shared root |
 | Git reflog undo | Working (3.18.0) | `GET /api/workspace/git/reflog` lists the newest 50 `HEAD@{n}` entries (`hash`, `selector`, `action`, `date`) and `inProgress`; an unborn branch answers an empty list. `POST /api/workspace/git/undo` takes a selector the server itself listed, resolves the commit from that entry (a raw hash, another ref's reflog or `HEAD@{0}` is a 400) and runs `git reset --hard` behind the `git` action. It refuses 409 while a merge or rebase is unfinished or tracked files are modified, because the tree is reset with the branch; untracked files are ignored. The reset is itself a reflog entry, so the same list redoes it. The pane's `Undo…` lists the entries, marks the current one, disables Restore during a merge or rebase, and confirms branch, selector, short hash and action |
 | Format buffer | Working (3.23.0) | `POST /api/workspace/format {path, content}` returns formatted text only, never a write: rustfmt (stdin, edition 2021, project config), gofmt, or Prettier (folder `node_modules/.bin` first, then PATH, `--stdin-filepath`). Unknown extensions, missing tools, parse errors, 20 s timeouts, empty output and output over 2 MiB are 400s naming the reason; the buffer is marked unsaved and Ctrl+S uses the normal gated save. Workspace-relative paths only. The editor has a Format button and palette command; the contract id `editor_format` hides it where the server cannot serve it |
-| Syntax highlighting, diagnostics, completion | Missing | no editor engine, by design |
+| Syntax highlighting, diagnostics, completion | Partial (3.25.0) | Syntax highlighting is still absent: the editor is a plain textarea. Completion is real: `GET /api/index/complete?prefix=&path=` ranks indexed symbols (prefix above contains, +2 in the buffer's own file, +1 in its folder, one entry per name) and `Ctrl+Space` inserts one as an ordinary edit, 20 by default and 50 at most; a one-letter prefix is a 400 and names are matched as plain text, so `%` is a character. Diagnostics come from the runner's Problems panel (1.73.0), not from a language server — there is no completion for locals the index never saw, and no type information |
 | Build/test runner + diagnostics in the Problems panel | Working (1.73.0) | `app/src/runner.rs`: detects `cargo build`/`cargo test` from `Cargo.toml`, and `build`/`test` scripts from `package.json` through npm/pnpm/yarn. `GET /api/workspace/runner`, `POST /api/workspace/run` (preset id only, never a command line; gated on `command`; one run at a time; 300 s ceiling; 1 MiB per stream, last 200 000 chars returned). Parses Rust, TypeScript and generic `path:line:col` diagnostics, dedupes, caps at 200, drops paths outside the folder. The Problems pane runs them, shows the raw output, and opens a diagnostic at its real line. Since 1.73.0 a test run also reports counts: `tests {framework,total,passed,failed,ignored,failures}` parsed from libtest's per-binary result lines, Jest, Vitest and node's TAP summary, shown in the pane header with the failing names in its tooltip. A build is never searched and a summary-less test run reports `null`, so zeroes are never invented. Since 3.17.0 the same list carries commands saved in Settings (`kind: custom`, ids `custom-<slug>`, at most 20, each a `name :: command` line run through the platform shell) and the pane has a picker and Run for them; the request still sends an id, never a command line |
 | Watch mode | Working (3.21.0) | `POST /api/workspace/watch/start` takes a preset id resolved from `runner::all` (never a command line) and asks the `command` permission once with the full line; that decision covers the session because a background thread cannot prompt. The loop reuses `workspace::fingerprint_tree` every 700 ms and takes a new baseline after each run, so generated output cannot retrigger it. A watch holds the runner's only slot, so manual runs are refused meanwhile. `GET /api/workspace/watch` returns the preset, run count, last real run (exit code, duration, problems, bounded output tail, test summary), `truncated` and `error`; `POST /api/workspace/watch/stop` signals, and the runner kills the command at its next 120 ms poll (with `taskkill /T` on Windows) instead of waiting up to 300 s. Opening or closing a folder stops it. The Problems pane has Watch / Stop watching, polls every 1.2 s, reuses the manual run renderer and restores its state after a reload |
 | Debugger | **Missing** | there is no debug adapter. A user-defined command preset (3.17.0) still covers the "run any command" case, and watch mode (3.21.0) reruns it on changes |
@@ -673,7 +683,7 @@ x/y, a 2px press writes nothing, a drag past the right edge clamps) while a real
 | Desktop Linux/Windows/macOS | Working | deb, AppImage, tarball, zip, macOS universal tarball |
 | Android client | Working (subset) | chat streaming, history, backup, remote agent runs via Host API; no router management, no local execution |
 | VS Code extension | Working (subset) | embedded Node server, agent port, runs webview |
-| Capability negotiation driving feature gates | Working (3.22.0) | The local API states 23 implemented ids plus enforced limits; the extension's embedded server states its honest subset and its status command reports the match. Since 3.22.0 the shared UI fetches the contract at boot and hides exactly the controls a known contract marks `false` (Source control, Index, Memory, Watch, Saved commands and six Settings sections), keeping everything on an older/unknown server. Android negotiates v1 over the Host API |
+| Capability negotiation driving feature gates | Working (3.22.0) | The local API states 25 implemented ids plus enforced limits; the extension's embedded server states its honest subset and its status command reports the match. Since 3.22.0 the shared UI fetches the contract at boot and hides exactly the controls a known contract marks `false` (Source control, Index, Memory, Watch, Saved commands and six Settings sections), keeping everything on an older/unknown server. Android negotiates v1 over the Host API |
 | Pairing / TLS / sessions | Working | host token lifecycle + TLS transport |
 
 ## Phase 15 — Extension and plugin ecosystem

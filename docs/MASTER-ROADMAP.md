@@ -53,8 +53,8 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | Editor engine completion/diagnostics and a debugger. Formatting shipped in 3.23.0. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 23 ids, the extension's subset, and controls hidden only on an explicit `false`. |
+| 9 — Developer environment | Syntax highlighting and a debugger. Symbol completion shipped in 3.25.0, formatting in 3.23.0. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 25 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
@@ -405,6 +405,18 @@ that name the reason; paths are workspace-relative and escapes are refused; a
 new unsaved buffer is allowed. The Format button and `File: Format buffer` are
 gated by the new `editor_format` capability (24 ids), false in the embedded
 server. Phase 9 is left with completion/diagnostics and a debugger.*
+
+*Delivered 3.25.0: symbol completion. `GET /api/index/complete?prefix=&path=`
+ranks indexed symbols near the caret — a prefix match above a containing one, the
+buffer's own file above its folder, one suggestion per name — and answers 20 by
+default, 50 at most, with a 400 below two characters. Names are compared in Rust
+rather than with `LIKE`, so `%` and `_` are characters and not wildcards. The
+editor's Ctrl+Space (or `Editor: Complete symbol`) opens a listbox at the caret,
+moves with the arrows, inserts on Enter or Tab, closes on Escape, refines as the
+word grows and drops an answer whose caret moved; accepting is an ordinary edit,
+so Ctrl+S still passes the permission and claim checks. `editor_complete` is the
+25th contract id with `max_completions` in the limits. Phase 9 is left with syntax
+highlighting and a debugger.*
 
 *Delivered 1.68.0: the remote half — fetch with a resolved remote,
 fast-forward-only pull that refuses a diverged history with a 409, and push that
@@ -880,7 +892,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
 | 8 Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
-| 9 Developer environment | Partial | no editor engine (completion/diagnostics) or debugger; watch 3.21.0, formatting 3.23.0 |
+| 9 Developer environment | Partial | no syntax highlighting or debugger; completion 3.25.0, formatting 3.23.0, watch 3.21.0 |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |

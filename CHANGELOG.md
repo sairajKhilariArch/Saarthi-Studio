@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.25.0
+
+Phase 9 gains a completion engine. The editor completes the name being typed from
+the code index the app already keeps — no language server, no second parser.
+
+- **`GET /api/index/complete?prefix=&path=&limit=`** answers
+  `{ok, prefix, items, note}` with `name`, `kind`, `path`, `line` and `language`
+  per candidate. Twenty by default, at most fifty however large the ask, and a
+  one-letter prefix is a 400 rather than most of the index. Names are matched as
+  plain text, not through `LIKE`: SQLite refused a single-backslash `ESCAPE`
+  clause outright, so the filter runs in Rust and a `%` the user typed is a
+  character, never a wildcard.
+- **Ranking is local and honest.** A name that starts with the prefix outranks one
+  that only contains it; a name declared more than once is one suggestion, shown
+  at the copy in the buffer being edited, then the same folder. Equal scores fall
+  back to the shorter name, then the alphabet, so one index always answers the
+  same order.
+- **The editor.** Ctrl+Space, or `Editor: Complete symbol` in the palette, opens a
+  listbox at the caret; Arrow keys move, Enter or Tab inserts, Escape closes and
+  typing keeps refining. Accepting is an ordinary buffer edit, so Ctrl+S still
+  goes through the normal permission and file-claim checks. An answer for a caret
+  that has since moved is dropped, and an empty answer says why — nothing matches,
+  or the index has not been refreshed — instead of drawing a blank box.
+- **Contract.** `editor_complete` is the 25th id, with `max_completions` in the
+  limits; the VS Code extension's embedded server reports it false, so the popup
+  is gated there and Ctrl+Space refuses with a sentence.
+
+Verified: `cargo test --locked` 594 passed, 1 ignored (2 new: ranking by file
+context, prefix, name length and alphabet with the refusals, and the cap plus the
+limit clamp); clippy `--all-targets -D warnings` clean; `cargo fmt --check` clean;
+`test-frontend.sh` 53 passed (3 new: prefix extraction at the caret, replacement
+without touching a later word, and the popup's contract gate); `test-version.sh`
+20/20; `test-e2e.sh` 32 passed; extension `npm test` 27 passed. Live headless
+against this repository's own index: `embed` answered 20 ranked hits, the same
+prefix from `app/src/embeddings.rs` put that file's `embed` first, one character
+was a 400, `%%` matched nothing, and a prefix with no hits carried the
+"refresh the index" note. **Not run:** the popup in a browser — its key handling,
+caret position and pixels are unverified; only the helpers and the contract gate
+are tested.
+
 ## 3.24.0
 
 Phase 8's semantic index no longer needs a router. An embedding model named
