@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.34.1
+
+Clippy ran only on Ubuntu, so a warning in a `#[cfg(windows)]` block could reach
+a tagged release without any push failing.
+
+- The `windows` job in `desktop-ci.yml` now runs
+  `cargo clippy --locked --all-targets -- -D warnings` after its tests, reusing
+  the debug artifacts it just built. The job has always compiled and tested
+  those paths; this lints them (KNOWN-ISSUES 11).
+- macOS is deliberately still not linted: a step that has never run on a macOS
+  runner could fail on macOS-only code, so the issue stays partly open until
+  that can be checked.
 ## 3.34.0
 
 The editor has mirrored unsaved buffers since 3.33.0, but that copy was only

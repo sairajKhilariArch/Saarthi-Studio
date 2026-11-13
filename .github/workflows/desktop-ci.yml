@@ -123,7 +123,9 @@ jobs:
     # before any test ran there. WebView2 and the MSVC toolchain ship on the
     # runner, and `.cargo/config.toml` already scopes mold and `-Z threads` to
     # Linux, so the default `gui` feature links without extra setup. Linux keeps
-    # clippy and the end-to-end smoke; this job is build + tests.
+    # the formatting gate, clippy and the end-to-end smoke; this job builds,
+    # tests, and checks the Windows-only code paths (taskkill, PowerShell, drive
+    # paths) with clippy, which the Linux job cannot see (KNOWN-ISSUES 11).
     name: Test and build desktop (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
@@ -146,6 +148,13 @@ jobs:
       - name: Run desktop tests
         working-directory: app
         run: cargo test --locked
+
+      # The Linux job's clippy never compiles a `#[cfg(windows)]` block, so a
+      # warning in one could reach a tagged release. This reuses the debug
+      # artifacts the build above produced.
+      - name: Run clippy
+        working-directory: app
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       # The MSI packager is what a Windows user installs and uninstalls, so its
       # payload and refusals are checked here. WiX comes from nuget as a dotnet

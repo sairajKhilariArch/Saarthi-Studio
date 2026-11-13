@@ -76,7 +76,7 @@ This is the ordered backlog for the current tree. It supersedes older
 
 - Browser-level layout checks for the IDE and workflow canvas, and a privileged
   ENOSPC test.
-- Clippy on Windows/macOS as well as Linux (the whole tree is rustfmt-gated since 3.19.0).
+- Clippy on Linux and Windows since 3.34.1; macOS is still not linted (the whole tree is rustfmt-gated since 3.19.0).
 - Real-device checks for the macOS/Windows/Android icons. AppStream and desktop-entry
   agreement, including the packaged release version, is checked since 3.32.0.
 - Reconcile the diverged `website` branch. (The stale workflow names in
@@ -815,7 +815,7 @@ and AppImage, the Windows zip and the macOS tarball.
 Delivered in 2.32.0: Windows in CI. `desktop-ci.yml` builds the default `gui`
 feature and runs the full Rust suite on `windows-latest`, so a Windows-only
 source break fails on the push instead of on a tag; the release pipeline keeps
-building the shipped Windows zip. Linux keeps clippy and the end-to-end smoke.
+building the shipped Windows zip. Linux keeps the formatting gate and the end-to-end smoke; 3.34.1 adds clippy to the Windows job.
 
 Delivered in 2.33.0: the render smoke. The harness now returns stable element
 stubs and records creations, so `renderWorkflowCanvas` can be executed and its

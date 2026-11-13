@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.34.1 (2026-11-13):** Clippy now lints Windows too. The `windows` job
+in `desktop-ci.yml` runs `cargo clippy --locked --all-targets -- -D warnings`
+after its tests, so a warning in a `#[cfg(windows)]` block fails the push instead
+of surfacing at release; the step reuses the artifacts the job already built.
+macOS is not linted yet, deliberately, because the step has never run there. The
+issue is partly closed.
 **Revision 3.34.0 (2026-11-13):** Recovery is visible. The Files pane lists a
 folder's drafts whose file is not already open ("Recovered buffers", with path
 and size); opening a row restores the text marked unsaved. Discard all clears the
@@ -821,7 +827,7 @@ it needs, and both are enforced rather than displayed.
 | End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
 | Failure-injection matrix | Working (2.34.0) | Four process-level cases in `scripts/ci/test-e2e.sh`: (1) the mock provider is killed and the next run must reach `failed` with an error while `/api/ready` keeps answering; (2) the provider is slowed and the process killed mid-run, and the restarted app must mark that run `interrupted` with a readable step log; (3) the database is replaced with garbage — the process must exit with `file is not a database` in its log, nothing may answer on the port, and restoring the saved copy must bring it back ready; (4) the data directory is made read-only (POSIX only: Windows Git Bash ignores `chmod`, so the case prints `skip`) and the `data directory` readiness check must go false and then recover. Not covered: a true ENOSPC case (needs a privileged loop/tmpfs mount) and browser-level layout |
 | Install smokes in CI | Working (2.31.0) | `scripts/ci/smoke-package.sh` unpacks a tarball, zip, `.deb` (`dpkg-deb -x`) or AppImage (`--appimage-extract`), boots the packaged binary headless against a scratch home, checks `/api/ready`, serves `/`, and compares `/api/diagnostics/bundle`'s `app.version` with `app/Cargo.toml`. `desktop-release.yml` runs it on the `.deb`, the Linux tarball and AppImage, the Windows zip and the macOS tarball; VSIX and APK are not covered. Verified locally on a zip and a tarball; the `.deb` and AppImage paths run only in the Linux release jobs |
-| Windows Rust CI job | Working (2.32.0) | `desktop-ci.yml` builds the default `gui` feature and runs `cargo test --locked` on `windows-latest`; WebView2 and MSVC come with the runner and mold/`-Z threads` are Linux-scoped. Linux still owns clippy and the end-to-end smoke. Verified locally with the same commands on Windows; the GitHub job itself runs on push |
+| Windows Rust CI job | Working (2.32.0) | `desktop-ci.yml` builds the default `gui` feature and runs `cargo test --locked` on `windows-latest`; WebView2 and MSVC come with the runner and mold/`-Z threads` are Linux-scoped. Linux owns the formatting gate and the end-to-end smoke; since 3.34.1 this job also runs clippy, so Windows-only code is linted. Verified locally with the same commands on Windows; the GitHub job itself runs on push |
 
 ## Phase 17 — Observability and diagnostics
 
