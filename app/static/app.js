@@ -3418,7 +3418,7 @@ function acceptCompletion(index = completions.active) {
 /* ---- go to definition ----------------------------------------------------
    The index knows every declaration; F12 asks it for the name under the caret.
    Like completion this only reads: the jump moves the caret, never the buffer. */
-let definitions = { open: false, items: [], active: 0, name: "" };
+let places = { open: false, items: [], active: 0, name: "", label: "" };
 
 /* The identifier at the caret, or the one that ends just before it. */
 function wordAt(text, caret) {
@@ -3449,9 +3449,9 @@ function definitionCaret(text, line, name) {
   return { line: index + 1, column: 1 };
 }
 
-function closeDefinitions() {
-  if (!definitions.open) return;
-  definitions = { open: false, items: [], active: 0, name: "" };
+function closePlaces() {
+  if (!places.open) return;
+  places = { open: false, items: [], active: 0, name: "", label: "" };
   const box = $("definitions");
   if (!box) return;
   box.classList.add("hidden");
@@ -3470,10 +3470,14 @@ function fillChooser(box, items, active, onPick) {
     row.setAttribute("aria-selected", index === active ? "true" : "false");
     const name = document.createElement("span");
     name.className = "completion-name";
-    name.textContent = item.name;
+    // A reference carries its own row text (the line it mentions the name on);
+    // a declaration is labelled by its kind.
+    name.textContent = item.snippet || item.name;
     const where = document.createElement("span");
     where.className = "completion-where";
-    where.textContent = `${item.kind} · ${item.path}:${item.line}`;
+    where.textContent = item.kind
+      ? `${item.kind} · ${item.path}:${item.line}`
+      : `${item.path}:${item.line}`;
     row.append(name, where);
     row.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -3487,15 +3491,17 @@ function fillChooser(box, items, active, onPick) {
   positionPopup(box);
 }
 
-function renderDefinitions() {
+function renderPlaces() {
   const box = $("definitions");
   if (!box) return;
-  if (!definitions.open) {
+  if (!places.open) {
     box.replaceChildren();
     box.classList.add("hidden");
     return;
   }
-  fillChooser(box, definitions.items, definitions.active, acceptDefinition);
+  // The same list serves declarations and references; its name follows the ask.
+  box.setAttribute("aria-label", places.label || "Definitions");
+  fillChooser(box, places.items, places.active, acceptPlace);
 }
 
 function placeCaret(line, column) {
@@ -3515,8 +3521,8 @@ function placeCaret(line, column) {
 
 /* The declaration is already known to exist; opening its file and placing the
    caret on the name is the whole jump. */
-async function revealDefinition(item) {
-  closeDefinitions();
+async function revealLocation(item) {
+  closePlaces();
   await openFile(item.path);
   const area = $("codeArea");
   const file = activeFile();
@@ -3526,20 +3532,20 @@ async function revealDefinition(item) {
   placeCaret(at.line, at.column);
 }
 
-function acceptDefinition(index = definitions.active) {
-  const item = definitions.items[index];
+function acceptPlace(index = places.active) {
+  const item = places.items[index];
   if (!item) {
-    closeDefinitions();
+    closePlaces();
     return;
   }
-  void revealDefinition(item);
+  void revealLocation(item);
 }
 
-function moveDefinition(step) {
-  if (!definitions.items.length) return;
-  definitions.active =
-    (definitions.active + step + definitions.items.length) % definitions.items.length;
-  renderDefinitions();
+function movePlace(step) {
+  if (!places.items.length) return;
+  places.active =
+    (places.active + step + places.items.length) % places.items.length;
+  renderPlaces();
 }
 
 async function gotoDefinition() {
@@ -3550,7 +3556,7 @@ async function gotoDefinition() {
     return;
   }
   if (!capabilitiesAllow(state.capabilities, "editor_definition")) {
-    toast("This server cannot look up definitions.");
+    toast("This server cannot look up places.");
     return;
   }
   const name = wordAt(area.value, area.selectionStart);
@@ -3558,7 +3564,7 @@ async function gotoDefinition() {
     toast("Place the caret on a name first.");
     return;
   }
-  closeDefinitions();
+  closePlaces();
   const caret = area.selectionStart;
   const params = new URLSearchParams({ name });
   if (!file.scratch) params.set("path", file.path);
@@ -3577,11 +3583,11 @@ async function gotoDefinition() {
   }
   // One declaration is unambiguous; several open a chooser at the caret.
   if (items.length === 1) {
-    await revealDefinition(items[0]);
+    await revealLocation(items[0]);
     return;
   }
-  definitions = { open: true, items, active: 0, name };
-  renderDefinitions();
+  places = { open: true, items, active: 0, name, label: "Definitions" };
+  renderPlaces();
 }
 
 /* ---- symbols in the open file --------------------------------------------
@@ -3650,7 +3656,7 @@ async function gotoSymbol() {
     toast("Scratch pads are not indexed.");
     return;
   }
-  closeDefinitions();
+  closePlaces();
   closeSymbols();
   const params = new URLSearchParams({ path: file.path });
   const result = await api(`/api/index/symbols?${params.toString()}`);
@@ -3672,6 +3678,52 @@ async function gotoSymbol() {
   }
   fileSymbols = { open: true, items, active: 0, name: file.name };
   renderSymbols();
+}
+
+/* ---- find references ------------------------------------------------------
+   Shift+F12: every indexed file that mentions the name at the caret. This is a
+   text search, so it also finds calls and comments the symbol table never saw,
+   and it makes no claim about scope. */
+async function findReferences() {
+  const area = $("codeArea");
+  const file = activeFile();
+  if (!area || !file) {
+    toast("Open a file first.");
+    return;
+  }
+  if (!capabilitiesAllow(state.capabilities, "editor_references")) {
+    toast("This server cannot search the index for references.");
+    return;
+  }
+  const name = wordAt(area.value, area.selectionStart);
+  if (!name) {
+    toast("Place the caret on a name first.");
+    return;
+  }
+  closeSymbols();
+  closePlaces();
+  const caret = area.selectionStart;
+  const params = new URLSearchParams({ name });
+  if (!file.scratch) params.set("path", file.path);
+  const result = await api(`/api/index/references?${params.toString()}`);
+  // The caret or the buffer moved while the request was out.
+  if (area.selectionStart !== caret || wordAt(area.value, caret) !== name) return;
+  if (!result.ok) {
+    toast(result.data.error || "Reference search failed.");
+    return;
+  }
+  const items = Array.isArray(result.data.items) ? result.data.items : [];
+  if (!items.length) {
+    toast(result.data.note || `Nothing in the index mentions ${name}.`);
+    return;
+  }
+  if (items.length === 1) {
+    await revealLocation(items[0]);
+    return;
+  }
+  places = { open: true, items, active: 0, name, label: "References" };
+  renderPlaces();
+  if (result.data.note) toast(result.data.note);
 }
 
 async function formatActiveFile() {
@@ -8206,7 +8258,7 @@ function bindEvents() {
   $("codeArea").addEventListener("input", () => {
     onEditorInput();
     // A chooser belongs to the name it was opened on; typing dismisses it.
-    if (definitions.open) closeDefinitions();
+    if (places.open) closePlaces();
     if (fileSymbols.open) closeSymbols();
     // An open list follows the word being typed; a closed one stays shut until
     // Ctrl+Space asks again.
@@ -8232,26 +8284,31 @@ function bindEvents() {
         return;
       }
     }
-    if (definitions.open) {
+    if (places.open) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        moveDefinition(event.key === "ArrowDown" ? 1 : -1);
+        movePlace(event.key === "ArrowDown" ? 1 : -1);
         return;
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        acceptDefinition();
+        acceptPlace();
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        closeDefinitions();
+        closePlaces();
         return;
       }
     }
     if (event.code === "KeyO" && event.shiftKey && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       void gotoSymbol();
+      return;
+    }
+    if (event.key === "F12" && event.shiftKey) {
+      event.preventDefault();
+      void findReferences();
       return;
     }
     if (event.key === "F12") {

@@ -2430,6 +2430,7 @@
     { label: "Editor: Complete symbol", hint: "Ctrl+Space", run: () => { void requestCompletions(); } },
     { label: "Editor: Go to definition", hint: "F12", run: () => { void gotoDefinition(); } },
     { label: "Editor: Go to symbol in file", hint: "Ctrl+Shift+O", run: () => { void gotoSymbol(); } },
+    { label: "Editor: Find references", hint: "Shift+F12", run: () => { void findReferences(); } },
     { label: "File: Find in file", hint: "Ctrl+F", run: () => openFind() },
     { label: "File: Open folder…", run: () => openFolderDialog() },
     { label: "File: New file in Explorer", run: () => { openActivity("explorer"); if ($("newFileBtn")) $("newFileBtn").click(); } },

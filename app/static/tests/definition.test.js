@@ -72,7 +72,7 @@ test("the chooser is gated on the contract's editor_definition id", () => {
   assert.match(app, /capabilitiesAllow\(state\.capabilities, "editor_definition"\)/);
   assert.match(app, /\/api\/index\/definition\?/);
   assert.match(app, /event\.key === "F12"/);
-  assert.match(app, /acceptDefinition/);
+  assert.match(app, /acceptPlace/);
 
   const rust = fs.readFileSync(path.join(__dirname, "..", "..", "src", "index.rs"), "utf8");
   assert.match(rust, /\.route\("\/api\/index\/definition", get\(definition_symbols\)\)/);

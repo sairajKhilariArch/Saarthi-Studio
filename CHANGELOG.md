@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.30.0
+
+Shift+F12 now answers the other half of go to definition: every place in the
+open folder that mentions the name at the caret.
+
+- **`GET /api/index/references?name=&path=&limit=`** reads the files the index
+  already knows, in the buffer's own file first and then by path, and returns
+  one row per line that mentions the name as a whole word: 1-based character
+  column, trimmed line (up to 160 characters), path, line and language. It is a
+  text search, so it finds calls, field uses and comments the symbol extractor
+  never recorded — and it makes no claim about scope, which the changelog states
+  rather than hides. `login` is not found inside `login_again`, matching the
+  editor's own identifier characters.
+- **Bounded, and it says so.** 200 matches by default, 500 at most; 32 MiB of
+  text read per request, source file first, and a `truncated` flag plus a note
+  when a cap or the budget stopped the scan early. An empty name is a 400; an
+  unknown name is an empty list with a note.
+- **Shift+F12 and `Editor: Find references`.** One mention jumps straight there;
+  several open the chooser with the line that mentions the name and
+  `path:line` — the same list definitions use, now shared as `places`, with
+  `fillChooser` preferring `snippet` and a detail line without a kind. Keys,
+  dismissal and the caret placement are the definitions list's, so a mention in
+  another file opens that file first.
+- **`editor_references` is the 28th contract id** with `max_references` in the
+  limits, `false` in the VS Code extension's embedded server.
+
+Verified: `cargo test --locked`: 599 passed, 1 ignored (2 new: whole-word
+matching with columns and snippets, source-file-first ordering, the declaration
+file included, an unknown name empty and a blank name refused; the cap and a
+budget smaller than the file); clippy `--all-targets -D warnings` clean;
+`cargo fmt --check` clean; `test-frontend.sh` 74 passed (2 new: the capability
+gate, route, shortcut and row text; the scan helpers, palette entry and the
+extension's `false`); `test-version.sh` 20/20; `test-e2e.sh` 32; extension
+`npm test` 27. Live headless against a scratch workspace with two files: the
+index reported 2 added, and `references?name=login&path=src/session.rs` answered
+two rows — `src/session.rs:2:5` `login();` first, then `src/auth.rs:1:8`
+`pub fn login() {}` — with `login_again` absent, `scanned` 2 files/89 bytes and
+`truncated` false. **Not run:** the list and its jumps in a browser
+(KNOWN-ISSUES 42).
+
 ## 3.29.0
 
 The editor's symbol outline: Ctrl+Shift+O lists what the index knows about the

@@ -34,6 +34,7 @@ const FEATURES: &[&str] = &[
     "editor_complete",
     "editor_definition",
     "editor_symbols",
+    "editor_references",
     "saved_commands",
     "watch",
     "skills",
@@ -72,6 +73,7 @@ pub(crate) fn capabilities() -> Value {
             "max_completions": crate::index::MAX_COMPLETIONS,
             "max_definitions": crate::index::MAX_DEFINITIONS,
             "max_symbols": crate::index::MAX_SYMBOLS,
+            "max_references": crate::index::MAX_REFERENCES,
         },
     })
 }
@@ -109,6 +111,7 @@ mod tests {
         assert!(features.contains_key("editor_complete"));
         assert!(features.contains_key("editor_definition"));
         assert!(features.contains_key("editor_symbols"));
+        assert!(features.contains_key("editor_references"));
     }
 
     #[test]
@@ -137,6 +140,10 @@ mod tests {
         assert_eq!(
             value["limits"]["max_symbols"],
             json!(crate::index::MAX_SYMBOLS)
+        );
+        assert_eq!(
+            value["limits"]["max_references"],
+            json!(crate::index::MAX_REFERENCES)
         );
     }
 }

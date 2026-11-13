@@ -1067,6 +1067,174 @@ async fn file_symbols(
     }
 }
 
+/// How many places one reference request answers with: a common name appears
+/// hundreds of times, and a jump list is read rather than scrolled forever.
+pub(crate) const MAX_REFERENCES: usize = 200;
+/// The most one request may ask for.
+const MAX_REFERENCE_LIMIT: usize = 500;
+/// How much text one request may read from disk before it answers with what it
+/// has. The index knows the files, so a scan is bounded without walking anew.
+const MAX_REFERENCE_BYTES: usize = 32 * 1024 * 1024;
+
+struct ReferenceScan {
+    items: Vec<Value>,
+    files: usize,
+    bytes: usize,
+    truncated: bool,
+}
+
+/// The identifier characters the editor uses, so `login` is not found inside
+/// `login_again` here just because the editor would not complete it there.
+fn is_name_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+}
+
+/// The first whole-word mention of `name` on one line, as its 1-based character
+/// column and the trimmed line. One row per line keeps a list readable; the jump
+/// lands on the line either way.
+fn mention_in(line: &str, name: &str) -> Option<(usize, String)> {
+    let mut from = 0;
+    while let Some(offset) = line[from..].find(name) {
+        let at = from + offset;
+        let before = line[..at].chars().next_back();
+        let after = line[at + name.len()..].chars().next();
+        let bounded =
+            !before.map(is_name_char).unwrap_or(false) && !after.map(is_name_char).unwrap_or(false);
+        if bounded {
+            let column = line[..at].chars().count() + 1;
+            let snippet: String = line.trim().chars().take(160).collect();
+            return Some((column, snippet));
+        }
+        from = at + name.len();
+    }
+    None
+}
+
+/// Every indexed file that mentions `name`, the buffer's own file first and then
+/// by path and line. This reads text, so it finds mentions the symbol extractor
+/// never recorded (a call, a field use, a comment) but knows nothing about
+/// scope: a mention of the same spelling in another module is listed too.
+fn references(
+    db: &FsPath,
+    root: &FsPath,
+    name: &str,
+    path: &str,
+    limit: usize,
+    budget: usize,
+) -> Result<ReferenceScan, String> {
+    let wanted = name.trim();
+    if wanted.is_empty() {
+        return Err("Name a symbol to find references for.".to_string());
+    }
+    let conn = open_db(db).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT path, language FROM code_index_files")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    // The source file is read first, so a cap or a budget stops after it rather
+    // than before the places the reader is most likely to want.
+    let mut files: Vec<(String, String)> = rows.flatten().collect();
+    files.sort_by(|a, b| {
+        let left_here = !path.is_empty() && a.0 == path;
+        let right_here = !path.is_empty() && b.0 == path;
+        right_here.cmp(&left_here).then_with(|| a.0.cmp(&b.0))
+    });
+    let cap = limit.clamp(1, MAX_REFERENCE_LIMIT);
+    let mut scan = ReferenceScan {
+        items: Vec::new(),
+        files: 0,
+        bytes: 0,
+        truncated: false,
+    };
+    for (relative, language) in files {
+        if scan.items.len() >= cap {
+            scan.truncated = true;
+            break;
+        }
+        let Ok(text) = fs::read_to_string(root.join(&relative)) else {
+            continue;
+        };
+        if scan.bytes + text.len() > budget {
+            scan.truncated = true;
+            break;
+        }
+        scan.files += 1;
+        scan.bytes += text.len();
+        for (index, line) in text.lines().enumerate() {
+            let Some((column, snippet)) = mention_in(line, wanted) else {
+                continue;
+            };
+            scan.items.push(json!({
+                "name": wanted,
+                "path": relative,
+                "line": index + 1,
+                "column": column,
+                "snippet": snippet,
+                "language": language,
+            }));
+            if scan.items.len() >= cap {
+                scan.truncated = true;
+                break;
+            }
+        }
+    }
+    Ok(scan)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ReferencesQuery {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn find_references(
+    State(state): State<AppState>,
+    Query(query): Query<ReferencesQuery>,
+) -> Response<Body> {
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error.message().to_string()),
+    };
+    let limit = query.limit.unwrap_or(MAX_REFERENCES);
+    match references(
+        &state.database_path,
+        &root,
+        &query.name,
+        &query.path,
+        limit,
+        MAX_REFERENCE_BYTES,
+    ) {
+        Ok(scan) => {
+            let mut note = String::new();
+            if scan.items.is_empty() {
+                note.push_str(
+                    "Nothing in the index mentions that name — refresh the index or check the spelling.",
+                );
+            } else if scan.truncated {
+                note.push_str("The list stops at the first matches; try a rarer name.");
+            }
+            Json(json!({
+                "ok": true,
+                "name": query.name.trim(),
+                "items": scan.items,
+                "scanned": { "files": scan.files, "bytes": scan.bytes },
+                "truncated": scan.truncated,
+                "note": note,
+            }))
+            .into_response()
+        }
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/index", get(get_status))
@@ -1075,6 +1243,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/index/complete", get(complete_symbols))
         .route("/api/index/definition", get(definition_symbols))
         .route("/api/index/symbols", get(file_symbols))
+        .route("/api/index/references", get(find_references))
         .route(
             "/api/index/semantic",
             get(crate::embeddings::semantic_endpoint),
@@ -1452,6 +1621,83 @@ mod tests {
         let items = symbols_for(&db, "src/lib.rs", 2).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[1]["line"], 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn references_find_whole_words_and_report_columns() {
+        let dir = scratch("references");
+        let db = database(&dir);
+        write(
+            &dir,
+            "src/auth.rs",
+            "pub fn login() {}\npub fn login_again() {}\n",
+        );
+        write(
+            &dir,
+            "src/session.rs",
+            "fn start() {\n    login();\n    login_again();\n}\n",
+        );
+        refresh(&db, &dir, &[]).unwrap();
+
+        let scan = references(
+            &db,
+            &dir,
+            "login",
+            "src/session.rs",
+            MAX_REFERENCES,
+            MAX_REFERENCE_BYTES,
+        )
+        .unwrap();
+        // `login_again` is a different word: one mention in the buffer, then the
+        // declaration in the other file.
+        assert_eq!(scan.items.len(), 2, "{:?}", scan.items);
+        assert_eq!(scan.items[0]["path"], "src/session.rs");
+        assert_eq!(scan.items[0]["line"], 2);
+        assert_eq!(scan.items[0]["column"], 5);
+        assert_eq!(scan.items[0]["snippet"], "login();");
+        assert_eq!(scan.items[1]["path"], "src/auth.rs");
+        assert_eq!(scan.items[1]["line"], 1);
+        assert!(!scan.truncated);
+        assert_eq!(scan.files, 2);
+        assert!(scan.bytes > 0);
+
+        // No name is refused; an unknown name is an empty scan, not an error.
+        assert!(references(&db, &dir, "  ", "", MAX_REFERENCES, MAX_REFERENCE_BYTES).is_err());
+        assert!(references(
+            &db,
+            &dir,
+            "missing",
+            "",
+            MAX_REFERENCES,
+            MAX_REFERENCE_BYTES
+        )
+        .unwrap()
+        .items
+        .is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn references_stop_at_the_cap_and_before_a_budget_they_cannot_afford() {
+        let dir = scratch("references-limit");
+        let db = database(&dir);
+        let mut text = String::from("fn use_it() {\n");
+        for _ in 0..30 {
+            text.push_str("    dup();\n");
+        }
+        text.push_str("}\n");
+        write(&dir, "src/many.rs", &text);
+        refresh(&db, &dir, &[]).unwrap();
+
+        let scan = references(&db, &dir, "dup", "", 5, MAX_REFERENCE_BYTES).unwrap();
+        assert_eq!(scan.items.len(), 5);
+        assert!(scan.truncated);
+        // A budget smaller than the file stops before reading it at all.
+        let scan = references(&db, &dir, "dup", "", MAX_REFERENCES, 10).unwrap();
+        assert!(scan.items.is_empty());
+        assert!(scan.truncated);
+        assert_eq!(scan.files, 0);
         let _ = fs::remove_dir_all(&dir);
     }
 }
