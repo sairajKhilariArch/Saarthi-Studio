@@ -5545,6 +5545,7 @@ async function renderMcpServers() {
     actions.append(
       mcpButton("Edit", () => editMcpServer(server)),
       mcpButton("Test", () => void testMcpServer(server.name)),
+      mcpButton("Disconnect", () => void disconnectMcpServer(server.name)),
       mcpButton("Logs", () => void toggleMcpLogs(server.name)),
       mcpButton("Remove", () => void removeMcpServer(server.name)),
     );
@@ -5737,6 +5738,24 @@ async function removeMcpServer(name) {
     renderMcpTools();
   }
   mcpNotice(`Removed ${name}.`, true);
+  await loadMcp();
+}
+
+async function disconnectMcpServer(name) {
+  const result = await api(`/api/mcp/${encodeURIComponent(name)}/disconnect`, {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result.ok) {
+    mcpNotice(result.data.error || "Could not disconnect that server.", false);
+    return;
+  }
+  mcpNotice(
+    result.data.disconnected
+      ? `Disconnected ${name}. Its settings are kept; Test reconnects.`
+      : `${name} had no warm session.`,
+    true,
+  );
   await loadMcp();
 }
 

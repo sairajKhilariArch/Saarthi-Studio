@@ -347,6 +347,11 @@ depth limit for recursive schemas. Keywords it does not model (`pattern`,
 the authority, and an unreadable schema is refused at call time. Phase 7 is
 closed; nothing in the specification remains open here.
 
+*Delivered 3.45.0: an MCP session can be ended on purpose. Disconnect closes
+the pooled connection, killing a stdio child and aborting an SSE reader, while
+keeping the server's settings; it reports honestly when there was no warm
+session. Test reconnects.*
+
 ## Phase 8 — Project knowledge and memory
 
 File discovery, language detection, symbol extraction, incremental index,

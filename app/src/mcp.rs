@@ -1078,11 +1078,14 @@ async fn supervisor_sweep(within: Duration) {
 
 /// A save or a removal changes the entry, so the connection it described is
 /// closed instead of being handed to a call that believes the old settings.
-pub(crate) fn forget_pooled(name: &str) {
+/// Returns whether there was a warm session to drop, which is what an explicit
+/// disconnect reports instead of claiming it closed something that was never
+/// open.
+pub(crate) fn forget_pooled(name: &str) -> bool {
     let mut all = pool()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    all.remove(name);
+    all.remove(name).is_some()
 }
 
 /// One conversation that can outlive its caller: `close` returns a healthy
@@ -1938,6 +1941,7 @@ pub(crate) fn router(port: u16) -> Router<AppState> {
     let mutations = Router::new()
         .route("/api/mcp/servers", post(save_server))
         .route("/api/mcp/servers/remove", post(remove_server))
+        .route("/api/mcp/:name/disconnect", post(disconnect_server))
         .route("/api/mcp/test", post(test_server))
         .route("/api/mcp/call", post(call_tool))
         .route("/api/mcp/health/check", post(check_health))
@@ -2291,6 +2295,22 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
     // so the next call starts from the entry that was just written.
     forget_pooled(&name);
     Json(json!({ "ok": true, "server": server_json(&server) })).into_response()
+}
+
+/// `POST /api/mcp/:name/disconnect` — close the warm session for one server
+/// without forgetting its settings. Dropping a stdio session kills the child
+/// (kill_on_drop) and an SSE reader is aborted; a remote HTTP session just stops
+/// being reused. A server that was never contacted is not an error: the answer
+/// says `disconnected: false` rather than pretending it closed something.
+async fn disconnect_server(State(state): State<AppState>, Path(name): Path<String>) -> Response {
+    let known = read_servers(&registry_path(&state))
+        .iter()
+        .any(|server| server.name == name);
+    if !known {
+        return crate::json_error(StatusCode::NOT_FOUND, "No such MCP server.");
+    }
+    let disconnected = forget_pooled(&name);
+    Json(json!({ "ok": true, "name": name, "disconnected": disconnected })).into_response()
 }
 
 async fn remove_server(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
@@ -3060,8 +3080,8 @@ mod tests {
 
     #[test]
     fn forgetting_an_unpooled_server_is_a_no_op() {
-        forget_pooled("never-pooled");
-        forget_pooled("never-pooled");
+        assert!(!forget_pooled("never-pooled"));
+        assert!(!forget_pooled("never-pooled"));
     }
 
     #[test]

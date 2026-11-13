@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.45.0 (2026-11-13):** Phase 7's explicit disconnect exists.
+`POST /api/mcp/:name/disconnect` closes a warm session while keeping its
+settings, reports whether there was one, and leaves an unknown server a 404. The
+panel exposes it beside Test. A warm stdio process being killed by this action
+was not exercised live.
 **Revision 3.44.0 (2026-11-13):** Phase 17's workflow failures are on the
 diagnostics timeline. Failed, cancelled and interrupted runs carry their run id,
 graph name and stored error; the server accepts a `workflow` filter, and the
@@ -740,7 +745,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Item | Status | Notes |
 |---|---|---|
 | Server registry | Working (1.37.0) | `mcp.json` beside the config; `transport` (stdio/http/sse), `url` for remote servers, `env` for stdio and write-only `headers` for remote — values stored, only names returned; an entry without `transport` reads as stdio |
-| Connection lifecycle | Working (1.39.0) | a live session per server is reused across calls (handshake skipped, tool list re-read), warm for five idle minutes, evicted on save/remove and on a failed request, with a fresh-handshake fallback; a dropped stdio child is killed and an SSE reader aborted |
+| Explicit disconnect | Working (3.45.0) | `POST /api/mcp/:name/disconnect` drops the warm session (stdio child killed, SSE reader aborted, HTTP session no longer reused) and keeps the settings; `{disconnected:false}` when none was warm, 404 for an unknown name, local-origin guarded. The MCP panel's Disconnect action says which happened || Connection lifecycle | Working (1.39.0) | a live session per server is reused across calls (handshake skipped, tool list re-read), warm for five idle minutes, evicted on save/remove and on a failed request, with a fresh-handshake fallback; a dropped stdio child is killed and an SSE reader aborted |
 | Tool discovery | Working (1.33.0) | `tools/list`, schemas kept |
 | Schema validation | Working (2.7.0) | Bounded JSON Schema subset: type lists, enum/const, nested properties and items, `additionalProperties`, bounds, combinators, boolean schemas and local `$ref`s, depth-limited; `pattern`/`format`/remote refs left to the server |
 | Permission binding | Working (1.33.0) | `mcp_tool` on `server.tool`; ask/deny/allow, audited |

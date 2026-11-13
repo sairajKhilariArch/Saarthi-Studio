@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.45.0
+
+Phase 7 asks for connect and disconnect. MCP sessions could be warmed by a call
+or Test and were only dropped by editing/removing the server, by a failure, or
+after five idle minutes; there was no way to end one on purpose.
+
+- `POST /api/mcp/:name/disconnect` closes the pooled session for one server and
+  keeps its settings. A stdio child is killed (kill_on_drop), an SSE reader is
+  aborted and a remote HTTP session stops being reused. A server that was never
+  contacted answers `{disconnected: false}` instead of claiming it closed
+  something; an unknown name is a 404. The route sits behind the same local
+  origin guard as the other MCP mutations.
+- The MCP panel gains a **Disconnect** action beside Test and Logs. Its notice
+  says whether a warm session existed and that Test reconnects.
+- `forget_pooled` now reports whether it removed a session, so save/remove keep
+  their existing behaviour while disconnect can be honest about it.
+
 ## 3.44.0
 
 Phase 17 lists workflow failures among what diagnostics must track. Workflow
