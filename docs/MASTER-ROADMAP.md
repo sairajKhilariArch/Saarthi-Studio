@@ -447,7 +447,10 @@ readable after its folder is deleted. The routes (`GET`/`PUT`/`DELETE
 `/api/workspace/draft`, `GET /api/workspace/drafts`) sit behind the editor's
 loopback-origin guard and add no contract id. 3.33.1 carries a draft across a
 rename, which otherwise left it under the old path, and 3.33.2 keeps the drafts
-when a project switch closes tabs silently. Phase 9 is left with a debugger and
+when a project switch closes tabs silently. 3.34.0 surfaces the drafts: the
+Files pane lists the folder's drafts for files that are not open, opens one through
+the ordinary path, discards them all, and clears them per path when a file or
+folder is deleted. Phase 9 is left with a debugger and
 everything a language server would know.*
 *Delivered 3.29.0: the file outline. `GET /api/index/symbols?path=&limit=` lists one
 indexed file's declarations in source order — name, kind, line, language — 200 by

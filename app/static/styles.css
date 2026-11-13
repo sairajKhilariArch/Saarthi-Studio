@@ -758,6 +758,13 @@ kbd {
 .tree-tool:hover { background: var(--surface); color: var(--text); }
 .tree-tool.danger:hover { color: var(--danger); }
 .tree-tool:disabled { opacity: .35; }
+.recovered { border: 1px solid var(--line); border-radius: 8px; padding: 6px; margin-bottom: 8px; background: var(--surface); }
+.recovered-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 2px 4px; font-size: 10.5px; color: var(--mute); text-transform: uppercase; letter-spacing: .04em; }
+.recovered-list { display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; }
+.recovered-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 6px; border-radius: 5px; font-size: 12px; text-align: left; color: var(--text); }
+.recovered-row:hover { background: var(--line); }
+.recovered-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recovered-size { color: var(--mute); font-size: 11px; flex: none; }
 .tree { flex: 1; overflow: auto; min-height: 80px; padding: 2px 0 20px; }
 .tree-empty { font-size: 11.5px; color: var(--mute); padding: 14px 8px; line-height: 1.7; margin: 0; }
 .tree-row {

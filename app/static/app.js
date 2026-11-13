@@ -2715,6 +2715,7 @@ async function loadWorkspace() {
     renderTree();
   }
   terminalFollowWorkspace();
+  void loadDrafts();
 }
 
 function renderWorkspaceHeader() {
@@ -2902,6 +2903,7 @@ async function applyWorkspacePayload(payload) {
   setSidebarMode("files");
   hideModal($("folderModal"));
   toast(`Opened ${state.workspace.name}.`);
+  void loadDrafts();
   return true;
 }
 
@@ -2929,6 +2931,7 @@ async function closeWorkspace() {
   state.workspace = null;
   resetTree();
   renderWorkspaceHeader();
+  void loadDrafts();
   toast("Folder closed.");
 }
 
@@ -3028,6 +3031,9 @@ async function deleteSelected() {
     return;
   }
   closeTabsUnder(selected.path);
+  // Drafts under a deleted path have nothing left to recover into.
+  void api(`/api/workspace/drafts?prefix=${encodeURIComponent(selected.path)}`, { method: "DELETE" })
+    .then(() => scheduleDraftsRefresh());
   for (const key of [...state.tree.dirs.keys()]) {
     if (key === selected.path || key.startsWith(`${selected.path}/`)) state.tree.dirs.delete(key);
   }
@@ -3139,6 +3145,7 @@ async function openFile(path, options = {}) {
   state.openTabs.push(fileKey(file.path));
   activateTab(fileKey(file.path));
   await restoreDraft(file);
+  scheduleDraftsRefresh();
   if (options.focus !== false) $("codeArea").focus();
 }
 
@@ -3233,6 +3240,7 @@ async function restoreDraft(file) {
 async function discardDraft(path) {
   if (!path || path === SCRATCH_KEY) return;
   await api(`/api/workspace/draft?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+  scheduleDraftsRefresh();
 }
 
 /* A rename moves the file on disk but not its draft row, and the debounce may
@@ -3249,6 +3257,83 @@ async function moveDraft(from, to) {
     body: JSON.stringify({ path: to, content: result.data.draft.content }),
   });
   await discardDraft(from);
+}
+
+/* ---- recovered buffers ---------------------------------------------------
+   The server keeps a draft for every buffer that was dirty when the window went
+   away. The Files pane lists the ones whose file is not already open: opening a
+   row restores the text through openFile, Discard all clears the folder's copy. */
+let draftsTimer = 0;
+
+/* A draft whose file is open is the buffer itself, not something to recover. */
+function unopenedDrafts(drafts, open) {
+  const openPaths = open instanceof Set ? open : new Set(open || []);
+  return (Array.isArray(drafts) ? drafts : []).filter(
+    (draft) => draft && typeof draft.path === "string" && !openPaths.has(draft.path),
+  );
+}
+
+function draftSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
+
+function scheduleDraftsRefresh() {
+  clearTimeout(draftsTimer);
+  draftsTimer = setTimeout(() => { void loadDrafts(); }, 250);
+}
+
+async function loadDrafts() {
+  const box = $("recovered");
+  if (!box) return;
+  if (!state.workspace) {
+    box.classList.add("hidden");
+    return;
+  }
+  const result = await api("/api/workspace/drafts");
+  if (!result.ok) {
+    box.classList.add("hidden");
+    return;
+  }
+  const drafts = unopenedDrafts(result.data.drafts, new Set(state.files.keys()));
+  box.classList.toggle("hidden", drafts.length === 0);
+  $("recoveredTitle").textContent =
+    drafts.length === 1 ? "1 recovered buffer" : `${drafts.length} recovered buffers`;
+  const list = $("recoveredList");
+  list.replaceChildren();
+  for (const draft of drafts) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "recovered-row";
+    row.title = `Open ${draft.path} and restore its unsaved text`;
+    const name = document.createElement("span");
+    name.className = "recovered-path";
+    name.textContent = draft.path;
+    const size = document.createElement("span");
+    size.className = "recovered-size";
+    size.textContent = draftSize(draft.bytes);
+    row.append(name, size);
+    row.addEventListener("click", async () => {
+      await openFile(draft.path);
+      scheduleDraftsRefresh();
+    });
+    list.append(row);
+  }
+}
+
+async function discardAllDrafts() {
+  const result = await api("/api/workspace/drafts", { method: "DELETE" });
+  if (!result.ok) {
+    toast(result.data.error || "Could not discard the recovered buffers.");
+    return;
+  }
+  toast(
+    result.data.removed
+      ? `Discarded ${result.data.removed} recovered buffer(s).`
+      : "No recovered buffers to discard.",
+  );
+  await loadDrafts();
 }
 
 function updateGutter() {
@@ -8278,6 +8363,7 @@ function bindEvents() {
 
   $("openFolderBtn").addEventListener("click", openFolderDialog);
   $("scratchBtn").addEventListener("click", openScratchPad);
+  $("recoveredDiscard").addEventListener("click", () => { void discardAllDrafts(); });
   $("wsClose").addEventListener("click", closeWorkspace);
   $("folderCancel").addEventListener("click", () => hideModal($("folderModal")));
   $("folderCancelIcon").addEventListener("click", () => hideModal($("folderModal")));

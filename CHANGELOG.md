@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.34.0
+
+The editor has mirrored unsaved buffers since 3.33.0, but that copy was only
+discovered by reopening the file it belonged to: `GET /api/workspace/drafts`
+existed and nothing in the UI called it.
+
+- **The Files pane lists them.** A "Recovered buffers" section appears when the
+  open folder holds drafts whose file is not already open, each row naming the
+  path and size; a row opens the file through the ordinary path, so the buffer
+  comes back marked unsaved.
+- **Discard all** clears the folder's drafts in one request. Deleting a file or
+  folder from the tree clears the drafts at or under that path, so a removed
+  file leaves nothing behind to recover into.
+- `DELETE /api/workspace/drafts[?prefix=]` answers `{removed}`. The prefix is
+  checked like a draft path (absolute, `..` and drive paths are 400) and matches
+  whole path components only, so `src` never matches `src-old`. No contract id
+  changed: these routes stay internal to the desktop UI.
 ## 3.33.2
 
 Switching projects closes every tab silently, and 3.33.0 had that close delete

@@ -41,6 +41,41 @@ test("the editor mirrors a dirty buffer and clears it on save, revert and close"
   assert.match(app, /await restoreDraft\(file\);/);
 });
 
+test("the Files pane lists only drafts whose file is not already open", () => {
+  // A draft for an open buffer is the buffer itself, not something to recover.
+  const paths = call(
+    `unopenedDrafts([{path:"a.rs"},{path:"b.rs"},{path:7},{},null], new Set(["a.rs"])).map((d) => d.path).join(",")`,
+  );
+  assert.equal(paths, "b.rs");
+  // A missing list is an empty list, not a crash.
+  assert.equal(call(`unopenedDrafts(null, new Set()).length`), 0);
+  assert.equal(call(`unopenedDrafts([{path:"a.rs"}], null).length`), 1);
+});
+
+test("a recovered row shows bytes and a readable size", () => {
+  assert.equal(call(`draftSize(512)`), "512 B");
+  assert.equal(call(`draftSize(2048)`), "2 KB");
+  assert.equal(call(`draftSize(0)`), "0 B");
+  assert.equal(call(`draftSize(-1)`), "");
+  assert.equal(call(`draftSize("wide")`), "");
+});
+
+test("the list and its Discard all are wired to the bulk route", () => {
+  const html = read("index.html");
+  assert.match(html, /id="recovered" class="recovered hidden"/);
+  assert.match(html, /id="recoveredList"/);
+  assert.match(html, /id="recoveredDiscard"/);
+  const app = read("app.js");
+  assert.match(app, /async function discardAllDrafts\(\)/);
+  assert.match(app, /\$\("recoveredDiscard"\)\.addEventListener/);
+  // Deleting a file or folder clears the drafts beneath it.
+  assert.match(app, /\/api\/workspace\/drafts\?prefix=\$/);
+  const rust = read("../src/drafts.rs");
+  assert.match(rust, /get\(list\)\.delete\(clear\)/);
+  assert.match(rust, /fn clear_drafts\(db: &FsPath, root: &FsPath, prefix: &str\)/);
+  assert.match(rust, /path == key \|\| path\.starts_with\(under\)/);
+});
+
 test("a silent project switch keeps drafts; an explicit close-all discards them", () => {
   const app = read("app.js");
   const body = app.slice(app.indexOf("function closeAllFileTabs("), app.indexOf("function closeAllFileTabs(") + 1200);
@@ -65,7 +100,7 @@ test("a rename carries a dirty buffer's draft to its new path", () => {
 test("the server stores drafts in the database, not in the workspace", () => {
   const rust = read("../src/drafts.rs");
   assert.match(rust, /CREATE TABLE IF NOT EXISTS editor_drafts/);
-  assert.match(rust, /\.route\("\/api\/workspace\/drafts", get\(list\)\)/);
+  assert.match(rust, /\.route\("\/api\/workspace\/drafts", get\(list\)\.delete\(clear\)\)/);
   assert.match(rust, /get\(read\)\.put\(save\)\.delete\(remove\)/);
   // A deleted folder must not make its draft unreadable.
   assert.match(rust, /fn draft_key\(path: &str\)/);

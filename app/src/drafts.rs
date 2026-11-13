@@ -241,6 +241,48 @@ fn remove_draft(db: &FsPath, root: &FsPath, path: &str) -> Result<bool, String> 
     Ok(removed > 0)
 }
 
+/// Remove the folder's drafts, or only those at or under `prefix` (a deleted
+/// file or folder). Paths are compared lexically after the same validation a
+/// save uses, so a prefix can never reach outside the folder it is scoped to.
+fn clear_drafts(db: &FsPath, root: &FsPath, prefix: &str) -> Result<usize, String> {
+    let limit = prefix.trim();
+    let key = if limit.is_empty() {
+        None
+    } else {
+        Some(draft_key(limit)?)
+    };
+    let mut conn = open_db(db).map_err(|error| error.to_string())?;
+    let folder = root_key(root);
+    let paths: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT path FROM editor_drafts WHERE root = ?1")
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map(params![&folder], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        rows.flatten().collect()
+    };
+    let under = key.clone().map(|key| format!("{key}/"));
+    let doomed: Vec<String> = paths
+        .into_iter()
+        .filter(|path| match (&key, &under) {
+            (None, _) => true,
+            (Some(key), Some(under)) => path == key || path.starts_with(under),
+            _ => false,
+        })
+        .collect();
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for path in &doomed {
+        tx.execute(
+            "DELETE FROM editor_drafts WHERE root = ?1 AND path = ?2",
+            params![&folder, path],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(doomed.len())
+}
+
 #[derive(Deserialize)]
 pub(crate) struct DraftQuery {
     #[serde(default)]
@@ -297,6 +339,26 @@ async fn save(State(state): State<AppState>, Json(input): Json<Value>) -> Respon
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct DraftsQuery {
+    #[serde(default)]
+    prefix: String,
+}
+
+/// Clear the folder's drafts, or those under `prefix`, when a file or folder is
+/// deleted from the tree. Nothing else calls this without a prefix except the
+/// Files pane's "Discard all".
+async fn clear(State(state): State<AppState>, Query(query): Query<DraftsQuery>) -> Response {
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error.into_response(),
+    };
+    match clear_drafts(&state.database_path, &root, &query.prefix) {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
 async fn remove(State(state): State<AppState>, Query(query): Query<DraftQuery>) -> Response {
     let root = match state.workspace.root() {
         Ok(root) => root,
@@ -310,7 +372,7 @@ async fn remove(State(state): State<AppState>, Query(query): Query<DraftQuery>) 
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/workspace/drafts", get(list))
+        .route("/api/workspace/drafts", get(list).delete(clear))
         .route("/api/workspace/draft", get(read).put(save).delete(remove))
 }
 
@@ -414,6 +476,29 @@ mod tests {
         save_draft(&db, &root, "new.rs", "brand new", small).unwrap();
         // The saved file, the new file and the draft whose folder is gone.
         assert_eq!(list_drafts(&db, &root).unwrap().len(), 3);
+        let _ = fs::remove_dir_all(root.parent().expect("parent"));
+    }
+
+    #[test]
+    fn a_folder_or_a_prefix_clears_its_drafts() {
+        let (db, root) = scratch("clear");
+        let db = database(&db);
+        fs::create_dir_all(root.join("dir")).expect("nested folder");
+        save_draft(&db, &root, "a.rs", "a", Limits::default()).unwrap();
+        save_draft(&db, &root, "b.rs", "b", Limits::default()).unwrap();
+        save_draft(&db, &root, "dir/c.rs", "c", Limits::default()).unwrap();
+
+        assert_eq!(clear_drafts(&db, &root, "dir").unwrap(), 1);
+        assert!(read_draft(&db, &root, "dir/c.rs").unwrap().is_none());
+        assert!(read_draft(&db, &root, "a.rs").unwrap().is_some());
+        // A prefix only reaches whole path parts, never part of a name.
+        assert_eq!(clear_drafts(&db, &root, "a").unwrap(), 0);
+        assert_eq!(clear_drafts(&db, &root, "a.rs").unwrap(), 1);
+        assert!(clear_drafts(&db, &root, "../escape").is_err());
+        assert!(clear_drafts(&db, &root, "C:/Windows").is_err());
+        // No prefix means the whole folder.
+        assert_eq!(clear_drafts(&db, &root, "").unwrap(), 1);
+        assert!(list_drafts(&db, &root).unwrap().is_empty());
         let _ = fs::remove_dir_all(root.parent().expect("parent"));
     }
 
