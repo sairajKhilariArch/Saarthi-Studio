@@ -478,6 +478,12 @@ test("skillCompatibilityNote names the Studio version a skill needs", () => {
   assert.equal(call("skillCompatibilityNote(null)"), "");
 });
 
+test("usageAgentNote counts runs and tokens without inventing spend", () => {
+  assert.equal(call(`usageAgentNote({ agent: "coding", runs: 2, tokens: 1234 })`), "2 runs · 1,234 tok");
+  assert.equal(call(`usageAgentNote({ agent: "planner", runs: 1, tokens: 0 })`), "1 run · 0 tok");
+  assert.equal(call(`usageAgentNote({ agent: "empty" })`), "0 runs · 0 tok");
+});
+
 test("providerRateLimitNote reports only counted refusals", () => {
   assert.equal(call("providerRateLimitNote({ rate_limited: 3 })"), "3 rate-limited");
   assert.equal(call("providerRateLimitNote({ rate_limited: 0 })"), "");

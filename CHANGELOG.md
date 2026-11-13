@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.43.0
+
+Phase 11 asks for token usage per agent. Agent runs already carried their own
+reported token total, but nothing rolled it up; the Usage page could only show
+models and projects.
+
+- `/api/usage` gains `by_agent`: the same 24-hour window as the project rollup,
+  grouped by the run's profile, with `runs` and `tokens`. A blank profile is
+  grouped as `(no profile)` rather than dropped, and the largest token user
+  leads.
+- The Usage page has a **By agent** card with the profile name, a token bar and
+  `runs · tokens`, fed by that array. It says plainly when no agent runs happened
+  in the window.
+- `usageAgentNote` keeps the wording pure. No spend is invented for a run: one
+  run can span several priced model calls.
+
 ## 3.42.0
 
 Phase 11 lists rate-limit monitoring, and Phase 3 asks that provider failures be

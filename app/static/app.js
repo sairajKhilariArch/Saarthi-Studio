@@ -7238,6 +7238,7 @@ async function loadUsage() {
   renderUsageSeries(Array.isArray(result.data.series) ? result.data.series : []);
   renderUsageByModel(Array.isArray(result.data.by_model) ? result.data.by_model : []);
   renderUsageByProject(Array.isArray(result.data.by_project) ? result.data.by_project : []);
+  renderUsageByAgent(Array.isArray(result.data.by_agent) ? result.data.by_agent : []);
   renderUsageHead();
   loadProviderHealth();
 }
@@ -7403,6 +7404,42 @@ function renderUsageByProject(rows) {
     note.className = "muted";
     note.textContent = usageProjectNote(row);
     line.title = `${row.project} — ${row.requests} requests in the last 24 hours`;
+    line.appendChild(label);
+    line.appendChild(bar);
+    line.appendChild(note);
+    host.appendChild(line);
+  });
+}
+
+/* An agent run's own reported total: runs and tokens, no invented per-run
+   average and no spend (a run can span several priced calls). */
+function usageAgentNote(row) {
+  const runs = Number(row.runs || 0);
+  return `${runs} run${runs === 1 ? "" : "s"} · ${Number(row.tokens || 0).toLocaleString()} tok`;
+}
+
+function renderUsageByAgent(rows) {
+  const host = $("usageByAgent");
+  if (!host) return;
+  host.replaceChildren();
+  if (!rows.length) {
+    host.appendChild(pageNote("No agent runs in the last 24 hours."));
+    return;
+  }
+  const peak = Math.max(...rows.map((row) => row.tokens || 1));
+  rows.slice(0, 12).forEach((row) => {
+    const line = document.createElement("div");
+    line.className = "usage-model-line";
+    const label = document.createElement("span");
+    label.className = "usage-model-name";
+    label.textContent = row.agent;
+    const bar = document.createElement("span");
+    bar.className = "usage-model-bar";
+    bar.style.width = `${Math.round(((row.tokens || 0) / peak) * 100)}%`;
+    const note = document.createElement("small");
+    note.className = "muted";
+    note.textContent = usageAgentNote(row);
+    line.title = `${row.agent} — ${row.runs} runs, ${Number(row.tokens || 0).toLocaleString()} tokens in the last 24 hours`;
     line.appendChild(label);
     line.appendChild(bar);
     line.appendChild(note);

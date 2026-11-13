@@ -3147,6 +3147,18 @@ async fn usage(
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
+        // Agent runs carry their own token total, so this roll-up reads them
+        // directly rather than joining request_log back to a run.
+        let by_agent = {
+            let mut stmt = conn.prepare(USAGE_BY_AGENT_SQL)?;
+            let rows = stmt.query_map([window_start], |r| {
+                Ok(json!({
+                    "agent": r.get::<_, String>(0)?, "runs": r.get::<_, i64>(1)?,
+                    "tokens": r.get::<_, i64>(2)?
+                }))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         Ok(json!({
             "summary": summary,
@@ -3158,6 +3170,7 @@ async fn usage(
             "series": series,
             "by_model": by_model,
             "by_project": by_project,
+            "by_agent": by_agent,
             "cost": {
                 "window_hours": 24,
                 "usd_24h": spend_24h.usd,
@@ -4939,6 +4952,14 @@ const USAGE_BY_PROJECT_SQL: &str =
      LEFT JOIN projects p ON p.id=c.project_id \
      WHERE r.created_at>=?1 GROUP BY p.name ORDER BY COUNT(*) DESC LIMIT 20";
 
+/// The usage page's per-agent rollup. `agent_runs.tokens` is the run's own
+/// reported total (every model call it made); a run whose profile is blank is
+/// grouped rather than dropped. The same 24-hour window as the project rollup.
+const USAGE_BY_AGENT_SQL: &str =
+    "SELECT COALESCE(NULLIF(TRIM(profile),''),'(no profile)') AS agent, COUNT(*), \
+     COALESCE(SUM(tokens),0) \
+     FROM agent_runs WHERE created_at>=?1 GROUP BY agent ORDER BY 3 DESC, 2 DESC LIMIT 20";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5003,6 +5024,51 @@ mod tests {
         assert_eq!((none.1, none.2, none.4), (1, 5, 1));
         // The row older than the window is not in any bucket.
         assert_eq!(rows.iter().map(|row| row.2).sum::<i64>(), 175);
+    }
+
+    #[test]
+    fn usage_by_agent_rolls_up_profile_tokens() {
+        let conn = Connection::open_in_memory().expect("memory database");
+        conn.execute_batch(
+            "CREATE TABLE agent_runs (
+                id TEXT PRIMARY KEY, profile TEXT NOT NULL DEFAULT 'coding',
+                tokens INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
+             );",
+        )
+        .expect("schema");
+        let now = now_seconds();
+        conn.execute_batch(&format!(
+            "INSERT INTO agent_runs(id,profile,tokens,created_at) VALUES
+             ('a','coding',100,{now}),
+             ('b','coding',50,{now}),
+             ('c','planner',900,{now}),
+             ('d','',5,{now}),
+             ('e','planner',9999,{now}-172800);"
+        ))
+        .expect("runs");
+        let mut stmt = conn.prepare(USAGE_BY_AGENT_SQL).expect("query");
+        let rows = stmt
+            .query_map([now - 86400.0], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .expect("rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect");
+        assert_eq!(rows[0].0, "planner", "the largest token user leads");
+        let coding = rows.iter().find(|row| row.0 == "coding").expect("coding");
+        assert_eq!((coding.1, coding.2), (2, 150));
+        let blank = rows
+            .iter()
+            .find(|row| row.0 == "(no profile)")
+            .expect("blank");
+        assert_eq!((blank.1, blank.2), (1, 5));
+        // The older run is outside the window and cannot inflate planner.
+        let planner = rows.iter().find(|row| row.0 == "planner").expect("planner");
+        assert_eq!((planner.1, planner.2), (1, 900));
     }
 
     #[test]

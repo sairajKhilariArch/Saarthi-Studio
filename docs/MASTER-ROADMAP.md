@@ -586,6 +586,11 @@ own window, not the table filters.*
 one, and prints `N rate-limited` beside the success count. Nothing is inferred
 from latency, so a slow provider is not called rate-limited.*
 
+*Delivered 3.43.0: token usage per agent. `/api/usage` rolls up the runs of
+the last 24 hours by profile with their own recorded tokens, and the Usage page
+shows the largest users in a **By agent** card. A run's spend is not invented,
+because one run can span several priced model calls.*
+
 ## Phase 12 — Live monitoring
 
 Backend-truth dashboard: agents, task, model, router, tokens, duration, tool,
