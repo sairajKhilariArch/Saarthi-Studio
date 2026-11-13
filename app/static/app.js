@@ -7227,6 +7227,7 @@ async function loadUsage() {
   renderUsagePager(result.data);
   renderUsageSeries(Array.isArray(result.data.series) ? result.data.series : []);
   renderUsageByModel(Array.isArray(result.data.by_model) ? result.data.by_model : []);
+  renderUsageByProject(Array.isArray(result.data.by_project) ? result.data.by_project : []);
   renderUsageHead();
   loadProviderHealth();
 }
@@ -7359,6 +7360,43 @@ function renderUsageSeries(series) {
     slot.appendChild(failBar);
     slot.appendChild(label);
     host.appendChild(slot);
+  });
+}
+
+/* One project line's numbers, kept pure so the wording is testable without a
+   layout. Spend is a labelled floor: unpriced successes are counted beside it. */
+function usageProjectNote(row) {
+  const spend = Number(row.usd || 0) > 0 ? ` · $${Number(row.usd).toFixed(4)}` : "";
+  const unpriced = Number(row.unpriced || 0) > 0 ? ` · ${row.unpriced} unpriced` : "";
+  return `${row.requests} req · ${Number(row.tokens || 0).toLocaleString()} tok${spend}${unpriced}`;
+}
+
+function renderUsageByProject(rows) {
+  const host = $("usageByProject");
+  if (!host) return;
+  host.replaceChildren();
+  if (!rows.length) {
+    host.appendChild(pageNote("No requests recorded in the last 24 hours."));
+    return;
+  }
+  const peak = Math.max(...rows.map((row) => row.requests || 1));
+  rows.slice(0, 12).forEach((row) => {
+    const line = document.createElement("div");
+    line.className = "usage-model-line";
+    const label = document.createElement("span");
+    label.className = "usage-model-name";
+    label.textContent = row.project;
+    const bar = document.createElement("span");
+    bar.className = "usage-model-bar";
+    bar.style.width = `${Math.round(((row.requests || 0) / peak) * 100)}%`;
+    const note = document.createElement("small");
+    note.className = "muted";
+    note.textContent = usageProjectNote(row);
+    line.title = `${row.project} — ${row.requests} requests in the last 24 hours`;
+    line.appendChild(label);
+    line.appendChild(bar);
+    line.appendChild(note);
+    host.appendChild(line);
   });
 }
 

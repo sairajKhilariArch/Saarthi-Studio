@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.40.0 (2026-11-13):** Phase 11's per-project usage is shown. The
+existing 24-hour roll-up now also sums `total_tokens`, and the Usage page has a
+**By project** card fed by `by_project` (requests, tokens, estimated spend and
+unpriced successes), with `(no project)` for unassigned conversations. The card
+uses the roll-up's own 24-hour window, not the table filters, and says so.
+Verified live against a seeded database.
 **Revision 3.39.1 (2026-11-13):** Phase 16's locked and full-database cases
 are covered. One test proves a second connection waits behind the 10 s
 `busy_timeout` instead of failing while another holds `BEGIN IMMEDIATE`; another
@@ -780,7 +786,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Item | Status | Notes |
 |---|---|---|
 | Token-budgeted packing | Working | `context.rs`, 1 k–32 k clamp, VS Code parity |
-| Usage log + aggregates/series/by-model | Working | `request_log`, `/api/usage` |
+| Usage log + aggregates/series/by-model/by-project | Working (3.40.0) | `request_log`, `/api/usage`; the project roll-up is a 24-hour join over conversations/projects and is shown on the Usage page with tokens, estimated spend and unpriced successes |
 | Pricing, cost estimates | Working | `cost.rs` × `capabilities::Price` from the live `/models` row × the provider's reported tokens; `request_log.cost_usd`/`cost_basis`, unpriced rows counted rather than zeroed. Native OpenAI Platform picks stay unpriced (no mirrored price table) |
 | Budget enforcement that stops a run | Working | `daily_budget_usd`, rolling 24 h (timestamps are UTC), checked once before the fallback chain and before a stream; refusal is non-retryable and names spend, budget and unpriced count. Zero = no limit; local inference exempt |
 | Compression beyond head/tail cropping | Working | `context.rs`: whitespace normalisation, repeat-once dedup, digest of labelled excerpts capped at a quarter of the budget, first message kept as a pointer; a fitting thread is untouched and every condensed/dropped message is reported in meta. No model call, so no invented summaries |

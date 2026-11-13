@@ -450,6 +450,21 @@ test("uninstallReportText distinguishes removed, kept and scheduled", () => {
   assert.equal(call("uninstallReportText(null)"), "Nothing to remove.");
 });
 
+test("usageProjectNote names tokens, estimated spend and unpriced requests", () => {
+  const note = call(
+    `usageProjectNote({ project: "Alpha", requests: 3, tokens: 1234, usd: 0.5, unpriced: 1 })`,
+  );
+  assert.ok(note.includes("3 req"), note);
+  assert.ok(note.includes("tok"), note);
+  assert.ok(note.includes("$0.5000"), note);
+  assert.ok(note.includes("1 unpriced"), note);
+  // A free project does not print an empty spend or unpriced clause.
+  assert.equal(
+    call(`usageProjectNote({ project: "Beta", requests: 1, tokens: 0, usd: 0, unpriced: 0 })`),
+    "1 req · 0 tok",
+  );
+});
+
 test("rollbackStatusText stays empty before any rollback", () => {
   assert.equal(call("rollbackStatusText(null)"), "");
   assert.equal(call("rollbackStatusText({})"), "");

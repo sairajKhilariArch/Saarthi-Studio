@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.40.0
+
+Phase 11 asks for token usage per project. The server already computed a
+24-hour project roll-up for `/api/usage`, but it was never shown, and it carried
+requests and estimated spend but not tokens.
+
+- `USAGE_BY_PROJECT_SQL` now sums `total_tokens` beside requests, estimated spend
+  and the count of unpriced successes, and every `by_project` row carries
+  `tokens`.
+- The Usage page gains a **By project** card fed by that array: project name, a
+  relative request bar, and `requests · tokens · $estimate · unpriced`, labelled
+  24 h because the roll-up uses its own window rather than the table filters. A
+  window with no requests says so.
+- A conversation with no project, or a request with no conversation, stays
+  grouped as `(no project)`; a failed request is not counted as unpriced.
+
 ## 3.39.1
 
 Phase 16's failure matrix covered an unavailable provider and an unreadable

@@ -569,6 +569,12 @@ compression that reports every condensed and dropped message, and a context
 meter with an over-budget state. Native OpenAI Platform picks remain unpriced by
 design; nothing is inferred.
 
+*Delivered 3.40.0: usage per project is visible. The 24-hour `by_project`
+roll-up now sums tokens as well as requests and estimated spend, and the Usage
+page shows it in a **By project** card (with `(no project)` for unassigned
+conversations and the unpriced count beside the estimate). It uses the roll-up's
+own window, not the table filters.*
+
 ## Phase 12 — Live monitoring
 
 Backend-truth dashboard: agents, task, model, router, tokens, duration, tool,

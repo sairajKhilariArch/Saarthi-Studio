@@ -3141,7 +3141,8 @@ async fn usage(
             let rows = stmt.query_map([window_start], |r| {
                 Ok(json!({
                     "project": r.get::<_, String>(0)?, "requests": r.get::<_, i64>(1)?,
-                    "usd": r.get::<_, f64>(2)?, "unpriced": r.get::<_, Option<i64>>(3)?.unwrap_or(0)
+                    "tokens": r.get::<_, i64>(2)?, "usd": r.get::<_, f64>(3)?,
+                    "unpriced": r.get::<_, Option<i64>>(4)?.unwrap_or(0)
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -4917,7 +4918,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// indentation, and this query once shipped as `END)FROM` / `idLEFT JOIN`, which
 /// made every `/api/usage` request answer 500 instead of the page it draws.
 const USAGE_BY_PROJECT_SQL: &str =
-    "SELECT COALESCE(p.name,'(no project)') AS name, COUNT(*), COALESCE(SUM(r.cost_usd),0), \
+    "SELECT COALESCE(p.name,'(no project)') AS name, COUNT(*), COALESCE(SUM(r.total_tokens),0), \
+     COALESCE(SUM(r.cost_usd),0), \
      SUM(CASE WHEN r.cost_usd IS NULL AND r.status='ok' THEN 1 ELSE 0 END) \
      FROM request_log r LEFT JOIN conversations c ON c.id=r.conversation_id \
      LEFT JOIN projects p ON p.id=c.project_id \
@@ -4929,6 +4931,64 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn usage_by_project_sums_tokens_and_labels_unpriced_requests() {
+        let conn = Connection::open_in_memory().expect("memory database");
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, created_at REAL);
+             CREATE TABLE conversations (id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id), created_at REAL);
+             CREATE TABLE request_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
+                conversation_id TEXT, model TEXT, provider TEXT, status TEXT NOT NULL,
+                latency_ms INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER,
+                total_tokens INTEGER, fallback_attempts TEXT, error TEXT,
+                cost_usd REAL, cost_basis TEXT);",
+        )
+        .expect("schema");
+        conn.execute_batch(
+            "INSERT INTO projects VALUES ('p1','Alpha',1.0),('p2','Beta',2.0);
+             INSERT INTO conversations VALUES ('c1','p1',1.0),('c2','p2',2.0),('c3',NULL,3.0);",
+        )
+        .expect("projects");
+        let now = now_seconds();
+        conn.execute_batch(&format!(
+            "INSERT INTO request_log(created_at,conversation_id,status,total_tokens,cost_usd) VALUES
+             ({now},'c1','ok',100,0.5),
+             ({now},'c1','ok',50,NULL),
+             ({now},'c2','error',20,0.1),
+             ({now},'c3','ok',5,NULL),
+             ({now}-172800,'c1','ok',999,9.0);"
+        ))
+        .expect("requests");
+        let mut stmt = conn.prepare(USAGE_BY_PROJECT_SQL).expect("query");
+        let rows = stmt
+            .query_map([now - 86400.0], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                ))
+            })
+            .expect("rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect");
+        let alpha = rows.iter().find(|row| row.0 == "Alpha").expect("Alpha");
+        assert_eq!((alpha.1, alpha.2, alpha.3), (2, 150, 0.5));
+        assert_eq!(alpha.4, 1, "one unpriced success is counted");
+        let beta = rows.iter().find(|row| row.0 == "Beta").expect("Beta");
+        // A failed request carries no price and is not an unpriced success.
+        assert_eq!((beta.1, beta.2, beta.3, beta.4), (1, 20, 0.1, 0));
+        let none = rows
+            .iter()
+            .find(|row| row.0 == "(no project)")
+            .expect("unassigned");
+        assert_eq!((none.1, none.2, none.4), (1, 5, 1));
+        // The row older than the window is not in any bucket.
+        assert_eq!(rows.iter().map(|row| row.2).sum::<i64>(), 175);
     }
 
     #[test]
@@ -5693,7 +5753,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE request_log (
                 id INTEGER PRIMARY KEY, created_at REAL NOT NULL, cost_usd REAL,
-                status TEXT NOT NULL, conversation_id TEXT
+                total_tokens INTEGER, status TEXT NOT NULL, conversation_id TEXT
              );
              CREATE TABLE conversations (id TEXT PRIMARY KEY, project_id TEXT);
              CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT);",
