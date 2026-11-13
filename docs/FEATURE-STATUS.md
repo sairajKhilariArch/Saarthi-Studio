@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.38.0 (2026-11-13):** The Windows portable uninstall finishes.
+The emptied program folder used to stay until the person deleted it; the route
+now schedules a detached, windowless PowerShell that waits for the process to
+exit and retries `Remove-Item` for a minute, and reports `scheduled` beside
+`pending` (with `complete` still false). Settings → About says the folder will be
+deleted when the window closes, or keeps the manual instruction if scheduling
+failed. The path is validated and quoted; the POSIX path is unchanged. Verified
+on a staged portable copy: `scheduled: true`, and the folder was gone after the
+server exited while kept data remained.
 **Revision 3.37.0 (2026-11-13):** Refresh a Git-imported skill. Imports now
 record their origin and ref, and `POST /api/skills/:id/refresh` re-clones that
 recorded repository (never a URL from the request) under Import's bounds,

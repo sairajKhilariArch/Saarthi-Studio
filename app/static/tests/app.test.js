@@ -439,6 +439,14 @@ test("uninstallReportText distinguishes removed, kept and scheduled", () => {
   assert.ok(pending.includes("C:/apps/studio"), pending);
   assert.ok(pending.includes("busy"), pending);
 
+  // When the server arranged the deletion, the report says so instead of asking
+  // the person to remove the folder themselves.
+  const scheduled = call(
+    `uninstallReportText({ targets: { install: { path: "C:/apps/studio", removed: false, pending: "C:/apps/studio", scheduled: true } } })`,
+  );
+  assert.ok(scheduled.includes("will be deleted when this window closes"), scheduled);
+  assert.ok(!scheduled.includes("stays until you delete it"), scheduled);
+
   assert.equal(call("uninstallReportText(null)"), "Nothing to remove.");
 });
 

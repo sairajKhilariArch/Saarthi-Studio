@@ -1169,7 +1169,12 @@ function uninstallReportText(report) {
     const label = key === "install" ? "Program folder" : key === "data" ? "Data" : "Settings";
     if (part.kept) lines.push(`${label} kept at ${part.path}.`);
     else if (part.removed) lines.push(`${label} removed.`);
-    else if (part.pending) lines.push(`${label} is emptied; ${part.pending} stays until you delete it after closing this window.`);
+    else if (part.pending)
+      lines.push(
+        part.scheduled
+          ? `${label} is emptied; ${part.pending} will be deleted when this window closes.`
+          : `${label} is emptied; ${part.pending} stays until you delete it after closing this window.`,
+      );
     else if (part.existed === false) lines.push(`${label} was not there.`);
     else lines.push(`${label} could not be removed${part.error ? `: ${part.error}` : ""}.`);
   }

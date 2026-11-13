@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.38.0
+
+A portable uninstall on Windows emptied its program folder but left it behind:
+the running binary could be renamed, not deleted, and nothing ever removed the
+folder after the process exited.
+
+- `POST /api/uninstall` now schedules that last step: a detached, windowless
+  PowerShell waits for this process to exit and retries `Remove-Item` for up to
+  a minute, covering the brief window in which Windows still holds the folder.
+  The install report gains `scheduled`; `pending` still names the folder and
+  `complete` stays false, because nothing is claimed before it happens.
+- The path comes from the running binary's own folder and is passed in single
+  quotes; `install_check` already refuses quotes, `%`, `&`, `|`, `<`, `>` and
+  control characters rather than escaping them.
+- Settings → About says the folder "will be deleted when this window closes"
+  when the cleanup was arranged, and keeps the old instruction to delete it by
+  hand when scheduling failed. Package-managed installs are untouched, and
+  POSIX still removes the folder directly.
+
 ## 3.37.0
 
 A skill imported from Git could not be updated: Import refuses an id that is

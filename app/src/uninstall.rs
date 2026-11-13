@@ -173,6 +173,42 @@ pub(crate) fn preview(targets: &Targets) -> Value {
     })
 }
 
+/// Windows cannot delete a running executable or the folder holding it, so a
+/// pending folder is removed by a detached PowerShell that waits for this
+/// process to exit. The path is passed in single quotes and `install_check`
+/// already refuses quotes and shell syntax, so nothing in it is interpreted.
+#[cfg(windows)]
+fn schedule_cleanup(dir: &FsPath, pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    // Wait for the process, then retry the delete: Windows can keep the folder
+    // briefly busy after the process object goes away, and a single attempt can
+    // land in that window.
+    let script = format!(
+        "$path='{}'; $end=(Get-Date).AddMinutes(2); while ((Get-Process -Id {pid} -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $end)) {{ Start-Sleep -Milliseconds 500 }}; $end=(Get-Date).AddMinutes(1); while ((Test-Path -LiteralPath $path) -and ((Get-Date) -lt $end)) {{ Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path -LiteralPath $path) {{ Start-Sleep -Milliseconds 500 }} }}",
+        dir.to_string_lossy().replace('\'', "''")
+    );
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        // No window, and a group of its own so closing this app's console does
+        // not take the cleanup with it.
+        .creation_flags(0x0800_0000 | 0x0000_0200)
+        .spawn()
+        .map(|_| true)
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn schedule_cleanup(_dir: &FsPath, _pid: u32) -> bool {
+    false
+}
+
 #[cfg(not(windows))]
 fn remove_install(dir: &FsPath) -> Result<(), String> {
     // POSIX unlinks a running executable happily; the process keeps its inode.
@@ -248,6 +284,9 @@ pub(crate) fn uninstall(
         if !gone {
             complete = false;
         }
+        // The folder is emptied but held open by the running binary; have it
+        // deleted once this process exits, and report whether that was arranged.
+        let scheduled = !gone && schedule_cleanup(dir, std::process::id());
         report.insert(
             "install".to_string(),
             json!({
@@ -257,6 +296,7 @@ pub(crate) fn uninstall(
                 "bytes": bytes,
                 "removed": gone,
                 "pending": if gone { Value::Null } else { json!(dir.to_string_lossy()) },
+                "scheduled": scheduled,
             }),
         );
     }
@@ -438,6 +478,40 @@ mod tests {
         fs::create_dir_all(dir.join("projects")).expect("projects");
         fs::write(dir.join("studio.db"), b"database").expect("db");
         fs::write(dir.join("projects/notes.md"), b"notes").expect("notes");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_pending_folder_is_scheduled_for_deletion_after_its_process_exits() {
+        let root = scratch("cleanup");
+        let install = root.join("app");
+        portable_install(&install);
+        // What remove_install leaves behind: a renamed binary and the emptied UI
+        // folder around it.
+        fs::write(
+            install.join(format!(
+                "free-ai-studio.uninstalling-{}.exe",
+                std::process::id()
+            )),
+            b"binary",
+        )
+        .expect("renamed binary");
+        // A process that has already exited, so the wait ends at once.
+        let mut gone_child = std::process::Command::new("cmd")
+            .args(["/C", "exit"])
+            .spawn()
+            .expect("a short-lived process");
+        let dead_pid = gone_child.id();
+        let _ = gone_child.wait();
+        assert!(schedule_cleanup(&install, dead_pid));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while install.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(
+            !install.exists(),
+            "the scheduled cleanup should remove the pending folder"
+        );
     }
 
     #[test]

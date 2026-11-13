@@ -975,6 +975,14 @@ program folder is removed first so a refusal cannot orphan a working install, an
 a Windows binary is renamed aside with the folder reported as pending, because a
 running program cannot be deleted.
 
+Delivered in 3.38.0: the pending Windows folder cleans itself up. `POST
+/api/uninstall` spawns a detached, windowless PowerShell that waits for this
+process to exit, then retries `Remove-Item` for up to a minute; the report gains
+`scheduled` beside `pending`, and the About card says the folder will be deleted
+when the window closes (or keeps the manual instruction when scheduling failed).
+The path is the binary's own folder and is validated by `install_check` before
+being passed in quotes. POSIX and package-managed installs are untouched.
+
 Open: code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice.
 The portable uninstall shipped in 2.44.0.
 
