@@ -925,6 +925,7 @@ export function embeddedCapabilities(): CapabilityContract {
       editor_definition: false,
       editor_symbols: false,
       editor_references: false,
+      language_diagnostics: false,
       saved_commands: false,
       watch: false,
       mcp: true,

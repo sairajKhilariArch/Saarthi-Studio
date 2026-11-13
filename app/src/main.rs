@@ -54,6 +54,7 @@ mod index;
 mod installer;
 mod keychain;
 mod local;
+mod lsp;
 mod mcp;
 mod mcp_oauth;
 mod media;

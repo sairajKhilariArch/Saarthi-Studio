@@ -17,6 +17,19 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.49.0 (2026-11-13):** Phase 9's language-server diagnostics.
+`app/src/lsp.rs` is a bounded LSP client (Content-Length JSON-RPC, initialize,
+didOpen, five seconds for `publishDiagnostics`, shutdown, Drop kills the child)
+behind `POST /api/workspace/language-diagnostics` and `GET /api/lsp/servers`.
+The route picks a server by extension from PATH (rust-analyzer,
+typescript-language-server, pylsp, gopls, clangd), caps a buffer at 2 MiB and
+concurrent runs at two, and answers `installed: false` with the reason when
+nothing is installed. Rows are one-based with named severities and capped
+fields; a quiet server reports `published: false` rather than an empty list. The
+Problems pane has a Diagnostics button gated by the new
+`language_diagnostics` capability (false in the extension). A debugger is what
+Phase 9 still lacks. Tests (unit plus a fake stdio server) were added and the
+whole test target compiles; `cargo test` was not run in this session.
 **Revision 3.48.0 (2026-11-13):** Phase 14's MCP half in the VS Code embedded
 server, stdio only. A new `vscode-extension/src/mcp.ts` speaks MCP over stdio
 (newline-delimited JSON-RPC 2.0, `initialize`, `tools/list`, `tools/call`, one

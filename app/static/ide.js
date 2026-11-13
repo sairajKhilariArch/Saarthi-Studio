@@ -310,6 +310,7 @@
       '<button type="button" class="btn btn-quiet btn-small" id="watchPreset" data-feature="watch" title="Rerun the chosen command when files change">Watch</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runBuild">Build</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="runTest">Test</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="runDiagnostics" data-feature="language_diagnostics" title="Ask the language server installed for this file">Diagnostics</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="problemsClear">Clear</button>',
       "No problems. Failed saves and requests, and build or test diagnostics, land here.");
     problemsPane.insertAdjacentHTML("beforeend", '<pre id="runnerOutput" class="runner-output hidden" aria-label="Build output"></pre>');
@@ -317,6 +318,9 @@
     // already read (a cached answer), hide the watch control here as well.
     if ($("watchPreset") && !capabilitiesAllow(state.capabilities, "watch")) {
       $("watchPreset").classList.add("hidden");
+    }
+    if ($("runDiagnostics") && !capabilitiesAllow(state.capabilities, "language_diagnostics")) {
+      $("runDiagnostics").classList.add("hidden");
     }
     body.appendChild(problemsPane);
     body.appendChild(makePane("runsPane", "runsBody",
@@ -330,6 +334,7 @@
       "No requests logged yet."));
     panel.appendChild(body);
 
+    $("runDiagnostics").addEventListener("click", () => void checkLanguageDiagnostics());
     $("problemsClear").addEventListener("click", () => { IDE.problems = []; renderProblems(); updateProblemCounts(); });
     $("runPreset").addEventListener("click", () => void runChosen());
     $("watchPreset").addEventListener("click", () => void toggleWatch());
@@ -1653,6 +1658,55 @@
       }
       box.appendChild(row);
     });
+  }
+
+  /* Phase 9's language-server half: ask the server installed for the open file
+     for diagnostics and put them in the same Problems list the runner feeds.
+     A reply that published nothing says so, so an empty list is never shown as
+     "no problems". */
+  async function checkLanguageDiagnostics() {
+    const file = activeFile();
+    if (!file) { toast("Open a file first."); return; }
+    if (file.scratch) { toast("A scratch pad has no path for a language server."); return; }
+    const button = $("runDiagnostics");
+    if (button) button.disabled = true;
+    setRunnerStatus(`Asking the language server about ${file.name}…`);
+    try {
+      const result = await api("/api/workspace/language-diagnostics", {
+        method: "POST",
+        body: JSON.stringify({ path: file.path, content: file.content }),
+      });
+      if (!result.ok) {
+        recordProblem(file.path, result.data.error || "The language server did not answer.");
+        setRunnerStatus("The language server did not answer.");
+        return;
+      }
+      if (!result.data.server || result.data.installed === false) {
+        setRunnerStatus(result.data.note || "No language server is installed for this file.");
+        return;
+      }
+      IDE.problems = IDE.problems.filter((problem) => problem.source !== "language-server");
+      const rows = (result.data.diagnostics || []).map((entry) => ({
+        where: entry.path || file.path,
+        line: entry.line,
+        column: entry.column,
+        severity: entry.severity,
+        message: entry.source ? `${entry.message} (${entry.source})` : entry.message,
+        source: "language-server",
+        at: Date.now(),
+      }));
+      IDE.problems = [...rows, ...IDE.problems].slice(0, 100);
+      updateProblemCounts();
+      renderProblems();
+      setRunnerStatus(
+        result.data.published === false
+          ? (result.data.note || "The language server published nothing.")
+          : `${rows.length} language-server problem${rows.length === 1 ? "" : "s"} in ${file.name}`,
+      );
+      selectBottomTab("problems");
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   function setRunnerStatus(text) {

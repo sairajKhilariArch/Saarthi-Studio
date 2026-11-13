@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.49.0
+
+Phase 9's language-server half. The Problems pane could only show compiler
+output the runner captured; nothing asked a language server, so a diagnostic
+only an LSP knows never appeared.
+
+- New `app/src/lsp.rs`: a bounded LSP client — Content-Length framed JSON-RPC
+  over stdio, `initialize` + `initialized`, `textDocument/didOpen`, a five-second
+  wait for `textDocument/publishDiagnostics` for the URI it opened, then
+  shutdown/exit. `Drop` kills the process, so a timeout leaves nothing running.
+- `POST /api/workspace/language-diagnostics {path, content?}` takes a
+  workspace-relative path (or reads it), caps the buffer at 2 MiB, picks the
+  server by extension (rust-analyzer, typescript-language-server, pylsp, gopls,
+  clangd) and allows two runs at once (429 beyond). A language with no mapping,
+  or a server that is not on `PATH`, answers `installed: false` with the reason;
+  a failed handshake is a 502 that keeps the server's own words; a server that
+  stays quiet is `published: false` with a note — never an empty "no problems".
+- `GET /api/lsp/servers` lists the mapping and whether each server is installed,
+  without starting anything.
+- Diagnostics are one-based with named severities, message capped at 500
+  characters, source/code at 40, 500 rows at most (`max_language_diagnostics`).
+- The Problems pane gained a **Diagnostics** button behind the new
+  `language_diagnostics` capability (false in the VS Code embedded server): it
+  sends the open buffer, replaces its previous language-server rows, selects the
+  pane and shows the server's note when nothing was published.
+- Deliberately not included: pooled sessions or a background re-check, pull
+  diagnostics, and a debugger.
+
 ## 3.48.0
 
 Phase 14's MCP half. The VS Code built-in server declared `mcp: false`, so

@@ -53,7 +53,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0) and unsaved-buffer recovery (3.33.0) are done. |
+| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0) and language-server diagnostics (3.49.0) are done. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level (3.47.0) and runs stdio MCP servers (3.48.0); remote transports, OAuth, agent-run reasoning and MCP tools in agent prompts remain missing there. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -556,6 +556,22 @@ unstage), with the patch built server-side from git's own preamble so the client
 never supplies patch text — plus a commit-detail diff from history. Still open:
 merge/rebase, staging individual lines, and worktree checkpoints before an agent
 writes.*
+
+*Delivered 3.49.0: language-server diagnostics.* `app/src/lsp.rs` starts the
+server installed for the open file's language (rust-analyzer,
+typescript-language-server, pylsp, gopls, clangd — found on `PATH`, `.cmd` shims
+run through the command interpreter), initializes it, sends
+`textDocument/didOpen`, waits five seconds for `textDocument/publishDiagnostics`
+for that URI, then shuts it down; `Drop` kills a server that ignores all three.
+`POST /api/workspace/language-diagnostics` confines the path, caps a buffer at
+2 MiB, allows two concurrent runs (429 beyond) and answers `installed: false`
+with the reason when nothing is installed; a failed handshake is a 502 with the
+server's own message, and a quiet server is `published: false`, never an empty
+"no problems". Rows are one-based with named severities, capped fields and a
+500-row ceiling; `GET /api/lsp/servers` reports the mapping without starting
+anything. The Problems pane's **Diagnostics** button is behind the new
+`language_diagnostics` capability (false in the extension). Phase 9 is left with
+a debugger.*
 
 ## Phase 10 — Safety and permissions
 

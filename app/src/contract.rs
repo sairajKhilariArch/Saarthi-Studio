@@ -35,6 +35,7 @@ const FEATURES: &[&str] = &[
     "editor_definition",
     "editor_symbols",
     "editor_references",
+    "language_diagnostics",
     "saved_commands",
     "watch",
     "skills",
@@ -74,6 +75,7 @@ pub(crate) fn capabilities() -> Value {
             "max_definitions": crate::index::MAX_DEFINITIONS,
             "max_symbols": crate::index::MAX_SYMBOLS,
             "max_references": crate::index::MAX_REFERENCES,
+            "max_language_diagnostics": crate::lsp::MAX_DIAGNOSTICS,
         },
     })
 }
