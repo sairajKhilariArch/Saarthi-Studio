@@ -339,6 +339,59 @@ pub(crate) fn timeline_value(
         }
     }
 
+    // Workflow failures are their own record: a run can fail without any agent
+    // run of its own (a condition node, a cancelled graph), and that failure
+    // belongs on the same timeline as the rest. Successful runs are omitted so
+    // the failure view is not buried under routine completions.
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, COALESCE(workflow_id,''), COALESCE(name,''), status,
+                        COALESCE(error,''), COALESCE(updated_at,created_at)
+                   FROM workflow_runs
+                  WHERE status IN ('failed','cancelled','interrupted')
+                  ORDER BY COALESCE(updated_at,created_at) DESC LIMIT ?1",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map([limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, f64>(5)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let (id, workflow_id, name, status, error, at) =
+                row.map_err(|error| error.to_string())?;
+            let mut detail = format!("{name} · {workflow_id}");
+            if !error.is_empty() {
+                detail.push_str(&format!(" — {error}"));
+            }
+            entries.push(Entry {
+                at,
+                area: "workflow",
+                event: if status == "failed" {
+                    "workflow failed".to_string()
+                } else {
+                    format!("workflow {status}")
+                },
+                level: if status == "cancelled" {
+                    "warn"
+                } else {
+                    "error"
+                },
+                correlation: id,
+                detail,
+                request: String::new(),
+            });
+        }
+    }
+
     // Router installs and MCP health are not SQLite rows, but they are records
     // the app already keeps, so they belong on the same timeline instead of in
     // a separate panel the reader has to remember to visit.
@@ -435,7 +488,7 @@ pub(crate) fn timeline_value(
     Ok(json!({
         "ok": true,
         "limit": limit,
-        "areas": ["provider", "permission", "agent", "router", "mcp"],
+        "areas": ["provider", "permission", "agent", "router", "mcp", "workflow"],
         "events": events,
     }))
 }
@@ -499,6 +552,32 @@ pub(crate) fn summary_value(state: &AppState) -> Result<Value, String> {
         )
         .map_err(|error| error.to_string())?;
 
+    // Workflow failures over the same window. `failed_24h` counts the three
+    // terminal bad states; a cancelled run is not an error but is still a run
+    // that did not finish its graph.
+    let mut workflow_statuses = serde_json::Map::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT status, COUNT(*) FROM workflow_runs
+                  WHERE COALESCE(updated_at,created_at)>=?1 GROUP BY status",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map([since], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let (status, count) = row.map_err(|error| error.to_string())?;
+            workflow_statuses.insert(status, json!(count));
+        }
+    }
+    let failed_workflows: i64 = ["failed", "cancelled", "interrupted"]
+        .iter()
+        .filter_map(|status| workflow_statuses.get(*status).and_then(Value::as_i64))
+        .sum();
+
     Ok(json!({
         "window_hours": 24,
         "provider": {
@@ -510,6 +589,10 @@ pub(crate) fn summary_value(state: &AppState) -> Result<Value, String> {
         "agent": {
             "by_status": Value::Object(statuses),
             "live": live,
+        },
+        "workflow": {
+            "by_status": Value::Object(workflow_statuses),
+            "failed_24h": failed_workflows,
         },
     }))
 }
@@ -583,11 +666,11 @@ async fn timeline_route(
     if let Some(named) = area.as_deref() {
         if !matches!(
             named,
-            "provider" | "permission" | "agent" | "router" | "mcp"
+            "provider" | "permission" | "agent" | "router" | "mcp" | "workflow"
         ) {
             return crate::json_error(
                 StatusCode::BAD_REQUEST,
-                "area must be provider, permission, agent, router or mcp",
+                "area must be provider, permission, agent, router, mcp or workflow",
             );
         }
     }
@@ -863,6 +946,67 @@ mod tests {
             params![id, at],
         )
         .expect("seed step");
+    }
+
+    fn seed_workflow(state: &AppState, id: &str, at: f64, status: &str, error: &str) {
+        let conn = open_db(&state.database_path).expect("open");
+        conn.execute(
+            "INSERT INTO workflow_runs(id,workflow_id,name,status,error,created_at,updated_at)
+             VALUES(?1,'wf-1','Release graph',?2,?3,?4,?4)",
+            params![id, status, error, at],
+        )
+        .expect("seed workflow");
+    }
+
+    #[test]
+    fn workflow_failures_join_the_timeline_and_are_counted() {
+        let state = fixture("workflow-rows");
+        let now = now_seconds();
+        seed_workflow(
+            &state,
+            "wf-failed",
+            now - 30.0,
+            "failed",
+            "the build node failed",
+        );
+        seed_workflow(
+            &state,
+            "wf-cancelled",
+            now - 20.0,
+            "cancelled",
+            "Cancelled by the user.",
+        );
+        // A successful run is not a failure and must not pad the view.
+        seed_workflow(&state, "wf-ok", now - 10.0, "succeeded", "");
+
+        let payload = timeline_value(&state, 50, None, true).expect("timeline");
+        let events = payload["events"].as_array().expect("events");
+        let workflow: Vec<&Value> = events
+            .iter()
+            .filter(|event| event["area"] == "workflow")
+            .collect();
+        assert_eq!(workflow.len(), 2, "only the bad terminal states");
+        let failed = workflow
+            .iter()
+            .find(|event| event["correlation"] == "wf-failed")
+            .expect("failed run");
+        assert_eq!(failed["event"], "workflow failed");
+        assert_eq!(failed["level"], "error");
+        assert!(failed["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("the build node failed"));
+        let cancelled = workflow
+            .iter()
+            .find(|event| event["correlation"] == "wf-cancelled")
+            .expect("cancelled run");
+        assert_eq!(cancelled["level"], "warn");
+
+        let only = timeline_value(&state, 50, Some("workflow"), true).expect("filtered");
+        assert_eq!(only["events"].as_array().unwrap().len(), 2);
+        let summary = summary_value(&state).expect("summary");
+        assert_eq!(summary["workflow"]["failed_24h"], 2);
+        assert_eq!(summary["workflow"]["by_status"]["failed"], 1);
     }
 
     #[test]

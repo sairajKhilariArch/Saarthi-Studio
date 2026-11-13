@@ -5258,16 +5258,7 @@ async function loadDiagnostics() {
     return;
   }
   const summary = result.data.summary || {};
-  if (summaryLine) {
-    const provider = summary.provider || {};
-    const decisions = summary.permission_decisions || {};
-    const agent = summary.agent || {};
-    summaryLine.textContent = [
-      `${provider.errors || 0} of ${provider.requests || 0} provider requests failed in 24 h`,
-      `${decisions.deny || 0} denied · ${decisions.ask || 0} asked`,
-      `${agent.live || 0} live run${agent.live === 1 ? "" : "s"}`,
-    ].join(" · ");
-  }
+  if (summaryLine) summaryLine.textContent = diagnosticsSummaryLine(summary);
   const events = Array.isArray(result.data.events) ? result.data.events : [];
   if (!events.length) {
     host.appendChild(pageNote("Nothing recorded in this area yet. The timeline fills as you chat, run agents and touch privileged actions."));
@@ -7528,6 +7519,21 @@ async function loadProviderHealth() {
     line.appendChild(note);
     host.appendChild(line);
   });
+}
+
+/* The 24-hour line above the diagnostics timeline. Kept pure so the wording
+   and the singular/plural counts are testable without a rendered panel. */
+function diagnosticsSummaryLine(summary) {
+  const provider = (summary && summary.provider) || {};
+  const decisions = (summary && summary.permission_decisions) || {};
+  const agent = (summary && summary.agent) || {};
+  const workflow = (summary && summary.workflow) || {};
+  return [
+    `${provider.errors || 0} of ${provider.requests || 0} provider requests failed in 24 h`,
+    `${decisions.deny || 0} denied · ${decisions.ask || 0} asked`,
+    `${agent.live || 0} live run${agent.live === 1 ? "" : "s"}`,
+    `${workflow.failed_24h || 0} workflow failure${workflow.failed_24h === 1 ? "" : "s"}`,
+  ].join(" · ");
 }
 
 function usageFiltersFromInputs() {

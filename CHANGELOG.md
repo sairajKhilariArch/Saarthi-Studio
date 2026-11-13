@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.44.0
+
+Phase 17 lists workflow failures among what diagnostics must track. Workflow
+runs were persisted and visible in their own pane, but the diagnostics timeline
+only merged provider, permission, agent, router and MCP records.
+
+- `GET /api/diagnostics` adds a `workflow` area: failed, cancelled and
+  interrupted workflow runs become timeline rows with the run id as the
+  correlation key, the graph's name, and the stored error. A successful run is
+  omitted rather than padding the failure view; a cancelled run is a `warn`,
+  a failure or interruption an `error`.
+- The area is accepted by the server filter and offered in Settings →
+  Diagnostics. The 24-hour summary line now reports `N workflow failure(s)`,
+  from a new `workflow.failed_24h` count beside the per-status map.
+- `diagnosticsSummaryLine` keeps the summary wording pure and testable.
+
 ## 3.43.0
 
 Phase 11 asks for token usage per agent. Agent runs already carried their own

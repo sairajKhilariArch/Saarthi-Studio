@@ -478,6 +478,23 @@ test("skillCompatibilityNote names the Studio version a skill needs", () => {
   assert.equal(call("skillCompatibilityNote(null)"), "");
 });
 
+test("diagnosticsSummaryLine counts workflow failures in the 24 h line", () => {
+  const line = call(`diagnosticsSummaryLine({
+    provider: { requests: 10, errors: 2 },
+    permission_decisions: { deny: 1, ask: 3 },
+    agent: { live: 2 },
+    workflow: { failed_24h: 4 }
+  })`);
+  assert.ok(line.includes("2 of 10 provider requests failed"), line);
+  assert.ok(line.includes("2 live runs"), line);
+  assert.ok(line.includes("4 workflow failures"), line);
+  assert.ok(
+    call(`diagnosticsSummaryLine({ workflow: { failed_24h: 1 } })`).endsWith("1 workflow failure"),
+    "singular form",
+  );
+  assert.ok(call("diagnosticsSummaryLine(null)").includes("0 workflow failures"));
+});
+
 test("usageAgentNote counts runs and tokens without inventing spend", () => {
   assert.equal(call(`usageAgentNote({ agent: "coding", runs: 2, tokens: 1234 })`), "2 runs · 1,234 tok");
   assert.equal(call(`usageAgentNote({ agent: "planner", runs: 1, tokens: 0 })`), "1 run · 0 tok");

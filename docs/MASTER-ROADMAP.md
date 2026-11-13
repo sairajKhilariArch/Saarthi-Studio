@@ -917,6 +917,11 @@ timeline.
 **Phase 17 is complete.** What remains in the roadmap is 13 (workflow graph), 15
 (extension manifest) and the 16/18 quality and packaging work.
 
+*Delivered 3.44.0: workflow failures reach diagnostics. Failed, cancelled and
+interrupted runs appear on the shared timeline with their run id, graph name and
+error, are filterable as their own area, and are counted in the 24-hour line.
+Routine successful runs are left out.*
+
 ## Phase 18 — Installers and updates
 
 Delivered: Linux `.deb`, AppImage and tarball, a Windows portable zip, an

@@ -17,6 +17,10 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.44.0 (2026-11-13):** Phase 17's workflow failures are on the
+diagnostics timeline. Failed, cancelled and interrupted runs carry their run id,
+graph name and stored error; the server accepts a `workflow` filter, and the
+24-hour line counts them. Successful runs are deliberately left out.
 **Revision 3.43.0 (2026-11-13):** Phase 11's per-agent usage is visible.
 `/api/usage` rolls up `agent_runs` over 24 hours by profile with runs and the
 run's own token total, and the Usage page shows it in a **By agent** card. Blank
@@ -910,7 +914,7 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Diagnostics UI | Working (1.72.0) | Settings → Diagnostics: timeline with area/level colour and the short correlation id, server-side area filter, row count, 24-hour summary line, and a bundle download the browser saves without composing it |
 | Structured log file + console ring | Working (2.2.0) | `app/src/oplog.rs` appends one redacted JSON object per line to `studio.log` beside the database, flushed per write, rotated at 1 MiB into one previous file, with a 200-entry ring in memory; `GET /api/diagnostics/log?limit=` serves the ring and Settings → Diagnostics shows it with the file's path. Written at boot, router install/update/uninstall/restart, permission ask/deny, provider failures and every run ending |
 | Request id for non-run operations | Working (2.4.0) | `trace.rs` gives every local API request an id, kept in a task-local for the handler's lifetime and echoed as `x-request-id`; a caller's own id is accepted only if it is 8–64 characters of alphanumerics/`-_.`. `permission_audit` gained a `request_id` column (migrated in place, old rows keep `''` rather than a guessed id), so a terminal open, a Git stage or a settings save is now tied to the call that asked for it; the timeline and the process log both show it |
-| Router installs and MCP connections in the timeline | Working (2.3.0) | `timeline_value` adds one row per router from `router-installs.json` (the newest record, since that file keeps one per router) and one per MCP server that has actually answered, at its own `checked_at` — a server never contacted adds nothing rather than a row stamped "now". Areas `router` and `mcp` are valid filters, and the panel offers them |
+| Workflow failures in the timeline | Working (3.44.0) | `workflow_runs` rows in a bad terminal state join the same list: failed/cancelled/interrupted only, with the run id as correlation, the graph name and the stored error; cancelled is `warn`, the others `error`. The area is a server-side filter and a panel option, and `summary.workflow.failed_24h` feeds the 24-hour line. Successful runs are omitted || Router installs and MCP connections in the timeline | Working (2.3.0) | `timeline_value` adds one row per router from `router-installs.json` (the newest record, since that file keeps one per router) and one per MCP server that has actually answered, at its own `checked_at` — a server never contacted adds nothing rather than a row stamped "now". Areas `router` and `mcp` are valid filters, and the panel offers them |
 | Health/readiness dashboard | Working (2.4.0) | `GET /api/ready` runs only cheap local checks — database opens and answers, the data directory accepts a write (a probe file, then removed), provider base URL and whether a key is saved plus the credential store mode, latest router install outcomes, and MCP servers by health. Only the first two are `required`; the rest change what works, not whether the app runs. Shown at the top of Settings → Diagnostics |
 
 ## Phase 18 — Installation and updates
