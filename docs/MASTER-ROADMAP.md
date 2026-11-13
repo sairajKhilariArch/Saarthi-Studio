@@ -314,6 +314,11 @@ bounds, requiring the same declared name and keeping the replaced copy under
 `.removed/` (a failed copy restores the old folder). A manual edit keeps the
 origin, and the detail pane offers Update from Git behind a confirmation. Skills
 imported before this version need one remove-and-import to gain Refresh.*
+*Delivered 3.39.0: install from a local directory. A folder without `.git` is
+copied through the same staging folder and validation as a clone, gated on
+`fs_write`, and installed under its slug; it records no origin, while a folder
+holding `.git` still clones and can be refreshed.*
+
 *Delivered 1.57.0: a message that names no skill is matched against the enabled
 skills' names and descriptions, with a floor, a two-skill cap and a token
 budget; the reply reports what was attached. Per-skill permissions remain open,

@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.39.0 (2026-11-13):** Install a skill from a local directory.
+Import only cloned; a plain folder without `.git` is now copied through the same
+staging and validation path as a clone (root `SKILL.md`, 200 files / 2 MiB, no
+symlinks, slug rewrite, staging removed either way), gated on `fs_write` for the
+skills folder. A folder holding `.git` still clones and keeps its refreshable
+origin; a copied folder has no origin and a branch/tag with it is refused. The
+import form names both sources.
 **Revision 3.38.0 (2026-11-13):** The Windows portable uninstall finishes.
 The emptied program folder used to stay until the person deleted it; the route
 now schedules a detached, windowless PowerShell that waits for the process to
@@ -694,7 +701,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Discovery across 5 roots | Working | `skills.rs` |
 | Enable/disable persisted | Working | `POST /api/skills/:id/state` |
 | Instruction injection with token cap | Working | rides the next message |
-| Install / update / remove / version tracking | Working (1.49.0) | install writes `<user skills>/<slug>/SKILL.md` after validating it with the list parser (temp file + rename, refuses overwrite unless `replace`); update rewrites in place and keeps the id; remove moves the folder to `<root>/.removed/` instead of deleting; `skills.json` records version, install/update times and a content fingerprint, so “edited since install” is reported; only the user root is writable. Git import (3.36.0): `POST /api/skills/import` clones an https URL or a local clone, requires a root `SKILL.md`, caps the copy at 200 files/2 MiB, refuses symlinks, installs as the user root's `<slug>` and rewrites the manifest to that id; the clone is removed either way and the route is git-gated |
+| Install / update / remove / version tracking | Working (1.49.0) | install writes `<user skills>/<slug>/SKILL.md` after validating it with the list parser (temp file + rename, refuses overwrite unless `replace`); update rewrites in place and keeps the id; remove moves the folder to `<root>/.removed/` instead of deleting; `skills.json` records version, install/update times and a content fingerprint, so “edited since install” is reported; only the user root is writable. Git import (3.36.0): `POST /api/skills/import` clones an https URL or a local clone, requires a root `SKILL.md`, caps the copy at 200 files/2 MiB, refuses symlinks, installs as the user root's `<slug>` and rewrites the manifest to that id; the clone is removed either way and the route is git-gated; Refresh from Git (3.37.0) re-clones the recorded origin, keeping the replaced copy under `.removed/`; a local folder without `.git` is copied through the same validation (3.39.0) and has no origin to refresh |
 | Skill permissions / usage history | Partial (1.49.0) | usage history is real (`skill_usage`: id, time, conversation, tokens; `uses`/`last_used_at` per skill and `/api/skills/:id/usage`); writing routes are gated on `fs_write`. There are no per-skill permissions because a skill is prompt text and is never executed |
 | Automatic skill selection | Working (1.57.0) | `skills::select_for`: id/name words score 4, description words 2, noise words and numbers dropped; needs 2 points, at most two skills, id tie-break, 1,200-token budget, disabled and broken skills skipped. A manual pick always wins, and `auto_select_skills` (default on) turns it off. The reply meta names what was attached (`auto_skills`) |
 

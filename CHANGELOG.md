@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.39.0
+
+Phase 6 asks for installing a skill from a local directory. Import only cloned,
+so a plain folder with a `SKILL.md` was refused unless it was also a Git
+repository.
+
+- `POST /api/skills/import` now accepts a local folder without `.git`: it is
+  copied through the same staging folder as a clone, with the same 200-file /
+  2 MiB cap, symlink refusal, root `SKILL.md` requirement and manifest rewrite,
+  and the staging folder is removed either way.
+- A folder holding `.git` still takes the clone path, so it keeps a recorded
+  origin and the Update from Git action; a copied folder has no origin and
+  therefore no refresh. A branch or tag sent with a plain folder is a 400.
+- A copy is gated on `fs_write` for the skills folder (a clone stays on `git`),
+  and an id that is already installed is still refused rather than overwritten.
+- Settings → Skills → "Import from Git or a folder" names both sources and says
+  a local folder without `.git` is copied.
+
 ## 3.38.0
 
 A portable uninstall on Windows emptied its program folder but left it behind:

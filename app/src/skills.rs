@@ -638,6 +638,38 @@ fn stage_clone(root: &FsPath, source: &str, git_ref: Option<&str>) -> Result<Pat
     Ok(temp)
 }
 
+/// A local folder the user named that is not a Git clone. It is copied, not
+/// cloned; a folder holding `.git` still goes through the clone path so the
+/// install keeps a refreshable origin.
+fn local_skill_folder(source: &str) -> Option<PathBuf> {
+    let path = FsPath::new(source.trim());
+    (path.is_dir() && !path.join(".git").exists()).then(|| path.to_path_buf())
+}
+
+fn stage_folder(root: &FsPath, source: &FsPath) -> Result<PathBuf, String> {
+    fs::create_dir_all(root)
+        .map_err(|error| format!("Could not create {}: {error}", root.display()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let temp = root.join(format!(".import-{}-{stamp}", std::process::id()));
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    if let Err(error) = copy_tree(source, &temp, &mut files, &mut bytes) {
+        let _ = fs::remove_dir_all(&temp);
+        return Err(error);
+    }
+    Ok(temp)
+}
+
+fn import_folder(root: &FsPath, source: &FsPath) -> Result<Imported, String> {
+    let temp = stage_folder(root, source)?;
+    let result = install_clone(root, &temp);
+    let _ = fs::remove_dir_all(&temp);
+    result
+}
+
 fn clone_into(source: &str, branch: Option<&str>, temp: &FsPath) -> Result<(), String> {
     let mut command = std::process::Command::new("git");
     command.arg("clone").arg("--depth").arg("1").arg("--quiet");
@@ -832,7 +864,7 @@ fn copy_tree(from: &FsPath, to: &FsPath, files: &mut usize, bytes: &mut u64) -> 
         let kind = entry.file_type().map_err(|error| error.to_string())?;
         if kind.is_symlink() {
             return Err(format!(
-                "The repository contains a symlink ({}), which is refused.",
+                "That skill contains a symlink ({}), which is refused.",
                 source.display()
             ));
         }
@@ -1227,7 +1259,7 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
     if source.is_empty() {
         return crate::json_error(
             StatusCode::BAD_REQUEST,
-            "Give a Git URL or a folder holding a clone.",
+            "Give a Git URL, a folder holding a clone, or a skill folder to copy.",
         );
     }
     let Some(root) = writable_root(&state) else {
@@ -1236,6 +1268,29 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
             "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
         );
     };
+    // A folder without `.git` is a plain skill directory: copy it, so installing
+    // from a local directory does not require the person to initialise a repo.
+    if let Some(folder) = local_skill_folder(&source) {
+        if !git_ref.is_empty() {
+            return crate::json_error(
+                StatusCode::BAD_REQUEST,
+                "A branch or tag only applies to a Git repository; this folder has none.",
+            );
+        }
+        if let Some(response) = crate::permissions::guard_user(
+            &state,
+            crate::permissions::Action::FsWrite,
+            &root.display().to_string(),
+            "",
+            approve,
+            "copy a skill folder into the skills folder",
+        ) {
+            return response;
+        }
+        let outcome = tokio::task::spawn_blocking(move || import_folder(&root, &folder)).await;
+        // A copied folder has no repository, so it cannot be refreshed from Git.
+        return finish_import(&state, outcome, None, None);
+    }
     if let Some(response) = crate::permissions::guard_user(
         &state,
         crate::permissions::Action::Git,
@@ -1260,16 +1315,26 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
     let outcome =
         tokio::task::spawn_blocking(move || import_clone(&root, &source, reference.as_deref()))
             .await;
+    finish_import(&state, outcome, Some(&recorded_origin), Some(&recorded_ref))
+}
+
+/// The shared tail of both import paths: record what was installed and answer.
+fn finish_import(
+    state: &AppState,
+    outcome: Result<Result<Imported, String>, tokio::task::JoinError>,
+    origin: Option<&str>,
+    git_ref: Option<&str>,
+) -> Response<Body> {
     match outcome {
         Ok(Ok(imported)) => {
             if let Ok(text) = fs::read_to_string(imported.path.join(MANIFEST)) {
                 if let Err(error) = remember_at(
-                    &registry_path(&state),
+                    &registry_path(state),
                     &imported.id,
                     &imported.version,
                     &fingerprint(&text),
-                    Some(&recorded_origin),
-                    Some(&recorded_ref),
+                    origin,
+                    git_ref,
                 ) {
                     return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
                 }
@@ -1823,6 +1888,64 @@ mod tests {
                 message,
             ],
         );
+    }
+
+    #[test]
+    fn a_plain_folder_is_copied_into_the_skills_root() {
+        let base = scratch("folder-import");
+        let source = base.join("my-skill");
+        fs::create_dir_all(source.join("assets")).unwrap();
+        fs::write(
+            source.join(MANIFEST),
+            "---\nname: Folder Skill\nversion: 1.2.3\n---\nCopied instructions.\n",
+        )
+        .unwrap();
+        fs::write(source.join("assets/notes.txt"), "notes").unwrap();
+        let root = base.join("skills");
+        let imported = import_folder(&root, &source).expect("folder import");
+        assert_eq!(imported.id, "folder-skill");
+        assert_eq!(imported.version, "1.2.3");
+        assert_eq!(imported.files, 2);
+        let installed = root.join("folder-skill");
+        assert!(installed.join("assets/notes.txt").is_file());
+        assert!(!installed.join(".git").exists());
+        let text = fs::read_to_string(installed.join(MANIFEST)).unwrap();
+        assert!(text.contains("name: folder-skill"), "{text}");
+        assert!(text.contains("Copied instructions."), "{text}");
+        // The staging folder is removed either way.
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".import-"))
+            .count();
+        assert_eq!(leftovers, 0, "no staging folder should be left behind");
+    }
+
+    #[test]
+    fn only_a_folder_without_git_is_treated_as_plain() {
+        let base = scratch("folder-detect");
+        let clone = base.join("clone");
+        fs::create_dir_all(clone.join(".git")).unwrap();
+        assert!(
+            local_skill_folder(clone.to_str().unwrap()).is_none(),
+            "a folder holding .git must take the clone path"
+        );
+        let plain = base.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(
+            local_skill_folder(plain.to_str().unwrap()),
+            Some(plain.clone())
+        );
+        assert!(local_skill_folder(base.join("missing").to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn a_plain_folder_import_refuses_a_missing_manifest() {
+        let base = scratch("folder-import-empty");
+        let source = base.join("no-manifest");
+        fs::create_dir_all(&source).unwrap();
+        let error = import_folder(&base.join("skills"), &source).unwrap_err();
+        assert!(error.contains("SKILL.md"), "{error}");
     }
 
     #[test]

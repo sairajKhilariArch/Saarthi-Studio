@@ -20,6 +20,8 @@ test("the skills pane has a Git import form, wired to the import route", () => {
   assert.match(html, /id="skillImportSource"/);
   assert.match(html, /id="skillImportRef"/);
   assert.match(html, /id="skillImportBtn"/);
+  // A local folder without .git is copied, not cloned.
+  assert.match(html, /a local folder without <code>\.git<\/code> is copied/);
   assert.match(html, /needs a SKILL\.md at its root/);
 
   const app = read("app.js");
