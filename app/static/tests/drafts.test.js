@@ -41,6 +41,21 @@ test("the editor mirrors a dirty buffer and clears it on save, revert and close"
   assert.match(app, /await restoreDraft\(file\);/);
 });
 
+test("a rename carries a dirty buffer's draft to its new path", () => {
+  const app = read("app.js");
+  assert.match(app, /async function moveDraft\(from, to\)/);
+  // The draft is re-saved under the new key before the old one is discarded.
+  const body = app.slice(app.indexOf("async function moveDraft"));
+  const put = body.indexOf('method: "PUT"');
+  // The first `discardDraft(from)` is the no-draft branch; the normal path
+  // clears the old key only after the new one has been written.
+  assert.ok(put !== -1, "moveDraft writes the new key");
+  assert.match(body.slice(put), /await discardDraft\(from\);/, "moveDraft saves then clears");
+  // Both the file branch and the folder branch of remapOpenPaths carry drafts,
+  // and only a dirty buffer has one to carry.
+  assert.equal((app.match(/if \(file\.content !== file\.original\) void moveDraft\(key, /g) || []).length, 2);
+});
+
 test("the server stores drafts in the database, not in the workspace", () => {
   const rust = read("../src/drafts.rs");
   assert.match(rust, /CREATE TABLE IF NOT EXISTS editor_drafts/);

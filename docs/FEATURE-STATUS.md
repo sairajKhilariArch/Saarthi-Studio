@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.33.1 (2026-11-13):** A rename no longer strands a draft. Renaming
+an open dirty file moved the tab but the draft row was keyed by the old path, so
+a shutdown before the next keystroke lost it; `moveDraft` now copies the row to
+the new path and deletes the old one in both `remapOpenPaths` branches, and only
+for a dirty buffer. Not exercised in a browser.
 **Revision 3.33.0 (2026-11-13):** Crash recovery for unsaved buffers. A dirty
 buffer is mirrored 1.2 s after the last keystroke into the app's own
 `editor_drafts` table and cleared on save, revert or a discarded close; opening

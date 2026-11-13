@@ -3043,6 +3043,7 @@ function remapOpenPaths(from, to) {
     if (key === from) {
       file.path = to;
       file.name = basename(to);
+      if (file.content !== file.original) void moveDraft(key, to).catch(() => {});
       remapped.set(to, file);
       state.openTabs = state.openTabs.map((item) => (item === fileKey(from) ? fileKey(to) : item));
       if (state.activeKey === fileKey(from)) state.activeKey = fileKey(to);
@@ -3050,6 +3051,7 @@ function remapOpenPaths(from, to) {
       const next = to + key.slice(from.length);
       file.path = next;
       file.name = basename(next);
+      if (file.content !== file.original) void moveDraft(key, next).catch(() => {});
       remapped.set(next, file);
       state.openTabs = state.openTabs.map((item) => (item === fileKey(key) ? fileKey(next) : item));
       if (state.activeKey === fileKey(key)) state.activeKey = fileKey(next);
@@ -3226,6 +3228,22 @@ async function restoreDraft(file) {
 async function discardDraft(path) {
   if (!path || path === SCRATCH_KEY) return;
   await api(`/api/workspace/draft?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+}
+
+/* A rename moves the file on disk but not its draft row, and the debounce may
+   not run again before a crash. Carry the draft across with the tab. */
+async function moveDraft(from, to) {
+  if (!from || !to || from === to) return;
+  const result = await api(`/api/workspace/draft?path=${encodeURIComponent(from)}`);
+  if (!result.ok || !result.data.draft) {
+    await discardDraft(from);
+    return;
+  }
+  await api("/api/workspace/draft", {
+    method: "PUT",
+    body: JSON.stringify({ path: to, content: result.data.draft.content }),
+  });
+  await discardDraft(from);
 }
 
 function updateGutter() {

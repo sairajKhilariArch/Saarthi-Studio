@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.33.1
+
+3.33.0 moved a renamed tab's path but left its draft row behind, so renaming a
+dirty buffer and then crashing before the next keystroke lost exactly the text
+3.33.0 exists to keep.
+
+- `moveDraft` reads the draft at the old path, writes it under the new one and
+  deletes the old row; both `remapOpenPaths` branches (a renamed file, and files
+  under a renamed folder) carry a dirty buffer's draft across.
+- Only a dirty buffer has a draft, so a clean tab sends no request and an
+  ordinary rename costs nothing. A rename with no stored draft clears the old
+  key rather than failing.
 ## 3.33.0
 
 An unexpected shutdown lost every unsaved buffer: the editor kept them in memory
