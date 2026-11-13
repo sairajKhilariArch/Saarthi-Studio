@@ -53,6 +53,19 @@
           "minimum": 2,
           "maximum": 24,
           "description": "How many recent messages compete for the token budget."
+        },
+        "freeAiStudio.thinkingLevel": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "off", "low", "medium", "high"],
+          "enumDescriptions": [
+            "Send no reasoning parameter; the model's own default applies.",
+            "No reasoning parameter is sent (an explicit off).",
+            "A short reasoning pass - fastest, cheapest.",
+            "A balanced reasoning pass.",
+            "A deeper reasoning pass - slowest, most tokens."
+          ],
+          "description": "Reasoning level the built-in server asks for on chat turns. A message's Think choice or @Thinking directive wins over this setting."
         }
       }
     }

@@ -97,6 +97,7 @@ function readConfig(): StudioConfig {
     contextBudgetTokens: clamp(config.get<number>("contextBudgetTokens", 6000), 1000, 32000),
     historyMessages: clamp(config.get<number>("historyMessages", 6), 2, 24),
     sendWorkspaceOutline: true,
+    thinkingLevel: config.get<string>("thinkingLevel", "") || "",
   };
 }
 

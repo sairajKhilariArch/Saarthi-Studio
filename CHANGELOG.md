@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.47.0
+
+Phase 14 asks the VS Code extension's embedded server to cover the desktop's
+living subset. It declared `thinking: false` and ignored the composer's Think
+choice, so a reasoning level picked in the shared UI changed nothing whenever
+the desktop app was closed.
+
+- `callRouter` sends `reasoning_effort` for a level of low, medium or high; `off`
+  and "model default" send no parameter at all, so those requests stay
+  byte-for-byte what they were before Thinking.
+- `lib.ts` ports the desktop rules: `parseThinkingLevel` (with the `none`,
+  `minimal` and `med` aliases), `takeThinkingDirective` (`@Thinking`,
+  `@Thinking:high`, `@Thinking high`, `\@Thinking`, and the cases that stay
+  prose), and `resolveThinking` (this message's choice, then its directive, then
+  the global setting).
+- The embedded server answers `GET /api/thinking/levels` (id, effort,
+  description), reports the level in force as `meta.thinking` with its scope,
+  stores the message without the command token, and serves `thinking_level` in
+  `GET /api/config`.
+- A new `freeAiStudio.thinkingLevel` setting is the global scope, and the
+  capability contract now says `thinking: true` because the route and the
+  request are real. Agent runs in the embedded server still send no reasoning
+  parameter: the desktop's `run_thinking_level` has no counterpart there, and
+  MCP is still not served.
+- The AppStream component's newest `<release>` said 3.32.0, which the release
+  gate refuses against a newer build; it now names this version.
+
 ## 3.46.0
 
 Phase 12's dashboard asks which tool each live agent is on and which files it is

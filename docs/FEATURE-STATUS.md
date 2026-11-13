@@ -17,6 +17,17 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.47.0 (2026-11-13):** Phase 14's thinking half in the VS Code
+embedded server. `callRouter` carries `reasoning_effort` for low/medium/high
+and nothing for off or unset; the server parses `@Thinking` exactly as the
+desktop does, resolves this message's choice above its directive above the new
+`freeAiStudio.thinkingLevel` setting, reports `meta.thinking` with its scope,
+serves `GET /api/thinking/levels` and `thinking_level` in `/api/config`, and the
+contract says `thinking: true`. Four extension tests cover the parse, the
+directive, the precedence and the real request body. Still absent there: MCP,
+and any reasoning parameter for agent runs. The AppStream component's newest
+release also caught up with the build (3.32.0 → 3.47.0), which the metadata gate
+had been failing.
 **Revision 3.46.0 (2026-11-13):** Phase 12's live detail is on the dashboard.
 `overview.liveRuns` reports each live run's newest step and its written files,
 read from the step log; the board lists them with the model. The live total is

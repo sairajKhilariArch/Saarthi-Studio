@@ -19,6 +19,11 @@ import {
   sanitizeConsolePath,
   startEmbeddedServer,
   stripAttachedCode,
+  THINKING_LEVELS,
+  parseThinkingLevel,
+  resolveThinking,
+  takeThinkingDirective,
+  thinkingEffort,
   supportsCapability,
   listDir,
   readTextFile,
@@ -954,4 +959,140 @@ test("capability summary names an older server instead of guessing", () => {
   assert.equal(supportsCapability({ contract: CONTRACT_VERSION, features: { chat: true } }, "mcp"), false);
   // A contract this client does not read never unlocks a command on a guess.
   assert.equal(supportsCapability({ contract: 9, features: { chat: true } }, "chat"), false);
+});
+
+/* ------------------------------------------------------------------ */
+/* thinking control                                                    */
+/* ------------------------------------------------------------------ */
+
+test("thinking levels parse with the desktop's aliases and send no parameter off", () => {
+  assert.equal(parseThinkingLevel(" HIGH "), "high");
+  assert.equal(parseThinkingLevel("med"), "medium");
+  assert.equal(parseThinkingLevel("minimal"), "low");
+  assert.equal(parseThinkingLevel("none"), "off");
+  // "default" is the absence of a level, and an unknown word is never promoted.
+  assert.equal(parseThinkingLevel("default"), null);
+  assert.equal(parseThinkingLevel("banana"), null);
+  assert.equal(parseThinkingLevel(undefined), null);
+  assert.equal(thinkingEffort("off"), null);
+  assert.equal(thinkingEffort(null), null);
+  assert.equal(thinkingEffort("low"), "low");
+  assert.equal(thinkingEffort("high"), "high");
+  assert.deepEqual(THINKING_LEVELS, ["off", "low", "medium", "high"]);
+});
+
+test("the thinking directive strips only a real command", () => {
+  assert.deepEqual(takeThinkingDirective("@Thinking:high fix the test"), {
+    level: "high",
+    command: true,
+    text: "fix the test",
+  });
+  assert.deepEqual(takeThinkingDirective("@Thinking high fix it"), {
+    level: "high",
+    command: true,
+    text: "fix it",
+  });
+  // A bare token turns the command on and leaves the level unchanged.
+  assert.deepEqual(takeThinkingDirective("@Thinking write it"), {
+    level: null,
+    command: true,
+    text: "write it",
+  });
+  // Escaped, unknown-level, mid-sentence, bare and look-alike tokens stay prose.
+  assert.deepEqual(takeThinkingDirective("\\@Thinking:high stays prose"), {
+    level: null,
+    command: false,
+    text: "@Thinking:high stays prose",
+  });
+  assert.equal(takeThinkingDirective("@Thinking:banana").command, false);
+  assert.equal(takeThinkingDirective("ask about @Thinking later").command, false);
+  assert.equal(takeThinkingDirective("@Thinking").text, "@Thinking");
+  assert.equal(takeThinkingDirective("@ThinkingXYZ hi").command, false);
+});
+
+test("thinking resolves message choice above directive above the global setting", () => {
+  const none = takeThinkingDirective("plain message");
+  assert.deepEqual(resolveThinking("high", none, "low"), { level: "high", scope: "message" });
+  const directive = takeThinkingDirective("@Thinking:medium go");
+  assert.deepEqual(resolveThinking(undefined, directive, "low"), { level: "medium", scope: "message" });
+  assert.deepEqual(resolveThinking("banana", none, "low"), { level: "low", scope: "global" });
+  assert.equal(resolveThinking("", none, ""), null);
+});
+
+test("built-in server asks the router for the reasoning level and says where it came from", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const bodies = [];
+  const fetchImpl = async (_url, init) => {
+    bodies.push(JSON.parse(String(init.body)));
+    return new Response(
+      JSON.stringify({ model: "auto", provider: "mock", choices: [{ message: { content: "ok" } }] }),
+      { status: 200 },
+    );
+  };
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+      thinkingLevel: "",
+    }),
+  });
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const capabilities = await (await fetch(`${embedded.url}/api/capabilities`)).json();
+  assert.equal(capabilities.features.thinking, true);
+  const levels = await (await fetch(`${embedded.url}/api/thinking/levels`)).json();
+  assert.deepEqual(levels.levels.map((level) => level.id), ["off", "low", "medium", "high"]);
+  assert.equal(levels.levels[0].effort, null);
+  assert.equal(levels.levels[3].effort, "high");
+  assert.match(levels.levels[3].description, /deeper reasoning/);
+
+  const id = (await post("/api/conversations", { title: "Thinking" })).body.id;
+
+  const chosen = await post("/api/chat", { conversation_id: id, message: "explain this", thinking: "high" });
+  assert.equal(chosen.status, 200);
+  assert.equal(bodies.at(-1).reasoning_effort, "high");
+  assert.deepEqual(chosen.body.meta.thinking, {
+    level: "high",
+    scope: "message",
+    note: "Asks for a deeper reasoning pass — slowest, most tokens.",
+  });
+
+  // The directive is a command: the token never reaches the router or history.
+  const directed = await post("/api/chat", { conversation_id: id, message: "@Thinking:low tighten this" });
+  assert.equal(directed.status, 200);
+  assert.equal(bodies.at(-1).reasoning_effort, "low");
+  assert.equal(bodies.at(-1).messages.at(-1).content, "tighten this");
+  const messages = await (await fetch(`${embedded.url}/api/conversations/${id}/messages`)).json();
+  assert.equal(messages.at(-2).content, "tighten this");
+
+  // Off sends nothing at all, so the request is the pre-Thinking request.
+  const off = await post("/api/chat", { conversation_id: id, message: "plain turn", thinking: "off" });
+  assert.equal(off.status, 200);
+  assert.equal("reasoning_effort" in bodies.at(-1), false);
+  assert.equal(off.body.meta.thinking.level, "off");
+
+  // No level anywhere is the provider default, reported as null.
+  const unset = await post("/api/chat", { conversation_id: id, message: "no level" });
+  assert.equal(unset.body.meta.thinking, null);
+  assert.equal("reasoning_effort" in bodies.at(-1), false);
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
 });

@@ -33,6 +33,8 @@ export interface StudioConfig {
   contextBudgetTokens: number;
   historyMessages: number;
   sendWorkspaceOutline: boolean;
+  /** Global reasoning level for chat turns (desktop `thinking_level`). */
+  thinkingLevel?: string;
   /** Workspace path prefixes never sent to any provider (desktop parity). */
   privacyExclusions?: string[];
 }
@@ -80,6 +82,128 @@ export function normalizeBaseUrl(value: string): string {
   const trimmed = String(value || "").trim().replace(/\/+$/, "");
   if (!trimmed) return "http://127.0.0.1:3001/v1";
   return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
+/* ------------------------------------------------------------------ */
+/* thinking control (desktop thinking.rs parity)                       */
+/* ------------------------------------------------------------------ */
+
+/** The four levels the composer offers. "Model default" is the absence of a
+    level, not a fifth value: nothing is sent and the provider decides. */
+export type ThinkingLevel = "off" | "low" | "medium" | "high";
+
+export const THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
+
+/** Case- and space-insensitive parse of a stored or submitted level; `null`
+    for anything else, including "default". */
+export function parseThinkingLevel(value: unknown): ThinkingLevel | null {
+  const word = String(value ?? "").trim().toLowerCase();
+  if (word === "none") return "off";
+  if (word === "minimal") return "low";
+  if (word === "med") return "medium";
+  return (THINKING_LEVELS as string[]).includes(word) ? (word as ThinkingLevel) : null;
+}
+
+/** The `reasoning_effort` value a level sends. "off" has none on purpose:
+    several models answer HTTP 400 to `effort: "none"`. */
+export function thinkingEffort(level: ThinkingLevel | null): string | null {
+  return level === "low" || level === "medium" || level === "high" ? level : null;
+}
+
+/** What a level asks for, for a UI that must not promise more than it does. */
+export function thinkingNote(level: ThinkingLevel | null): string {
+  switch (level) {
+    case "low":
+      return "Asks for a short reasoning pass — fastest, cheapest.";
+    case "medium":
+      return "Asks for a balanced reasoning pass.";
+    case "high":
+      return "Asks for a deeper reasoning pass — slowest, most tokens.";
+    default:
+      return "No reasoning parameter is sent; the model's own default applies.";
+  }
+}
+
+/** One parsed composer directive. */
+export interface ThinkingDirective {
+  /** The level the message itself asked for (`@Thinking` with no level leaves
+      this `null`: the command is on, the level is unchanged). */
+  level: ThinkingLevel | null;
+  /** True only when the token was consumed as a command. */
+  command: boolean;
+  /** The message to send: the command removed, or the escaped token restored. */
+  text: string;
+}
+
+const THINKING_TOKEN = "@thinking";
+
+/** Recognise `@Thinking`, `@Thinking:high` or `@Thinking high` at the start of
+    a message. Anything that would leave an empty prompt, carry an unknown
+    level, or appear mid-sentence is left exactly as typed — a message is never
+    silently truncated. */
+export function takeThinkingDirective(message: string): ThinkingDirective {
+  const literal = (text: string): ThinkingDirective => ({ level: null, command: false, text });
+  const trimmed = message.replace(/^\s+/, "");
+
+  // Escaped: the backslash is consumed and the token ships as text.
+  if (trimmed.startsWith("\\") && trimmed.slice(1).toLowerCase().startsWith(THINKING_TOKEN)) {
+    return literal(trimmed.slice(1));
+  }
+  if (!trimmed.toLowerCase().startsWith(THINKING_TOKEN)) return literal(message);
+
+  const after = trimmed.slice(THINKING_TOKEN.length);
+  let level: ThinkingLevel | null = null;
+  let rest: string;
+  if (after.startsWith(":")) {
+    const body = after.slice(1);
+    const end = body.search(/\s/);
+    const word = end === -1 ? body : body.slice(0, end);
+    const parsed = parseThinkingLevel(word);
+    // `@Thinking:banana` is not a command — keep the text intact.
+    if (!parsed) return literal(message);
+    level = parsed;
+    rest = end === -1 ? "" : body.slice(end);
+  } else if (!after) {
+    rest = after;
+  } else if (/^\s/.test(after)) {
+    const trimmedRest = after.replace(/^\s+/, "");
+    const end = trimmedRest.search(/\s/);
+    const word = end === -1 ? trimmedRest : trimmedRest.slice(0, end);
+    const parsed = parseThinkingLevel(word);
+    // A bare token followed by prose: the command is on, the prose is the
+    // prompt. A word that is not a level is prose too.
+    if (parsed) level = parsed;
+    rest = parsed ? trimmedRest.slice(end === -1 ? trimmedRest.length : end) : after;
+  } else {
+    // `@ThinkingXYZ` is not our token.
+    return literal(message);
+  }
+
+  const text = rest.trim();
+  // Nothing to send: treat the whole input as prose rather than swallowing
+  // what the user typed.
+  if (!text) return literal(message);
+  return { level, command: true, text };
+}
+
+export interface ResolvedThinking {
+  level: ThinkingLevel;
+  scope: "message" | "global";
+}
+
+/** First configured scope wins, as the desktop orders it: the composer's
+    choice for this message, then the message's own directive, then the global
+    setting. `null` means no scope set a level, so the provider default
+    applies. */
+export function resolveThinking(
+  submitted: unknown,
+  directive: ThinkingDirective,
+  global: unknown,
+): ResolvedThinking | null {
+  const message = parseThinkingLevel(submitted) || directive.level;
+  if (message) return { level: message, scope: "message" };
+  const fallback = parseThinkingLevel(global);
+  return fallback ? { level: fallback, scope: "global" } : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -693,18 +817,24 @@ export async function callRouter(
   messages: ChatMessage[],
   fetchImpl: typeof fetch,
   modelOverride?: string,
+  thinking?: ThinkingLevel | null,
 ): Promise<RouterReply> {
   const base = normalizeBaseUrl(config.routerBaseUrl);
   const model = modelOverride || config.model || "auto";
   const started = Date.now();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  const payload: Record<string, unknown> = { model, messages, stream: false };
+  // Desktop parity: an "off" or unset level sends no parameter at all, so the
+  // request is byte-for-byte the one it was before Thinking existed.
+  const effort = thinkingEffort(thinking ?? null);
+  if (effort) payload.reasoning_effort = effort;
   let response: Response;
   try {
     response = await fetchImpl(`${base}/chat/completions`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model, messages, stream: false }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(120_000),
     });
   } catch (error) {
@@ -800,7 +930,7 @@ export function embeddedCapabilities(): CapabilityContract {
       memory: false,
       code_index: false,
       extensions: false,
-      thinking: false,
+      thinking: true,
       openai_platform: false,
       permissions: false,
       deep_search: false,
@@ -1346,7 +1476,11 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
      `meta` so both chat routes can render their own response shape. */
   async function runChatTurn(body: Record<string, unknown>): Promise<{ answer: string; meta: Record<string, unknown> }> {
     const conversationId = String(body.conversation_id || "");
-    const message = String(body.message || "").trim();
+    // `@Thinking` at the start of the message is a command (desktop parity):
+    // the token is removed before the message is stored or sent, and
+    // `\@Thinking` ships the text as typed.
+    const directive = takeThinkingDirective(String(body.message || ""));
+    const message = directive.text.trim();
     const code = String(body.code || "").slice(0, 50_000);
     const language = String(body.language || "text").slice(0, 40);
     const fail = (status: number, reason: string): never => {
@@ -1407,6 +1541,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     store.append(conversationId, "user", prompt, attachmentRefs.length ? attachmentRefs : undefined);
     notifyConversation(conversationId, "user");
     const config = options.getConfig();
+    // Precedence where this server has the scopes: the composer's choice for
+    // this message, then the message's directive, then the global setting.
+    const thinking = resolveThinking(body.thinking, directive, config.thinkingLevel);
     const history = store
       .messages(conversationId)
       .slice(-Math.max(config.historyMessages, 2))
@@ -1428,7 +1565,13 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     });
     const modelOverride = String(body.model || "").trim();
     try {
-      const reply = await callRouter(config, packed.messages, fetchImpl, modelOverride || undefined);
+      const reply = await callRouter(
+        config,
+        packed.messages,
+        fetchImpl,
+        modelOverride || undefined,
+        thinking ? thinking.level : null,
+      );
       store.append(conversationId, "assistant", reply.answer);
       notifyConversation(conversationId, "assistant");
       store.logRequest({
@@ -1445,7 +1588,14 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       });
       return {
         answer: reply.answer,
-        meta: { ...reply.meta, context_tokens: packed.estimatedTokens, context_trimmed: packed.trimmedMessages },
+        meta: {
+          ...reply.meta,
+          context_tokens: packed.estimatedTokens,
+          context_trimmed: packed.trimmedMessages,
+          thinking: thinking
+            ? { level: thinking.level, scope: thinking.scope, note: thinkingNote(thinking.level) }
+            : null,
+        },
       };
     } catch (error) {
       const failure = error as Error & { latency?: number };
@@ -1514,6 +1664,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
             history_messages: config.historyMessages,
             send_workspace_outline: config.sendWorkspaceOutline,
             privacy_exclusions: config.privacyExclusions || [],
+            thinking_level: parseThinkingLevel(config.thinkingLevel) || "",
             embedded: true,
           });
           return;
@@ -1855,6 +2006,19 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         }
         workflowsStore.write(data);
         sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      /* thinking levels: id, the effort each sends and what it does ------ */
+      if (routePath === "/api/thinking/levels" && method === "GET") {
+        sendJson(response, 200, {
+          ok: true,
+          levels: THINKING_LEVELS.map((id) => ({
+            id,
+            effort: thinkingEffort(id),
+            description: thinkingNote(id),
+          })),
+        });
         return;
       }
 

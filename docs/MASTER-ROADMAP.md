@@ -54,7 +54,7 @@ This is the ordered backlog for the current tree. It supersedes older
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
 | 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0) and unsaved-buffer recovery (3.33.0) are done. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level since 3.47.0; its MCP subset and reasoning for agent runs are still missing. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
@@ -721,6 +721,17 @@ missing table or a future contract keeps everything visible. A remembered
 section that is no longer available falls back to Connection. The contract
 gained `permissions`, `deep_search` and `watch`; the extension's built-in server
 marks all three false because it does not serve those routes.
+
+*Delivered 3.47.0: the embedded server's thinking subset.* A chat turn asks the
+router for `reasoning_effort` when the level is low, medium or high, and sends no
+parameter for off or "model default". `@Thinking`, `@Thinking:high`,
+`@Thinking high` and `\@Thinking` behave exactly as they do on the desktop, the
+level resolves from the message's own choice to its directive to the new
+`freeAiStudio.thinkingLevel` setting, `meta.thinking` names the level and its
+scope, and `GET /api/thinking/levels` gives the composer each level's effort and
+what it does. The contract's `thinking` is now true because the request and the
+route are real. What the embedded server still does not have: MCP, and a
+reasoning parameter for agent runs (the desktop's `run_thinking_level`).
 
 ## Phase 15 — Extension ecosystem
 
