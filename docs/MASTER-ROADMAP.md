@@ -53,8 +53,8 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0) and formatting (3.23.0) are done. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 26 ids, the extension's subset, and controls hidden only on an explicit `false`. |
+| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0) and formatting (3.23.0) are done. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 27 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
@@ -405,6 +405,16 @@ that name the reason; paths are workspace-relative and escapes are refused; a
 new unsaved buffer is allowed. The Format button and `File: Format buffer` are
 gated by the new `editor_format` capability (24 ids), false in the embedded
 server. Phase 9 is left with completion/diagnostics and a debugger.*
+
+*Delivered 3.29.0: the file outline. `GET /api/index/symbols?path=&limit=` lists one
+indexed file's declarations in source order — name, kind, line, language — 200 by
+default and 2000 at most, an empty path a 400 and an unindexed file an empty list
+with a note. `Ctrl+Shift+O` and `Editor: Go to symbol in file` jump to the one
+symbol or open the chooser for several, with the definitions list's keys and
+labels; the caret lands on the name through the same placement helper. Both
+choosers now share `fillChooser`. The contract gained `editor_symbols` (27 ids)
+and `max_symbols`. Phase 9 is left with a debugger and everything a language
+server would know.*
 
 *Delivered 3.28.0: go to definition. `GET /api/index/definition?name=&path=&limit=`
 answers with every declaration of the exact name — kind, path, line, language — 20
@@ -924,7 +934,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
 | 8 Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
-| 9 Developer environment | Partial | no debugger; highlighting 3.27.0 (one layer), completion 3.25.0, definition 3.28.0, formatting 3.23.0, watch 3.21.0 |
+| 9 Developer environment | Partial | no debugger; highlighting 3.27.0 (one layer), completion 3.25.0, definition 3.28.0, symbols 3.29.0, formatting 3.23.0, watch 3.21.0 |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |

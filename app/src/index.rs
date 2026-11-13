@@ -986,6 +986,87 @@ async fn definition_symbols(
     }
 }
 
+/// How many symbols one file's outline lists: enough for a large module, still
+/// one cheap query from the index.
+pub(crate) const MAX_SYMBOLS: usize = 200;
+/// The most one request may ask for; the index itself stops at 2000 per file.
+const MAX_SYMBOL_LIMIT: usize = 2000;
+
+/// The declarations of one indexed file, in source order. An outline is a
+/// reading aid, so line order matters more than any ranking.
+fn symbols_for(db: &FsPath, path: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let relative = path.trim();
+    if relative.is_empty() {
+        return Err("Name a file to list its symbols.".to_string());
+    }
+    let conn = open_db(db).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.name, s.kind, s.line, f.language
+             FROM code_index_symbols s JOIN code_index_files f ON f.path = s.path
+             WHERE s.path = ?1
+             ORDER BY s.line, s.name",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([relative], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .flatten()
+        .take(limit.clamp(1, MAX_SYMBOL_LIMIT))
+        .map(|(name, kind, line, language)| {
+            json!({
+                "name": name,
+                "kind": kind,
+                "path": relative,
+                "line": line,
+                "language": language,
+            })
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SymbolsQuery {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn file_symbols(
+    State(state): State<AppState>,
+    Query(query): Query<SymbolsQuery>,
+) -> Response<Body> {
+    let limit = query.limit.unwrap_or(MAX_SYMBOLS);
+    match symbols_for(&state.database_path, &query.path, limit) {
+        Ok(items) => {
+            // A file that is not indexed is an ordinary answer, not an error:
+            // the outline just has nothing to show until the index sees it.
+            let note = if items.is_empty() {
+                "This file is not in the index — refresh the index or open an indexed file."
+            } else {
+                ""
+            };
+            Json(json!({
+                "ok": true,
+                "path": query.path.trim(),
+                "items": items,
+                "note": note,
+            }))
+            .into_response()
+        }
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/index", get(get_status))
@@ -993,6 +1074,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/index/search", get(search_index))
         .route("/api/index/complete", get(complete_symbols))
         .route("/api/index/definition", get(definition_symbols))
+        .route("/api/index/symbols", get(file_symbols))
         .route(
             "/api/index/semantic",
             get(crate::embeddings::semantic_endpoint),
@@ -1327,6 +1409,48 @@ mod tests {
         // Equal scores in one file fall back to the earlier line.
         let items = definitions(&db, "dup", "", 2).unwrap();
         assert_eq!(items[0]["line"], 1);
+        assert_eq!(items[1]["line"], 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_symbols_lists_one_file_in_source_order() {
+        let dir = scratch("symbols");
+        let db = database(&dir);
+        write(
+            &dir,
+            "src/lib.rs",
+            "pub struct Beta;\npub fn gamma() {}\npub fn alpha() {}\n",
+        );
+        write(&dir, "src/other.rs", "fn delta() {}\n");
+        refresh(&db, &dir, &[]).unwrap();
+
+        // Source order, not the alphabet: line 1, 2, 3.
+        let items = symbols_for(&db, "src/lib.rs", MAX_SYMBOLS).unwrap();
+        assert_eq!(items.len(), 3, "{items:?}");
+        assert_eq!(items[0]["name"], "Beta");
+        assert_eq!(items[0]["kind"], "struct");
+        assert_eq!(items[1]["name"], "gamma");
+        assert_eq!(items[1]["line"], 2);
+        assert_eq!(items[2]["name"], "alpha");
+        assert!(items.iter().all(|item| item["language"] == "rust"));
+        assert!(items.iter().all(|item| item["path"] == "src/lib.rs"));
+
+        // Another file's symbols are not mixed in, an unindexed path is an
+        // empty answer rather than an error, and no path at all is refused.
+        assert_eq!(
+            symbols_for(&db, "src/other.rs", MAX_SYMBOLS).unwrap().len(),
+            1
+        );
+        assert!(symbols_for(&db, "src/missing.rs", MAX_SYMBOLS)
+            .unwrap()
+            .is_empty());
+        assert!(symbols_for(&db, "  ", MAX_SYMBOLS).is_err());
+
+        // The cap keeps the start of the file, and a zero ask is one symbol.
+        assert_eq!(symbols_for(&db, "src/lib.rs", 0).unwrap().len(), 1);
+        let items = symbols_for(&db, "src/lib.rs", 2).unwrap();
+        assert_eq!(items.len(), 2);
         assert_eq!(items[1]["line"], 2);
         let _ = fs::remove_dir_all(&dir);
     }

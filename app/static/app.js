@@ -3458,20 +3458,16 @@ function closeDefinitions() {
   box.replaceChildren();
 }
 
-function renderDefinitions() {
-  const box = $("definitions");
-  if (!box) return;
+/* One listbox body for both choosers: a row per place, a click that picks, and
+   the active row scrolled into view. */
+function fillChooser(box, items, active, onPick) {
   box.replaceChildren();
-  if (!definitions.open) {
-    box.classList.add("hidden");
-    return;
-  }
-  definitions.items.forEach((item, index) => {
+  items.forEach((item, index) => {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = `completion-item${index === definitions.active ? " active" : ""}`;
+    row.className = `completion-item${index === active ? " active" : ""}`;
     row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", index === definitions.active ? "true" : "false");
+    row.setAttribute("aria-selected", index === active ? "true" : "false");
     const name = document.createElement("span");
     name.className = "completion-name";
     name.textContent = item.name;
@@ -3481,14 +3477,25 @@ function renderDefinitions() {
     row.append(name, where);
     row.addEventListener("mousedown", (event) => {
       event.preventDefault();
-      acceptDefinition(index);
+      onPick(index);
     });
     box.appendChild(row);
   });
-  const active = box.querySelector(".completion-item.active");
-  if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest" });
+  const current = box.querySelector(".completion-item.active");
+  if (current && current.scrollIntoView) current.scrollIntoView({ block: "nearest" });
   box.classList.remove("hidden");
   positionPopup(box);
+}
+
+function renderDefinitions() {
+  const box = $("definitions");
+  if (!box) return;
+  if (!definitions.open) {
+    box.replaceChildren();
+    box.classList.add("hidden");
+    return;
+  }
+  fillChooser(box, definitions.items, definitions.active, acceptDefinition);
 }
 
 function placeCaret(line, column) {
@@ -3575,6 +3582,96 @@ async function gotoDefinition() {
   }
   definitions = { open: true, items, active: 0, name };
   renderDefinitions();
+}
+
+/* ---- symbols in the open file --------------------------------------------
+   Ctrl+Shift+O: the index's outline of one file, in source order. It is the same
+   chooser as definitions, so the keys and the jump behave identically. */
+let fileSymbols = { open: false, items: [], active: 0, name: "" };
+
+function closeSymbols() {
+  if (!fileSymbols.open) return;
+  fileSymbols = { open: false, items: [], active: 0, name: "" };
+  const box = $("symbols");
+  if (!box) return;
+  box.classList.add("hidden");
+  box.replaceChildren();
+}
+
+function renderSymbols() {
+  const box = $("symbols");
+  if (!box) return;
+  if (!fileSymbols.open) {
+    box.replaceChildren();
+    box.classList.add("hidden");
+    return;
+  }
+  fillChooser(box, fileSymbols.items, fileSymbols.active, acceptSymbol);
+}
+
+function moveSymbol(step) {
+  if (!fileSymbols.items.length) return;
+  fileSymbols.active =
+    (fileSymbols.active + step + fileSymbols.items.length) % fileSymbols.items.length;
+  renderSymbols();
+}
+
+/* The symbol is in the buffer already, so the jump is a caret move with no file
+   to open. */
+function revealSymbol(item) {
+  closeSymbols();
+  const area = $("codeArea");
+  if (!area) return;
+  const at = definitionCaret(area.value, item.line, item.name);
+  placeCaret(at.line, at.column);
+}
+
+function acceptSymbol(index = fileSymbols.active) {
+  const item = fileSymbols.items[index];
+  if (!item) {
+    closeSymbols();
+    return;
+  }
+  revealSymbol(item);
+}
+
+async function gotoSymbol() {
+  const area = $("codeArea");
+  const file = activeFile();
+  if (!area || !file) {
+    toast("Open a file first.");
+    return;
+  }
+  if (!capabilitiesAllow(state.capabilities, "editor_symbols")) {
+    toast("This server cannot list a file's symbols.");
+    return;
+  }
+  if (file.scratch) {
+    toast("Scratch pads are not indexed.");
+    return;
+  }
+  closeDefinitions();
+  closeSymbols();
+  const params = new URLSearchParams({ path: file.path });
+  const result = await api(`/api/index/symbols?${params.toString()}`);
+  // A different tab is active now: its outline is not this one.
+  if (activeFile() !== file) return;
+  if (!result.ok) {
+    toast(result.data.error || "Could not list this file's symbols.");
+    return;
+  }
+  const items = Array.isArray(result.data.items) ? result.data.items : [];
+  if (!items.length) {
+    toast(result.data.note || "No symbols in the index for this file.");
+    return;
+  }
+  // One symbol is unambiguous; several open the chooser at the caret.
+  if (items.length === 1) {
+    revealSymbol(items[0]);
+    return;
+  }
+  fileSymbols = { open: true, items, active: 0, name: file.name };
+  renderSymbols();
 }
 
 async function formatActiveFile() {
@@ -8110,6 +8207,7 @@ function bindEvents() {
     onEditorInput();
     // A chooser belongs to the name it was opened on; typing dismisses it.
     if (definitions.open) closeDefinitions();
+    if (fileSymbols.open) closeSymbols();
     // An open list follows the word being typed; a closed one stays shut until
     // Ctrl+Space asks again.
     if (!completions.open) return;
@@ -8117,6 +8215,23 @@ function bindEvents() {
     completionTimer = setTimeout(() => { void requestCompletions(); }, 120);
   });
   $("codeArea").addEventListener("keydown", (event) => {
+    if (fileSymbols.open) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        moveSymbol(event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        acceptSymbol();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSymbols();
+        return;
+      }
+    }
     if (definitions.open) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -8133,6 +8248,11 @@ function bindEvents() {
         closeDefinitions();
         return;
       }
+    }
+    if (event.code === "KeyO" && event.shiftKey && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      void gotoSymbol();
+      return;
     }
     if (event.key === "F12") {
       event.preventDefault();

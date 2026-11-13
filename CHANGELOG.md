@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.29.0
+
+The editor's symbol outline: Ctrl+Shift+O lists what the index knows about the
+file that is open, in source order, and jumps to it.
+
+- **`GET /api/index/symbols?path=&limit=`** answers with one indexed file's
+  declarations — name, kind, line, language — ordered by line rather than ranked,
+  because an outline is read top to bottom. 200 by default and 2000 at most, the
+  same ceiling the indexer applies to a file. An empty path is a 400; a file the
+  index has not seen is an empty list with a note, not an error.
+- **Ctrl+Shift+O and `Editor: Go to symbol in file`.** One symbol jumps straight
+  there; several open the chooser at the caret, sharing the definitions list's
+  keys (arrows, Enter, Escape, typing dismisses) and its `kind · path:line`
+  labels. The jump reuses the declaration placement, so the caret lands on the
+  name on its own line, and scratch pads say they are not indexed.
+- The chooser markup is now built by one `fillChooser` helper for both lists;
+  the definitions list lost its own copy of that code and behaves as before.
+- **`editor_symbols` is the 27th contract id** with `max_symbols` in the limits,
+  `false` in the VS Code extension's embedded server, which has no index.
+
+Verified: `cargo test --locked`: 597 passed, 1 ignored (1 new: one file's symbols
+in source order, another file's excluded, an unindexed path empty, a blank path
+refused, and the cap with its clamp); clippy `--all-targets -D warnings` clean;
+`cargo fmt --check` clean; `test-frontend.sh` 72 passed (3 new: the listbox and
+its contract id, the shortcut and the request, the palette and the extension's
+`false`); `test-version.sh` 20/20; `test-e2e.sh` 32; extension `npm test` 27.
+Live headless: the route answered 200 with its "not in the index" note, a blank
+path was 400, the page carries `#symbols`, and the contract reports
+`"editor_symbols": true` with `"max_symbols": 200`. **Not run:** the outline and
+its jump in a browser — placement, scrolling and the keys are layout, which the
+harness cannot see (KNOWN-ISSUES 42).
+
 ## 3.28.0
 
 Phase 9 gains go to definition — the last navigation the code index can answer
