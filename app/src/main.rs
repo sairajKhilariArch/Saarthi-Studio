@@ -35,6 +35,7 @@ mod contract;
 mod cost;
 mod deepsearch;
 mod diagnostics;
+mod drafts;
 mod embeddings;
 mod events;
 mod extension_run;
@@ -510,6 +511,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     memory::initialize(conn).map_err(|error| format!("memory: {error}"))?;
     embeddings::initialize(conn).map_err(|error| format!("embeddings: {error}"))?;
     index::initialize(conn).map_err(|error| format!("code index: {error}"))?;
+    drafts::initialize(conn).map_err(|error| format!("editor drafts: {error}"))?;
     agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
     migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))
@@ -4709,6 +4711,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             workspace::guard_local_origin,
         )))
         .merge(index::router().route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        )))
+        .merge(drafts::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
         )))

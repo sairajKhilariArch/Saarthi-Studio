@@ -53,7 +53,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0) and formatting (3.23.0) are done. |
+| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0) and unsaved-buffer recovery (3.33.0) are done. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -436,6 +436,17 @@ calls and comments the symbol table never saw, and knows nothing about scope.
 The contract gained `editor_references` (28 ids) and `max_references`. Phase 9 is
 left with a debugger and everything a language server would know.*
 
+*Delivered 3.33.0: crash recovery for unsaved buffers. A dirty buffer is mirrored
+1.2 s after the last keystroke into the app's own database — never the
+workspace — and cleared when the file is saved, reverted or a tab is closed with
+its changes discarded. Opening the file fetches the draft, marks the buffer
+unsaved and leaves the file untouched until the reader saves. Drafts are scoped
+to the folder they were typed in, capped at 1 MiB each, 200 rows and 16 MiB per
+folder with the oldest pruned; the path is checked lexically, so a draft stays
+readable after its folder is deleted. The routes (`GET`/`PUT`/`DELETE
+`/api/workspace/draft`, `GET /api/workspace/drafts`) sit behind the editor's
+loopback-origin guard and add no contract id. Phase 9 is left with a debugger and
+everything a language server would know.*
 *Delivered 3.29.0: the file outline. `GET /api/index/symbols?path=&limit=` lists one
 indexed file's declarations in source order — name, kind, line, language — 200 by
 default and 2000 at most, an empty path a 400 and an unindexed file an empty list

@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.33.0
+
+An unexpected shutdown lost every unsaved buffer: the editor kept them in memory
+only, so a crash, a killed process or a restart took work the reader had never
+saved. The editor now keeps a copy of each dirty buffer in the application's own
+database and offers it back when the file is next opened.
+
+- **Mirrored while typing**: 1.2 s after the last keystroke a dirty buffer is
+  written to the new `editor_drafts` table through `PUT /api/workspace/draft`.
+  `GET /api/workspace/draft?path=` answers one, `GET /api/workspace/drafts`
+  lists what the open folder holds and `DELETE` clears one; the four routes
+  carry the same loopback-origin guard as the rest of the editor's API.
+- **Cleared when it is no longer needed**: saving, reverting, closing a tab and
+  closing all tabs with the changes discarded each delete the draft, so
+  recovery never offers text the file already has.
+- **Restored on open**: a file's draft is fetched when it is opened and the
+  buffer is marked unsaved, so nothing reaches disk until the reader saves.
+- **Bounded**: 1 MiB per buffer (the editor's own file cap), 200 drafts and
+  16 MiB per folder, pruning the oldest first. A draft is scoped to the folder
+  it was typed in and never writes to the workspace. The path check is lexical,
+  so a draft for a folder deleted afterwards stays readable; absolute paths,
+  `..` and Windows prefixes are refused.
+- **No new contract id**: the routes are internal to the desktop UI, so
+  `app/contract.rs` is unchanged at 28 ids.
+
 ## 3.32.0
 
 The packaged Linux metadata advertised version **1.26.6** while the app was

@@ -1707,6 +1707,8 @@ function closeTab(key) {
   }
   state.openTabs = state.openTabs.filter((item) => item !== key);
   state.files.delete(keyPath(key));
+  // A closed tab is not a crash: its mirror has done its job.
+  if (file) void discardDraft(file.path);
   if (state.activeKey === key) {
     const next = state.openTabs[state.openTabs.length - 1] || chatTabKey();
     activateTab(next);
@@ -3077,6 +3079,7 @@ function closeTabsUnder(path) {
     }
     state.openTabs = state.openTabs.filter((item) => item !== key);
     state.files.delete(keyPath(key));
+    if (file) void discardDraft(file.path);
   });
   if (!state.openTabs.includes(state.activeKey) && state.activeKey !== chatTabKey()) {
     activateTab(chatTabKey());
@@ -3089,6 +3092,7 @@ function closeAllFileTabs(silent = false) {
   if (!silent && dirty.length && !confirm(`${dirty.length} tab(s) have unsaved changes. Close them anyway?`)) {
     return false;
   }
+  [...state.files.values()].forEach((file) => { void discardDraft(file.path); });
   state.files.clear();
   state.openTabs = [chatTabKey()];
   state.activeKey = chatTabKey();
@@ -3127,6 +3131,7 @@ async function openFile(path, options = {}) {
   state.files.set(file.path, file);
   state.openTabs.push(fileKey(file.path));
   activateTab(fileKey(file.path));
+  await restoreDraft(file);
   if (options.focus !== false) $("codeArea").focus();
 }
 
@@ -3173,6 +3178,54 @@ function renderEditor() {
     $("gutter").scrollTop = 0;
     renderedPath = file.path;
   }
+}
+
+/* ---- unsaved buffers, kept across a crash --------------------------------
+   The editor mirrors a dirty buffer into the app's own database and removes the
+   row once the file is saved, reverted or the tab is closed with the changes
+   discarded. This path never writes the workspace: a draft is the app's copy of
+   text that was never saved, offered back when the file is opened again. */
+const DRAFT_DELAY = 1200;
+let draftTimer = 0;
+
+/* A draft is worth restoring only when it holds text the file on disk does not;
+   one equal to the file is the leftover of a discard that did not finish. */
+function draftRestore(draft, content) {
+  if (!draft || typeof draft.content !== "string") return "";
+  return draft.content === content ? "" : draft.content;
+}
+
+function scheduleDraft() {
+  clearTimeout(draftTimer);
+  const file = activeFile();
+  if (!file || file.scratch) return;
+  draftTimer = setTimeout(() => { void saveDraft(file); }, DRAFT_DELAY);
+}
+
+async function saveDraft(file) {
+  if (!file || file.scratch || file.content === file.original) return;
+  // The tab can close while the timer is pending; a closed buffer is not a draft.
+  if (!state.files.has(file.path)) return;
+  await api("/api/workspace/draft", {
+    method: "PUT",
+    body: JSON.stringify({ path: file.path, content: file.content }),
+  });
+}
+
+async function restoreDraft(file) {
+  if (!file || file.scratch) return;
+  const result = await api(`/api/workspace/draft?path=${encodeURIComponent(file.path)}`);
+  if (!result.ok) return;
+  const text = draftRestore(result.data.draft, file.content);
+  if (!text) return;
+  file.content = text;
+  renderEditor();
+  toast(`Recovered unsaved changes to ${file.name}.`);
+}
+
+async function discardDraft(path) {
+  if (!path || path === SCRATCH_KEY) return;
+  await api(`/api/workspace/draft?path=${encodeURIComponent(path)}`, { method: "DELETE" });
 }
 
 function updateGutter() {
@@ -3766,6 +3819,7 @@ async function saveActiveFile() {
   file.original = file.content;
   file.size = result.data.size;
   file.language = result.data.language || file.language;
+  void discardDraft(file.path);
   renderEditor();
   renderTabs();
   toast(`Saved ${basename(file.path)}.`);
@@ -3780,6 +3834,7 @@ function revertActiveFile() {
   if (!confirm("Discard unsaved changes and restore the last saved version?")) return;
   file.content = file.original;
   if (file.scratch) file.content = "";
+  void discardDraft(file.path);
   renderEditor();
   renderTabs();
   toast("Changes discarded.");
@@ -8260,6 +8315,7 @@ function bindEvents() {
     // A chooser belongs to the name it was opened on; typing dismisses it.
     if (places.open) closePlaces();
     if (fileSymbols.open) closeSymbols();
+    scheduleDraft();
     // An open list follows the word being typed; a closed one stays shut until
     // Ctrl+Space asks again.
     if (!completions.open) return;
