@@ -97,6 +97,12 @@ struct Installed {
     /// silently overwriting their words on the next update.
     #[serde(default)]
     fingerprint: String,
+    /// Where a Git import came from and at which ref, so it can be refreshed
+    /// later. Empty for skills typed in here or installed before 3.37.0.
+    #[serde(default)]
+    origin: String,
+    #[serde(default)]
+    git_ref: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -479,7 +485,14 @@ fn save_registry_at(path: &FsPath, registry: &Registry) -> Result<(), String> {
 }
 
 /// Record an install/update, keeping the original `installed_at`.
-fn remember_at(path: &FsPath, id: &str, version: &str, fingerprint: &str) -> Result<(), String> {
+fn remember_at(
+    path: &FsPath,
+    id: &str,
+    version: &str,
+    fingerprint: &str,
+    origin: Option<&str>,
+    git_ref: Option<&str>,
+) -> Result<(), String> {
     let mut registry = load_registry_at(path);
     let now = crate::now_seconds();
     match registry.skills.iter_mut().find(|entry| entry.id == id) {
@@ -487,6 +500,14 @@ fn remember_at(path: &FsPath, id: &str, version: &str, fingerprint: &str) -> Res
             entry.version = version.to_string();
             entry.updated_at = now;
             entry.fingerprint = fingerprint.to_string();
+            // A manual edit must not erase where the skill came from, so only
+            // a known origin replaces it.
+            if let Some(origin) = origin {
+                entry.origin = origin.to_string();
+            }
+            if let Some(git_ref) = git_ref {
+                entry.git_ref = git_ref.to_string();
+            }
         }
         None => registry.skills.push(Installed {
             id: id.to_string(),
@@ -494,6 +515,8 @@ fn remember_at(path: &FsPath, id: &str, version: &str, fingerprint: &str) -> Res
             installed_at: now,
             updated_at: now,
             fingerprint: fingerprint.to_string(),
+            origin: origin.unwrap_or_default().to_string(),
+            git_ref: git_ref.unwrap_or_default().to_string(),
         }),
     }
     save_registry_at(path, &registry)
@@ -570,6 +593,15 @@ struct Imported {
 /// sources must be `https`, because a credential prompt on a process with no
 /// terminal would hang and plain http would send it in the clear.
 fn import_clone(root: &FsPath, source: &str, git_ref: Option<&str>) -> Result<Imported, String> {
+    let temp = stage_clone(root, source, git_ref)?;
+    let result = install_clone(root, &temp);
+    let _ = fs::remove_dir_all(&temp);
+    result
+}
+
+/// Validate a source and clone it beside the skills root. The caller owns the
+/// temporary folder and removes it.
+fn stage_clone(root: &FsPath, source: &str, git_ref: Option<&str>) -> Result<PathBuf, String> {
     let source = source.trim();
     if source.is_empty() {
         return Err("Give a Git URL or a folder holding a clone.".to_string());
@@ -603,9 +635,7 @@ fn import_clone(root: &FsPath, source: &str, git_ref: Option<&str>) -> Result<Im
         let _ = fs::remove_dir_all(&temp);
         return Err(error);
     }
-    let result = install_clone(root, &temp);
-    let _ = fs::remove_dir_all(&temp);
-    result
+    Ok(temp)
 }
 
 fn clone_into(source: &str, branch: Option<&str>, temp: &FsPath) -> Result<(), String> {
@@ -662,7 +692,14 @@ fn clone_into(source: &str, branch: Option<&str>, temp: &FsPath) -> Result<(), S
     }
 }
 
-fn install_clone(root: &FsPath, temp: &FsPath) -> Result<Imported, String> {
+struct Staged {
+    id: String,
+    version: String,
+    document: String,
+}
+
+/// Read and validate a clone's `SKILL.md` without touching the skills root.
+fn inspect_clone(temp: &FsPath) -> Result<Staged, String> {
     let manifest = temp.join(MANIFEST);
     let text = fs::read_to_string(&manifest).map_err(|_| {
         format!("That repository has no {MANIFEST} at its root, so it is not a skill.")
@@ -687,18 +724,6 @@ fn install_clone(root: &FsPath, temp: &FsPath) -> Result<Imported, String> {
     if id.is_empty() {
         return Err("The skill's name has no letter or digit to build a folder from.".to_string());
     }
-    let target = root.join(&id);
-    if target.exists() {
-        return Err(format!(
-            "A skill named \"{id}\" is already installed; remove it first."
-        ));
-    }
-    let mut files = 0usize;
-    let mut bytes = 0u64;
-    if let Err(error) = copy_tree(temp, &target, &mut files, &mut bytes) {
-        let _ = fs::remove_dir_all(&target);
-        return Err(error);
-    }
     let version = if parsed.version.is_empty() {
         DEFAULT_VERSION.to_string()
     } else {
@@ -709,18 +734,84 @@ fn install_clone(root: &FsPath, temp: &FsPath) -> Result<Imported, String> {
     // Install follows. Extra front-matter keys this app does not read are not
     // carried over; the instructions, description and version are.
     let document = manifest_text(&id, &parsed.description, &version, &parsed.body);
+    Ok(Staged {
+        id,
+        version,
+        document,
+    })
+}
+
+fn install_clone(root: &FsPath, temp: &FsPath) -> Result<Imported, String> {
+    let staged = inspect_clone(temp)?;
+    let target = root.join(&staged.id);
+    if target.exists() {
+        return Err(format!(
+            "A skill named \"{}\" is already installed; remove it first.",
+            staged.id
+        ));
+    }
+    copy_staged(root, temp, &staged)
+}
+
+fn copy_staged(root: &FsPath, temp: &FsPath, staged: &Staged) -> Result<Imported, String> {
+    let target = root.join(&staged.id);
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    if let Err(error) = copy_tree(temp, &target, &mut files, &mut bytes) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(error);
+    }
     let manifest = target.join(MANIFEST);
-    if let Err(error) = fs::write(&manifest, &document) {
+    if let Err(error) = fs::write(&manifest, &staged.document) {
         let _ = fs::remove_dir_all(&target);
         return Err(format!("Could not write {}: {error}", manifest.display()));
     }
     Ok(Imported {
-        id,
-        version,
+        id: staged.id.clone(),
+        version: staged.version.clone(),
         path: target,
         files,
         bytes,
     })
+}
+
+/// Replace an installed skill with a fresh clone of its repository. The old
+/// copy is moved into `.removed/` first; if the new one cannot be written, it is
+/// moved back, so a failed refresh never leaves the skill missing. A repository
+/// that now declares another name is refused rather than silently renaming the
+/// skill the user has enabled, disabled and used.
+fn refresh_clone(
+    root: &FsPath,
+    expected: &str,
+    source: &str,
+    git_ref: Option<&str>,
+) -> Result<Imported, String> {
+    let temp = stage_clone(root, source, git_ref)?;
+    let result = (|| {
+        let staged = inspect_clone(&temp)?;
+        if staged.id != expected {
+            return Err(format!(
+                "The repository now names this skill \"{}\"; remove \"{expected}\" and import it again.",
+                staged.id
+            ));
+        }
+        let target = root.join(expected);
+        if !target.is_dir() {
+            return Err(format!(
+                "\"{expected}\" is not in the skills folder any more."
+            ));
+        }
+        let trash = move_out_of_the_way(root, &target)?;
+        match copy_staged(root, &temp, &staged) {
+            Ok(imported) => Ok(imported),
+            Err(error) => {
+                let _ = fs::rename(&trash, &target);
+                Err(error)
+            }
+        }
+    })();
+    let _ = fs::remove_dir_all(&temp);
+    result
 }
 
 /// Copy a clone without its `.git`, refusing anything but regular files. A
@@ -958,6 +1049,9 @@ fn skill_json(state: &AppState, skill: &Skill, usage: &HashMap<String, (i64, f64
         "installed_at": record.as_ref().map(|entry| entry.installed_at),
         "updated_at": record.as_ref().map(|entry| entry.updated_at),
         "writable": skill.source == "user",
+        // A recorded Git origin is what the refresh action needs.
+        "origin": record.as_ref().map(|entry| entry.origin.clone()).unwrap_or_default(),
+        "git_ref": record.as_ref().map(|entry| entry.git_ref.clone()).unwrap_or_default(),
         // A fingerprint mismatch means the file was edited after installation;
         // the UI says so instead of implying the installed version is current.
         "modified": record
@@ -1095,6 +1189,8 @@ async fn install_skill(State(state): State<AppState>, Json(input): Json<Value>) 
                 &slug,
                 &version,
                 &fingerprint(&document),
+                None,
+                None,
             ) {
                 return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
             }
@@ -1150,6 +1246,10 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
     ) {
         return response;
     }
+    // The registry keeps where this came from, so a later Refresh can find it
+    // again without asking the user to retype the URL.
+    let recorded_origin = source.clone();
+    let recorded_ref = git_ref.clone();
     let reference = if git_ref.is_empty() {
         None
     } else {
@@ -1168,6 +1268,8 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
                     &imported.id,
                     &imported.version,
                     &fingerprint(&text),
+                    Some(&recorded_origin),
+                    Some(&recorded_ref),
                 ) {
                     return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
                 }
@@ -1186,6 +1288,114 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
         Err(error) => crate::json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("The import task failed: {error}"),
+        ),
+    }
+}
+
+/// Refresh a Git-imported skill from the repository it came from. The origin
+/// and ref are read from `skills.json`, never from the request, and
+/// `refresh_clone` keeps the replaced copy under `.removed/`.
+async fn refresh_skill(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(skill) = all_skills(&state).into_iter().find(|skill| skill.id == id) else {
+        return crate::json_error(StatusCode::NOT_FOUND, "No such skill.");
+    };
+    if skill.source != "user" {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "Only a skill in your user skills folder can be refreshed from Git.",
+        );
+    }
+    let Some(record) = installed_record(&registry_path(&state), &id) else {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "This skill was not installed here, so it has no recorded repository.",
+        );
+    };
+    if record.origin.is_empty() {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "This skill has no recorded Git origin; import it from its repository first.",
+        );
+    }
+    let Some(root) = writable_root(&state) else {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
+        );
+    };
+    let Some(dir) = folder_of(&skill) else {
+        return crate::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not find the skill's folder.",
+        );
+    };
+    if !inside(&root, &dir) {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "That skill is not in the writable skills folder.",
+        );
+    }
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::Git,
+        &record.origin,
+        "",
+        approve,
+        "clone a skill's repository again and replace the installed copy",
+    ) {
+        return response;
+    }
+    let origin = record.origin.clone();
+    let recorded_origin = origin.clone();
+    let reference = record.git_ref.clone();
+    let recorded_ref = reference.clone();
+    let target = id.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let branch = if reference.is_empty() {
+            None
+        } else {
+            Some(reference.as_str())
+        };
+        refresh_clone(&root, &target, &origin, branch)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(imported)) => {
+            if let Ok(text) = fs::read_to_string(imported.path.join(MANIFEST)) {
+                if let Err(error) = remember_at(
+                    &registry_path(&state),
+                    &imported.id,
+                    &imported.version,
+                    &fingerprint(&text),
+                    Some(&recorded_origin),
+                    Some(&recorded_ref),
+                ) {
+                    return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+                }
+            }
+            Json(json!({
+                "ok": true,
+                "id": imported.id,
+                "version": imported.version,
+                "path": imported.path.display().to_string(),
+                "files": imported.files,
+                "bytes": imported.bytes,
+                "replaced": true,
+            }))
+            .into_response()
+        }
+        Ok(Err(error)) => crate::json_error(StatusCode::BAD_REQUEST, error),
+        Err(error) => crate::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("The refresh task failed: {error}"),
         ),
     }
 }
@@ -1270,6 +1480,8 @@ async fn update_skill(
                 &target_id,
                 &version,
                 &fingerprint(&document),
+                None,
+                None,
             ) {
                 return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
             }
@@ -1357,6 +1569,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/skills", get(get_skills))
         .route("/api/skills/install", post(install_skill))
         .route("/api/skills/import", post(import_skill))
+        .route("/api/skills/:id/refresh", post(refresh_skill))
         .route("/api/skills/:id", get(get_skill))
         .route("/api/skills/:id/state", post(set_skill_enabled))
         .route("/api/skills/:id/update", post(update_skill))
@@ -1549,15 +1762,27 @@ mod tests {
     fn the_registry_remembers_the_version_without_losing_the_install_time() {
         let dir = scratch("registry");
         let path = dir.join("skills.json");
-        remember_at(&path, "review", "1.0.0", "aaaa").expect("first install");
+        remember_at(
+            &path,
+            "review",
+            "1.0.0",
+            "aaaa",
+            Some("https://example.com/skill"),
+            Some("main"),
+        )
+        .expect("first install");
         let first = installed_record(&path, "review").expect("record");
         assert_eq!(first.version, "1.0.0");
         assert_eq!(first.installed_at, first.updated_at);
 
-        remember_at(&path, "review", "1.1.0", "bbbb").expect("update");
+        // A later manual update passes no origin; the recorded one survives so
+        // Refresh still knows where the skill came from.
+        remember_at(&path, "review", "1.1.0", "bbbb", None, None).expect("update");
         let second = installed_record(&path, "review").expect("record");
         assert_eq!(second.version, "1.1.0");
         assert_eq!(second.fingerprint, "bbbb");
+        assert_eq!(second.origin, "https://example.com/skill");
+        assert_eq!(second.git_ref, "main");
         assert_eq!(
             second.installed_at, first.installed_at,
             "an update does not reset the install time"
@@ -1565,6 +1790,93 @@ mod tests {
 
         forget_at(&path, "review").expect("forget");
         assert!(installed_record(&path, "review").is_none());
+    }
+
+    fn git_in(dir: &FsPath, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_commit(dir: &FsPath, message: &str) {
+        git_in(dir, &["add", "."]);
+        git_in(
+            dir,
+            &[
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
+        );
+    }
+
+    #[test]
+    fn a_refresh_replaces_the_installed_copy_and_keeps_the_previous_one() {
+        let base = scratch("refresh");
+        let repo = git_repository(
+            "refresh-source",
+            &[(
+                "SKILL.md",
+                "---\nname: Refreshed Skill\nversion: 1.0.0\n---\nFirst instructions.\n",
+            )],
+        );
+        let root = base.join("skills");
+        import_clone(&root, repo.to_str().unwrap(), None).unwrap();
+        assert!(root.join("refreshed-skill").join(MANIFEST).is_file());
+
+        fs::write(
+            repo.join(MANIFEST),
+            "---\nname: Refreshed Skill\nversion: 3.0.0\n---\nSecond instructions.\n",
+        )
+        .unwrap();
+        git_commit(&repo, "v2");
+        let refreshed =
+            refresh_clone(&root, "refreshed-skill", repo.to_str().unwrap(), None).expect("refresh");
+        assert_eq!(refreshed.version, "3.0.0");
+        let installed = fs::read_to_string(root.join("refreshed-skill").join(MANIFEST)).unwrap();
+        assert!(installed.contains("Second instructions."), "{installed}");
+        assert!(installed.contains("version: 3.0.0"), "{installed}");
+        // The replaced copy is kept, not deleted.
+        let kept = fs::read_dir(root.join(".removed"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .count();
+        assert_eq!(kept, 1, "the previous copy should be under .removed");
+    }
+
+    #[test]
+    fn a_refresh_refuses_a_repository_that_renamed_the_skill() {
+        let base = scratch("refresh-rename");
+        let root = base.join("skills");
+        let first = git_repository(
+            "refresh-old-name",
+            &[("SKILL.md", "---\nname: Old Skill\n---\nOld instructions.\n")],
+        );
+        import_clone(&root, first.to_str().unwrap(), None).unwrap();
+        let renamed = git_repository(
+            "refresh-new-name",
+            &[("SKILL.md", "---\nname: New Skill\n---\nNew instructions.\n")],
+        );
+        let error = refresh_clone(&root, "old-skill", renamed.to_str().unwrap(), None).unwrap_err();
+        assert!(error.contains("remove"), "{error}");
+        // The installed copy is untouched by the refusal.
+        let installed = fs::read_to_string(root.join("old-skill").join(MANIFEST)).unwrap();
+        assert!(installed.contains("Old instructions."), "{installed}");
     }
 
     #[test]

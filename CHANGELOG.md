@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.37.0
+
+A skill imported from Git could not be updated: Import refuses an id that is
+already installed, so the only way to take a newer version was to remove the
+skill and import it again, which also discarded local edits.
+
+- An import now records its origin and ref in `skills.json`. `GET /api/skills`
+  and `GET /api/skills/:id` expose them as `origin` and `git_ref`; a manual edit
+  keeps them, because only a known origin replaces a recorded one.
+- `POST /api/skills/:id/refresh` clones the **recorded** origin again — never a
+  URL from the request — with the same bounds as Import (https or a local clone,
+  root `SKILL.md`, 200 files / 2 MiB, no symlinks, 90 s, `git` permission).
+- The fresh clone must still declare the same name: a repository that renamed
+  the skill is refused with a message to remove and re-import it, rather than
+  silently renaming a skill the user enabled, disabled and used.
+- The installed folder is moved into `.removed/` first and the clone is copied
+  in; if the copy fails the old folder is moved back, so a failed refresh never
+  leaves the skill missing. A successful refresh keeps the replaced copy under
+  `.removed/`, and the enabled flag and usage history survive because they are
+  keyed by id.
+- A skill's detail pane shows **Update from Git** when it has an origin, states
+  which repository will be cloned, and confirms before replacing instructions.
+
+Prior imports (3.36.0) have no recorded origin and must be removed and imported
+once more to gain refresh; the repository is still cloned shallowly and the
+installed manifest still carries only name/description/version.
+
 ## 3.36.0
 
 Phase 6 asks for skills imported from Git repositories; a skill could only be

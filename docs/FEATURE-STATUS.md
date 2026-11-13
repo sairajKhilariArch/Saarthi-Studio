@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.37.0 (2026-11-13):** Refresh a Git-imported skill. Imports now
+record their origin and ref, and `POST /api/skills/:id/refresh` re-clones that
+recorded repository (never a URL from the request) under Import's bounds,
+requiring the same name and keeping the replaced copy under `.removed/`; a
+failed copy restores the old folder. A manual edit keeps the origin, the skill
+list and detail expose it, and the detail pane offers Update from Git with a
+confirmation. Skills imported before 3.37.0 have no origin and need one
+remove-and-import; the clone remains shallow and only name/description/version
+are carried into the installed manifest.
 **Revision 3.36.0 (2026-11-13):** Skills can be imported from Git. The new
 `POST /api/skills/import` clones an https URL or a local clone into a temporary
 folder, requires a root `SKILL.md`, refuses more than 200 files or 2 MiB and any

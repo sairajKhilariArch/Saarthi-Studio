@@ -32,6 +32,27 @@ test("the skills pane has a Git import form, wired to the import route", () => {
   assert.match(app, /await loadSkills\(\);\n  await openSkillDetail\(result\.data\.id\);/);
 });
 
+test("an imported skill offers Update from Git, which clones its recorded origin", () => {
+  const app = read("app.js");
+  assert.match(app, /async function refreshSkill\(id, origin\)/);
+  assert.match(app, /if \(skill\.origin\) \{/);
+  assert.match(app, /api\(`\/api\/skills\/\$\{encodeURIComponent\(id\)\}\/refresh`, \{\n    method: "POST",\n    confirmApproval: true,/);
+  // Replacing instructions is confirmed, and the old copy is named as kept.
+  assert.match(app, /Replace this skill's instructions with the current version of \$\{origin\}/);
+  assert.match(app, /kept under \.removed/);
+});
+
+test("the server records and refreshes a Git origin", () => {
+  const rust = read("../src/skills.rs");
+  assert.match(rust, /\.route\("\/api\/skills\/:id\/refresh", post\(refresh_skill\)\)/);
+  assert.match(rust, /fn refresh_clone\(/);
+  assert.match(rust, /The repository now names this skill/);
+  // The origin comes from the registry, not from the request body.
+  assert.match(rust, /let origin = record\.origin\.clone\(\);/);
+  assert.match(rust, /\"origin\": record\.as_ref\(\)\.map\(\|entry\| entry\.origin\.clone\(\)\)/);
+  assert.match(rust, /entry\.origin = origin\.to_string\(\);/);
+});
+
 test("the server route is registered and the clone is bounded", () => {
   const rust = read("../src/skills.rs");
   assert.match(rust, /\.route\("\/api\/skills\/import", post\(import_skill\)\)/);

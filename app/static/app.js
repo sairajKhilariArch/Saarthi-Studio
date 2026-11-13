@@ -776,12 +776,42 @@ function renderSkillDetail() {
   remove.className = "btn btn-quiet btn-small danger";
   remove.textContent = "Remove skill";
   remove.addEventListener("click", () => removeSkill(skill.id));
-  actions.append(save, remove);
+  actions.append(save);
+  if (skill.origin) {
+    // Only a skill imported from Git has a recorded origin to clone again.
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "btn btn-quiet btn-small";
+    refresh.textContent = "Update from Git";
+    refresh.title = `Clone ${skill.origin} again and replace this copy`;
+    refresh.addEventListener("click", () => refreshSkill(skill.id, skill.origin));
+    actions.append(refresh);
+  }
+  actions.append(remove);
   body.appendChild(actions);
   const note = document.createElement("p");
   note.className = "muted";
   note.textContent = "Usage is recorded whenever this skill rides along with a message.";
   body.appendChild(note);
+}
+
+async function refreshSkill(id, origin) {
+  const answer = confirm(
+    `Replace this skill's instructions with the current version of ${origin}?\n\nThe copy being replaced is kept under .removed in the skills folder.`,
+  );
+  if (!answer) return;
+  const result = await api(`/api/skills/${encodeURIComponent(id)}/refresh`, {
+    method: "POST",
+    confirmApproval: true,
+    body: "{}",
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not refresh that skill.");
+    return;
+  }
+  toast(`Refreshed ${result.data.id} to v${result.data.version} (${result.data.files} file(s)).`);
+  await loadSkills();
+  await openSkillDetail(result.data.id);
 }
 
 async function installSkill() {
