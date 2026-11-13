@@ -296,7 +296,7 @@ test("built-in server chats through the router and serves the workspace", async 
   const capabilities = await (await fetch(`${embedded.url}/api/capabilities`)).json();
   assert.equal(capabilities.contract, CONTRACT_VERSION);
   assert.equal(capabilities.features.chat, true);
-  assert.equal(capabilities.features.mcp, false);
+  assert.equal(capabilities.features.mcp, true);
   assert.equal(supportsCapability(capabilities, "chat"), true);
   assert.equal(supportsCapability(capabilities, "mcp"), false);
   assert.match(capabilitySummary(capabilities), /contract 1/);
@@ -1091,6 +1091,234 @@ test("built-in server asks the router for the reasoning level and says where it 
   const unset = await post("/api/chat", { conversation_id: id, message: "no level" });
   assert.equal(unset.body.meta.thinking, null);
   assert.equal("reasoning_effort" in bodies.at(-1), false);
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+/* ------------------------------------------------------------------ */
+/* MCP: the embedded server's stdio subset                             */
+/* ------------------------------------------------------------------ */
+
+const FAKE_MCP = [
+  'import { createInterface } from "node:readline";',
+  'const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");',
+  'createInterface({ input: process.stdin }).on("line", (line) => {',
+  "  let message;",
+  "  try { message = JSON.parse(line); } catch { return; }",
+  '  if (message.method === "initialize") {',
+  '    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "9.9.9" } } });',
+  "    return;",
+  "  }",
+  '  if (message.method === "tools/list") {',
+  '    send({ jsonrpc: "2.0", id: message.id, result: { tools: [',
+  '      { name: "echo", description: "echo the text back", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },',
+  '      { name: "fail", description: "always fails", inputSchema: {} },',
+  "    ] } });",
+  "    return;",
+  "  }",
+  '  if (message.method === "tools/call") {',
+  '    if (message.params && message.params.name === "fail") {',
+  '      send({ jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: "it broke" }] } });',
+  "      return;",
+  "    }",
+  '    const text = String((message.params && message.params.arguments && message.params.arguments.text) || "");',
+  '    send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "echo:" + text }] } });',
+  "    return;",
+  "  }",
+  '  if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown method" } });',
+  "});",
+].join("\n");
+
+test("the embedded server runs a real stdio MCP server end to end", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const script = path.join(storage, "fake-mcp.mjs");
+  fs.writeFileSync(script, FAKE_MCP);
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const capabilities = await get("/api/capabilities");
+  assert.equal(capabilities.features.mcp, true);
+
+  const saved = await post("/api/mcp/servers", {
+    name: "echo",
+    transport: "stdio",
+    command: process.execPath,
+    args: [script],
+    env: { FAKE_FLAG: "1" },
+    enabled: true,
+  });
+  assert.equal(saved.status, 200);
+  const listed = await get("/api/mcp");
+  assert.equal(listed.servers.length, 1);
+  assert.equal(listed.servers[0].name, "echo");
+  assert.equal(listed.servers[0].transport, "stdio");
+  assert.deepEqual(listed.servers[0].environment, ["FAKE_FLAG"]);
+  assert.deepEqual(listed.servers[0].headers, []);
+
+  // Nothing is claimed before a real handshake.
+  const before = await get("/api/mcp/health");
+  assert.equal(before.servers[0].health, "unknown");
+
+  const tested = await post("/api/mcp/test", { name: "echo" });
+  assert.equal(tested.status, 200);
+  assert.deepEqual(tested.body.tools.map((tool) => tool.name), ["echo", "fail"]);
+  assert.deepEqual(tested.body.tools[0].input_schema.required, ["text"]);
+  assert.equal(tested.body.version, "9.9.9");
+  assert.equal(tested.body.protocol, "2024-11-05");
+  const healthy = await get("/api/mcp/health");
+  assert.equal(healthy.servers[0].health, "healthy");
+  assert.equal(healthy.servers[0].tools, 2);
+  assert.equal(healthy.servers[0].version, "9.9.9");
+
+  const called = await post("/api/mcp/call", {
+    server: "echo",
+    tool: "echo",
+    arguments: { text: "hi" },
+  });
+  assert.equal(called.status, 200);
+  assert.equal(called.body.text, "echo:hi");
+  assert.equal(called.body.is_error, false);
+
+  // A tool that reports its own failure is not a transport failure.
+  const failedTool = await post("/api/mcp/call", { server: "echo", tool: "fail", arguments: {} });
+  assert.equal(failedTool.status, 200);
+  assert.equal(failedTool.body.text, "it broke");
+  assert.equal(failedTool.body.is_error, true);
+
+  // The session is warm, so Disconnect has something to close; a second one is honest.
+  const disconnected = await post("/api/mcp/echo/disconnect", {});
+  assert.equal(disconnected.body.disconnected, true);
+  const again = await post("/api/mcp/echo/disconnect", {});
+  assert.equal(again.body.disconnected, false);
+  // Test reconnects, exactly as the panel says it does.
+  const reconnected = await post("/api/mcp/call", { server: "echo", tool: "echo", arguments: { text: "back" } });
+  assert.equal(reconnected.body.text, "echo:back");
+
+  const logs = await get("/api/mcp/logs?name=echo");
+  assert.ok(logs.entries.some((entry) => entry.source === "client" && /started/.test(entry.text)));
+
+  const check = await post("/api/mcp/health/check", { approve: true });
+  assert.equal(check.status, 200);
+  assert.deepEqual(check.body.results, [{ name: "echo", ok: true }]);
+  assert.deepEqual(check.body.skipped, []);
+
+  const removed = await post("/api/mcp/servers/remove", { name: "echo" });
+  assert.equal(removed.status, 200);
+  const empty = await get("/api/mcp");
+  assert.deepEqual(empty.servers, []);
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("MCP refusals name the reason and keep the registry honest", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  // The panel offers HTTP/SSE because the desktop serves them; this server says so.
+  const remote = await post("/api/mcp/servers", {
+    name: "remote",
+    transport: "http",
+    url: "https://example.com/mcp",
+  });
+  assert.equal(remote.status, 400);
+  assert.match(remote.body.error, /desktop app/);
+  const headers = await post("/api/mcp/servers", {
+    name: "headed",
+    transport: "stdio",
+    command: process.execPath,
+    headers: { Authorization: "Bearer x" },
+  });
+  assert.equal(headers.status, 400);
+  assert.match(headers.body.error, /no headers/);
+
+  const crossOrigin = await fetch(`${embedded.url}/api/mcp/servers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+    body: JSON.stringify({ name: "evil", command: process.execPath }),
+  });
+  assert.equal(crossOrigin.status, 403);
+  assert.match((await crossOrigin.json()).error, /another origin/);
+
+  const unnamed = await post("/api/mcp/servers", { transport: "stdio", command: "node" });
+  assert.equal(unnamed.status, 400);
+  const unknown = await post("/api/mcp/test", { name: "nope" });
+  assert.equal(unknown.status, 404);
+  assert.match(unknown.body.error, /No MCP server named/);
+
+  const broken = await post("/api/mcp/servers", {
+    name: "broken",
+    transport: "stdio",
+    command: path.join(storage, "no-such-binary"),
+  });
+  assert.equal(broken.status, 200);
+  const failed = await post("/api/mcp/test", { name: "broken" });
+  assert.equal(failed.status, 502);
+  assert.match(failed.body.error, /could not start|did not answer/);
+  const health = await get("/api/mcp/health");
+  assert.equal(health.servers.find((row) => row.name === "broken").health, "unhealthy");
+  assert.match(health.servers.find((row) => row.name === "broken").error, /could not start|did not answer/);
+
+  const disabled = await post("/api/mcp/servers", {
+    name: "off",
+    transport: "stdio",
+    command: process.execPath,
+    enabled: false,
+  });
+  assert.equal(disabled.status, 200);
+  const call = await post("/api/mcp/call", { server: "off", tool: "echo", arguments: {} });
+  assert.equal(call.status, 409);
+  assert.match(call.body.error, /disabled/);
+  const noTool = await post("/api/mcp/call", { server: "off", tool: "" });
+  assert.equal(noTool.status, 400);
+  const noLogName = await fetch(`${embedded.url}/api/mcp/logs`);
+  assert.equal(noLogName.status, 400);
 
   await embedded.close();
   cleanupTemp(workspace);

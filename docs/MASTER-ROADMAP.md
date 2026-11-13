@@ -54,7 +54,7 @@ This is the ordered backlog for the current tree. It supersedes older
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
 | 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0) and unsaved-buffer recovery (3.33.0) are done. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level since 3.47.0; its MCP subset and reasoning for agent runs are still missing. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level (3.47.0) and runs stdio MCP servers (3.48.0); remote transports, OAuth, agent-run reasoning and MCP tools in agent prompts remain missing there. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
@@ -732,6 +732,18 @@ scope, and `GET /api/thinking/levels` gives the composer each level's effort and
 what it does. The contract's `thinking` is now true because the request and the
 route are real. What the embedded server still does not have: MCP, and a
 reasoning parameter for agent runs (the desktop's `run_thinking_level`).
+
+*Delivered 3.48.0: MCP over stdio in the embedded server.* `mcp.ts` is a real
+MCP client for the panel the desktop already serves: newline-delimited JSON-RPC
+2.0, `initialize` + `notifications/initialized`, `tools/list` and `tools/call`,
+one warm session per server, a 20 s deadline, bounded tool text and a bounded
+log, and server-to-client requests refused with `-32601`. The embedded server
+answers list/health/logs/save/remove/test/call/health-check/disconnect, keeps
+its registry in `mcp.json` beside the conversation store, refuses a cross-origin
+mutation, and reports `mcp: true`. The subset is stdio only — HTTP/SSE, headers
+and OAuth name the desktop app instead — and the extension has no permission
+store, so a deliberate click is the approval. Agent runs still do not advertise
+MCP tools.
 
 ## Phase 15 — Extension ecosystem
 

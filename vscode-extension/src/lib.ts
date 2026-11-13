@@ -21,6 +21,7 @@ import {
   unifiedDiff,
 } from "./agent";
 import type { AgentStep } from "./agent";
+import { McpError, McpService } from "./mcp";
 
 /* ------------------------------------------------------------------ */
 /* types + constants                                                   */
@@ -926,7 +927,7 @@ export function embeddedCapabilities(): CapabilityContract {
       editor_references: false,
       saved_commands: false,
       watch: false,
-      mcp: false,
+      mcp: true,
       memory: false,
       code_index: false,
       extensions: false,
@@ -1270,6 +1271,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     { workflows: [] },
   );
   const activeProject = (): string | null => projectsStore.read().active || null;
+  // Its own registry beside the conversation store: the VS Code settings are
+  // read-only to this server, so the panel's Save writes here instead.
+  const mcp = new McpService(path.join(path.dirname(options.storeFile), "mcp.json"));
 
   function skillRoots(): Array<{ source: string; dir: string }> {
     const roots = [{ source: "built-in", dir: path.join(options.uiDir, "skills") }];
@@ -1622,6 +1626,31 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     const url = new URL(request.url || "/", "http://127.0.0.1");
     const method = (request.method || "GET").toUpperCase();
     const routePath = url.pathname;
+
+    /** A page on another origin must not register or start a process here. */
+    const sameOrigin = (): boolean => {
+      const origin = String(request.headers.origin || "").trim();
+      if (!origin) return true;
+      try {
+        const parsed = new URL(origin);
+        if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(parsed.hostname)) return false;
+        return parsed.host.toLowerCase() === String(request.headers.host || "").toLowerCase();
+      } catch {
+        return false;
+      }
+    };
+    const mcpWritable = (): boolean => {
+      if (sameOrigin()) return true;
+      sendJson(response, 403, {
+        ok: false,
+        error: "A page from another origin cannot change MCP servers.",
+      });
+      return false;
+    };
+    const mcpFailed = (error: unknown): void => {
+      const status = error instanceof McpError ? error.status : 502;
+      sendJson(response, status, { ok: false, error: (error as Error).message });
+    };
 
     try {
       if (!isLoopbackUrl(`http://${request.headers.host || "127.0.0.1"}`) && !(request.headers.host || "").startsWith("127.0.0.1")) {
@@ -2022,6 +2051,94 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         return;
       }
 
+      /* MCP: the desktop's stdio subset ------------------------------- */
+      if (routePath === "/api/mcp" && method === "GET") {
+        sendJson(response, 200, { ok: true, servers: mcp.list() });
+        return;
+      }
+      if (routePath === "/api/mcp/health" && method === "GET") {
+        sendJson(response, 200, { ok: true, servers: mcp.healthRows() });
+        return;
+      }
+      if (routePath === "/api/mcp/logs" && method === "GET") {
+        const name = String(url.searchParams.get("name") || "");
+        if (!name) {
+          sendJson(response, 400, { ok: false, error: "Name a server to read its log." });
+          return;
+        }
+        sendJson(response, 200, { ok: true, name, entries: mcp.entries(name) });
+        return;
+      }
+      if (routePath === "/api/mcp/servers" && method === "POST") {
+        if (!mcpWritable()) return;
+        try {
+          mcp.save(await readBody(request));
+          sendJson(response, 200, { ok: true });
+        } catch (error) {
+          mcpFailed(error);
+        }
+        return;
+      }
+      if (routePath === "/api/mcp/servers/remove" && method === "POST") {
+        if (!mcpWritable()) return;
+        const body = await readBody(request);
+        try {
+          await mcp.remove(String(body.name || ""));
+          sendJson(response, 200, { ok: true });
+        } catch (error) {
+          mcpFailed(error);
+        }
+        return;
+      }
+      if (routePath === "/api/mcp/test" && method === "POST") {
+        if (!mcpWritable()) return;
+        const body = await readBody(request);
+        const name = String(body.name || "");
+        try {
+          const result = await mcp.test(name);
+          sendJson(response, 200, { ok: true, server: name, ...result });
+        } catch (error) {
+          mcpFailed(error);
+        }
+        return;
+      }
+      if (routePath === "/api/mcp/call" && method === "POST") {
+        if (!mcpWritable()) return;
+        const body = await readBody(request);
+        const args =
+          body.arguments && typeof body.arguments === "object" && !Array.isArray(body.arguments)
+            ? (body.arguments as Record<string, unknown>)
+            : {};
+        try {
+          const result = await mcp.call(String(body.server || ""), String(body.tool || ""), args);
+          sendJson(response, 200, { ok: true, text: result.text, is_error: result.is_error });
+        } catch (error) {
+          mcpFailed(error);
+        }
+        return;
+      }
+      if (routePath === "/api/mcp/health/check" && method === "POST") {
+        if (!mcpWritable()) return;
+        const body = await readBody(request);
+        try {
+          const result = await mcp.check(String(body.name || ""));
+          sendJson(response, 200, { ok: true, ...result });
+        } catch (error) {
+          mcpFailed(error);
+        }
+        return;
+      }
+      if (method === "POST" && /^\/api\/mcp\/[^/]+\/disconnect$/.test(routePath)) {
+        if (!mcpWritable()) return;
+        const name = decodeURIComponent(routePath.split("/")[3] || "");
+        try {
+          sendJson(response, 200, { ok: true, disconnected: await mcp.disconnect(name) });
+        } catch (error) {
+          mcpFailed(error);
+        }
+        return;
+      }
+
       /* model catalog ------------------------------------------------ */
       if (routePath === "/api/models" && method === "GET") {
         const config = options.getConfig();
@@ -2334,12 +2451,15 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     server,
     port,
     url: `http://127.0.0.1:${port}`,
-    close: () =>
-      new Promise<void>((resolve) => {
+    close: async () => {
+      // Every warm MCP child belongs to this server; none outlives it.
+      await mcp.shutdown();
+      await new Promise<void>((resolve) => {
         // Keep-alive sockets would otherwise hold the port until they time out.
         server.closeAllConnections?.();
         server.close(() => resolve());
-      }),
+      });
+    },
   };
 }
 

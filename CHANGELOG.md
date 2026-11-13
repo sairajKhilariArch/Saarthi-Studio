@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.48.0
+
+Phase 14's MCP half. The VS Code built-in server declared `mcp: false`, so
+Settings → MCP disappeared whenever the desktop app was closed, even though the
+panel is the same one the desktop serves.
+
+- New `vscode-extension/src/mcp.ts`: a real MCP client over stdio —
+  newline-delimited JSON-RPC 2.0, `initialize` + `notifications/initialized`,
+  `tools/list`, `tools/call`, one warm session per server, a 20 s request
+  deadline, bounded tool text and logs, and server-to-client requests answered
+  with `-32601`.
+- The embedded server answers the routes the panel already drives: `GET
+  /api/mcp`, `/api/mcp/health`, `/api/mcp/logs`, `POST /api/mcp/servers`,
+  `/servers/remove`, `/test`, `/call`, `/health/check` and `POST
+  /api/mcp/<name>/disconnect`. The registry is `mcp.json` beside the
+  conversation store, and every mutation refuses a page from another origin.
+- `mcp: true` in the contract. The subset is stdio only: HTTP/SSE transports,
+  headers and OAuth are refused with a message naming the desktop app, a
+  disabled server is a 409, an unknown name a 404, and a failed handshake a 502
+  that keeps the server's own error. The extension has no permission store, so
+  a deliberate click (Test, Check health, Call tool) is the approval; that
+  difference is recorded in `KNOWN-ISSUES.md`.
+
 ## 3.47.0
 
 Phase 14 asks the VS Code extension's embedded server to cover the desktop's

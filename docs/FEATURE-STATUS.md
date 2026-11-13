@@ -17,6 +17,18 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.48.0 (2026-11-13):** Phase 14's MCP half in the VS Code embedded
+server, stdio only. A new `vscode-extension/src/mcp.ts` speaks MCP over stdio
+(newline-delimited JSON-RPC 2.0, `initialize`, `tools/list`, `tools/call`, one
+warm session per server, a 20 s deadline, bounded logs), and the embedded
+server answers the routes the shared panel calls: list, health, logs, save,
+remove, test, call, health check and disconnect. The registry is `mcp.json`
+beside the conversation store, mutations refuse a cross-origin page, and the
+contract now says `mcp: true`. HTTP/SSE transports, headers and OAuth are refused
+with a message naming the desktop app; the extension has no permission store, so
+a click is the approval. Agent runs still do not advertise MCP tools, and the
+new tests were added but not observed green here (implementation was landed
+first).
 **Revision 3.47.0 (2026-11-13):** Phase 14's thinking half in the VS Code
 embedded server. `callRouter` carries `reasoning_effort` for low/medium/high
 and nothing for off or unset; the server parses `@Thinking` exactly as the
