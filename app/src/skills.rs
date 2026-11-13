@@ -18,6 +18,7 @@
 //! name: code-review
 //! description: Review a file for bugs, security problems and readability.
 //! version: 1.2.0
+//! requires: 3.40.0
 //! ---
 //! Instructions go here, in plain prose...
 //! ```
@@ -27,6 +28,14 @@
 //! `skills.json` beside it: the version that was installed, when it was installed
 //! and updated, and a fingerprint of what was written. Usage history is rows in
 //! `skill_usage`, because "used 4 times, last Tuesday" is history, not state.
+//!
+//! `requires:` is the minimum Saarthi-Studio version the skill was written for.
+//! It is optional; when present it must be a numeric `X.Y.Z`. An older build
+//! still lists the skill (so the user can read it and see why) but never
+//! attaches it: automatic selection skips it, the composer hides it, and a
+//! direct pick answers 422 naming both versions. That is a compatibility fact,
+//! not a malformed manifest — only a `requires` that is not a version is an
+//! error.
 //!
 //! Only the user root is written to. A project, built-in or `~/.agents` skill is
 //! reported as not writable rather than edited behind the repository's back, and
@@ -73,6 +82,8 @@ pub(crate) struct Skill {
     pub name: String,
     pub description: String,
     pub version: String,
+    /// Minimum Studio version from the manifest, empty when unstated.
+    pub requires: String,
     pub body: String,
     pub path: String,
     pub source: &'static str,
@@ -182,6 +193,7 @@ fn parse_manifest(manifest: &FsPath, source: &str) -> Skill {
             name: folder.replace(['_', '-'], " "),
             description: String::new(),
             version: String::new(),
+            requires: String::new(),
             body: String::new(),
             path: manifest.display().to_string(),
             source: label(source),
@@ -208,6 +220,7 @@ fn parse_text(folder: &str, text: &str, source: &str) -> Skill {
         name: folder.replace(['_', '-'], " "),
         description: String::new(),
         version: String::new(),
+        requires: String::new(),
         body: String::new(),
         path: String::new(),
         source: label(source),
@@ -255,6 +268,15 @@ fn parse_text(folder: &str, text: &str, source: &str) -> Skill {
             }
             "description" if !value.is_empty() => skill.description = value,
             "version" if !value.is_empty() => skill.version = value,
+            "requires" if !value.is_empty() => {
+                if is_version(&value) {
+                    skill.requires = value;
+                } else {
+                    skill.error = Some(format!(
+                        "SKILL.md requires: {value} is not a version like 3.40.0."
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -281,6 +303,21 @@ fn parse_text(folder: &str, text: &str, source: &str) -> Skill {
     skill
 }
 
+/// A plain numeric triple. `requires: 3.40` and `requires: latest` are refused
+/// instead of being compared as if they meant something.
+fn is_version(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|part| part.parse::<u64>().is_ok())
+}
+
+impl Skill {
+    /// Empty `requires` means no claim, so any build may use the skill.
+    pub(crate) fn compatible(&self) -> bool {
+        self.requires.is_empty()
+            || crate::extensions::version_at_least(env!("CARGO_PKG_VERSION"), &self.requires)
+    }
+}
+
 fn split_front_matter(text: &str) -> (String, String) {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text.split_inclusive('\n');
@@ -305,7 +342,9 @@ fn split_front_matter(text: &str) -> (String, String) {
 pub(crate) fn index_text(disabled: &[String], all: &[Skill]) -> Option<String> {
     let lines: Vec<String> = all
         .iter()
-        .filter(|skill| skill.error.is_none() && !disabled.contains(&skill.id))
+        .filter(|skill| {
+            skill.error.is_none() && skill.compatible() && !disabled.contains(&skill.id)
+        })
         .map(|skill| format!("- {}: {}", skill.id, skill.description))
         .collect();
     if lines.is_empty() {
@@ -380,7 +419,9 @@ pub(crate) fn select_for(text: &str, disabled: &[String], all: &[Skill]) -> Vec<
     }
     let mut scored: Vec<(usize, &Skill)> = all
         .iter()
-        .filter(|skill| skill.error.is_none() && !disabled.contains(&skill.id))
+        .filter(|skill| {
+            skill.error.is_none() && skill.compatible() && !disabled.contains(&skill.id)
+        })
         .filter_map(|skill| {
             let title = keywords(&format!(
                 "{} {}",
@@ -447,9 +488,16 @@ fn slugify(name: &str) -> String {
 /// Build a manifest from the fields the installer collects. `description` and
 /// `version` are optional; a description is never invented from the
 /// instructions, because the list would then show words the user did not write.
-fn manifest_text(name: &str, description: &str, version: &str, instructions: &str) -> String {
+fn manifest_text(
+    name: &str,
+    description: &str,
+    version: &str,
+    requires: &str,
+    instructions: &str,
+) -> String {
     let description = description.replace(['\n', '\r'], " ");
     let version = version.trim();
+    let requires = requires.trim();
     let mut out = String::from("---\n");
     out.push_str(&format!("name: {}\n", name.trim()));
     if !description.trim().is_empty() {
@@ -457,6 +505,9 @@ fn manifest_text(name: &str, description: &str, version: &str, instructions: &st
     }
     if !version.is_empty() {
         out.push_str(&format!("version: {version}\n"));
+    }
+    if !requires.is_empty() {
+        out.push_str(&format!("requires: {requires}\n"));
     }
     out.push_str("---\n\n");
     out.push_str(instructions.trim());
@@ -744,8 +795,15 @@ fn inspect_clone(temp: &FsPath) -> Result<Staged, String> {
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
     let parsed = parse_text(&folder, &text, "user");
-    if let Some(error) = parsed.error {
-        return Err(error);
+    if let Some(error) = &parsed.error {
+        return Err(error.clone());
+    }
+    if !parsed.compatible() {
+        return Err(format!(
+            "This skill needs Saarthi-Studio {} or newer; this build is {}.",
+            parsed.requires,
+            env!("CARGO_PKG_VERSION")
+        ));
     }
     if parsed.body.trim().is_empty() {
         return Err(format!(
@@ -765,7 +823,13 @@ fn inspect_clone(temp: &FsPath) -> Result<Staged, String> {
     // the installed copy must name the folder it now lives in — the same rule
     // Install follows. Extra front-matter keys this app does not read are not
     // carried over; the instructions, description and version are.
-    let document = manifest_text(&id, &parsed.description, &version, &parsed.body);
+    let document = manifest_text(
+        &id,
+        &parsed.description,
+        &version,
+        &parsed.requires,
+        &parsed.body,
+    );
     Ok(Staged {
         id,
         version,
@@ -1078,6 +1142,10 @@ fn skill_json(state: &AppState, skill: &Skill, usage: &HashMap<String, (i64, f64
         } else {
             skill.version.clone()
         },
+        // A compatibility fact, not an error: the manifest is valid, it just
+        // names a newer Studio than this build.
+        "requires": skill.requires,
+        "compatible": skill.compatible(),
         "installed_at": record.as_ref().map(|entry| entry.installed_at),
         "updated_at": record.as_ref().map(|entry| entry.updated_at),
         "writable": skill.source == "user",
@@ -1209,7 +1277,7 @@ async fn install_skill(State(state): State<AppState>, Json(input): Json<Value>) 
         .unwrap_or("");
     // The manifest names the slug, not the typed title: the id is what every
     // route, the config's disabled list and the usage history key on.
-    let document = manifest_text(&slug, description, &version, &instructions);
+    let document = manifest_text(&slug, description, &version, "", &instructions);
     let replace = input
         .get("replace")
         .and_then(Value::as_bool)
@@ -1536,7 +1604,7 @@ async fn update_skill(
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| skill.description.clone());
-    let document = manifest_text(&id, &description, &version, &instructions);
+    let document = manifest_text(&id, &description, &version, &skill.requires, &instructions);
     match write_manifest(&dir, &document, true) {
         Ok(manifest) => {
             let target_id = parse_text(&id, &document, "user").id;
@@ -1765,12 +1833,91 @@ mod tests {
     }
 
     #[test]
+    fn a_requires_line_is_kept_and_compared_with_this_build() {
+        let text = "---
+name: compat
+description: Needs a newer build.
+requires: 99.0.0
+---
+Go.
+";
+        let skill = parse_text("compat", text, "user");
+        assert!(skill.error.is_none(), "{:?}", skill.error);
+        assert_eq!(skill.requires, "99.0.0");
+        assert!(!skill.compatible(), "a 99.0.0 requirement cannot be met");
+        let older = parse_text("compat", &text.replace("99.0.0", "0.0.1"), "user");
+        assert!(older.compatible(), "an older requirement is met");
+        // A rewritten manifest carries the claim forward instead of quietly
+        // making the skill compatible at the next update.
+        let document = manifest_text("compat", "Needs a newer build.", "1.0.0", "99.0.0", "Go.");
+        let rewritten = parse_text("compat", &document, "user");
+        assert_eq!(rewritten.requires, "99.0.0");
+        assert!(!rewritten.compatible());
+    }
+
+    #[test]
+    fn a_requires_value_that_is_not_a_version_fails_to_load() {
+        for value in ["next", "3", "3.40", "3.40.0-beta"] {
+            let text = format!(
+                "---
+name: bad
+description: Bad.
+requires: {value}
+---
+Go.
+"
+            );
+            let skill = parse_text("bad", &text, "user");
+            assert!(
+                skill.error.unwrap_or_default().contains("not a version"),
+                "{value} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_selection_skips_a_skill_that_needs_a_newer_studio() {
+        let root = scratch("auto-compat");
+        write_skill(
+            &root,
+            "review-skill",
+            "---
+name: Review Skill
+description: Review code.
+requires: 99.0.0
+---
+Go.
+",
+        );
+        let all = discover(&[("user".into(), root)]);
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].compatible());
+        assert!(select_for("review my code", &[], &all).is_empty());
+    }
+
+    #[test]
+    fn an_import_of_a_skill_for_a_newer_studio_is_refused() {
+        let temp = scratch("import-compat");
+        fs::write(
+            temp.join(MANIFEST),
+            "---\nname: Future\ndescription: Future.\nrequires: 99.0.0\n---\nGo.\n",
+        )
+        .unwrap();
+        let error = match inspect_clone(&temp) {
+            Ok(_) => panic!("a skill for 99.0.0 must not be staged"),
+            Err(error) => error,
+        };
+        assert!(error.contains("needs Saarthi-Studio 99.0.0"), "{error}");
+    }
+
+    #[test]
     fn install_writes_a_manifest_and_keeps_the_version() {
         let root = scratch("install");
         let document = manifest_text(
             "code-review",
             "Review a file for bugs.",
             "1.2.0",
+            "",
             "Read the file, then list the bugs you can prove.",
         );
         let manifest =
@@ -1788,8 +1935,14 @@ mod tests {
     #[test]
     fn install_refuses_to_overwrite_unless_asked() {
         let root = scratch("overwrite");
-        let first = manifest_text("Review", "First copy.", "1.0.0", "First instructions.");
-        let second = manifest_text("Review", "Second copy.", "2.0.0", "Second instructions.");
+        let first = manifest_text("Review", "First copy.", "1.0.0", "", "First instructions.");
+        let second = manifest_text(
+            "Review",
+            "Second copy.",
+            "2.0.0",
+            "",
+            "Second instructions.",
+        );
         write_manifest(&root.join("review"), &first, false).expect("first install");
         let error = write_manifest(&root.join("review"), &second, false)
             .expect_err("a second install without replace must not clobber");
@@ -1807,7 +1960,7 @@ mod tests {
     #[test]
     fn an_install_with_no_instructions_creates_nothing() {
         let root = scratch("empty-install");
-        let document = manifest_text("Empty", "Nothing to say.", "1.0.0", "   ");
+        let document = manifest_text("Empty", "Nothing to say.", "1.0.0", "", "   ");
         let error = write_manifest(&root.join("empty"), &document, false)
             .expect_err("an empty skill is refused");
         assert!(error.contains("no instructions"), "{error}");
@@ -1816,8 +1969,8 @@ mod tests {
 
     #[test]
     fn a_hand_edit_changes_the_fingerprint() {
-        let installed = manifest_text("Edit", "Before.", "1.0.0", "Original instructions.");
-        let edited = manifest_text("Edit", "Before.", "1.0.0", "Someone changed this.");
+        let installed = manifest_text("Edit", "Before.", "1.0.0", "", "Original instructions.");
+        let edited = manifest_text("Edit", "Before.", "1.0.0", "", "Someone changed this.");
         assert_ne!(fingerprint(&installed), fingerprint(&edited));
         // Same text, same fingerprint: the comparison is about content only.
         assert_eq!(fingerprint(&edited), fingerprint(&edited.clone()));
@@ -2068,6 +2221,7 @@ mod tests {
             name: id.replace('-', " "),
             description: description.to_string(),
             version: "1.0.0".to_string(),
+            requires: String::new(),
             body: body.to_string(),
             path: format!("/skills/{id}/SKILL.md"),
             source: "user",

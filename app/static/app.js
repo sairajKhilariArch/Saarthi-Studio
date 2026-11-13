@@ -661,6 +661,11 @@ function skillById(id) {
   return state.skills.find((skill) => skill.id === id) || null;
 }
 
+function skillCompatibilityNote(skill) {
+  if (!skill || !skill.requires || skill.compatible !== false) return "";
+  return `Needs Studio ${skill.requires} or newer`;
+}
+
 function renderSkills() {
   const box = $("skillList");
   if (state.openSkillId) {
@@ -680,11 +685,11 @@ function renderSkills() {
   state.skills.forEach((skill) => {
     const card = document.createElement("button");
     card.type = "button";
-    card.className = "skill-card" + (skill.enabled ? "" : " off") + (skill.last_error ? " broken" : "");
+    card.className = "skill-card" + (skill.enabled && skill.compatible !== false ? "" : " off") + (skill.last_error ? " broken" : "");
     card.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-cube"/></svg>' +
       '<span class="skill-card-text"><strong></strong><small></small></span>';
     card.querySelector("strong").textContent = skill.name || skill.id;
-    card.querySelector("small").textContent = skill.summary || (skill.last_error ? "Load error" : "SKILL.md");
+    card.querySelector("small").textContent = skillCompatibilityNote(skill) || skill.summary || (skill.last_error ? "Load error" : "SKILL.md");
     card.title = skill.path || skill.id;
     card.addEventListener("click", () => openSkillDetail(skill.id));
     box.appendChild(card);
@@ -929,7 +934,7 @@ function renderSkillsOverview() {
   }
   state.skills.forEach((skill) => {
     const row = document.createElement("div");
-    row.className = "skill-row" + (skill.enabled ? "" : " off") + (skill.last_error ? " broken" : "");
+    row.className = "skill-row" + (skill.enabled && skill.compatible !== false ? "" : " off") + (skill.last_error ? " broken" : "");
     const main = document.createElement("div");
     main.className = "skill-main";
     const strong = document.createElement("strong");
@@ -946,6 +951,8 @@ function renderSkillsOverview() {
     if (skill.version) facts.push(`v${skill.version}`);
     if (skill.uses) facts.push(`${skill.uses} use${skill.uses === 1 ? "" : "s"}`);
     if (skill.modified) facts.push("edited since install");
+    const blocked = skillCompatibilityNote(skill);
+    if (blocked) facts.push(blocked);
     if (facts.length) {
       const meta = document.createElement("small");
       meta.className = "skill-meta";
@@ -4076,13 +4083,16 @@ function renderSkillMenu() {
   const list = $("skillMenuList");
   if (!list) return;
   list.replaceChildren();
-  const usable = state.skills.filter((skill) => !skill.error && skill.enabled !== false);
+  const usable = state.skills.filter(
+    (skill) => !skill.error && skill.enabled !== false && skill.compatible !== false
+  );
 
   if (!usable.length) {
     const empty = document.createElement("p");
     empty.className = "skill-menu-empty";
-    empty.textContent =
-      "No skills yet. Add a SKILL.md folder to this project, your config folder, or ~/.agents/skills.";
+    empty.textContent = state.skills.length
+      ? "Every skill here needs a newer Saarthi-Studio build."
+      : "No skills yet. Add a SKILL.md folder to this project, your config folder, or ~/.agents/skills.";
     list.appendChild(empty);
     return;
   }
@@ -6617,7 +6627,7 @@ function fillSkillOptions(selectedId) {
   blank.value = "";
   blank.textContent = "No skill";
   select.appendChild(blank);
-  state.skills.filter((skill) => !skill.error && skill.enabled !== false).forEach((skill) => {
+  state.skills.filter((skill) => !skill.error && skill.enabled !== false && skill.compatible !== false).forEach((skill) => {
     const option = document.createElement("option");
     option.value = skill.id;
     option.textContent = skill.name || skill.id;

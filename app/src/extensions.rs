@@ -486,7 +486,7 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
 
 /// Numeric triple comparison. Both sides are validated as `1.2.3` before they
 /// reach here, so a short or odd part can only come from a hand-written call.
-fn version_at_least(version: &str, required: &str) -> bool {
+pub(crate) fn version_at_least(version: &str, required: &str) -> bool {
     let parts = |text: &str| -> Vec<u64> {
         text.split('.')
             .map(|part| part.parse::<u64>().unwrap_or(0))

@@ -465,6 +465,19 @@ test("usageProjectNote names tokens, estimated spend and unpriced requests", () 
   );
 });
 
+test("skillCompatibilityNote names the Studio version a skill needs", () => {
+  assert.equal(
+    call(`skillCompatibilityNote({ id: "future", requires: "99.0.0", compatible: false })`),
+    "Needs Studio 99.0.0 or newer",
+  );
+  assert.equal(
+    call(`skillCompatibilityNote({ id: "ok", requires: "3.40.0", compatible: true })`),
+    "",
+  );
+  assert.equal(call(`skillCompatibilityNote({ id: "plain" })`), "");
+  assert.equal(call("skillCompatibilityNote(null)"), "");
+});
+
 test("rollbackStatusText stays empty before any rollback", () => {
   assert.equal(call("rollbackStatusText(null)"), "");
   assert.equal(call("rollbackStatusText({})"), "");

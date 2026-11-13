@@ -324,6 +324,12 @@ skills' names and descriptions, with a floor, a two-skill cap and a token
 budget; the reply reports what was attached. Per-skill permissions remain open,
 and only matter if a skill ever executes.*
 
+*Delivered 3.41.0: skills can state the Studio they were written for.
+`requires: X.Y.Z` is validated, preserved through installs and updates, and
+enforced on every attach path — automatic selection, the prompt index, the
+composer and workflow pickers, a direct pick (422) and import (refused before
+copying). This closes Phase 6's compatibility item.*
+
 ## Phase 7 — MCP manager
 
 Delivered 1.33.0–1.45.0: registry, stdio + streamable-HTTP + SSE transports,

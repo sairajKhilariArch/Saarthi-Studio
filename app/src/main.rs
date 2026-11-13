@@ -3389,6 +3389,20 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     if let Some(skill_id) = input.get("skill").and_then(Value::as_str) {
         if let Some(skill) = skills::instructions_for(skill_id, &available) {
             if skill.error.is_none() {
+                // A skill can name the Studio it was written for. This build
+                // still lists it, but attaching it would feed instructions for
+                // features that do not exist here, so the pick fails loudly.
+                if !skill.compatible() {
+                    return Err(Box::new(json_error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        format!(
+                            "The skill \"{}\" needs Saarthi-Studio {} or newer; this build is {}.",
+                            skill.name,
+                            skill.requires,
+                            env!("CARGO_PKG_VERSION")
+                        ),
+                    )));
+                }
                 prompt = format!(
                     "Follow the skill \"{}\" for this message:\n\n{}\n\n---\n\n{}",
                     skill.name, skill.body, prompt

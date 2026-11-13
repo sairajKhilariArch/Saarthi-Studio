@@ -40,7 +40,7 @@ The UI is static files from `app/static/` (`index.html`, `app.js`,
 | `router.rs` | 545 | FreeLLMAPI lifecycle: compose dir/port discovery, ownership file, start/stop/status, stop-only-if-owned on exit |
 | `router_console.rs` | 505 | Admin proxy to the router console with session-token handling and path allowlist |
 | `media.rs` | 461 | Attachment validation/storage/serving, `/api/embeddings` proxy |
-| `skills.rs` | 454 | `SKILL.md` discovery across 5 roots, frontmatter parse, enable/disable, instruction caps |
+| `skills.rs` | 2429 | `SKILL.md` discovery across 5 roots, frontmatter parse (including `requires`), enable/disable, instruction caps |
 | `host_security.rs` | 366 | Transport guardrails: origin checks, body caps, timeouts |
 | `privacy.rs` | 341 | Outbound credential-shape detection and workspace exclusion rules |
 | `terminal.rs` | 318 | Real PTYs (`portable-pty`) — ConPTY on Windows, unix pty elsewhere; SSE streams; resize; close |

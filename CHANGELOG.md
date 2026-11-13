@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.41.0
+
+Phase 6's last open item is compatibility. A `SKILL.md` may now say which
+Saarthi-Studio it was written for, and an older build refuses to apply it
+instead of feeding the model instructions for features that are not here.
+
+- Front matter accepts an optional `requires: X.Y.Z`. Anything that is not a
+  numeric triple (`3.40`, `next`, `3.40.0-beta`) is a load error, because a
+  comparison against it would be meaningless.
+- A skill whose requirement this build does not meet is still listed — with
+  `requires` and `compatible: false` — so the user can read it and see why. It
+  is skipped by automatic selection and by the system-prompt index, hidden in
+  the composer and workflow pickers, refused by a direct pick with `422` naming
+  both versions, and refused at import before anything is copied.
+- Install and update rewrite the manifest through the same field list, so a
+  `requires` line survives an update instead of quietly making a newer skill
+  look compatible.
+- The skills page and composer show `Needs Studio X or newer`; the composer's
+  empty state distinguishes "no skills" from "every skill needs a newer build".
+
 ## 3.40.0
 
 Phase 11 asks for token usage per project. The server already computed a
