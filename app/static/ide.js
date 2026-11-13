@@ -2073,70 +2073,17 @@
       if (event.key === "Enter") { event.preventDefault(); void branchScm("switch"); }
     });
   }
-  const KEYWORDS = {
-    rust: "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while",
-    js: "async await break case catch class const continue default delete do else export extends false finally for function if import in instanceof let new null of return static super switch this throw true try typeof var void while yield",
-    py: "and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield",
-    sh: "case do done elif else esac fi for function if in local return then until while export",
-    sql: "select from where insert update delete join on group by order limit as and or not null values into set",
-    plain: "",
-  };
-
   const FIND = { matches: [], index: 0 };
-  const PATTERNS = new Map();
 
-  function familyFor(language) {
-    const lang = String(language || "").toLowerCase();
-    if (/rust/.test(lang)) return "rust";
-    if (/java|kotlin|gradle|typescript|javascript|tsx|jsx|node/.test(lang)) return "js";
-    if (/python/.test(lang)) return "py";
-    if (/shell|bash|dockerfile|makefile/.test(lang)) return "sh";
-    if (/sql/.test(lang)) return "sql";
-    return "plain";
-  }
-
-  function patternFor(family) {
-    if (PATTERNS.has(family)) return PATTERNS.get(family);
-    const comments = [];
-    if (family === "py" || family === "sh") comments.push("#[^\n]*");
-    else if (family !== "plain") comments.push("\/\*[\s\S]*?\*\/", "\/\/[^\n]*");
-    const parts = [];
-    if (comments.length) parts.push("(" + comments.join("|") + ")");
-    else parts.push("(\u0000)");
-    parts.push("(\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)");
-    parts.push("(\b\d[\w.]*\b)");
-    parts.push("([A-Za-z_$][\w$]*)(?=\s*\()");
-    parts.push("([A-Za-z_$][\w$]*)");
-    const pattern = new RegExp(parts.join("|"), "g");
-    PATTERNS.set(family, pattern);
-    return pattern;
-  }
-
+  /* Highlighting lives in `highlight.js`: one tested tokenizer for every
+     language, escaped before it is wrapped, with the 200k cap inside it. The
+     workbench keeps its own layer, metrics, wrapping and scrolling, and hands
+     over only the text. */
   function highlightHtml(code, language) {
     if (!code) return "";
-    if (code.length > 200000) return escapeHtml(code);
-    const family = familyFor(language);
-    const keywords = new Set((KEYWORDS[family] || "").split(/\s+/).filter(Boolean));
-    const pattern = patternFor(family);
-    pattern.lastIndex = 0;
-    let out = "";
-    let last = 0;
-    let match;
-    while ((match = pattern.exec(code)) !== null) {
-      if (!match[0].length) { pattern.lastIndex += 1; continue; }
-      out += escapeHtml(code.slice(last, match.index));
-      const text = match[0];
-      let cls = "";
-      if (match[1]) cls = "tok-com";
-      else if (match[2]) cls = "tok-str";
-      else if (match[3]) cls = "tok-num";
-      else if (match[4]) cls = keywords.has(text) ? "tok-key" : "tok-fn";
-      else if (keywords.has(text)) cls = "tok-key";
-      else if (/^[A-Z][a-z]/.test(text)) cls = "tok-type";
-      out += cls ? `<span class="${cls}">${escapeHtml(text)}</span>` : escapeHtml(text);
-      last = match.index + text.length;
-    }
-    return out + escapeHtml(code.slice(last));
+    if (typeof highlightCode === "function") return highlightCode(code, language);
+    // The module is loaded before this script; this is only for a stale cache.
+    return escapeHtml(code);
   }
 
   function syncLayerScroll() {
@@ -2150,8 +2097,7 @@
     const area = $("codeArea"), layer = $("codeLayer");
     if (!area || !layer) return;
     const file = activeFile();
-    let html = highlightHtml(area.value, file && file.language);
-    if (/\n$/.test(area.value)) html += " ";
+    const html = highlightHtml(area.value, file && file.language);
     layer.innerHTML = html;
     syncLayerScroll();
     updateFindCount();

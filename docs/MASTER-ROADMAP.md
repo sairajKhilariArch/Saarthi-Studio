@@ -53,7 +53,7 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | A debugger. Highlighting (3.26.0), completion (3.25.0) and formatting (3.23.0) are done. |
+| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0) and formatting (3.23.0) are done. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 25 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -405,6 +405,16 @@ that name the reason; paths are workspace-relative and escapes are refused; a
 new unsaved buffer is allowed. The Format button and `File: Format buffer` are
 gated by the new `editor_format` capability (24 ids), false in the embedded
 server. Phase 9 is left with completion/diagnostics and a debugger.*
+
+*Delivered 3.27.0: one highlight layer. 3.26.0 added a second overlay beside the
+`#codeLayer` that `ide.js` has painted since 1.26.1; that duplicate is removed and
+the existing layer now renders `highlight.js`, the tested tokenizer, in place of
+the workbench's own five-family regex engine. The workbench keeps its wrapper,
+metrics, wrapping, find count and scroll sync; accepting a completion dispatches a
+real `input` event so the layer repaints, and the completion popup measures from
+`.code-wrap`. `tok-prop`, `tok-tag`, `tok-attr` and `tok-punct` joined the palette
+in `ide.css`. What is still missing is any browser-level check of what the editor
+draws — which is exactly how the duplicate got in (KNOWN-ISSUES 42).*
 
 *Delivered 3.26.0: syntax highlighting. `app/static/highlight.js` is a pure
 tokenizer — text and a language in, escaped HTML out — for 22 language names, and
@@ -903,7 +913,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
 | 8 Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
-| 9 Developer environment | Partial | no debugger; highlighting 3.26.0, completion 3.25.0, formatting 3.23.0, watch 3.21.0 |
+| 9 Developer environment | Partial | no debugger; highlighting 3.27.0 (one layer), completion 3.25.0, formatting 3.23.0, watch 3.21.0 |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |

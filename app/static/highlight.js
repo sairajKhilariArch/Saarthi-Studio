@@ -328,7 +328,7 @@ function tokenizeCode(text, grammar) {
     if (block) {
       const closeAt = text.indexOf(block[1], index + block[0].length);
       const stop = closeAt === -1 ? text.length : closeAt + block[1].length;
-      span("tok-comm", text.slice(index, stop));
+      span("tok-com", text.slice(index, stop));
       index = stop;
       continue;
     }
@@ -338,7 +338,7 @@ function tokenizeCode(text, grammar) {
     if (linePrefix) {
       const end = text.indexOf("\n", index);
       const stop = end === -1 ? text.length : end;
-      span("tok-comm", text.slice(index, stop));
+      span("tok-com", text.slice(index, stop));
       index = stop;
       continue;
     }
@@ -388,7 +388,7 @@ function tokenizeCode(text, grammar) {
           grammar.caseInsensitive ? entry.toLowerCase() === probe : entry === value,
         );
       let cls = "";
-      if (inList(keywords)) cls = "tok-kw";
+      if (inList(keywords)) cls = "tok-key";
       else if (inList(types)) cls = "tok-type";
       else if (grammar.keys && nextChar === ":") cls = "tok-prop";
       else if (nextChar === "(") cls = "tok-fn";
@@ -422,7 +422,7 @@ function tokenizeMarkup(text) {
       const closeAt = text.indexOf("-->", index);
       const stop = closeAt === -1 ? text.length : closeAt + 3;
       flush();
-      out.push(`<span class="tok-comm">${escapeCode(text.slice(index, stop))}</span>`);
+      out.push(`<span class="tok-com">${escapeCode(text.slice(index, stop))}</span>`);
       index = stop;
       continue;
     }
@@ -523,7 +523,7 @@ function tokenizeMarkdown(text) {
       }
       if (fence) return `<span class="tok-str">${escapeCode(line)}</span>`;
       if (/^\s{0,3}#{1,6}\s/.test(line)) {
-        return `<span class="tok-kw">${escapeCode(line)}</span>`;
+        return `<span class="tok-key">${escapeCode(line)}</span>`;
       }
       let html = escapeCode(line);
       html = html.replace(/(`[^`]*`)/g, '<span class="tok-str">$1</span>');

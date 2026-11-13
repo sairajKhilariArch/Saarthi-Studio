@@ -3158,7 +3158,6 @@ function renderEditor() {
   $("editorLang").textContent = file.language;
   $("editorSize").textContent = formatBytes(new Blob([file.content]).size);
   if ($("codeArea").value !== file.content) $("codeArea").value = file.content;
-  renderHighlight();
   const dirty = file.content !== file.original;
   $("editorDirty").classList.toggle("hidden", !dirty);
   $("editorState").textContent = file.scratch
@@ -3174,35 +3173,6 @@ function renderEditor() {
     $("gutter").scrollTop = 0;
     renderedPath = file.path;
   }
-}
-
-/* The gutter and the colour layer follow the textarea's own scroll: three
-   elements, one scroll position. */
-function syncEditorScroll() {
-  const area = $("codeArea");
-  if (!area) return;
-  if ($("gutter")) $("gutter").scrollTop = area.scrollTop;
-  if ($("highlight")) {
-    $("highlight").scrollTop = area.scrollTop;
-    $("highlight").scrollLeft = area.scrollLeft;
-  }
-}
-
-/* The buffer, escaped and coloured, drawn behind the transparent textarea. An
-   unknown language or an oversized buffer comes back as plain escaped text; a
-   missing highlighter clears the layer rather than leaving stale colour. */
-function renderHighlight() {
-  const layer = $("highlight");
-  const area = $("codeArea");
-  if (!layer || !area) return;
-  const file = activeFile();
-  const language = file ? file.language : "text";
-  if (typeof highlightCode !== "function") {
-    layer.textContent = "";
-    return;
-  }
-  layer.innerHTML = highlightCode(area.value, language);
-  syncEditorScroll();
 }
 
 function updateGutter() {
@@ -3234,7 +3204,6 @@ function onEditorInput() {
   $("revertBtn").disabled = !dirty;
   $("editorSize").textContent = formatBytes(new Blob([file.content]).size);
   updateGutter();
-  renderHighlight();
   updateCursor();
   syncTabDirty();
 }
@@ -3315,8 +3284,10 @@ function positionCompletions() {
   const before = area.value.slice(0, area.selectionStart);
   const line = before.split("\n").length - 1;
   const column = before.length - before.lastIndexOf("\n") - 1;
-  const stack = area.closest ? area.closest(".code-stack") : null;
-  const origin = stack ? stack.offsetLeft : 0;
+  // The workbench wraps the textarea in `.code-wrap` beside the gutter, so the
+  // popup starts at the wrap's own left edge rather than the body's.
+  const wrap = area.closest ? area.closest(".code-wrap") : null;
+  const origin = wrap ? wrap.offsetLeft : 0;
   const top = 14 + (line + 1) * lineHeight - area.scrollTop;
   const left = origin + 14 + column * completionCharWidth(area) - area.scrollLeft;
   const widest = Math.max(6, body.clientWidth - 280);
@@ -3432,7 +3403,9 @@ function acceptCompletion(index = completions.active) {
   area.value = edit.value;
   area.selectionStart = area.selectionEnd = edit.caret;
   closeCompletions();
-  onEditorInput();
+  // A real input event, so every listener sees the edit — including the
+  // workbench's highlight layer, which a plain function call would skip.
+  area.dispatchEvent(new Event("input", { bubbles: true }));
   renderTabs();
   updateCursor();
 }
@@ -8023,7 +7996,7 @@ function bindEvents() {
     }
   });
   ["click", "keyup"].forEach((type) => $("codeArea").addEventListener(type, updateCursor));
-  $("codeArea").addEventListener("scroll", syncEditorScroll);
+  $("codeArea").addEventListener("scroll", () => { $("gutter").scrollTop = $("codeArea").scrollTop; });
 
   $("messages").addEventListener("click", (event) => {
     const button = event.target.closest("[data-copy-code]");

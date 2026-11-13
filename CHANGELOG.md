@@ -1,5 +1,42 @@
 # Changelog
 
+## 3.27.0
+
+3.26.0 was wrong about the editor: the workbench has drawn a coloured layer behind
+the textarea since 1.26.1 (`setupCodeLayer`/`paintCode` in `ide.js`), and that
+release added a second overlay on top of it instead of using the one already
+there. This release removes the duplicate and hands the existing layer the new,
+tested tokenizer.
+
+- **One layer, not two.** 3.26.0's `.code-stack`/`#highlight` markup, its
+  `renderHighlight`/`syncEditorScroll` calls in `app.js` and its `.code-highlight`
+  CSS are gone. The editor is the gutter and the textarea again, with `ide.js`
+  wrapping the textarea in `.code-wrap` and painting `#codeLayer` exactly as
+  before.
+- **The tested tokenizer feeds that layer.** `ide.js`'s own regex engine — a five
+  -family keyword table with strings and comments matched in one pass — is
+  deleted. `highlightHtml` now calls `highlightCode` from
+  `app/static/highlight.js`, so Markdown, HTML, CSS, YAML, TOML, SQL, Go, C/C++,
+  C#, Ruby, PHP, Swift, Kotlin and JSON follow the rules the tests cover, and the
+  200,000-character cap lives in one place.
+- **A stale edit no longer keeps old colour.** Accepting a completion dispatches a
+  real `input` event instead of calling the app's handler directly, so the layer
+  (which listens for `input`) repaints with the gutter; the direct call had been
+  enough only because 3.26.0 repainted from `app.js` too.
+- **The completion popup follows the real wrapper**: it measures from `.code-wrap`,
+  which the workbench creates, not from a node this UI no longer has.
+- `tok-com` and `tok-key` are the class names the existing palette already styles;
+  `tok-prop`, `tok-tag`, `tok-attr` and `tok-punct` join them in `ide.css` with
+  dark and light values.
+
+Verified: `test-frontend.sh` 66 passed (1 new: the workbench delegates, no longer
+defines a regex engine, `highlight.js` loads before `ide.js`, and the markup holds
+no second overlay); the tokenizer's 12 rule tests pass with the class renames;
+`node --check` clean on `app.js`, `ide.js` and `highlight.js`; `test-version.sh`
+20/20; `test-e2e.sh` 32 passed. **Not run:** the layer in a browser. That is the
+same gap 3.26.0 had and the reason the duplicate slipped in — no automated check
+looks at what the editor draws (KNOWN-ISSUES 42).
+
 ## 3.26.0
 
 Phase 9 gains syntax highlighting. The editor was one flat colour; the buffer is

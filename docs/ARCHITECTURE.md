@@ -18,7 +18,7 @@ serves everything:
 `--no-default-features` builds the headless server used by the `.deb` job.
 The UI is static files from `app/static/` (`index.html`, `app.js`,
 `highlight.js` — the editor's pure tokenizer, `styles.css`, `ide.js`,
-`ide.css`, `skills/`) with no build step.
+`ide.css`, `skills/`) with no build step. `ide.js` owns the workbench and the editor's layer: it wraps the textarea in `.code-wrap`, paints `#codeLayer` from `highlight.js`, and keeps that layer's metrics, wrapping, find count and scroll sync.
 
 ## 2. Modules and responsibilities
 

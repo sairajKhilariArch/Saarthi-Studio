@@ -23,10 +23,10 @@ const call = (expression) => vm.runInContext(expression, context);
 
 test("rust colours keywords, types, numbers and comments", () => {
   const html = highlight("let x: i32 = 42; // hi", "rust");
-  assert.match(html, /<span class="tok-kw">let<\/span>/);
+  assert.match(html, /<span class="tok-key">let<\/span>/);
   assert.match(html, /<span class="tok-type">i32<\/span>/);
   assert.match(html, /<span class="tok-num">42<\/span>/);
-  assert.match(html, /<span class="tok-comm">\/\/ hi<\/span>/);
+  assert.match(html, /<span class="tok-com">\/\/ hi<\/span>/);
 });
 
 test("a rust lifetime is not a character literal", () => {
@@ -48,22 +48,22 @@ test("code is escaped, so a buffer can never inject markup", () => {
 
 test("a URL inside a string is not mistaken for a comment", () => {
   const url = highlight('const u = "http://x"; // done', "javascript");
-  assert.ok(!url.includes('<span class="tok-comm">http'), url);
+  assert.ok(!url.includes('<span class="tok-com">http'), url);
   assert.match(url, /tok-str">&quot;http:\/\/x&quot;/);
-  assert.match(url, /<span class="tok-comm">\/\/ done<\/span>/);
+  assert.match(url, /<span class="tok-com">\/\/ done<\/span>/);
 });
 
 test("an unterminated string stops at the line end", () => {
   const html = highlight('let a = "open\nlet b = 1;', "javascript");
   assert.match(html, /<span class="tok-str">&quot;open<\/span>/);
-  assert.match(html, /tok-kw">let<\/span> b = <span class="tok-num">1<\/span>/);
+  assert.match(html, /tok-key">let<\/span> b = <span class="tok-num">1<\/span>/);
 });
 
 test("json keys are properties and its literals are keywords", () => {
   const html = highlight('{"a": 1, "b": true}', "json");
   assert.match(html, /<span class="tok-prop">&quot;a&quot;<\/span>/);
   assert.match(html, /<span class="tok-num">1<\/span>/);
-  assert.match(html, /<span class="tok-kw">true<\/span>/);
+  assert.match(html, /<span class="tok-key">true<\/span>/);
 });
 
 test("css colours a property and a hex value", () => {
@@ -82,7 +82,7 @@ test("markup colours the tag, the attribute and its value", () => {
 
 test("markdown colours headings, fences, inline code, links and list markers", () => {
   const html = highlight("# Title\n\n- [x](http://y)\n\n```\ncode\n```", "markdown");
-  assert.match(html, /<span class="tok-kw"># Title<\/span>/);
+  assert.match(html, /<span class="tok-key"># Title<\/span>/);
   assert.match(html, /<span class="tok-punct">-<\/span>/);
   assert.match(html, /<span class="tok-fn">\[x\]<\/span>/);
   assert.match(html, /<span class="tok-str">\(http:\/\/y\)<\/span>/);
@@ -90,7 +90,7 @@ test("markdown colours headings, fences, inline code, links and list markers", (
   assert.match(html, /<span class="tok-str">code<\/span>/);
   // A fence that closes ends the block; the following line is plain again.
   const after = highlight("```\na\n```\n# Head", "markdown");
-  assert.match(after, /<span class="tok-kw"># Head<\/span>/);
+  assert.match(after, /<span class="tok-key"># Head<\/span>/);
 });
 
 test("an unknown language or an oversized buffer comes back escaped and plain", () => {
@@ -112,7 +112,19 @@ test("support is decided by a known grammar, not by the file name", () => {
 
 test("sql keywords match regardless of case, as sql itself does", () => {
   const html = highlight("SELECT id FROM users where id = 1", "sql");
-  assert.match(html, /<span class="tok-kw">SELECT<\/span>/);
-  assert.match(html, /<span class="tok-kw">FROM<\/span>/);
-  assert.match(html, /<span class="tok-kw">where<\/span>/);
+  assert.match(html, /<span class="tok-key">SELECT<\/span>/);
+  assert.match(html, /<span class="tok-key">FROM<\/span>/);
+  assert.match(html, /<span class="tok-key">where<\/span>/);
+});
+
+test("the workbench delegates its highlighting instead of keeping a second engine", () => {
+  const ide = fs.readFileSync(path.join(__dirname, "..", "ide.js"), "utf8");
+  assert.match(ide, /typeof highlightCode === "function"/, "ide.js calls the module");
+  assert.match(ide, /function paintCode\(/, "the workbench still owns the layer");
+  assert.ok(!/function patternFor|function familyFor/.test(ide), "the old regex engine is gone");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const moduleAt = html.indexOf("/static/highlight.js");
+  const ideAt = html.indexOf("/static/ide.js");
+  assert.ok(moduleAt > 0 && ideAt > moduleAt, "highlight.js loads before ide.js");
+  assert.ok(!html.includes('id="highlight"'), "the markup holds no second overlay");
 });

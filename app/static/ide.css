@@ -16,6 +16,10 @@
   --tok-com: #6f7480;
   --tok-fn: #8fb8ff;
   --tok-type: #7fd6c1;
+  --tok-prop: #a5e0a5;
+  --tok-tag: #f07178;
+  --tok-attr: #f2c98a;
+  --tok-punct: #8a8a95;
 }
 
 :root[data-theme="light"] {
@@ -25,6 +29,10 @@
   --tok-com: #7a7f8a;
   --tok-fn: #2657c9;
   --tok-type: #0f6b5c;
+  --tok-prop: #1f7a3d;
+  --tok-tag: #b3261e;
+  --tok-attr: #a35a00;
+  --tok-punct: #6a6a77;
 }
 
 /* ---------- shell grid ---------- */
@@ -326,6 +334,10 @@ body.no-right { --right-w: 0px; }
 .tok-com { color: var(--tok-com); font-style: italic; }
 .tok-fn { color: var(--tok-fn); }
 .tok-type { color: var(--tok-type); }
+.tok-prop { color: var(--tok-prop); }
+.tok-tag { color: var(--tok-tag); }
+.tok-attr { color: var(--tok-attr); }
+.tok-punct { color: var(--tok-punct); }
 .settings-nav button[data-goto] { color: var(--mute); }
 .pref-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 @media (max-width: 1100px) {
