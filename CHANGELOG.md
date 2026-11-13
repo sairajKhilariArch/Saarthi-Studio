@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.42.0
+
+Phase 11 lists rate-limit monitoring, and Phase 3 asks that provider failures be
+understandable. The provider health card now says when a provider refused work
+for rate limiting, using the sentence the provider itself stored.
+
+- `GET /api/health/providers` adds `rate_limited` and `last_rate_limit_at` per
+  model, counted only when the stored error mentions `429` or `rate limit` over
+  the same 24-hour window. Nothing is inferred from latency or a generic
+  failure, and a model with none reports `0`, not an absent field.
+- The Provider health row shows `N rate-limited` beside its success count, via
+  the pure `providerRateLimitNote`.
+- The per-model SQL moved behind `provider_rows`, so it is exercised against a
+  real in-memory table: a 429, a `rate limit` sentence, a 502 and an
+  out-of-window 429 are told apart.
+
 ## 3.41.0
 
 Phase 6's last open item is compatibility. A `SKILL.md` may now say which

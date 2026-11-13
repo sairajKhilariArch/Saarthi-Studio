@@ -17,6 +17,10 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.42.0 (2026-11-13):** Phase 11's rate-limit monitoring is real.
+Provider health counts a model's 24-hour refusals only when its stored error
+mentions 429 or a rate limit, exposes `rate_limited` and `last_rate_limit_at`,
+and the card prints the count. No rate limit is inferred from latency.
 **Revision 3.41.0 (2026-11-13):** Phase 6's compatibility check is real. A
 manifest may state `requires: X.Y.Z`; an older build lists it as incompatible,
 never selects or attaches it, refuses an import, and a direct pick answers 422
@@ -795,7 +799,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Pricing, cost estimates | Working | `cost.rs` × `capabilities::Price` from the live `/models` row × the provider's reported tokens; `request_log.cost_usd`/`cost_basis`, unpriced rows counted rather than zeroed. Native OpenAI Platform picks stay unpriced (no mirrored price table) |
 | Budget enforcement that stops a run | Working | `daily_budget_usd`, rolling 24 h (timestamps are UTC), checked once before the fallback chain and before a stream; refusal is non-retryable and names spend, budget and unpriced count. Zero = no limit; local inference exempt |
 | Compression beyond head/tail cropping | Working | `context.rs`: whitespace normalisation, repeat-once dedup, digest of labelled excerpts capped at a quarter of the budget, first message kept as a pointer; a fitting thread is untouched and every condensed/dropped message is reported in meta. No model call, so no invented summaries |
-| Context-utilisation display | Working | context meter `~used / budget · %` with an over-budget state; `context_budget` in reply meta for other clients |
+| Rate-limit monitoring | Working (3.42.0) | `/api/health/providers` counts per-model `rate_limited` and `last_rate_limit_at` over 24 h, only when the provider's stored error mentions `429` or `rate limit`; the Provider health row prints `N rate-limited`. Nothing is inferred from latency or a generic failure || Context-utilisation display | Working | context meter `~used / budget · %` with an over-budget state; `context_budget` in reply meta for other clients |
 
 ## Phase 12 — Live agent monitoring
 

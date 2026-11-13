@@ -581,6 +581,11 @@ page shows it in a **By project** card (with `(no project)` for unassigned
 conversations and the unpriced count beside the estimate). It uses the roll-up's
 own window, not the table filters.*
 
+*Delivered 3.42.0: rate-limit monitoring. Provider health counts a model's
+24-hour refusals from the stored error (`429` or `rate limit`), reports the last
+one, and prints `N rate-limited` beside the success count. Nothing is inferred
+from latency, so a slow provider is not called rate-limited.*
+
 ## Phase 12 — Live monitoring
 
 Backend-truth dashboard: agents, task, model, router, tokens, duration, tool,

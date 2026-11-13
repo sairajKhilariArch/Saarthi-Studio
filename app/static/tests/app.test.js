@@ -478,6 +478,13 @@ test("skillCompatibilityNote names the Studio version a skill needs", () => {
   assert.equal(call("skillCompatibilityNote(null)"), "");
 });
 
+test("providerRateLimitNote reports only counted refusals", () => {
+  assert.equal(call("providerRateLimitNote({ rate_limited: 3 })"), "3 rate-limited");
+  assert.equal(call("providerRateLimitNote({ rate_limited: 0 })"), "");
+  assert.equal(call("providerRateLimitNote({})"), "");
+  assert.equal(call("providerRateLimitNote(null)"), "");
+});
+
 test("rollbackStatusText stays empty before any rollback", () => {
   assert.equal(call("rollbackStatusText(null)"), "");
   assert.equal(call("rollbackStatusText({})"), "");

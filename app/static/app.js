@@ -7439,6 +7439,13 @@ function renderUsageByModel(rows) {
   });
 }
 
+/* A rate-limit count exists only when the provider's own stored error said so;
+   nothing is inferred from a slow or failed request. */
+function providerRateLimitNote(row) {
+  const count = Number(row && row.rate_limited) || 0;
+  return count > 0 ? `${count} rate-limited` : "";
+}
+
 /* Breaker state plus what the log actually saw, on the same row: "open" with no
    history and "healthy but failing one time in three" are different problems. */
 async function loadProviderHealth() {
@@ -7474,6 +7481,8 @@ async function loadProviderHealth() {
     const facts = [state];
     if (circuit.retry_in_seconds > 0) facts.push(`retry in ${Math.ceil(circuit.retry_in_seconds)}s`);
     facts.push(`${row.ok || 0}/${row.requests || 0} ok`);
+    const limited = providerRateLimitNote(row);
+    if (limited) facts.push(limited);
     if (row.requests) facts.push(`${Math.round(row.avg_latency_ms || 0)} ms`);
     note.textContent = facts.join(" · ");
     line.title = circuit.breaker_error || row.last_error || "";
