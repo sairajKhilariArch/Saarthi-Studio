@@ -53,8 +53,8 @@ This is the ordered backlog for the current tree. It supersedes older
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0) and formatting (3.23.0) are done. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 25 ids, the extension's subset, and controls hidden only on an explicit `false`. |
+| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0) and formatting (3.23.0) are done. |
+| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 26 ids, the extension's subset, and controls hidden only on an explicit `false`. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
@@ -405,6 +405,17 @@ that name the reason; paths are workspace-relative and escapes are refused; a
 new unsaved buffer is allowed. The Format button and `File: Format buffer` are
 gated by the new `editor_format` capability (24 ids), false in the embedded
 server. Phase 9 is left with completion/diagnostics and a debugger.*
+
+*Delivered 3.28.0: go to definition. `GET /api/index/definition?name=&path=&limit=`
+answers with every declaration of the exact name — kind, path, line, language — 20
+by default and 50 at most, exact spelling above a case-insensitive match, and the
+buffer's own file above its folder above the shorter path above the earlier
+line. `F12` and `Editor: Go to definition` look up the identifier under the caret;
+one declaration opens its file with the caret on the name, several open a chooser
+at the caret, typing dismisses it and a stale answer is dropped. The chooser is
+`#definitions`, sharing the completion popup's styles and placement. The contract
+gained `editor_definition` (26 ids) and `max_definitions`. Phase 9 is left with a
+debugger and everything a language server would know.*
 
 *Delivered 3.27.0: one highlight layer. 3.26.0 added a second overlay beside the
 `#codeLayer` that `ide.js` has painted since 1.26.1; that duplicate is removed and
@@ -913,7 +924,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 6 Skills | Working | per-skill permissions only matter if skills execute |
 | 7 MCP | Working | — |
 | 8 Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
-| 9 Developer environment | Partial | no debugger; highlighting 3.27.0 (one layer), completion 3.25.0, formatting 3.23.0, watch 3.21.0 |
+| 9 Developer environment | Partial | no debugger; highlighting 3.27.0 (one layer), completion 3.25.0, definition 3.28.0, formatting 3.23.0, watch 3.21.0 |
 | 10 Safety and permissions | Working | — |
 | 11 Token, context, cost | Working | cost only where the provider reports usage |
 | 12 Agent monitoring | Working | — |

@@ -32,6 +32,7 @@ const FEATURES: &[&str] = &[
     "git_reflog_undo",
     "editor_format",
     "editor_complete",
+    "editor_definition",
     "saved_commands",
     "watch",
     "skills",
@@ -68,6 +69,7 @@ pub(crate) fn capabilities() -> Value {
             "max_saved_commands": crate::runner::MAX_CUSTOM_PRESETS,
             "max_reflog_entries": crate::git::MAX_REFLOG_ENTRIES,
             "max_completions": crate::index::MAX_COMPLETIONS,
+            "max_definitions": crate::index::MAX_DEFINITIONS,
         },
     })
 }
@@ -103,6 +105,7 @@ mod tests {
         assert!(features.contains_key("saved_commands"));
         assert!(features.contains_key("git_reflog_undo"));
         assert!(features.contains_key("editor_complete"));
+        assert!(features.contains_key("editor_definition"));
     }
 
     #[test]
@@ -123,6 +126,10 @@ mod tests {
         assert_eq!(
             value["limits"]["max_completions"],
             json!(crate::index::MAX_COMPLETIONS)
+        );
+        assert_eq!(
+            value["limits"]["max_definitions"],
+            json!(crate::index::MAX_DEFINITIONS)
         );
     }
 }

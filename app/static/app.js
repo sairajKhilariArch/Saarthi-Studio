@@ -3275,8 +3275,9 @@ function completionCharWidth(area) {
   return completionMetrics.width;
 }
 
-function positionCompletions() {
-  const box = $("completions");
+/* Both popups sit at the caret and share one placement: the list a caller hands
+   over is positioned, the editor it belongs to is measured. */
+function positionPopup(box) {
   const area = $("codeArea");
   const body = area && area.closest ? area.closest(".editor-body") : null;
   if (!box || !area || !body) return;
@@ -3293,6 +3294,10 @@ function positionCompletions() {
   const widest = Math.max(6, body.clientWidth - 280);
   box.style.top = `${Math.min(Math.max(6, top), Math.max(6, body.clientHeight - 44))}px`;
   box.style.left = `${Math.min(Math.max(6, left), widest)}px`;
+}
+
+function positionCompletions() {
+  positionPopup($("completions"));
 }
 
 function renderCompletions() {
@@ -3408,6 +3413,168 @@ function acceptCompletion(index = completions.active) {
   area.dispatchEvent(new Event("input", { bubbles: true }));
   renderTabs();
   updateCursor();
+}
+
+/* ---- go to definition ----------------------------------------------------
+   The index knows every declaration; F12 asks it for the name under the caret.
+   Like completion this only reads: the jump moves the caret, never the buffer. */
+let definitions = { open: false, items: [], active: 0, name: "" };
+
+/* The identifier at the caret, or the one that ends just before it. */
+function wordAt(text, caret) {
+  const at = Math.max(0, Math.min(caret, text.length));
+  const word = /[A-Za-z0-9_$]/;
+  let start = at;
+  while (start > 0 && word.test(text[start - 1])) start -= 1;
+  let end = at;
+  while (end < text.length && word.test(text[end])) end += 1;
+  return text.slice(start, end);
+}
+
+/* Where the name sits on its declaration line, so the jump lands on the name
+   rather than at column one. A signature written across lines falls back to the
+   start of the line. */
+function definitionCaret(text, line, name) {
+  const lines = text.split("\n");
+  const index = Math.max(0, Math.min(lines.length - 1, (line || 1) - 1));
+  const row = lines[index] || "";
+  const word = /[A-Za-z0-9_$]/;
+  for (let at = row.indexOf(name); at >= 0; at = row.indexOf(name, at + 1)) {
+    const before = at > 0 ? row[at - 1] : "";
+    const after = row[at + name.length] || "";
+    if (!word.test(before) && !word.test(after)) {
+      return { line: index + 1, column: at + 1 };
+    }
+  }
+  return { line: index + 1, column: 1 };
+}
+
+function closeDefinitions() {
+  if (!definitions.open) return;
+  definitions = { open: false, items: [], active: 0, name: "" };
+  const box = $("definitions");
+  if (!box) return;
+  box.classList.add("hidden");
+  box.replaceChildren();
+}
+
+function renderDefinitions() {
+  const box = $("definitions");
+  if (!box) return;
+  box.replaceChildren();
+  if (!definitions.open) {
+    box.classList.add("hidden");
+    return;
+  }
+  definitions.items.forEach((item, index) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `completion-item${index === definitions.active ? " active" : ""}`;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", index === definitions.active ? "true" : "false");
+    const name = document.createElement("span");
+    name.className = "completion-name";
+    name.textContent = item.name;
+    const where = document.createElement("span");
+    where.className = "completion-where";
+    where.textContent = `${item.kind} · ${item.path}:${item.line}`;
+    row.append(name, where);
+    row.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      acceptDefinition(index);
+    });
+    box.appendChild(row);
+  });
+  const active = box.querySelector(".completion-item.active");
+  if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest" });
+  box.classList.remove("hidden");
+  positionPopup(box);
+}
+
+function placeCaret(line, column) {
+  const area = $("codeArea");
+  if (!area) return;
+  const lines = area.value.split("\n");
+  const index = Math.max(0, Math.min(lines.length - 1, (line || 1) - 1));
+  let offset = 0;
+  for (let i = 0; i < index; i += 1) offset += lines[i].length + 1;
+  const within = Math.max(0, Math.min(lines[index].length, (column || 1) - 1));
+  area.focus();
+  area.setSelectionRange(offset + within, offset + lines[index].length);
+  const height = parseFloat(getComputedStyle(area).lineHeight) || 20;
+  area.scrollTop = Math.max(0, (index - 4) * height);
+  updateCursor();
+}
+
+/* The declaration is already known to exist; opening its file and placing the
+   caret on the name is the whole jump. */
+async function revealDefinition(item) {
+  closeDefinitions();
+  await openFile(item.path);
+  const area = $("codeArea");
+  const file = activeFile();
+  // The file did not open (openFile has already said why): nothing to place.
+  if (!area || !file || file.path !== item.path) return;
+  const at = definitionCaret(area.value, item.line, item.name);
+  placeCaret(at.line, at.column);
+}
+
+function acceptDefinition(index = definitions.active) {
+  const item = definitions.items[index];
+  if (!item) {
+    closeDefinitions();
+    return;
+  }
+  void revealDefinition(item);
+}
+
+function moveDefinition(step) {
+  if (!definitions.items.length) return;
+  definitions.active =
+    (definitions.active + step + definitions.items.length) % definitions.items.length;
+  renderDefinitions();
+}
+
+async function gotoDefinition() {
+  const area = $("codeArea");
+  const file = activeFile();
+  if (!area || !file) {
+    toast("Open a file first.");
+    return;
+  }
+  if (!capabilitiesAllow(state.capabilities, "editor_definition")) {
+    toast("This server cannot look up definitions.");
+    return;
+  }
+  const name = wordAt(area.value, area.selectionStart);
+  if (!name) {
+    toast("Place the caret on a name first.");
+    return;
+  }
+  closeDefinitions();
+  const caret = area.selectionStart;
+  const params = new URLSearchParams({ name });
+  if (!file.scratch) params.set("path", file.path);
+  const result = await api(`/api/index/definition?${params.toString()}`);
+  // The buffer or the caret moved while the request was out: a jump from a
+  // stale answer would put the caret where the reader did not ask for it.
+  if (area.selectionStart !== caret || wordAt(area.value, caret) !== name) return;
+  if (!result.ok) {
+    toast(result.data.error || "Definition lookup failed.");
+    return;
+  }
+  const items = Array.isArray(result.data.items) ? result.data.items : [];
+  if (!items.length) {
+    toast(result.data.note || `No definition of ${name} in the index.`);
+    return;
+  }
+  // One declaration is unambiguous; several open a chooser at the caret.
+  if (items.length === 1) {
+    await revealDefinition(items[0]);
+    return;
+  }
+  definitions = { open: true, items, active: 0, name };
+  renderDefinitions();
 }
 
 async function formatActiveFile() {
@@ -7941,6 +8108,8 @@ function bindEvents() {
   });
   $("codeArea").addEventListener("input", () => {
     onEditorInput();
+    // A chooser belongs to the name it was opened on; typing dismisses it.
+    if (definitions.open) closeDefinitions();
     // An open list follows the word being typed; a closed one stays shut until
     // Ctrl+Space asks again.
     if (!completions.open) return;
@@ -7948,6 +8117,28 @@ function bindEvents() {
     completionTimer = setTimeout(() => { void requestCompletions(); }, 120);
   });
   $("codeArea").addEventListener("keydown", (event) => {
+    if (definitions.open) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        moveDefinition(event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        acceptDefinition();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDefinitions();
+        return;
+      }
+    }
+    if (event.key === "F12") {
+      event.preventDefault();
+      void gotoDefinition();
+      return;
+    }
     if (completions.open) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();

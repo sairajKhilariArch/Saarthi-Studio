@@ -2428,6 +2428,7 @@
     { label: "File: Save", hint: "Ctrl+S", run: () => { void saveActiveFile(); } },
     { label: "File: Format buffer", run: () => { void formatActiveFile(); } },
     { label: "Editor: Complete symbol", hint: "Ctrl+Space", run: () => { void requestCompletions(); } },
+    { label: "Editor: Go to definition", hint: "F12", run: () => { void gotoDefinition(); } },
     { label: "File: Find in file", hint: "Ctrl+F", run: () => openFind() },
     { label: "File: Open folder…", run: () => openFolderDialog() },
     { label: "File: New file in Explorer", run: () => { openActivity("explorer"); if ($("newFileBtn")) $("newFileBtn").click(); } },

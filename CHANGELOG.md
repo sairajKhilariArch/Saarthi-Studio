@@ -1,5 +1,42 @@
 # Changelog
 
+## 3.28.0
+
+Phase 9 gains go to definition — the last navigation the code index can answer
+without a language server.
+
+- **`GET /api/index/definition?name=&path=&limit=`** answers with every
+  declaration of that exact name: kind, path, line and language, 20 by default
+  and 50 at most. It is not a prefix search, so `login` never matches
+  `login_token`. An exact spelling outranks a case-insensitive one (`LOGIN` still
+  finds `login`), and the declaration closest to the buffer comes first: the same
+  file, then the same folder, then the shorter path, then the earlier line. An
+  empty name is a 400; an unknown name is an empty list with a note, not an error.
+- **F12 in the editor, and `Editor: Go to definition` in the palette.** The
+  identifier under the caret is looked up — not the word before it — and a single
+  declaration opens its file with the caret on the name at its declared line,
+  selecting the line the way the workbench's other jumps do. A name declared more
+  than once opens a chooser at the caret (`kind · path:line`): arrows move, Enter
+  jumps, Escape dismisses, typing dismisses, and an answer that arrives after the
+  caret or the buffer moved is dropped instead of jumping somewhere unexpected.
+- **`editor_definition` is the 26th contract id**, with `max_definitions` in the
+  limits; it is `false` in the VS Code extension's embedded server, which has no
+  index.
+- The chooser is a second listbox (`#definitions`) sharing the placement helper
+  with completion, so both sit at the caret with the same geometry.
+
+Verified: `cargo test --locked`: 596 passed, 1 ignored (2 new: exact-name ranking
+with the case-insensitive fallback and the file/folder preference; the cap and the
+limit clamp, including repeated declarations in one file); clippy
+`--all-targets -D warnings` clean; `cargo fmt --check` clean; `test-frontend.sh`
+69 passed (3 new: the word under the caret, where a name sits on its declaration
+line, and the route/contract/markup wiring); `test-version.sh` 20/20;
+`test-e2e.sh` 32; extension `npm test` 27. Live headless: the route answered 200
+with the refresh note for an unknown name, 400 for an empty name, and the served
+page carries `#definitions`. **Not run:** the jump and the chooser in a browser —
+keys, placement and scrolling are layout, which the harness cannot see (KNOWN-ISSUES
+42 covers the same gap for the editor's drawn output).
+
 ## 3.27.0
 
 3.26.0 was wrong about the editor: the workbench has drawn a coloured layer behind

@@ -869,12 +869,130 @@ async fn complete_symbols(
     }
 }
 
+/// How many declarations one definition answer names: a name can be declared
+/// once per platform or trait impl, and a chooser shows a handful.
+pub(crate) const MAX_DEFINITIONS: usize = 20;
+/// The most one request may ask for.
+const MAX_DEFINITION_LIMIT: usize = 50;
+
+/// Every declaration of `name`, best first. Unlike completion this is not a
+/// prefix search: a longer name that merely starts with the text is a different
+/// symbol and is not offered. An exact spelling outranks a case-insensitive
+/// one, and the declaration closest to the buffer being edited comes first.
+fn definitions(db: &FsPath, name: &str, path: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let wanted = name.trim();
+    if wanted.is_empty() {
+        return Err("Name a symbol to look up.".to_string());
+    }
+    let lower = wanted.to_lowercase();
+    let conn = open_db(db).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.name, s.kind, s.path, s.line, f.language
+             FROM code_index_symbols s JOIN code_index_files f ON f.path = s.path
+             ORDER BY s.path, s.line",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let directory = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let mut items: Vec<(usize, Value)> = Vec::new();
+    for row in rows.flatten() {
+        let (symbol, kind, symbol_path, line, language) = row;
+        let exact = symbol == wanted;
+        if !exact && symbol.to_lowercase() != lower {
+            continue;
+        }
+        let mut score = if exact { 4 } else { 2 };
+        if !path.is_empty() {
+            if symbol_path == path {
+                score += 2;
+            } else if symbol_path
+                .rsplit_once('/')
+                .map(|(dir, _)| dir)
+                .unwrap_or("")
+                == directory
+            {
+                score += 1;
+            }
+        }
+        items.push((
+            score,
+            json!({
+                "name": symbol,
+                "kind": kind,
+                "path": symbol_path,
+                "line": line,
+                "language": language,
+            }),
+        ));
+    }
+    items.sort_by(|a, b| {
+        let (left, right) = (
+            a.1["path"].as_str().unwrap_or(""),
+            b.1["path"].as_str().unwrap_or(""),
+        );
+        b.0.cmp(&a.0)
+            .then_with(|| left.len().cmp(&right.len()))
+            .then_with(|| left.cmp(right))
+            .then_with(|| a.1["line"].as_i64().cmp(&b.1["line"].as_i64()))
+    });
+    items.truncate(limit.clamp(1, MAX_DEFINITION_LIMIT));
+    Ok(items.into_iter().map(|(_, item)| item).collect())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DefinitionQuery {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn definition_symbols(
+    State(state): State<AppState>,
+    Query(query): Query<DefinitionQuery>,
+) -> Response<Body> {
+    let limit = query.limit.unwrap_or(MAX_DEFINITIONS);
+    match definitions(&state.database_path, &query.name, &query.path, limit) {
+        Ok(items) => {
+            // An empty answer is not an error: an unrefreshed index or a typo is
+            // the common cause, so it is named instead of leaving a blank menu.
+            let note = if items.is_empty() {
+                "Nothing in the index declares that name — refresh the index or check the spelling."
+            } else {
+                ""
+            };
+            Json(json!({
+                "ok": true,
+                "name": query.name.trim(),
+                "items": items,
+                "note": note,
+            }))
+            .into_response()
+        }
+        Err(error) => json_error(StatusCode::BAD_REQUEST, error),
+    }
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/index", get(get_status))
         .route("/api/index/refresh", post(refresh_index))
         .route("/api/index/search", get(search_index))
         .route("/api/index/complete", get(complete_symbols))
+        .route("/api/index/definition", get(definition_symbols))
         .route(
             "/api/index/semantic",
             get(crate::embeddings::semantic_endpoint),
@@ -1140,6 +1258,76 @@ mod tests {
         // Equal scores fall back to the shorter name, then the alphabet.
         let items = complete(&db, "tok", "", 2).unwrap();
         assert_eq!(items[0]["name"], "token_0");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn definition_matches_the_whole_name_and_prefers_the_open_file() {
+        let dir = scratch("definition");
+        let db = database(&dir);
+        write(
+            &dir,
+            "src/auth.rs",
+            "pub fn login(user: &str) -> bool { true }\npub fn login_token() {}\n",
+        );
+        write(&dir, "src/session.rs", "fn login() {}\nfn logout() {}\n");
+        refresh(&db, &dir, &[]).unwrap();
+
+        // Both declarations are named exactly `login`; the open file's copy wins
+        // even though the other path is shorter.
+        let items = definitions(&db, "login", "src/session.rs", MAX_DEFINITIONS).unwrap();
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items[0]["path"], "src/session.rs");
+        assert_eq!(items[0]["line"], 1);
+        // `login_token` is a different symbol: a definition is not a prefix
+        // search, so it is never offered.
+        assert!(items.iter().all(|item| item["name"] == "login"));
+        // With no buffer to prefer, the shorter path comes first.
+        let items = definitions(&db, "login", "", MAX_DEFINITIONS).unwrap();
+        assert_eq!(items[0]["path"], "src/auth.rs");
+        // A name spelled differently is still found, and an unknown name is an
+        // empty answer rather than an error.
+        assert_eq!(
+            definitions(&db, "LOGIN", "", MAX_DEFINITIONS)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(definitions(&db, "missing", "", MAX_DEFINITIONS)
+            .unwrap()
+            .is_empty());
+        // Nothing to look up is refused.
+        assert!(definitions(&db, "  ", "", MAX_DEFINITIONS).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn definition_caps_the_answer_and_clamps_what_it_is_asked_for() {
+        let dir = scratch("definition-limit");
+        let db = database(&dir);
+        let mut text = String::new();
+        for _ in 0..30 {
+            text.push_str("fn dup() {}\n");
+        }
+        write(&dir, "src/many.rs", &text);
+        refresh(&db, &dir, &[]).unwrap();
+
+        assert_eq!(
+            definitions(&db, "dup", "", MAX_DEFINITIONS).unwrap().len(),
+            MAX_DEFINITIONS
+        );
+        assert_eq!(
+            definitions(&db, "dup", "", MAX_DEFINITION_LIMIT)
+                .unwrap()
+                .len(),
+            30
+        );
+        // A zero ask is one item rather than an empty menu that looks broken.
+        assert_eq!(definitions(&db, "dup", "", 0).unwrap().len(), 1);
+        // Equal scores in one file fall back to the earlier line.
+        let items = definitions(&db, "dup", "", 2).unwrap();
+        assert_eq!(items[0]["line"], 1);
+        assert_eq!(items[1]["line"], 2);
         let _ = fs::remove_dir_all(&dir);
     }
 }

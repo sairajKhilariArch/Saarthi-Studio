@@ -791,6 +791,7 @@ export function embeddedCapabilities(): CapabilityContract {
       git_reflog_undo: false,
       editor_format: false,
       editor_complete: false,
+      editor_definition: false,
       saved_commands: false,
       watch: false,
       mcp: false,
