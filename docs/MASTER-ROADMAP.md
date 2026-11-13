@@ -300,6 +300,14 @@ real platform, which needs an owner key.
 Install from local dir / git, version tracking, update preserving config,
 permission constraints, usage history, automatic selection — on top of the
 existing discovery/registry.
+*Delivered 3.36.0: import from Git. `POST /api/skills/import` clones an https
+URL or a local clone into a temporary folder beside the skills root, requires a
+root `SKILL.md`, refuses more than 200 files / 2 MiB and any symlink, and
+installs it under the user skills folder as `<slug>`, rewriting the copied
+manifest to name that folder so discovery keeps the id. The clone is removed
+either way; an installed id is refused rather than overwritten. The route is
+gated on `git`, and both skill roots follow `FREE_AI_STUDIO_HOME`. Per-skill
+permissions remain open, and only matter if a skill ever executes.*
 *Delivered 1.57.0: a message that names no skill is matched against the enabled
 skills' names and descriptions, with a floor, a two-skill cap and a token
 budget; the reply reports what was attached. Per-skill permissions remain open,

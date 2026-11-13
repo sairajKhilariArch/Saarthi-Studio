@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.36.0
+
+Phase 6 asks for skills imported from Git repositories; a skill could only be
+typed in, or written by hand into the user skills folder.
+
+- `POST /api/skills/import {source, git_ref?}` clones a repository — an https
+  URL or a folder holding a clone — into a temporary folder beside the skills
+  root, requires a `SKILL.md` at its root, and installs it as
+  `<user skills>/<slug>`. It is gated on `git`, because cloning runs git, and
+  the approval text names the skills-folder write too. The clone is removed
+  whether it succeeds or fails, and an id that is already installed is refused
+  rather than overwritten.
+- Bounded: at most 200 files and 2 MiB, symlinks are refused, the clone has a
+  90 s deadline with `GIT_TERMINAL_PROMPT=0`, plain `http` and `file://` URLs are
+  refused, and an unusable branch/tag name never reaches argv.
+- The installed `SKILL.md` is rewritten to name its new folder, as Install does.
+  Discovery keys ids on the manifest name, so an imported skill now keeps the id
+  the route returns instead of appearing under its display name.
+- Skills follow `FREE_AI_STUDIO_HOME`: both the user and `~/.agents` roots are
+  resolved under the override, so a sandboxed or test run no longer reads or
+  writes the real user's skills. Settings → Skills gains an "Import from Git…"
+  form.
 ## 3.35.0
 
 Phase 9 asks for search and replace; the editor had find (Ctrl+F, F3, a match

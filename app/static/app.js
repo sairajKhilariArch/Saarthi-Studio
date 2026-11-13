@@ -444,6 +444,7 @@ async function deleteProject(project) {
 
 async function loadSkills() {
   wireSkillInstall();
+  wireSkillImport();
   const box = $("skillList");
   const result = await api("/api/skills");
   if (!result.ok) {
@@ -855,6 +856,35 @@ function wireSkillInstall() {
   if (!button || button.dataset.wired) return;
   button.dataset.wired = "1";
   button.addEventListener("click", installSkill);
+}
+
+function wireSkillImport() {
+  const button = $("skillImportBtn");
+  if (!button || button.dataset.wired) return;
+  button.dataset.wired = "1";
+  button.addEventListener("click", importSkill);
+}
+
+async function importSkill() {
+  const source = $("skillImportSource").value.trim();
+  if (!source) {
+    toast("Give a Git URL or a folder holding a clone.");
+    return;
+  }
+  const result = await api("/api/skills/import", {
+    method: "POST",
+    confirmApproval: true,
+    body: JSON.stringify({ source, git_ref: $("skillImportRef").value.trim() }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not import that skill.");
+    return;
+  }
+  $("skillImportSource").value = "";
+  $("skillImportRef").value = "";
+  toast(`Imported ${result.data.id} v${result.data.version} (${result.data.files} file(s)).`);
+  await loadSkills();
+  await openSkillDetail(result.data.id);
 }
 
 function renderSkillsOverview() {

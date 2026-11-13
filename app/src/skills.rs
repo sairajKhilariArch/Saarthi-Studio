@@ -44,6 +44,7 @@ use axum::{
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::io::Read;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -117,11 +118,17 @@ pub(crate) fn roots(
     if let Some(root) = workspace_root {
         roots.push(("project".to_string(), root.join("skills")));
     }
+    // A test or sandboxed run must not read or write the real user's skills:
+    // FREE_AI_STUDIO_HOME already relocates config and data, so both skill
+    // folders follow it too.
+    let home = std::env::var_os("FREE_AI_STUDIO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(home_dir);
     roots.push((
         "user".to_string(),
-        home_dir().join(".config/free-ai-studio/skills"),
+        home.join(".config/free-ai-studio/skills"),
     ));
-    roots.push(("agents".to_string(), home_dir().join(".agents/skills")));
+    roots.push(("agents".to_string(), home.join(".agents/skills")));
     roots
 }
 
@@ -540,6 +547,225 @@ fn write_manifest(dir: &FsPath, document: &str, replace: bool) -> Result<PathBuf
     Ok(manifest)
 }
 
+/// Caps for a cloned skill: a skill is prompt text plus a few small assets,
+/// not a checkout. Anything larger is refused, never truncated.
+const IMPORT_MAX_FILES: usize = 200;
+const IMPORT_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const IMPORT_MAX_MANIFEST: usize = 256 * 1024;
+const IMPORT_MAX_STDERR: u64 = 8 * 1024;
+const IMPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+#[derive(Debug)]
+struct Imported {
+    id: String,
+    version: String,
+    path: PathBuf,
+    files: usize,
+    bytes: u64,
+}
+
+/// Import a skill from a Git repository. The clone lands in a temporary folder
+/// beside the skills root, its root `SKILL.md` is validated, and only regular
+/// files are copied into `<root>/<id>`; the clone is removed either way. Remote
+/// sources must be `https`, because a credential prompt on a process with no
+/// terminal would hang and plain http would send it in the clear.
+fn import_clone(root: &FsPath, source: &str, git_ref: Option<&str>) -> Result<Imported, String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("Give a Git URL or a folder holding a clone.".to_string());
+    }
+    let remote = source.starts_with("https://") || source.starts_with("http://");
+    if remote && !source.starts_with("https://") {
+        return Err("Use an https:// URL; plain http is refused.".to_string());
+    }
+    if !remote {
+        if source.starts_with("file://") {
+            return Err("Give the folder path itself, not a file:// URL.".to_string());
+        }
+        if !FsPath::new(source).is_dir() {
+            return Err(format!("{source} is not a folder on this machine."));
+        }
+    }
+    let branch = git_ref.map(str::trim).filter(|name| !name.is_empty());
+    if let Some(name) = branch {
+        if name.starts_with('-') || name.contains("..") || name.chars().any(char::is_control) {
+            return Err("That branch or tag name is not usable.".to_string());
+        }
+    }
+    fs::create_dir_all(root)
+        .map_err(|error| format!("Could not create {}: {error}", root.display()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let temp = root.join(format!(".import-{}-{stamp}", std::process::id()));
+    if let Err(error) = clone_into(source, branch, &temp) {
+        let _ = fs::remove_dir_all(&temp);
+        return Err(error);
+    }
+    let result = install_clone(root, &temp);
+    let _ = fs::remove_dir_all(&temp);
+    result
+}
+
+fn clone_into(source: &str, branch: Option<&str>, temp: &FsPath) -> Result<(), String> {
+    let mut command = std::process::Command::new("git");
+    command.arg("clone").arg("--depth").arg("1").arg("--quiet");
+    if let Some(name) = branch {
+        command.arg("--branch").arg(name);
+    }
+    command
+        .arg("--")
+        .arg(source)
+        .arg(temp)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "echo")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|_| "Git is not installed, or not on PATH.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("Git did not give us its output.")?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.take(IMPORT_MAX_STDERR).read_to_string(&mut text);
+        text
+    });
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < IMPORT_TIMEOUT => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(format!(
+                    "The clone did not finish within {} seconds.",
+                    IMPORT_TIMEOUT.as_secs()
+                ));
+            }
+            Err(error) => return Err(format!("Could not wait for git: {error}")),
+        }
+    };
+    let text = reader.join().unwrap_or_default();
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Could not clone {source}: {}", text.trim()))
+    }
+}
+
+fn install_clone(root: &FsPath, temp: &FsPath) -> Result<Imported, String> {
+    let manifest = temp.join(MANIFEST);
+    let text = fs::read_to_string(&manifest).map_err(|_| {
+        format!("That repository has no {MANIFEST} at its root, so it is not a skill.")
+    })?;
+    if text.len() > IMPORT_MAX_MANIFEST {
+        return Err(format!("{MANIFEST} is larger than 256 KiB."));
+    }
+    let folder = temp
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parsed = parse_text(&folder, &text, "user");
+    if let Some(error) = parsed.error {
+        return Err(error);
+    }
+    if parsed.body.trim().is_empty() {
+        return Err(format!(
+            "{MANIFEST} has no instructions below its front matter."
+        ));
+    }
+    let id = slugify(&parsed.name);
+    if id.is_empty() {
+        return Err("The skill's name has no letter or digit to build a folder from.".to_string());
+    }
+    let target = root.join(&id);
+    if target.exists() {
+        return Err(format!(
+            "A skill named \"{id}\" is already installed; remove it first."
+        ));
+    }
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    if let Err(error) = copy_tree(temp, &target, &mut files, &mut bytes) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(error);
+    }
+    let version = if parsed.version.is_empty() {
+        DEFAULT_VERSION.to_string()
+    } else {
+        parsed.version
+    };
+    // Discovery keys a skill's id on the manifest's `name`, not the folder, so
+    // the installed copy must name the folder it now lives in — the same rule
+    // Install follows. Extra front-matter keys this app does not read are not
+    // carried over; the instructions, description and version are.
+    let document = manifest_text(&id, &parsed.description, &version, &parsed.body);
+    let manifest = target.join(MANIFEST);
+    if let Err(error) = fs::write(&manifest, &document) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!("Could not write {}: {error}", manifest.display()));
+    }
+    Ok(Imported {
+        id,
+        version,
+        path: target,
+        files,
+        bytes,
+    })
+}
+
+/// Copy a clone without its `.git`, refusing anything but regular files. A
+/// symlink could point anywhere on the machine, so it is an error, not a skip.
+fn copy_tree(from: &FsPath, to: &FsPath, files: &mut usize, bytes: &mut u64) -> Result<(), String> {
+    fs::create_dir_all(to)
+        .map_err(|error| format!("Could not create {}: {error}", to.display()))?;
+    let entries = fs::read_dir(from)
+        .map_err(|error| format!("Could not read {}: {error}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let source = entry.path();
+        let dest = to.join(&name);
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_symlink() {
+            return Err(format!(
+                "The repository contains a symlink ({}), which is refused.",
+                source.display()
+            ));
+        }
+        if kind.is_dir() {
+            copy_tree(&source, &dest, files, bytes)?;
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        *files += 1;
+        *bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if *files > IMPORT_MAX_FILES || *bytes > IMPORT_MAX_BYTES {
+            return Err(format!(
+                "That skill is larger than {IMPORT_MAX_FILES} files or {} MiB.",
+                IMPORT_MAX_BYTES / (1024 * 1024)
+            ));
+        }
+        fs::copy(&source, &dest)
+            .map_err(|error| format!("Could not copy {}: {error}", source.display()))?;
+    }
+    Ok(())
+}
+
 /// The one root this app may write to: the user's own skills folder.
 fn writable_root(state: &AppState) -> Option<PathBuf> {
     let workspace_root = state.workspace.current_root();
@@ -882,6 +1108,88 @@ async fn install_skill(State(state): State<AppState>, Json(input): Json<Value>) 
     }
 }
 
+/// Import a skill from a Git repository. Gated on `git`, because cloning runs
+/// git; the operation text names the skills-folder write so one approval covers
+/// both halves.
+async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let source = input
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let git_ref = input
+        .get("git_ref")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if source.is_empty() {
+        return crate::json_error(
+            StatusCode::BAD_REQUEST,
+            "Give a Git URL or a folder holding a clone.",
+        );
+    }
+    let Some(root) = writable_root(&state) else {
+        return crate::json_error(
+            StatusCode::CONFLICT,
+            "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
+        );
+    };
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::Git,
+        &source,
+        "",
+        approve,
+        "clone a skill from a git repository into the skills folder",
+    ) {
+        return response;
+    }
+    let reference = if git_ref.is_empty() {
+        None
+    } else {
+        Some(git_ref)
+    };
+    // A clone is a blocking child process with a deadline of its own; it must
+    // not sit on an async worker thread.
+    let outcome =
+        tokio::task::spawn_blocking(move || import_clone(&root, &source, reference.as_deref()))
+            .await;
+    match outcome {
+        Ok(Ok(imported)) => {
+            if let Ok(text) = fs::read_to_string(imported.path.join(MANIFEST)) {
+                if let Err(error) = remember_at(
+                    &registry_path(&state),
+                    &imported.id,
+                    &imported.version,
+                    &fingerprint(&text),
+                ) {
+                    return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+                }
+            }
+            Json(json!({
+                "ok": true,
+                "id": imported.id,
+                "version": imported.version,
+                "path": imported.path.display().to_string(),
+                "files": imported.files,
+                "bytes": imported.bytes,
+            }))
+            .into_response()
+        }
+        Ok(Err(error)) => crate::json_error(StatusCode::BAD_REQUEST, error),
+        Err(error) => crate::json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("The import task failed: {error}"),
+        ),
+    }
+}
+
 async fn update_skill(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -1048,6 +1356,7 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/skills", get(get_skills))
         .route("/api/skills/install", post(install_skill))
+        .route("/api/skills/import", post(import_skill))
         .route("/api/skills/:id", get(get_skill))
         .route("/api/skills/:id/state", post(set_skill_enabled))
         .route("/api/skills/:id/update", post(update_skill))
@@ -1396,6 +1705,125 @@ mod tests {
         // Equal scores break on id, and only two may ride along.
         assert_eq!(ids(&first), ["alpha-review", "beta-review"]);
         assert_eq!(ids(&first), ids(&second));
+    }
+
+    fn git_repository(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = scratch(name).join("repo");
+        fs::create_dir_all(&dir).unwrap();
+        for (path, text) in files {
+            let full = dir.join(path);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, text).unwrap();
+        }
+        let run = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .expect("git runs");
+            assert!(
+                output.status.success(),
+                "git {:?}: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["init", "--quiet"]);
+        run(&["add", "."]);
+        run(&[
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "--quiet",
+            "-m",
+            "skill",
+        ]);
+        dir
+    }
+
+    #[test]
+    fn imports_a_skill_from_a_git_repository() {
+        let base = scratch("import");
+        let repo = git_repository(
+            "import-source",
+            &[
+                (
+                    "SKILL.md",
+                    "---\nname: Imported Review\ndescription: From git.\nversion: 2.1.0\n---\nRead the diff.\n",
+                ),
+                ("notes/checklist.md", "- item\n"),
+            ],
+        );
+        let root = base.join("skills");
+        let imported = import_clone(&root, repo.to_str().unwrap(), None).unwrap();
+        assert_eq!(imported.id, "imported-review");
+        assert_eq!(imported.version, "2.1.0");
+        assert_eq!(imported.files, 2);
+        assert!(root.join("imported-review").join(MANIFEST).is_file());
+        assert!(root.join("imported-review/notes/checklist.md").is_file());
+        // Discovery keys ids on the manifest name, so it must name the folder.
+        let installed = fs::read_to_string(root.join("imported-review").join(MANIFEST)).unwrap();
+        assert!(installed.contains("name: imported-review"), "{installed}");
+        let listed = discover(&[("user".to_string(), root.clone())]);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "imported-review");
+        assert_eq!(listed[0].version, "2.1.0");
+        assert!(listed[0].body.contains("Read the diff"));
+        // The clone is a source, not part of the skill.
+        assert!(!root.join("imported-review/.git").exists());
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".import-"))
+            .count();
+        assert_eq!(leftovers, 0, "a temporary clone was left behind");
+        // A second import is refused rather than overwriting an installed skill.
+        let error = import_clone(&root, repo.to_str().unwrap(), None).unwrap_err();
+        assert!(error.contains("already installed"), "{error}");
+    }
+
+    #[test]
+    fn an_import_refuses_what_is_not_a_skill_and_bad_sources() {
+        let base = scratch("import-refuse");
+        let root = base.join("skills");
+        let readme_only = git_repository("import-readme", &[("README.md", "no manifest\n")]);
+        let error = import_clone(&root, readme_only.to_str().unwrap(), None).unwrap_err();
+        assert!(error.contains("SKILL.md"), "{error}");
+        assert!(import_clone(&root, base.join("missing").to_str().unwrap(), None).is_err());
+        assert!(import_clone(&root, "http://example.com/skill.git", None).is_err());
+        assert!(import_clone(&root, "file:///tmp/skill", None).is_err());
+        let skill = git_repository(
+            "import-ref",
+            &[("SKILL.md", "---\nname: ref-skill\n---\nbody\n")],
+        );
+        assert!(import_clone(&root, skill.to_str().unwrap(), Some("-x")).is_err());
+        assert!(import_clone(&root, "  ", None).is_err());
+    }
+
+    #[test]
+    fn an_import_refuses_a_repository_over_the_size_cap() {
+        let base = scratch("import-big");
+        let root = base.join("skills");
+        let big = "x".repeat(3 * 1024 * 1024);
+        let repo = git_repository(
+            "import-big-source",
+            &[
+                ("SKILL.md", "---\nname: big-skill\n---\nbody\n"),
+                ("assets/blob.txt", &big),
+            ],
+        );
+        let error = import_clone(&root, repo.to_str().unwrap(), None).unwrap_err();
+        assert!(error.contains("larger than"), "{error}");
+        assert!(
+            !root.join("big-skill").exists(),
+            "a half-copy was left behind"
+        );
     }
 
     #[test]

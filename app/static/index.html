@@ -107,6 +107,13 @@
         <div class="form-actions"><button type="button" id="skillInstallBtn" class="btn btn-accent btn-small">Install</button></div>
         <small class="muted">Installed into your user skills folder. Nothing runs: the instructions only ride along when you pick the skill.</small>
       </details>
+      <details id="skillImport" class="skill-install">
+        <summary>Import from Git…</summary>
+        <label class="field"><span>Repository</span><input id="skillImportSource" type="text" placeholder="https://github.com/owner/skill or C:\skills\mine" autocomplete="off"></label>
+        <label class="field"><span>Branch or tag</span><input id="skillImportRef" type="text" placeholder="Optional, default branch" autocomplete="off"></label>
+        <div class="form-actions"><button type="button" id="skillImportBtn" class="btn btn-accent btn-small">Import</button></div>
+        <small class="muted">Clones into your user skills folder and refuses a folder that already exists. The repository needs a SKILL.md at its root; remote sources must be https.</small>
+      </details>
       <div id="skillDetail" class="skill-detail hidden">
         <div class="skill-detail-head">
           <button id="skillBack" class="icon-btn tiny" aria-label="Back to the skill list"><svg class="icon"><use href="#i-chevron"/></svg></button>

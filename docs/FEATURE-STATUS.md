@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.36.0 (2026-11-13):** Skills can be imported from Git. The new
+`POST /api/skills/import` clones an https URL or a local clone into a temporary
+folder, requires a root `SKILL.md`, refuses more than 200 files or 2 MiB and any
+symlink, and installs under the user skills folder, rewriting the manifest to
+name that folder so discovery keeps the id. The clone is removed either way, an
+installed id is refused, and the route is gated on `git`. Both skill roots now
+follow `FREE_AI_STUDIO_HOME`. Updating a Git-imported skill still means removing
+and importing it again (KNOWN-ISSUES 43).
 **Revision 3.35.0 (2026-11-13):** Replace in file. The find bar now has a
 Replace field: Replace (Enter) rewrites the match under the selection or the
 bar's current one and moves to the next, All (Shift+Enter) rewrites every
@@ -555,7 +563,7 @@ below carry the evidence.
 | 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
 | 4 | Thinking + OpenAI Platform | Working | no live platform call yet; request shapes are proven against a mock |
 | 5 | Agent execution | Working | named caveats only |
-| 6 | Skills | Working | per-skill permissions only matter if skills execute |
+| 6 | Skills | Working | Git import in 3.36.0; per-skill permissions only matter if skills execute |
 | 7 | MCP | Working | — |
 | 8 | Memory and RAG | Working | semantic search embeds through the router or a local runtime (`local:`, 3.24.0) |
 | 9 | Developer environment | Partial | a debugger; highlighting through the workbench layer (3.27.0), completion in 3.25.0, definition in 3.28.0, the file outline in 3.29.0, references in 3.30.0, formatting in 3.23.0, unsaved-buffer recovery in 3.33.0 and its Files-pane list in 3.34.0, search and replace in 3.35.0 |
@@ -668,7 +676,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Discovery across 5 roots | Working | `skills.rs` |
 | Enable/disable persisted | Working | `POST /api/skills/:id/state` |
 | Instruction injection with token cap | Working | rides the next message |
-| Install / update / remove / version tracking | Working (1.49.0) | install writes `<user skills>/<slug>/SKILL.md` after validating it with the list parser (temp file + rename, refuses overwrite unless `replace`); update rewrites in place and keeps the id; remove moves the folder to `<root>/.removed/` instead of deleting; `skills.json` records version, install/update times and a content fingerprint, so “edited since install” is reported; only the user root is writable |
+| Install / update / remove / version tracking | Working (1.49.0) | install writes `<user skills>/<slug>/SKILL.md` after validating it with the list parser (temp file + rename, refuses overwrite unless `replace`); update rewrites in place and keeps the id; remove moves the folder to `<root>/.removed/` instead of deleting; `skills.json` records version, install/update times and a content fingerprint, so “edited since install” is reported; only the user root is writable. Git import (3.36.0): `POST /api/skills/import` clones an https URL or a local clone, requires a root `SKILL.md`, caps the copy at 200 files/2 MiB, refuses symlinks, installs as the user root's `<slug>` and rewrites the manifest to that id; the clone is removed either way and the route is git-gated |
 | Skill permissions / usage history | Partial (1.49.0) | usage history is real (`skill_usage`: id, time, conversation, tokens; `uses`/`last_used_at` per skill and `/api/skills/:id/usage`); writing routes are gated on `fs_write`. There are no per-skill permissions because a skill is prompt text and is never executed |
 | Automatic skill selection | Working (1.57.0) | `skills::select_for`: id/name words score 4, description words 2, noise words and numbers dropped; needs 2 points, at most two skills, id tie-break, 1,200-token budget, disabled and broken skills skipped. A manual pick always wins, and `auto_select_skills` (default on) turns it off. The reply meta names what was attached (`auto_skills`) |
 
