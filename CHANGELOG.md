@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.50.0
+
+Phase 5's queue admitted runs with a read followed by a write: `dispatch` counted
+live runs from SQLite and then promoted a queued one. Two processes sharing the
+database could both read the last free slot and both take it, so
+`max_concurrent_runs` held per process instead of per workspace.
+
+- `claim_slot` is the promotion as one conditional statement: the row must still
+  be `queued` and `(SELECT COUNT(*) FROM agent_runs WHERE status IN ('running',
+  'awaiting_approval')) < limit` must hold when SQLite applies the UPDATE. Two
+  processes serialise on the database, so the second one's count already
+  includes the first one's run and it is refused instead of over-admitting.
+- `promote` takes the limit and uses that claim; `dispatch` keeps its
+  process-wide pass lock, which now only prevents this process from
+double-starting.
+- A test opens two connections on one database, queues two runs with a limit of
+  one, and proves the second connection cannot take the claimed slot, can once
+  the limit rises, and still cannot re-claim a run that is no longer queued.
+
 ## 3.49.0
 
 Phase 9's language-server half. The Problems pane could only show compiler

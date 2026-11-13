@@ -974,10 +974,43 @@ fn queued_runs(state: &AppState) -> Result<Vec<(String, Vec<String>)>, String> {
         .collect())
 }
 
+/// The conditional promotion, as one statement.
+///
+/// The row must still be queued *and* a slot must still be free at the moment
+/// SQLite applies this UPDATE: the live count is read inside the statement, so
+/// two processes sharing one database cannot both take the last slot. A
+/// separate read followed by an update could — that is exactly the race this
+/// closes. `status IN (running, awaiting_approval)` matches `count_live_slots`.
+fn claim_slot(
+    conn: &Connection,
+    run_id: &str,
+    stamp: f64,
+    context: &str,
+    limit: i64,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE agent_runs SET status=?2, \
+         started_at=CASE WHEN started_at > 0 THEN started_at ELSE ?3 END, \
+         updated_at=?3, error='', pending_action='', context=?5 \
+         WHERE id=?1 AND status=?4 \
+         AND (SELECT COUNT(*) FROM agent_runs WHERE status IN (?6, ?7)) < ?8",
+        params![
+            run_id,
+            RUNNING,
+            stamp,
+            QUEUED,
+            context,
+            RUNNING,
+            AWAITING_APPROVAL,
+            limit
+        ],
+    )
+}
+
 /// Start one queued run. The update is conditional on the row still being
 /// queued, so a run cancelled between the queue read and this line is never
-/// started behind the user's back.
-fn promote(state: &AppState, run_id: &str) -> bool {
+/// started behind the user's back, and on a free slot at claim time.
+fn promote(state: &AppState, run_id: &str, limit: i64) -> bool {
     let stamp = now();
     // What the run is handed is decided once, here, and stored with the run: the
     // steps read it back, and the card can say what it was given.
@@ -986,14 +1019,7 @@ fn promote(state: &AppState, run_id: &str) -> bool {
         _ => return false,
     };
     let changed = db(state).and_then(|conn| {
-        conn.execute(
-            "UPDATE agent_runs SET status=?2, \
-             started_at=CASE WHEN started_at > 0 THEN started_at ELSE ?3 END, \
-             updated_at=?3, error='', pending_action='', context=?5 \
-             WHERE id=?1 AND status=?4",
-            params![run_id, RUNNING, stamp, QUEUED, context],
-        )
-        .map_err(|e| e.to_string())
+        claim_slot(&conn, run_id, stamp, &context, limit).map_err(|e| e.to_string())
     });
     match changed {
         Ok(1) => {
@@ -1011,8 +1037,9 @@ fn promote(state: &AppState, run_id: &str) -> bool {
 /// wait forever on something that will never arrive.
 ///
 /// Two passes at once could both see the same free slot, so the pass holds one
-/// process-wide lock. The status change is conditional as well, which is what
-/// keeps a raced promotion from starting the same run twice.
+/// process-wide lock, and the promotion itself claims the slot in the same
+/// statement — the lock keeps this process from double-starting, and the claim
+/// keeps a second process over the same database from taking the slot too.
 pub(crate) async fn dispatch(state: &AppState) -> Vec<String> {
     static PASS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
     let _pass = PASS.lock().await;
@@ -1081,7 +1108,7 @@ pub(crate) async fn dispatch(state: &AppState) -> Vec<String> {
             if !ready {
                 continue;
             }
-            if promote(state, &run_id) {
+            if promote(state, &run_id, limit) {
                 started.push(run_id);
                 slots -= 1;
                 progressed = true;
@@ -8340,7 +8367,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 [],
             )
             .unwrap();
-        assert!(promote(&fixture.state, "q1"));
+        assert!(promote(&fixture.state, "q1", 1));
         let run = load_run(&fixture.state, "q1").unwrap().unwrap();
         let labels = context_json(&run.context);
         assert_eq!(
@@ -8376,11 +8403,51 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
                 [],
             )
             .unwrap();
-        assert!(promote(&fixture.state, "q2"));
+        assert!(promote(&fixture.state, "q2", 1));
         let run = load_run(&fixture.state, "q2").unwrap().unwrap();
         let labels = context_json(&run.context);
         assert_eq!(labels["memory"], json!([]), "{labels}");
         assert_eq!(labels["code"], json!([]), "{labels}");
         assert_eq!(stored_background(&fixture.state, &run), "");
+    }
+
+    #[test]
+    fn two_connections_cannot_take_the_same_last_slot() {
+        // Each connection is what one process holds. Admission used to read the
+        // live count and then update, so two processes could both see the last
+        // slot free; the claim now reads the count inside the same statement.
+        let path =
+            std::env::temp_dir().join(format!("sarthi-queue-slot-{}.db", uuid::Uuid::new_v4()));
+        let first = crate::open_db(&path).expect("temp db");
+        initialize(&first).expect("schema");
+        for id in ["a", "b"] {
+            first
+                .execute(
+                    "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at) \
+                     VALUES(?1,'p','g','queued',0,0,1,4,1.0,1.0)",
+                    [id],
+                )
+                .unwrap();
+        }
+        let second = crate::open_db(&path).expect("second connection");
+        assert_eq!(claim_slot(&first, "a", 2.0, "", 1).unwrap(), 1);
+        assert_eq!(
+            claim_slot(&second, "b", 3.0, "", 1).unwrap(),
+            0,
+            "the only slot was claimed through the other connection"
+        );
+        // Raising the limit lets the same statement through...
+        assert_eq!(claim_slot(&second, "b", 3.0, "", 2).unwrap(), 1);
+        // ...while a status that is no longer queued still refuses a re-claim.
+        assert_eq!(claim_slot(&second, "b", 4.0, "", 9).unwrap(), 0);
+        let live: i64 = second
+            .query_row(
+                "SELECT COUNT(*) FROM agent_runs WHERE status=?1",
+                [RUNNING],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(live, 2);
+        let _ = std::fs::remove_file(&path);
     }
 }

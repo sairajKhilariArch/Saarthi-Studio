@@ -295,6 +295,18 @@ real platform, which needs an owner key.
    is only marked complete on `APPROVE`; ISSUES allows one repair round and then
    fails the run with the findings kept.*
 
+*Delivered 3.50.0: admission is atomic across processes.* `dispatch` used to
+read the live-run count and then promote, so two processes sharing one database
+could each see the last free slot; `max_concurrent_runs` therefore held per
+process. The promotion is now one conditional UPDATE (`claim_slot`) whose
+subquery counts live runs — running and awaiting approval — inside the same
+statement, so the second process's statement already includes the first one's
+run and is refused. `dispatch` keeps its process-wide pass lock, which now only
+stops this process double-starting. A test proves it across two connections on
+one database. Each process still runs its own pass, so a queued run waits for
+whichever process notices the slot; a worktree that is never applied still
+stays on disk.*
+
 ## Phase 6 — Skills management
 
 Install from local dir / git, version tracking, update preserving config,

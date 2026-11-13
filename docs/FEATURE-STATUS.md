@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.50.0 (2026-11-13):** Phase 5's admission is atomic across
+processes. `dispatch` used to read the live-run count and then promote, so two
+processes over one database could each take the last free slot. Promotion is now
+one conditional UPDATE (`claim_slot`) whose subquery counts live runs in the
+same statement, so the second process sees the first one's run and is refused;
+the process-wide pass lock remains only to stop this process double-starting. A
+test proves it with two connections on one database (claim, refusal, a higher
+limit letting it through, and no re-claim of a run that is no longer queued).
+Also lands Phase 9's language-server diagnostics (3.49.0) and Phase 14's
+thinking (3.47.0) and stdio MCP (3.48.0) in the VS Code embedded server.
 **Revision 3.49.0 (2026-11-13):** Phase 9's language-server diagnostics.
 `app/src/lsp.rs` is a bounded LSP client (Content-Length JSON-RPC, initialize,
 didOpen, five seconds for `publishDiagnostics`, shutdown, Drop kills the child)
