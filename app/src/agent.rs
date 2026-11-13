@@ -3877,6 +3877,52 @@ async fn list_runs(State(state): State<AppState>) -> Response {
 /// The monitoring dashboard: every recent run with its timing and totals, plus
 /// the counts its header shows. It reuses the same rows as the list, so the board
 /// and the cards can never disagree about a run.
+/// The path a write step names. Steps store the human summary, and `write`
+/// summaries are produced here as `write <path> (<n> bytes)`; anything that
+/// does not follow that shape is simply not reported as a file.
+fn write_path(summary: &str) -> Option<String> {
+    let rest = summary.strip_prefix("write ")?;
+    let path = match rest.rfind(" (") {
+        Some(index) if rest[index..].ends_with(" bytes)") => &rest[..index],
+        _ => rest,
+    };
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+/// What one live run is doing right now: its newest step, and the distinct
+/// files it has written (newest first). Read from the same step log the run
+/// card shows, so the dashboard cannot invent a tool the run never called.
+fn live_detail(conn: &rusqlite::Connection, run_id: &str) -> Value {
+    let current = conn
+        .query_row(
+            "SELECT action, summary FROM agent_steps WHERE run_id=?1 ORDER BY seq DESC LIMIT 1",
+            [run_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .ok();
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT summary FROM agent_steps WHERE run_id=?1 AND action='write' \
+         ORDER BY seq DESC LIMIT 40",
+    ) {
+        if let Ok(rows) = stmt.query_map([run_id], |row| row.get::<_, String>(0)) {
+            for summary in rows.flatten() {
+                if let Some(path) = write_path(&summary) {
+                    if !files.contains(&path) {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+    files.truncate(5);
+    json!({
+        "currentTool": current.as_ref().map(|step| step.0.clone()).unwrap_or_default(),
+        "currentSummary": current.map(|step| step.1).unwrap_or_default(),
+        "files": files,
+    })
+}
+
 async fn runs_overview(State(state): State<AppState>) -> Response {
     let conn = match db(&state) {
         Ok(conn) => conn,
@@ -3910,7 +3956,9 @@ async fn runs_overview(State(state): State<AppState>) -> Response {
     }
     // "Live" is the honest union: a run can be working, or stopped waiting for a
     // human answer, and both block the queue in different ways.
-    let live = rows
+    // The count covers every live row; only the detail list is capped, so a
+    // dashboard with more than twelve live runs still reports the true total.
+    let live_total = rows
         .iter()
         .filter(|run| {
             matches!(
@@ -3919,10 +3967,30 @@ async fn runs_overview(State(state): State<AppState>) -> Response {
             )
         })
         .count();
+    let live_runs: Vec<Value> = rows
+        .iter()
+        .filter(|run| {
+            matches!(
+                run["status"].as_str(),
+                Some("running" | "awaiting_approval" | "paused")
+            )
+        })
+        .take(12)
+        .map(|run| {
+            let id = run["id"].as_str().unwrap_or("");
+            let mut detail = live_detail(&conn, id);
+            detail["id"] = json!(id);
+            detail["goal"] = run["goal"].clone();
+            detail["status"] = run["status"].clone();
+            detail["model"] = run["model"].clone();
+            detail
+        })
+        .collect();
     Json(json!({
         "ok": true,
         "counts": counts,
-        "totals": { "runs": rows.len(), "tokens": tokens, "steps": steps, "live": live },
+        "totals": { "runs": rows.len(), "tokens": tokens, "steps": steps, "live": live_total },
+        "liveRuns": live_runs,
         "runs": rows,
     }))
     .into_response()
@@ -4971,6 +5039,43 @@ mod tests {
             "{payload}"
         );
         assert!(payload["idleSeconds"].as_f64().unwrap() > 0.0, "{payload}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_live_detail_names_the_current_step_and_written_files() {
+        let path =
+            std::env::temp_dir().join(format!("sarthi-live-detail-{}.db", uuid::Uuid::new_v4()));
+        let conn = crate::open_db(&path).expect("temp db");
+        initialize(&conn).expect("schema");
+        conn.execute(
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,created_at,updated_at) \
+             VALUES('run-live','proj','goal','running',1,0,0,8,10.0,20.0)",
+            [],
+        )
+        .expect("insert run");
+        for (seq, action, summary) in [
+            (1, "read", "read src/a.rs"),
+            (2, "write", "write src/a.rs (3 bytes)"),
+            (3, "write", "write src/a.rs (4 bytes)"),
+            (4, "write", "write src/b.rs (9 bytes)"),
+            (5, "read", "read src/b.rs"),
+        ] {
+            conn.execute(
+                "INSERT INTO agent_steps(run_id,seq,action,summary,created_at) VALUES(?1,?2,?3,?4,0)",
+                rusqlite::params!["run-live", seq, action, summary],
+            )
+            .expect("step");
+        }
+        let detail = live_detail(&conn, "run-live");
+        assert_eq!(detail["currentTool"], json!("read"));
+        assert_eq!(detail["currentSummary"], json!("read src/b.rs"));
+        // Newest first, one entry per path, and only write steps count.
+        assert_eq!(detail["files"], json!(["src/b.rs", "src/a.rs"]));
+        assert_eq!(
+            write_path("write odd (name).rs (2 bytes)"),
+            Some("odd (name).rs".to_string())
+        );
         let _ = std::fs::remove_file(&path);
     }
 

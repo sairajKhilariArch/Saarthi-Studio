@@ -17,6 +17,10 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.46.0 (2026-11-13):** Phase 12's live detail is on the dashboard.
+`overview.liveRuns` reports each live run's newest step and its written files,
+read from the step log; the board lists them with the model. The live total is
+no longer capped with the detail list.
 **Revision 3.45.0 (2026-11-13):** Phase 7's explicit disconnect exists.
 `POST /api/mcp/:name/disconnect` closes a warm session while keeping its
 settings, reports whether there was one, and leaves an unknown server a 404. The
@@ -822,6 +826,9 @@ Working for monitoring (1.51.0), controls (1.52.0) and the live step view
 approve/reject, cancel, restore and pause/resume are real backend state;
 `GET /api/runs/overview` adds a cross-run dashboard (live, awaiting approval,
 paused, failed, summed steps and tokens) built from the same rows as the panel,
+and since 3.46.0 `liveRuns` carries each live run's newest step and the distinct
+files it has written (read from `agent_steps`; the board lists them as **Live
+now**),
 and every run reports `tokens`, `elapsedSeconds` and `idleSeconds` with a live
 run measured from its start. Pause parks a run at the next step boundary and a
 paused run holds no live task, so start/pause/resume/cancel all act on real

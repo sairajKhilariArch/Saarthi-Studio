@@ -478,6 +478,19 @@ test("skillCompatibilityNote names the Studio version a skill needs", () => {
   assert.equal(call("skillCompatibilityNote(null)"), "");
 });
 
+test("liveRunNote names the current tool, written-file count and model", () => {
+  assert.equal(
+    call(`liveRunNote({ currentTool: "write", files: ["a.rs", "b.rs"], model: "gpt-5" })`),
+    "now write · 2 files · gpt-5",
+  );
+  assert.equal(
+    call(`liveRunNote({ currentTool: "read", files: ["a.rs"], model: "" })`),
+    "now read · 1 file · auto",
+  );
+  assert.equal(call("liveRunNote({})"), "between steps · auto");
+  assert.equal(call("liveRunNote(null)"), "between steps · auto");
+});
+
 test("diagnosticsSummaryLine counts workflow failures in the 24 h line", () => {
   const line = call(`diagnosticsSummaryLine({
     provider: { requests: 10, errors: 2 },

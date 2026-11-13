@@ -623,6 +623,11 @@ with a pulsing tag that respects `prefers-reduced-motion`.
 No workstream remains open; Move up/Move down covers one-step queue reordering,
 but drag-and-drop is not promised.
 
+*Delivered 3.46.0: live runs report what they are doing. The runs overview adds
+each live run's newest step and the files it has written, read from the step log,
+and the board lists them with the model and file count. The live total counts
+every live row, not only the twelve with details.*
+
 ## Phase 13 — Workflow builder
 
 Started in 2.9.0. `workflows.json` now carries an optional `nodes` array, so a

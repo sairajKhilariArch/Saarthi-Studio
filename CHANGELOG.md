@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.46.0
+
+Phase 12's dashboard asks which tool each live agent is on and which files it is
+modifying. The overview could only report aggregate counts.
+
+- `GET /api/runs/overview` gains `liveRuns`: for every live run (running,
+  awaiting approval, paused) its newest step (`currentTool`, `currentSummary`)
+  and the distinct files it has written, newest first, capped at five. Read from
+  the same `agent_steps` the run card shows, so a tool is never inferred.
+- `totals.live` still counts every live run while only the detail list is
+  capped at twelve, so a busy queue keeps an honest number.
+- The Runs board shows a **Live now** list with the goal, the current step, the
+  written-file count and the model via the pure `liveRunNote`; file paths are in
+  the row's tooltip.
+
 ## 3.45.0
 
 Phase 7 asks for connect and disconnect. MCP sessions could be warmed by a call

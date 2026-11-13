@@ -9286,11 +9286,59 @@ function renderRunBoard() {
   return board;
 }
 
+/* One live run's second line: what it is doing, how many distinct files it has
+   written, and the model. Counts only, so the wording stays testable. */
+function liveRunNote(run) {
+  const tool = run && run.currentTool ? `now ${run.currentTool}` : "between steps";
+  const count = run && Array.isArray(run.files) ? run.files.length : 0;
+  const files = count ? ` · ${count} file${count === 1 ? "" : "s"}` : "";
+  return `${tool}${files} · ${(run && run.model) || "auto"}`;
+}
+
+function renderLiveRuns(runs) {
+  if (!Array.isArray(runs) || !runs.length) return null;
+  const box = document.createElement("section");
+  box.className = "card";
+  const head = document.createElement("div");
+  head.className = "table-head";
+  const title = document.createElement("h3");
+  title.textContent = "Live now";
+  const hint = document.createElement("small");
+  hint.className = "muted";
+  hint.textContent = "current step · written files";
+  head.append(title, hint);
+  box.appendChild(head);
+  runs.slice(0, 12).forEach((run) => {
+    const row = document.createElement("div");
+    row.className = "skill-row";
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = run.goal || run.id;
+    const step = document.createElement("p");
+    step.textContent = run.currentSummary || "No step recorded yet.";
+    const meta = document.createElement("small");
+    meta.className = "skill-path";
+    meta.textContent = liveRunNote(run);
+    main.append(strong, step, meta);
+    row.appendChild(main);
+    if (Array.isArray(run.files) && run.files.length) {
+      row.title = `Files: ${run.files.join(", ")}`;
+    }
+    box.appendChild(row);
+  });
+  return box;
+}
+
 function renderRuns() {
   const box = $("runsList");
   if (!box) return;
   box.innerHTML = "";
-  if (state.runOverview) box.appendChild(renderRunBoard());
+  if (state.runOverview) {
+    box.appendChild(renderRunBoard());
+    const live = renderLiveRuns(state.runOverview.liveRuns);
+    if (live) box.appendChild(live);
+  }
   if (!state.agentRuns.length) {
     const empty = document.createElement("p");
     empty.className = "run-empty";
