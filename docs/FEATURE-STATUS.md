@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.31.0 (2026-11-13):** Phase 1's artifact gate now requires what
+each release job promises. `verify-artifacts.sh` keeps its safety scan and checksum
+verification and additionally fails, naming each one, when an expected file is
+missing; every release job passes its own names, and `verify-release.sh` still
+checks the whole published set. A new `test-artifacts.sh` runs on every push over
+fixture directories (missing file, unsafe name, empty directory, tampered
+checksum, the ten-file release set). Phase 1 stays Blocked on the tagged run.
+
 **Revision 3.30.0 (2026-11-13):** Find references. `GET
 `/api/index/references?name=&path=&limit=` reads the indexed files (the buffer's
 own file first) and returns one row per line that mentions the name as a whole
@@ -489,7 +497,7 @@ below carry the evidence.
 
 | Phase | Area | State | Largest open gap |
 |---|---|---|---|
-| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation |
+| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation. The artifact set gate (3.31.0) now requires each job's promised files and runs on every push |
 | 2 | Router manager | Working | remote routers are unauthenticated base URLs; no live network test |
 | 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
 | 4 | Thinking + OpenAI Platform | Working | no live platform call yet; request shapes are proven against a mock |

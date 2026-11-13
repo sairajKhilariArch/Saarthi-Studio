@@ -147,10 +147,11 @@ jobs:
       - name: Smoke the installed package (unpack, boot, report version)
         run: bash scripts/ci/smoke-package.sh dist/*.deb
 
-      # Reject control characters/spaces in names and verify checksums before
-      # anything is handed to upload-artifact or the release API.
+      # Reject control characters/spaces in names, require the package this job
+      # promised, and verify checksums before anything is handed to
+      # upload-artifact or the release API.
       - name: Validate artifact names
-        run: bash scripts/ci/verify-artifacts.sh dist
+        run: bash scripts/ci/verify-artifacts.sh dist "free-ai-studio_${{ steps.meta.outputs.version }}-1_amd64.deb"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
@@ -295,7 +296,11 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Validate artifact names and checksums
-        run: bash scripts/ci/verify-artifacts.sh dist
+        run: |
+          bash scripts/ci/verify-artifacts.sh dist \
+            "sarthi-studio_${{ steps.meta.outputs.version }}_linux-x86_64.tar.gz" \
+            "sarthi-studio_${{ steps.meta.outputs.version }}_x86_64.AppImage" \
+            SHA256SUMS.txt
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -392,7 +397,10 @@ jobs:
         run: Remove-Item -Recurse -Force "dist/sarthi-studio_${{ steps.meta.outputs.version }}_windows-x86_64"
 
       - name: Validate artifact names
-        run: bash scripts/ci/verify-artifacts.sh dist
+        run: |
+          bash scripts/ci/verify-artifacts.sh dist \
+            "sarthi-studio_${{ steps.meta.outputs.version }}_windows-x86_64.zip" \
+            "sarthi-studio_${{ steps.meta.outputs.version }}_windows-x86_64.msi"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -533,7 +541,10 @@ jobs:
         run: bash scripts/ci/smoke-package.sh dist/*.app.zip
 
       - name: Validate artifact names
-        run: bash scripts/ci/verify-artifacts.sh dist
+        run: |
+          bash scripts/ci/verify-artifacts.sh dist \
+            "sarthi-studio_${{ steps.meta.outputs.version }}_macos-universal.tar.gz" \
+            "sarthi-studio_${{ steps.meta.outputs.version }}_macos-universal.app.zip"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -586,6 +597,9 @@ jobs:
       # activation entry, engine floor and no secret-shaped files.
       - name: Smoke the packaged VSIX
         run: bash scripts/ci/smoke-vsix.sh dist/free-ai-studio-vscode.vsix
+
+      - name: Validate the extension artifact
+        run: bash scripts/ci/verify-artifacts.sh dist free-ai-studio-vscode.vsix
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@v4
@@ -649,6 +663,9 @@ jobs:
       # native libraries React Native loads and its JavaScript bundle.
       - name: Smoke the packaged APK and AAB
         run: bash scripts/ci/smoke-apk.sh dist/free-ai-studio-android.apk dist/free-ai-studio-android.aab
+
+      - name: Validate the Android artifacts
+        run: bash scripts/ci/verify-artifacts.sh dist free-ai-studio-android.apk free-ai-studio-android.aab
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4

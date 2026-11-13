@@ -92,6 +92,16 @@ remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
 
+Delivered in 3.31.0:
+
+- The artifact gate requires the files a job promised, not just whatever it
+  produced. `scripts/ci/verify-artifacts.sh` takes the expected names, fails with
+  each missing one and counts them, and checks that an expected name is itself a
+  safe filename; every release job (deb, Linux packages, Windows, macOS, VSIX,
+  Android) passes its own list. `scripts/ci/test-artifacts.sh` runs the gate over
+  fixture directories on every push, so an empty or half-built set fails in CI
+  instead of at upload time.
+
 Delivered in 3.19.0:
 
 - The whole Rust tree is formatted, and both Rust workflows check all of it:

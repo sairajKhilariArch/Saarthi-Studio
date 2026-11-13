@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.31.0
+
+Phase 1: a release job that builds nothing — or only half of what it promised —
+now fails instead of publishing an empty or partial artifact set.
+
+- **`scripts/ci/verify-artifacts.sh` takes the expected names.** After the
+  existing safety scan (control characters, spaces, restricted charset) it checks
+  that every named file is present, reports each missing one by name and counts
+  them. An expected name is held to the same filename rules before it is used to
+  build a path. Called without arguments the old behaviour is unchanged.
+- **Every release job declares what it owes.** The deb job requires
+  `free-ai-studio_<version>-1_amd64.deb`; the Linux package job the tarball, the
+  AppImage and `SHA256SUMS.txt`; Windows the zip and MSI; macOS the tarball and
+  `.app.zip`; the extension job the VSIX; the Android job the APK and AAB. The
+  release-asset gate (`verify-release.sh`) still checks the whole published set.
+- **`scripts/ci/test-artifacts.sh`, run on every push** in `desktop-ci.yml`,
+  drives the gate over fixture directories: a complete set, a missing expected
+  file (named in the error), an unsafe expected name, an empty directory, a good
+  and a tampered `SHA256SUMS.txt`, and the full ten-file release set with one
+  file removed. Twelve assertions, no packaging tools, no token, no network.
+
+Verified: `test-artifacts.sh` 12 passed; `test-version.sh` 20 passed;
+`test-release.sh` 13 passed; `bash -n` clean on both scripts; both edited
+workflows parse with PyYAML, and their artifact steps name the expected files in
+the intended jobs (`deb`, `release`, `windows`, `macos`, `vscode-extension`,
+`android`). **Not run:** a tagged release. This changes the release workflow
+only; Phase 1 still needs a green tagged run with the eleven assets, and no tag
+can be pushed from here.
+
 ## 3.30.0
 
 Shift+F12 now answers the other half of go to definition: every place in the
