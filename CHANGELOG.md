@@ -1,5 +1,42 @@
 # Changelog
 
+## 3.32.0
+
+The packaged Linux metadata advertised version **1.26.6** while the app was
+3.31.0. `appstreamcli validate-tree` accepted it — an old `<release>` entry is
+valid XML — so the `.deb` and the AppImage would both have told software centres
+the wrong version. This release corrects it and makes the drift impossible to
+ship again.
+
+- **`scripts/ci/verify-linux-metadata.sh`** checks the AppStream component and
+  the desktop entry offline, with only Python's standard library: the component
+  id matches the file name, the summary exists and carries no trailing period,
+  the metadata licence is one AppStream recommends, a description paragraph and
+  content rating are present, the `<launchable>` names this desktop file, the
+  newest `<release>` equals the build's version and has a date, the desktop entry
+  has `Type`/`Name`/`Exec`/`Icon`/`Categories`, every `Categories` part ends in a
+  semicolon, `Exec` runs the binary the component `<provides>`, and the named
+  `Icon` has its committed `-256.png` beside it. Every problem is listed
+  together, not one at a time.
+- **The metadata now says 3.32.0**, with 1.26.6 kept as history beneath it.
+- **Checked on every push and before packaging**: `desktop-ci.yml` runs the
+  fixture test; the `deb` and `release` jobs run the validator before building,
+  so a future version bump that forgets the AppStream file fails there rather
+  than in a published package.
+- **`scripts/ci/test-linux-metadata.sh`** covers the committed files and eight
+  fixture breakages: version drift, an id that does not match the file, a
+  `<launchable>` naming another desktop file, a missing summary, malformed XML,
+  a desktop entry without `Exec`, `Categories` without a semicolon, and an `Exec`
+  that runs another binary.
+
+Verified: `verify-linux-metadata.sh` reports `OK: 3.32.0`; `test-linux-metadata.sh`
+9 passed; `test-version.sh` 20 passed; `test-artifacts.sh` 12 passed;
+`test-frontend.sh` 74 passed; `test-e2e.sh` 32 passed; both edited workflows
+parse with PyYAML and the new steps appear in the `deb`, `release` and `build`
+jobs. **Not run:** an actual `.deb`/AppImage build or `appstreamcli` — neither
+packaging tool is available on this machine, and Phase 1 still needs a tagged
+run.
+
 ## 3.31.0
 
 Phase 1: a release job that builds nothing — or only half of what it promised —

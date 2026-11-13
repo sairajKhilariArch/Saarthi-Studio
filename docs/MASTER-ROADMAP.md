@@ -77,8 +77,8 @@ This is the ordered backlog for the current tree. It supersedes older
 - Browser-level layout checks for the IDE and workflow canvas, and a privileged
   ENOSPC test.
 - Clippy on Windows/macOS as well as Linux (the whole tree is rustfmt-gated since 3.19.0).
-- AppStream validation for the renamed Linux package; real-device checks for the
-  macOS/Windows/Android icons.
+- Real-device checks for the macOS/Windows/Android icons. AppStream and desktop-entry
+  agreement, including the packaged release version, is checked since 3.32.0.
 - Reconcile the diverged `website` branch. (The stale workflow names in
   `AGENTS.md` were fixed in 3.10.0.)
 - Run restore remains narrower than a workspace snapshot; diagnostics and
@@ -91,6 +91,14 @@ the workflow engine, and the testing layers are functionally complete. Their
 remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
+
+Delivered in 3.32.0:
+
+- The AppStream component and desktop entry are validated against each other and
+  against the build version, offline and without `appstreamcli`
+  (`scripts/ci/verify-linux-metadata.sh`), on every push and before the deb and
+  AppImage jobs package. The metadata had still advertised 1.26.6 at 3.31.0 -
+  valid XML, so `validate-tree` accepted it - and now tracks the release.
 
 Delivered in 3.31.0:
 

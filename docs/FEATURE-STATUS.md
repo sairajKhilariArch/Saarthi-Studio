@@ -17,6 +17,18 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.32.0 (2026-11-13):** The Linux package metadata is now checked
+against the build. The packaged AppStream component still advertised 1.26.6 at
+3.31.0, which `appstreamcli validate-tree` accepts, so the .deb and AppImage
+would have reported the wrong version; the component now says 3.32.0 with the old
+entry kept as history. `scripts/ci/verify-linux-metadata.sh` checks, offline and
+without appstreamcli, the component id against the file name, the summary and its
+licence, the description, content rating, launchable, the newest release against
+the build version and the desktop entry's Type/Name/Exec/Icon/Categories,
+cross-checking `Exec` against the component's binary and the icon against its
+committed PNG. `test-linux-metadata.sh` runs on every push and the deb/release
+jobs validate before packaging. Phase 1 stays Blocked on the tagged run.
+
 **Revision 3.31.0 (2026-11-13):** Phase 1's artifact gate now requires what
 each release job promises. `verify-artifacts.sh` keeps its safety scan and checksum
 verification and additionally fails, naming each one, when an expected file is
@@ -497,7 +509,7 @@ below carry the evidence.
 
 | Phase | Area | State | Largest open gap |
 |---|---|---|---|
-| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation. The artifact set gate (3.31.0) now requires each job's promised files and runs on every push |
+| 1 | CI/CD and release | Blocked | green tagged run with 11 assets; deb test confirmation. The artifact set gate (3.31.0) now requires each job's promised files and runs on every push. The AppStream/desktop metadata is checked against the build version on every push and before packaging since 3.32.0 |
 | 2 | Router manager | Working | remote routers are unauthenticated base URLs; no live network test |
 | 3 | Model and provider | Working | native OpenAI picks carry no price; context only when supplied |
 | 4 | Thinking + OpenAI Platform | Working | no live platform call yet; request shapes are proven against a mock |

@@ -116,6 +116,11 @@ jobs:
         with:
           workspaces: app
 
+      # The .deb packages this metadata; a stale <release> version would tell
+      # software centres the wrong version, so it is checked before the build.
+      - name: Validate the Linux package metadata
+        run: bash scripts/ci/verify-linux-metadata.sh
+
       - name: Build headless binary and run tests
         working-directory: app
         run: |
@@ -207,6 +212,11 @@ jobs:
           set -eu
           version="$(bash scripts/ci/version.sh app/Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The AppImage embeds this metadata and appimagetool only checks its
+      # schema, not whether its newest <release> is this build.
+      - name: Validate the Linux package metadata
+        run: bash scripts/ci/verify-linux-metadata.sh
 
       - name: Build release binary and run tests
         working-directory: app

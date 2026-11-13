@@ -73,6 +73,12 @@ jobs:
       - name: Test the artifact gate
         run: bash scripts/ci/test-artifacts.sh
 
+      # The AppStream component and desktop entry are packaged into the .deb and
+      # the AppImage; a stale release version there is valid XML, so only this
+      # check catches it.
+      - name: Test the Linux package metadata
+        run: bash scripts/ci/test-linux-metadata.sh
+
       # A release with zero assets looked successful on GitHub. The gate reads a
       # fixture release over loopback and must reject a missing artifact.
       - name: Test the release asset gate
