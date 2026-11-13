@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.39.1
+
+Phase 16's failure matrix covered an unavailable provider and an unreadable
+database, but not the two SQLite failures the specification names: a locked
+database and a full one.
+
+- A new test holds `BEGIN IMMEDIATE` on one connection and proves a second
+  `open_db` connection waits behind the 10 s `busy_timeout` and then succeeds,
+  instead of failing immediately.
+- A new test caps `PRAGMA max_page_count` so SQLite answers `SQLITE_FULL` as a
+  real disk would, and proves the error names a full database, the refused
+  insert changed nothing, `quick_check` still says `ok`, and deleting rows still
+  works.
+- This is SQLite's full-database path, not a full filesystem: the privileged
+  ENOSPC case (a loop/tmpfs mount) is still not run, and the docs keep saying so.
+
 ## 3.39.0
 
 Phase 6 asks for installing a skill from a local directory. Import only cloned,

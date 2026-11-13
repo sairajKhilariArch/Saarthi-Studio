@@ -4932,6 +4932,77 @@ mod tests {
     }
 
     #[test]
+    fn a_second_connection_waits_out_a_short_write_lock() {
+        let dir = scratch("db-lock");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("data folder");
+        let path = dir.join("studio.db");
+        let first = open_db(&path).expect("first connection");
+        first
+            .execute_batch("CREATE TABLE t (value INTEGER);")
+            .expect("schema");
+        let second = open_db(&path).expect("second connection");
+        first
+            .execute_batch("BEGIN IMMEDIATE; INSERT INTO t VALUES (1);")
+            .expect("held lock");
+        let waiting = std::thread::spawn(move || {
+            // The first connection releases the lock while this one is waiting.
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            second.execute("INSERT INTO t VALUES (2)", [])
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        first.execute_batch("COMMIT").expect("commit");
+        waiting
+            .join()
+            .expect("the waiter finishes")
+            .expect("the waiting write waits and then succeeds");
+        let count: i64 = first
+            .query_row("SELECT COUNT(*) FROM t", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_database_reports_an_error_and_keeps_its_rows() {
+        let dir = scratch("db-full");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("data folder");
+        let path = dir.join("studio.db");
+        let conn = open_db(&path).expect("connection");
+        // A small page ceiling makes SQLite answer SQLITE_FULL as a real disk
+        // would, without needing a full filesystem or special privileges.
+        conn.execute_batch("CREATE TABLE blobs (body BLOB); PRAGMA max_page_count = 32;")
+            .expect("schema");
+        let blob = vec![7u8; 4096];
+        let mut inserted = 0i64;
+        let error = loop {
+            match conn.execute("INSERT INTO blobs (body) VALUES (?1)", params![&blob]) {
+                Ok(_) => {
+                    inserted += 1;
+                    assert!(inserted < 1000, "the page ceiling was never reached");
+                }
+                Err(error) => break error,
+            }
+        };
+        assert!(
+            error.to_string().to_lowercase().contains("full"),
+            "the error should name a full database: {error}"
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM blobs", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, inserted, "the refused insert changed nothing");
+        let check: String = conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .expect("quick check");
+        assert_eq!(check, "ok", "a full database is still intact");
+        conn.execute("DELETE FROM blobs", [])
+            .expect("deleting the rows still works");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn permission_audit_gains_a_request_id_column_once() {
         let conn = Connection::open_in_memory().expect("memory database");
         // The pre-2.4.0 shape: no request_id column.

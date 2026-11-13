@@ -856,8 +856,14 @@ a saved copy must bring it back ready; a read-only data directory must make the
 `data directory` readiness check go false and recover (POSIX only, skipped where
 `chmod` is not enforced).
 
-Remaining: a privileged ENOSPC case (a real full disk needs a loop/tmpfs mount)
-and browser-level layout checks for the canvas and IDE. The VSIX and the
+Delivered in 3.39.1: the two SQLite failure cases Phase 16 names. A test proves
+a second connection waits behind the 10 s `busy_timeout` while another holds a
+write lock, and another uses `PRAGMA max_page_count` to make SQLite answer
+`SQLITE_FULL`, checking the error, an unchanged row count, `quick_check` and a
+delete afterwards. No product code changed.
+
+Remaining: a privileged ENOSPC case (a real full disk needs a loop/tmpfs mount;
+SQLite's own `SQLITE_FULL` path is tested since 3.39.1) and browser-level layout checks for the canvas and IDE. The VSIX and the
 APK/AAB got their install smokes in 3.11.0 (`smoke-vsix.sh`, `smoke-apk.sh`),
 beside the desktop archives, deb and AppImage that were already wired.
 
