@@ -95,6 +95,15 @@ remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
 
+Delivered in 3.54.0:
+
+- The version cannot be read outside `scripts/ci/version.sh` any more.
+  `scripts/ci/verify-version-steps.sh` fails a release step that publishes
+  `id: meta` without calling the parser, or a workflow that contains an inline
+  `sed`/`grep`/PowerShell reader of `version =`, naming the step or line. It is
+  driven by `test-version.sh` (23 checks) over the real workflow and two
+  fixtures, so the class of bug behind the v1.26.0/v1.26.1 assets fails a push.
+
 Delivered in 3.53.0:
 
 - The release's asset set is one contract, not two copies of one. New

@@ -122,5 +122,42 @@ else
   pass "artifact gate rejects an empty directory"
 fi
 
+# --- one version parser in the release workflow ------------------------------
+# v1.26.0/v1.26.1 lost their assets to a per-job `sed` (a CR reached the filename)
+# and the macOS job's copy of that regex was over-escaped. The shared parser is
+# only a fix while every job actually calls it.
+steps="$here/verify-version-steps.sh"
+workflow="$here/../../.github/workflows/desktop-release.yml"
+if bash "$steps" "$workflow" >"$tmp/steps.out" 2>&1; then
+  pass "every release job reads the version through scripts/ci/version.sh"
+else
+  cat "$tmp/steps.out" >&2
+  die "a release job reads the version with its own parser"
+fi
+
+# A job that grows its own reader again is caught, and the line is named.
+sed 's|version="$(bash scripts/ci/version.sh app/Cargo.toml)"|version="$(sed -n '"'"'s/^version = "\\(.*\\)"/\\1/p'"'"' app/Cargo.toml)"|' \
+  "$workflow" >"$tmp/inline.yml"
+if bash "$steps" "$tmp/inline.yml" >"$tmp/inline.out" 2>&1; then
+  die "the check accepted an inline version parser"
+else
+  grep -q 'inline `sed` version reader' "$tmp/inline.out" ||
+    die "the inline reader was not named"
+  pass "an inline version parser is caught and named"
+fi
+
+# A step that keeps `id: meta` but stops calling the parser is caught by name.
+sed '0,/scripts\/ci\/version.sh app\/Cargo.toml/s//echo 9.9.9/' \
+  "$workflow" >"$tmp/no-parser.yml"
+if bash "$steps" "$tmp/no-parser.yml" >"$tmp/no-parser.out" 2>&1; then
+  die "the check accepted a version step without the parser"
+else
+  grep -q 'does not call scripts/ci/version.sh' "$tmp/no-parser.out" ||
+    die "the step that lost the parser was not named"
+  grep -q 'Read and verify the version' "$tmp/no-parser.out" ||
+    die "the failing step's name is missing"
+  pass "a step that stops using the parser is caught and named"
+fi
+
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ] || exit 1

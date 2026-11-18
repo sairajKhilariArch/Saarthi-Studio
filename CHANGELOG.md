@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.54.0
+
+Phase 1's version-extraction guard. `scripts/ci/version.sh` fixed the v1.26.1
+carriage-return bug and the over-escaped macOS regex, but nothing stopped a
+release job from growing its own reader again — the two failures this parser
+exists for.
+
+- New `scripts/ci/verify-version-steps.sh` reads the release workflow, finds every
+  step that publishes the version (`id: meta`), and fails when one does not call
+  `scripts/ci/version.sh`, or when the file contains an inline `sed`/`grep`/
+  PowerShell reader of `version =`. Every problem is named with the step or the
+  line, and fewer than four version steps is treated as one job having lost the
+  parser rather than as a deliberate removal.
+- `scripts/ci/test-version.sh` drives the check over the real workflow and two
+  fixtures — a job that reintroduces the inline `sed` (caught by line) and a step
+  that keeps `id: meta` but stops calling the parser (caught by step name). The
+  suite is 23 checks now.
+
 ## 3.53.0
 
 Phase 1's last automatic protection. The release's asset set existed twice: each

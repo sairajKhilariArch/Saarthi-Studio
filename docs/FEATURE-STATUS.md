@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.53.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.54.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.54.0 (2026-11-18):** Phase 1's version guard. `version.sh` had
+already fixed the CR-in-filename bug and the over-escaped macOS regex, but each
+release job could still grow its own reader. `verify-version-steps.sh` now fails
+the push when a step publishes the version without calling the parser, or when
+the workflow holds an inline `sed`/`grep`/PowerShell reader; `test-version.sh`
+drives it over the real workflow and two fixtures (23 checks).
 **Revision 3.53.0 (2026-11-18):** Phase 1's release contract. The 11 promised
 assets existed as two hand-kept lists — each build job's expected files and the
 final release gate — so a rename failed only at the end of a tagged run. They now
