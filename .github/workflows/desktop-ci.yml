@@ -84,6 +84,12 @@ jobs:
       - name: Test the release asset gate
         run: bash scripts/ci/test-release.sh
 
+      # Each build job's expected files and the release gate's list are one
+      # contract; a rename on one side used to surface only after a tagged run
+      # had built every platform and reached the last job.
+      - name: Check the release contract
+        run: bash scripts/ci/verify-release-contract.sh .github/workflows/desktop-release.yml
+
       # The static UI has no build step, so nothing else catches a broken pure
       # helper: these run the real app.js in a browser-free harness.
       - name: Run frontend tests

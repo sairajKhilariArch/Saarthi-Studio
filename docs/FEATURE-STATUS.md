@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.52.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.53.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.53.0 (2026-11-18):** Phase 1's release contract. The 11 promised
+assets existed as two hand-kept lists — each build job's expected files and the
+final release gate — so a rename failed only at the end of a tagged run. They now
+come from `scripts/ci/release-assets.sh`, and `verify-release-contract.sh` checks
+the workflow's job lists against it on every push, naming each unbuilt contract
+asset and each ungoverned job artifact. What Phase 1 still lacks is external: a
+tagged run with six green jobs and 11 attached assets.
 **Revision 3.52.0 (2026-11-18):** Phase 5 closes. The editor's save was invisible
 to the run ledger: `claim_write` only refused a write over a read record that no
 longer matched, so a live run that had never read the file could replace a

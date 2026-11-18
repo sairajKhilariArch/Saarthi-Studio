@@ -37,26 +37,19 @@ mkdir -p "$release_dir"
 release_file="$release_dir/v9.9.9"
 list_file="$list_dir/index.html"
 
+# The fixture release is built from the same contract the real gate reads, so a
+# name this test does not know about cannot be silently missing from it.
+assets_list="$tmp/assets-9.9.9.txt"
+bash "$here/release-assets.sh" 9.9.9 >"$assets_list"
+
 write_release() { # missing asset name (empty for complete)
-  "$py" - "$release_file" "$1" <<'PY'
+  "$py" - "$release_file" "$1" "$assets_list" <<'PY'
 import json
 import sys
 
-path, missing = sys.argv[1:3]
-version = "9.9.9"
-names = [
-    "free-ai-studio-android.aab",
-    "free-ai-studio-android.apk",
-    "free-ai-studio-vscode.vsix",
-    f"free-ai-studio_{version}-1_amd64.deb",
-    f"sarthi-studio_{version}_linux-x86_64.tar.gz",
-    f"sarthi-studio_{version}_macos-universal.app.zip",
-    f"sarthi-studio_{version}_macos-universal.tar.gz",
-    f"sarthi-studio_{version}_windows-x86_64.msi",
-    f"sarthi-studio_{version}_windows-x86_64.zip",
-    f"sarthi-studio_{version}_x86_64.AppImage",
-    "SHA256SUMS.txt",
-]
+path, missing, assets_path = sys.argv[1:4]
+with open(assets_path, encoding="utf-8") as handle:
+    names = [line.strip() for line in handle if line.strip()]
 assets = [{"name": name, "size": 1024} for name in names if name != missing]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({"draft": False, "assets": assets}, handle)
@@ -249,6 +242,49 @@ else
   grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-missing.out" ||
     die "audit failure did not name the missing asset"
   pass "audit rejects a release with a missing asset"
+fi
+
+# --- the release contract -----------------------------------------------------
+# The jobs' expected files and the release gate's list are one contract now. A
+# rename on one side used to be visible only after a whole tagged run had built
+# every platform; these cases fail on a push instead.
+contract="$here/verify-release-contract.sh"
+if bash "$contract" "$workflow" 9.9.9 >"$tmp/contract.out" 2>&1; then
+  pass "the workflow promises exactly the release contract"
+else
+  cat "$tmp/contract.out" >&2
+  die "the workflow and the release contract disagree"
+fi
+count="$(wc -l <"$assets_list" | tr -d ' ')"
+if [ "$count" = "11" ]; then
+  pass "the contract names the 11 release assets"
+else
+  die "the contract names $count assets, not 11"
+fi
+
+# A rename in one job only: the contract still demands the old name and nothing
+# builds it, so both sides are reported.
+sed 's/free-ai-studio-android\.aab/free-ai-studio-android-signed.aab/' \
+  "$workflow" >"$tmp/renamed.yml"
+if bash "$contract" "$tmp/renamed.yml" 9.9.9 >"$tmp/renamed.out" 2>&1; then
+  die "the contract check accepted an asset only one side names"
+else
+  grep -q 'free-ai-studio-android\.aab' "$tmp/renamed.out" ||
+    die "the contract failure did not name the unbuilt asset"
+  grep -q 'free-ai-studio-android-signed\.aab' "$tmp/renamed.out" ||
+    die "the contract failure did not name the ungoverned asset"
+  pass "a renamed asset is refused with both names"
+fi
+
+# A job that stops promising a file it used to build.
+sed -e '/windows-x86_64\.msi"/d' -e 's/\(windows-x86_64\.zip"\) \\$*/\1/' \
+  "$workflow" >"$tmp/dropped.yml"
+if bash "$contract" "$tmp/dropped.yml" 9.9.9 >"$tmp/dropped.out" 2>&1; then
+  die "the contract check accepted a dropped MSI"
+else
+  grep -q 'windows-x86_64\.msi' "$tmp/dropped.out" ||
+    die "the dropped artifact was not named"
+  pass "a job that drops an asset is refused and named"
 fi
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"

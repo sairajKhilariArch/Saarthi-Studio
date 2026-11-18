@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.53.0
+
+Phase 1's last automatic protection. The release's asset set existed twice: each
+build job passed its own expected names to `verify-artifacts.sh`, and the final
+gate in `verify-release.sh` held a second copy. A rename applied to one side was
+only visible after a tagged run had built every platform and reached the last
+job — the cost Phase 1 exists to stop paying.
+
+- New `scripts/ci/release-assets.sh <version>` is the one list of the 11 promised
+  assets. It refuses a version that would make an unsafe filename (whitespace,
+  path separators, control characters), so the carriage-return class of bug
+  cannot return through the shared list.
+- `verify-release.sh` reads that list instead of its own copy. The released-asset
+  check, its messages and its failure behaviour are unchanged.
+- New `scripts/ci/verify-release-contract.sh` joins the workflow's shell
+  continuations, substitutes `${{ steps.meta.outputs.version }}`, and compares
+  every job's expected names with the contract, naming both an asset the release
+  promises but no job builds and a job artifact the gate ignores. It runs in
+  `desktop-ci.yml` on every push, so a rename fails the commit instead of a tag.
+- `scripts/ci/test-release.sh` builds its fixture release from the same list and
+  gained three cases: the real workflow agrees with the contract, a renamed asset
+  reports both names, and a job that drops an asset is refused and named. The
+  suite is 17 checks now.
+
 ## 3.52.0
 
 Phase 5's last open note: an editor save was invisible to the run ledger.

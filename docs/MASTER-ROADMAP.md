@@ -95,6 +95,18 @@ remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
 
+Delivered in 3.53.0:
+
+- The release's asset set is one contract, not two copies of one. New
+  `scripts/ci/release-assets.sh` prints the 11 promised names for a version (and
+  refuses a version that would make an unsafe filename), `verify-release.sh`
+  reads it, and `scripts/ci/verify-release-contract.sh` compares it with every
+  build job's `verify-artifacts.sh` list on each push. A rename now names both
+  sides and fails the commit instead of consuming a tagged run; `test-release.sh`
+  drives the check over a renamed and a dropped-asset fixture (17 checks).
+  What remains in the phase is what only GitHub can answer: a tagged run with all
+  six jobs green and 11 assets attached, plus the external macOS/signing items.
+
 Delivered in 3.32.0:
 
 - The AppStream component and desktop entry are validated against each other and
