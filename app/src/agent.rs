@@ -3490,6 +3490,7 @@ fn run_routes(prefix: &'static str) -> Router<AppState> {
         .route(format!("{prefix}/:id/retry").as_str(), post(retry_run))
         .route(format!("{prefix}/:id/restore").as_str(), post(restore_run))
         .route(format!("{prefix}/:id/apply").as_str(), post(apply_run))
+        .route(format!("{prefix}/:id/discard").as_str(), post(discard_run))
         .route(format!("{prefix}/:id/cancel").as_str(), post(cancel_run))
         .route(
             format!("{prefix}/:id/steps/:seq/restore").as_str(),
@@ -4351,6 +4352,71 @@ async fn apply_run(
     };
     match crate::git::apply_run_worktree(&root, &run_id, &message) {
         Ok(value) => Json(value).into_response(),
+        Err(message) => error_response(StatusCode::CONFLICT, message),
+    }
+}
+
+/// Throw a finished run's own checkout away without applying it. A run that can
+/// write works in a checkout of its own; applying merges it, and this is the
+/// other answer — remove the worktree and delete its branch, so a run nobody
+/// wants stops holding disk and a branch forever. A live run is refused, and
+/// git's own reason is returned when the removal fails.
+async fn discard_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response {
+    let run = match load_run(&state, &run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "No such run."),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if matches!(
+        run.status.as_str(),
+        RUNNING | AWAITING_APPROVAL | QUEUED | PAUSED
+    ) {
+        return error_response(
+            StatusCode::CONFLICT,
+            "This run is still live. Discard its checkout once it has finished.",
+        );
+    }
+    if !(run.allow_writes || run.allow_commands) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "This run could not write or run commands, so it has no checkout to discard.",
+        );
+    }
+    let root = match state.workspace.root() {
+        Ok(root) => root,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error.message()),
+    };
+    let approve = input
+        .get("approve")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if let Some(response) = crate::permissions::guard_user(
+        &state,
+        crate::permissions::Action::Git,
+        &run_id,
+        "",
+        approve,
+        "discard a run's checkout",
+    ) {
+        return response;
+    }
+    match crate::git::discard_run_worktree(&root, &run_id) {
+        Ok(value)
+            if value["removed"].as_bool() == Some(true)
+                || value["branchRemoved"].as_bool() == Some(true) =>
+        {
+            Json(value).into_response()
+        }
+        // Neither a worktree nor a branch was left, so a second discard has
+        // nothing to do and says so instead of reporting a success.
+        Ok(_) => error_response(
+            StatusCode::CONFLICT,
+            "This run has no checkout or branch left to discard.",
+        ),
         Err(message) => error_response(StatusCode::CONFLICT, message),
     }
 }
@@ -6479,12 +6545,20 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
     }
 
     async fn post_apply(app: &Router, id: &str) -> (StatusCode, Value) {
+        post_run_action(app, id, "apply").await
+    }
+
+    async fn post_discard(app: &Router, id: &str) -> (StatusCode, Value) {
+        post_run_action(app, id, "discard").await
+    }
+
+    async fn post_run_action(app: &Router, id: &str, action: &str) -> (StatusCode, Value) {
         let response = app
             .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri(format!("/api/runs/{id}/apply"))
+                    .uri(format!("/api/runs/{id}/{action}"))
                     .header("content-type", "application/json")
                     .body(axum::body::Body::from(r#"{"approve":true}"#))
                     .unwrap(),
@@ -6599,6 +6673,98 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         .await;
         wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
         let (code, payload) = post_apply(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::CONFLICT, "{payload}");
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("still live"),
+            "{payload}"
+        );
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn discarding_a_finished_run_removes_its_checkout_and_branch() {
+        let base = scripted_router(&[
+            r#"{"action":"write","path":"note.txt","content":"hello"}"#,
+            r#"{"action":"done","summary":"note written"}"#,
+            "APPROVE: note.txt exists with the requested content.",
+        ])
+        .await;
+        let fixture = run_fixture("discard-run", &base);
+        let repo = fixture.root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q", "-b", "main"]).status.success());
+        let _ = git(&["config", "user.email", "a@b.c"]);
+        let _ = git(&["config", "user.name", "t"]);
+        let _ = git(&["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join("seed.txt"), "seed\n").unwrap();
+        let _ = git(&["add", "-A"]);
+        let _ = git(&["commit", "-q", "-m", "base"]);
+        fixture
+            .state
+            .workspace
+            .open(repo.to_str().unwrap())
+            .expect("open the repository");
+        let id = start_run(
+            &fixture.app,
+            json!({"goal": "write note.txt", "allowWrites": true, "autoApprove": true}),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        let checkout = crate::git::run_worktree_path(&repo, &id);
+        assert!(checkout.join("note.txt").exists());
+
+        let (code, payload) = post_discard(&fixture.app, &id).await;
+        assert_eq!(code, StatusCode::OK, "{payload}");
+        assert_eq!(payload["removed"], json!(true));
+        assert_eq!(payload["branchRemoved"], json!(true));
+        assert!(!checkout.exists(), "the checkout is removed");
+        // The opposite of apply: the shared folder keeps nothing of this run.
+        assert!(
+            !repo.join("note.txt").exists(),
+            "discarding must not apply the run's work"
+        );
+        let short: String = id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(8)
+            .collect();
+        let branch = git(&[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/run/{short}"),
+        ]);
+        assert!(!branch.status.success(), "the run's branch is deleted");
+
+        // A second discard has nothing left to throw away.
+        let (again, message) = post_discard(&fixture.app, &id).await;
+        assert_eq!(again, StatusCode::CONFLICT, "{message}");
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    #[tokio::test]
+    async fn discarding_a_live_run_is_refused() {
+        let base = scripted_router(&[r#"{"action":"write","path":"a.txt","content":"x"}"#]).await;
+        let fixture = run_fixture("discard-live", &base);
+        let id = start_run(
+            &fixture.app,
+            json!({"goal": "write a.txt", "allowWrites": true, "autoApprove": false}),
+        )
+        .await;
+        wait_until_status(&fixture.state, &id, AWAITING_APPROVAL).await;
+        let (code, payload) = post_discard(&fixture.app, &id).await;
         assert_eq!(code, StatusCode::CONFLICT, "{payload}");
         assert!(
             payload["error"]
@@ -6835,7 +7001,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
         assert_eq!(status, CANCELLED, "actions: {actions:?}");
         assert!(
-            actions.contains(&"emergency-stop".to_string()),
+            actions.iter().any(|i| i == "emergency-stop"),
             "actions: {actions:?}"
         );
 
@@ -7062,8 +7228,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         // Parked means parked: the run recorded the pause and never reached
         // `done`, and no loop is left holding a cancel flag for it.
         let actions = step_actions(&fixture.state, &id);
-        assert!(actions.contains(&"pause".to_string()), "{actions:?}");
-        assert!(!actions.contains(&"done".to_string()), "{actions:?}");
+        assert!(actions.iter().any(|i| i == "pause"), "{actions:?}");
+        assert!(!actions.iter().any(|i| i == "done"), "{actions:?}");
         assert!(!ACTIVE.lock().unwrap().contains_key(&id), "{actions:?}");
 
         // Pausing an already-parked run is a no-op, not an error.
@@ -7076,8 +7242,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(code, StatusCode::OK, "{body}");
         let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
         assert_eq!(status, SUCCEEDED, "{actions:?}");
-        assert!(actions.contains(&"resume".to_string()), "{actions:?}");
-        assert!(actions.contains(&"done".to_string()), "{actions:?}");
+        assert!(actions.iter().any(|i| i == "resume"), "{actions:?}");
+        assert!(actions.iter().any(|i| i == "done"), "{actions:?}");
     }
 
     #[tokio::test]
@@ -7122,7 +7288,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             2,
             "{actions:?}"
         );
-        assert!(!actions.contains(&"done".to_string()), "{actions:?}");
+        assert!(!actions.iter().any(|i| i == "done"), "{actions:?}");
     }
 
     #[tokio::test]
@@ -7208,7 +7374,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             })
             .unwrap();
         assert_eq!(status, PAUSED);
-        assert!(step_actions(&fixture.state, &id).contains(&"pause".to_string()));
+        assert!(step_actions(&fixture.state, &id)
+            .iter()
+            .any(|i| i == "pause"));
     }
 
     #[tokio::test]
@@ -7224,10 +7392,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         )
         .unwrap();
         let stopped = cancel_all_active(&fixture.state, "Test emergency stop.");
-        assert!(
-            stopped.contains(&"r-still-parked".to_string()),
-            "{stopped:?}"
-        );
+        assert!(stopped.iter().any(|i| i == "r-still-parked"), "{stopped:?}");
         let status: String = conn
             .query_row(
                 "SELECT status FROM agent_runs WHERE id='r-still-parked'",
@@ -7482,7 +7647,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         let dependent_id = dependent["run"]["id"].as_str().unwrap().to_string();
         let (status, actions) = wait_for_terminal(&fixture.state, &dependent_id).await;
         assert_eq!(status, FAILED, "{actions:?}");
-        assert!(actions.contains(&"queue".to_string()), "{actions:?}");
+        assert!(actions.iter().any(|i| i == "queue"), "{actions:?}");
         let error: String = db(&fixture.state)
             .unwrap()
             .query_row(
@@ -7816,7 +7981,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             .unwrap();
         assert_eq!(status, SUCCEEDED, "{actions:?} error={error}");
         assert!(
-            actions.contains(&"write-conflict".to_string()),
+            actions.iter().any(|i| i == "write-conflict"),
             "the change must be refused with a step, not written silently: {actions:?}"
         );
         // The refused write changed nothing, and the run's later write won on a

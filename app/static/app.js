@@ -9558,6 +9558,13 @@ function buildRunDetail(detail) {
       apply.title = `Commit this run's checkout (${detail.worktree}), fast-forward the workspace onto its branch, and remove the checkout`;
       apply.addEventListener('click', () => applyRun(detail.id));
       controls.appendChild(apply);
+      const discard = document.createElement("button");
+      discard.type = "button";
+      discard.className = "btn btn-quiet btn-small";
+      discard.textContent = "Discard checkout";
+      discard.title = `Throw this run's checkout away without applying it: remove ${detail.worktree} and delete its branch, uncommitted work included`;
+      discard.addEventListener('click', () => discardRun(detail.id));
+      controls.appendChild(discard);
     }
   }
   const refresh = document.createElement("button");
@@ -9703,6 +9710,25 @@ async function restoreSnapshot(runId) {
   const data = result.data || {};
   const skipped = (data.skipped || []).length;
   toast(`Restored ${data.count} file${data.count === 1 ? "" : "s"} from the run's snapshot${skipped ? `, ${skipped} skipped` : ""}.`);
+  await loadRunDetail();
+}
+
+async function discardRun(runId) {
+  const warning = "Throw this run's checkout away without applying it?\n\n"
+    + "The worktree and its run branch are deleted, including any uncommitted work in it."
+    + " The workspace itself is not changed. This cannot be undone.";
+  if (!confirm(warning)) return;
+  const result = await api(`/api/runs/${encodeURIComponent(runId)}/discard`, {
+    method: "POST",
+    body: JSON.stringify({ approve: true }),
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not discard the run's checkout.");
+    return;
+  }
+  const data = result.data || {};
+  toast(`Discarded ${data.branch}${data.removed ? " and removed the checkout" : ""}.`);
   await loadRunDetail();
 }
 

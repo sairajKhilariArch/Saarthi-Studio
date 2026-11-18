@@ -93,6 +93,17 @@ fn draft_key(path: &str) -> Result<String, String> {
     if candidate.is_absolute() {
         return Err("Drafts are stored by a path inside the open folder.".to_string());
     }
+    // A Windows drive is absolute on Windows and a plain folder name on Unix, so
+    // `C:/Windows/win.ini` used to be accepted there as a folder called `C:`.
+    // The rule is the same on every platform — a draft key names something inside
+    // the open folder — and a workspace can move between them.
+    let first = trimmed.split(['/', '\\']).next().unwrap_or("");
+    if first.len() == 2
+        && first.ends_with(':')
+        && first.starts_with(|c: char| c.is_ascii_alphabetic())
+    {
+        return Err("Drafts are stored by a path inside the open folder.".to_string());
+    }
     for component in candidate.components() {
         match component {
             Component::Normal(name) if !name.is_empty() => {}
@@ -525,8 +536,8 @@ mod tests {
             .map(|draft| draft["path"].as_str().unwrap_or("").to_string())
             .collect();
         assert_eq!(names.len(), 2);
-        assert!(names.contains(&"b.rs".to_string()));
-        assert!(names.contains(&"c.rs".to_string()));
+        assert!(names.iter().any(|i| i == "b.rs"));
+        assert!(names.iter().any(|i| i == "c.rs"));
         let _ = fs::remove_dir_all(root.parent().expect("parent"));
     }
 }

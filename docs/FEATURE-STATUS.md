@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.50.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.51.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.51.0 (2026-11-18):** Phase 5's abandoned checkouts. A run that can
+write works in its own worktree on a `run/<short>` branch; Apply merged it, but
+nothing removed a checkout the person did not want, so it stayed on disk with
+its branch. `POST /api/runs/:id/discard` removes the worktree (validated against
+the repository's own `git worktree list` first) and deletes the branch, gated on
+the `git` permission and refused while the run is live; the run detail view
+offers it beside Apply. Phase 5's remaining note is the editor-save lease timing.
 **Revision 3.50.0 (2026-11-13):** Phase 5's admission is atomic across
 processes. `dispatch` used to read the live-run count and then promote, so two
 processes over one database could each take the last free slot. Promotion is now

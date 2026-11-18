@@ -627,6 +627,80 @@ pub(crate) fn apply_run_worktree(
     Ok(json!({ "ok": true, "branch": branch, "applied": changes, "removed": removed }))
 }
 
+/// Throw a run's checkout away instead of applying it: remove the worktree,
+/// discarding whatever uncommitted work the run left in it, and delete its
+/// `run/<short>` branch, which is where its commits live. Nothing is merged into
+/// the shared checkout — this is the opposite of `apply_run_worktree`, for work
+/// the person does not want. The folder is validated against this repository's
+/// own worktree list first, so a misnamed path is refused before anything is
+/// deleted.
+pub(crate) fn discard_run_worktree(root: &Path, run_id: &str) -> Result<Value, String> {
+    let short: String = run_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    if short.is_empty() {
+        return Err("This run has no checkout to discard.".to_string());
+    }
+    let branch = format!("run/{short}");
+    let worktree = run_worktree_path(root, run_id);
+    let mut removed = false;
+    if worktree.exists() {
+        let listed = worktree_list(root)?.iter().any(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|known| same_worktree_path(known, &plain_path(&worktree)))
+        });
+        if !listed {
+            return Err(format!(
+                "{} is not a worktree of this repository, so nothing was deleted.",
+                worktree.display()
+            ));
+        }
+        // `--force` on purpose: the whole point is to throw the run's uncommitted
+        // work away. The check above is what keeps that from reaching a folder
+        // this repository does not own.
+        let output = git(
+            root,
+            &["worktree", "remove", "--force", &plain_path(&worktree)],
+        )?;
+        if !output.ok {
+            return Err(git_error(&output, "git worktree remove failed"));
+        }
+        removed = true;
+    } else {
+        // The folder was deleted by hand but its registration is still in .git,
+        // and `branch -D` refuses a branch it believes is checked out.
+        let _ = git(root, &["worktree", "prune"]);
+    }
+    let exists = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )?
+    .ok;
+    let mut branch_removed = false;
+    if exists {
+        let output = git(root, &["branch", "-D", &branch])?;
+        if !output.ok {
+            return Err(git_error(&output, "git branch -D failed"));
+        }
+        branch_removed = true;
+    }
+    Ok(json!({
+        "ok": true,
+        "branch": branch,
+        "worktree": plain_path(&worktree),
+        "removed": removed,
+        "branchRemoved": branch_removed,
+    }))
+}
+
 /// Is this folder the root of a git repository? Isolation needs exactly that: a
 /// worktree is created for the repository the user opened, not for whatever
 /// enclosing repository a subfolder happens to sit inside.

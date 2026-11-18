@@ -593,3 +593,26 @@ test("every control the contract can hide carries its feature id", () => {
   assert.match(ide, /id: "scm"[^}]*feature: "git"/, "the Source control activity is gated on git");
   assert.match(ide, /id="watchPreset"[^>]*data-feature="watch"/, "the Watch button is gated on watch");
 });
+
+test("a finished run's checkout can be discarded from the detail view", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  // The button only appears when the server reports a checkout of the run's own.
+  assert.match(app, /if \(detail\.worktree\) \{/, "the actions are gated on a checkout");
+  assert.match(app, /discard\.textContent = "Discard checkout"/, "the button is labelled");
+  assert.match(app, /discard\.addEventListener\('click', \(\) => discardRun\(detail\.id\)\)/, "it calls the discard action");
+  // The action posts to the run's discard route with an explicit approval, the
+  // same way Apply does: deleting a checkout is destructive.
+  assert.match(
+    app,
+    /async function discardRun\(runId\) \{\n  const warning = [\s\S]*?confirm\(warning\)/,
+    "discard confirms before deleting anything",
+  );
+  assert.match(
+    app,
+    /api\(`\/api\/runs\/\$\{encodeURIComponent\(runId\)\}\/discard`, \{\n    method: "POST",\n    body: JSON\.stringify\(\{ approve: true \}\),\n    confirmApproval: true,/,
+    "discard posts to the run's route with an approval",
+  );
+  assert.match(app, /Cannot be undone|nothing is forced/, "the confirmation says what it costs");
+});

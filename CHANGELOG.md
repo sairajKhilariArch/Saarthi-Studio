@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.51.0
+
+Phase 5's last loose end: a run's own checkout could be applied, but never
+thrown away. A writing run works in a worktree of its own on a `run/<short>`
+branch, so a run whose work the person did not want left that folder and branch
+on disk indefinitely — nothing in the app removed either.
+
+- `git::discard_run_worktree` removes the run's worktree with `--force` (throwing
+  its uncommitted work away is the point) after checking the folder against this
+  repository's own `git worktree list`, so a misnamed path is refused before
+  anything is deleted, then deletes the `run/<short>` branch with `-D`. A folder
+  deleted by hand is pruned first, because `branch -D` refuses a branch git still
+  believes is checked out.
+- `POST /api/runs/:id/discard` (and the host-listener prefix) answers 404 for an
+  unknown run, 409 while the run is live, 400 when the run could not write, and
+  is gated on the `git` permission with the same `approve: true` second request
+  Apply uses. The workspace is never modified, a second discard is a 409 instead
+  of a claimed success, and git's own sentence is kept on failure.
+- The run detail view offers **Discard checkout** beside **Apply to workspace**
+  whenever the server reports a checkout, behind a confirmation that says the
+  worktree, the branch and any uncommitted work in it are deleted and that this
+  cannot be undone.
+- The current nightly's `clippy::unnecessary_to_owned` flagged twelve test
+  assertions that allocated a `String` only to hand it to `contains`; they
+  iterate now, so `cargo clippy --all-targets -- -D warnings` — the gate both
+  Rust CI jobs run — is green again.
+- `draft_key` refuses a Windows drive prefix (`C:/...`) on every platform, not
+  only where `Path::is_absolute` reports one. On Linux the path used to be
+  accepted as a folder named `C:`, contradicting the function's own rule that a
+  draft key names something inside the open folder; the two assertions that
+  encode that rule failed on Linux and pass now.
+
 ## 3.50.1
 
 Documentation only; no behaviour changes. The `docs/` set was re-verified against
