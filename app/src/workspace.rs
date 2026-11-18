@@ -1037,7 +1037,17 @@ async fn write_file(State(state): State<AppState>, Json(input): Json<Value>) -> 
         return response;
     }
     match write_text_file(&root, path, content) {
-        Ok(payload) => Json(payload).into_response(),
+        Ok(payload) => {
+            // The ledger's other half: a run that has not read this file now
+            // refuses to write over the save instead of replacing it silently.
+            crate::filelock::record_editor_write(
+                &state,
+                &root.to_string_lossy(),
+                &payload.path,
+                &payload.content,
+            );
+            Json(payload).into_response()
+        }
         Err(error) => error.into_response(),
     }
 }

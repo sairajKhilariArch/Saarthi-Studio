@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.51.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.52.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.52.0 (2026-11-18):** Phase 5 closes. The editor's save was invisible
+to the run ledger: `claim_write` only refused a write over a read record that no
+longer matched, so a live run that had never read the file could replace a
+person's fresh save with no conflict step. `PUT /api/workspace/file` now records
+the saved bytes' fingerprint per path (`editor_writes`), and `claim_write` refuses
+such a write by name until the run has read the file; a stale mark is dropped
+rather than refusing forever. With 3.50.0's atomic admission and 3.51.0's
+discard, the phase has no open workstream — only the outside-program caveat in
+`KNOWN-ISSUES.md` 20.
 **Revision 3.51.0 (2026-11-18):** Phase 5's abandoned checkouts. A run that can
 write works in its own worktree on a `run/<short>` branch; Apply merged it, but
 nothing removed a checkout the person did not want, so it stayed on disk with

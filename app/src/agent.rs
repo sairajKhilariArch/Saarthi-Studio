@@ -8048,6 +8048,102 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert!(crate::filelock::command_claim(&fixture.state, "shared").is_none());
     }
 
+    /// The editor's save is a person's change the run has never seen. Before it
+    /// was recorded, a run that had never read the file could write over it with
+    /// no conflict step at all.
+    #[tokio::test]
+    async fn an_editor_save_is_not_overwritten_by_a_run_that_never_read_it() {
+        let base = scripted_router(&[]).await;
+        let fixture = run_fixture("lease-editor", &base);
+        let run = format!("run-e-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &run, RUNNING);
+        crate::filelock::record_editor_write(&fixture.state, "shared", "src/main.rs", "v2");
+        let error =
+            crate::filelock::claim_write(&fixture.state, "shared", &run, "src/main.rs", Some("v2"))
+                .unwrap_err();
+        assert!(error.contains("saved from the editor"), "{error}");
+        assert!(error.contains("Read src/main.rs"), "{error}");
+        // A file the editor never saved is still nobody's business but this run's.
+        crate::filelock::claim_write(&fixture.state, "shared", &run, "src/lib.rs", Some("x"))
+            .unwrap();
+        // Reading the save is exactly what makes the write legitimate.
+        crate::filelock::record_read(&fixture.state, "shared", &run, "src/main.rs", Some("v2"));
+        crate::filelock::claim_write(&fixture.state, "shared", &run, "src/main.rs", Some("v2"))
+            .unwrap();
+
+        // A mark the disk has moved past describes nothing and must not refuse.
+        crate::filelock::record_editor_write(&fixture.state, "shared", "src/old.rs", "before");
+        let other = format!("run-o-{}", uuid::Uuid::new_v4());
+        insert_run(&fixture.state, &other, RUNNING);
+        crate::filelock::claim_write(
+            &fixture.state,
+            "shared",
+            &other,
+            "src/old.rs",
+            Some("after"),
+        )
+        .unwrap();
+        let left: i64 = db(&fixture.state)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM editor_writes WHERE path='src/old.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the stale mark is dropped");
+        crate::filelock::release(&fixture.state, &run);
+        crate::filelock::release(&fixture.state, &other);
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
+    /// The whole loop, through a real run: the file the editor saved is still
+    /// there afterwards and the model was told why in its step log.
+    #[tokio::test]
+    async fn a_run_cannot_write_over_an_editor_save_it_never_read() {
+        let base = scripted_router(&[
+            r#"{"action":"write","path":"note.txt","content":"from the run"}"#,
+            r#"{"action":"done","summary":"the editor's file is untouched"}"#,
+            "APPROVE: the editor's file is untouched.",
+        ])
+        .await;
+        let fixture = run_fixture("editor-save-run", &base);
+        let ws = fixture.root.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("note.txt"), "from the editor").unwrap();
+        fixture
+            .state
+            .workspace
+            .open(ws.to_str().unwrap())
+            .expect("open the folder");
+        let root = fixture
+            .state
+            .workspace
+            .root()
+            .expect("the open folder")
+            .to_string_lossy()
+            .to_string();
+        crate::filelock::record_editor_write(&fixture.state, &root, "note.txt", "from the editor");
+        let id = start_run(
+            &fixture.app,
+            json!({"goal": "write note.txt", "allowWrites": true, "autoApprove": true}),
+        )
+        .await;
+        let (status, actions) = wait_for_terminal(&fixture.state, &id).await;
+        assert_eq!(status, SUCCEEDED, "actions: {actions:?}");
+        assert!(
+            actions.iter().any(|i| i == "write-conflict"),
+            "the write must be refused with a step: {actions:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.join("note.txt")).unwrap(),
+            "from the editor"
+        );
+        let conflict = step_output(&fixture.state, &id, "write-conflict");
+        assert!(conflict.contains("saved from the editor"), "{conflict}");
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+
     #[tokio::test]
     async fn a_finished_runs_claim_does_not_outlive_it() {
         let base = scripted_router(&[]).await;

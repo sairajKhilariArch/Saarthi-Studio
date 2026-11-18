@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.52.0
+
+Phase 5's last open note: an editor save was invisible to the run ledger.
+`claim_write` refused a write when the run's recorded read no longer matched the
+disk, which catches a run that read the file first — but a live run that had
+never read it could overwrite a person's fresh save with no conflict step at all,
+and 3.51.0's discard and apply both assumed the lease was the whole story.
+
+- `filelock::record_editor_write` stores `(scope, checkout, path)` with the
+  fingerprint of the saved bytes and a timestamp, in a new `editor_writes` table
+  created beside `run_leases`/`run_reads`. A checkout keeps at most 4096 marks,
+  oldest dropped, so a folder with no agent runs in it cannot grow the table.
+- `PUT /api/workspace/file` records the mark after a successful save, from the
+  payload's own path and content, so nothing about the request has to be trusted
+  twice.
+- `claim_write` now refuses, naming the reason, a write whose bytes on disk are
+  still the editor's save while this run has no read record for the path: "was
+  saved from the editor and this run has not read it … Read <path> first, then
+  write from what is there now." Reading the file is what makes the write
+  legitimate. A mark the disk has moved past describes nothing and is dropped the
+  first time a run asks about that path, so it never refuses forever. The
+  existing "changed since this run last read it" check is unchanged.
+
 ## 3.51.0
 
 Phase 5's last loose end: a run's own checkout could be applied, but never

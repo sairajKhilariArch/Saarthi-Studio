@@ -30,6 +30,11 @@ use crate::AppState;
 /// paths stop being recorded instead of the table growing without limit.
 const MAX_TRACKED_PATHS: usize = 256;
 
+/// How many editor saves one checkout remembers. A mark is dropped as soon as a
+/// run finds the file no longer matches it, so this only bounds a folder nobody
+/// runs an agent in.
+const MAX_EDITOR_MARKS: i64 = 4096;
+
 /// The path a command claim is stored under: one per checkout, not per file,
 /// because a command can write anywhere inside it.
 const COMMAND_SCOPE: &str = "*command*";
@@ -68,6 +73,14 @@ fn connect(state: &AppState) -> Result<Connection, String> {
              run_id TEXT NOT NULL,
              fingerprint INTEGER NOT NULL,
              PRIMARY KEY (scope, checkout, path, run_id)
+         );
+         CREATE TABLE IF NOT EXISTS editor_writes (
+             scope TEXT NOT NULL,
+             checkout TEXT NOT NULL,
+             path TEXT NOT NULL,
+             fingerprint INTEGER NOT NULL,
+             at REAL NOT NULL,
+             PRIMARY KEY (scope, checkout, path)
          );",
     )
     .map_err(|e| e.to_string())?;
@@ -177,6 +190,28 @@ pub(crate) fn claim_write(
                  overwritten. Read {path} again and rewrite from what is there now."
             ));
         }
+    } else if let Ok(mark) = conn.query_row(
+        "SELECT fingerprint FROM editor_writes WHERE scope=?1 AND checkout=?2 AND path=?3",
+        params![db, root, path],
+        |row| row.get::<_, i64>(0),
+    ) {
+        // The editor's save is not a lease — it is a person's change the run has
+        // never seen. Comparing fingerprints is the only way to know whether the
+        // bytes on disk are still that save: a later write by anyone makes the
+        // mark stale, and a stale mark is dropped instead of refusing forever.
+        if mark == now && current.is_some() {
+            return Err(format!(
+                "{path} was saved from the editor and this run has not read it. Writing now would \
+                 replace that save with content the run never saw, so the write was refused and \
+                 nothing was changed. Read {path} first, then write from what is there now."
+            ));
+        }
+        if mark != now {
+            let _ = conn.execute(
+                "DELETE FROM editor_writes WHERE scope=?1 AND checkout=?2 AND path=?3",
+                params![db, root, path],
+            );
+        }
     }
     conn.execute(
         "INSERT INTO run_reads(scope, checkout, path, run_id, fingerprint) VALUES(?1,?2,?3,?4,?5) \
@@ -191,6 +226,39 @@ pub(crate) fn claim_write(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Remember that the editor saved `path` with this content.
+///
+/// The editor writes outside any run's lease, so a save used to be invisible to
+/// the ledger: a live run that had never read the file could overwrite the
+/// person's change with no conflict step at all. The mark is the missing half of
+/// the question `claim_write` asks — it makes the next run that has not read the
+/// file refuse the write by name.
+///
+/// The editor's save route calls this after the write succeeds. A file deleted by
+/// hand and recreated later simply makes the mark stale, and a stale mark is
+/// dropped the first time a run asks about the path.
+pub(crate) fn record_editor_write(state: &AppState, root: &str, path: &str, content: &str) {
+    let Ok(conn) = connect(state) else {
+        return;
+    };
+    let db = scope(state);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64())
+        .unwrap_or(0.0);
+    let _ = conn.execute(
+        "INSERT INTO editor_writes(scope, checkout, path, fingerprint, at) VALUES(?1,?2,?3,?4,?5) \
+         ON CONFLICT(scope, checkout, path) DO UPDATE SET fingerprint=excluded.fingerprint, at=excluded.at",
+        params![db, root, path, fingerprint(Some(content)) as i64, at],
+    );
+    let _ = conn.execute(
+        "DELETE FROM editor_writes WHERE scope=?1 AND checkout=?2 AND path NOT IN (\
+             SELECT path FROM editor_writes WHERE scope=?1 AND checkout=?2 ORDER BY at DESC LIMIT ?3\
+         )",
+        params![db, root, MAX_EDITOR_MARKS],
+    );
 }
 
 /// Who, if anyone, a live run has claimed `path` against in this checkout.

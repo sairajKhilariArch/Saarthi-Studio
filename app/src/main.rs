@@ -5315,6 +5315,68 @@ mod tests {
         (format!("http://{addr}"), seen)
     }
 
+    /// The editor's save goes through the real route, and the ledger it leaves
+    /// behind is what refuses a live run's write over the person's change.
+    #[tokio::test]
+    async fn a_save_through_the_editor_route_is_seen_by_the_run_ledger() {
+        use tower::ServiceExt;
+        let state = fixture("editor-save-route");
+        let dir = state
+            .database_path
+            .parent()
+            .expect("fixture dir")
+            .join("ws");
+        std::fs::create_dir_all(&dir).expect("workspace dir");
+        state.workspace.open(dir.to_str().unwrap()).expect("open");
+        let root = state
+            .workspace
+            .root()
+            .expect("the open folder")
+            .to_string_lossy()
+            .to_string();
+        let app = crate::workspace::router(80).with_state(state.clone());
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/api/workspace/file")
+                    .header("host", "127.0.0.1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        json!({"path": "note.txt", "content": "from the editor", "approve": true})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("note.txt")).expect("the saved file"),
+            "from the editor"
+        );
+        let marks: i64 = crate::open_db(&state.database_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM editor_writes WHERE path='note.txt'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marks, 1, "the save is recorded in the ledger");
+        let run_id = format!("run-{}", uuid::Uuid::new_v4());
+        let error = crate::filelock::claim_write(
+            &state,
+            &root,
+            &run_id,
+            "note.txt",
+            Some("from the editor"),
+        )
+        .unwrap_err();
+        assert!(error.contains("saved from the editor"), "{error}");
+        let _ = std::fs::remove_dir_all(dir.parent().expect("fixture dir"));
+    }
+
     #[tokio::test]
     async fn a_rate_limited_model_falls_through_to_the_configured_fallback() {
         let (base, seen) = scripted_router(&[429, 200], "answered by the fallback").await;
