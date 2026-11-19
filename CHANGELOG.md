@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.63.0
+
+Agent runs in the VS Code embedded server could only use the global thinking
+setting. Phase 4's precedence is message > agent > project > global; runs had
+no agent-level choice at all.
+
+- `POST /api/runs` accepts `thinking` (`off`, `low`, `medium`, `high`;
+  `default`, `model default` or an empty value mean no run-level choice). Any
+  other value is refused with 400 before a run starts, rather than silently
+  falling back.
+- The level is stored on the run, reported as `thinking` in the run summary,
+  and passed with every model call — including the team reviewer's — through
+  the same `resolveThinking` chat uses. The run's own level beats
+  `freeAiStudio.thinkingLevel`; `off` or unset sends no `reasoning_effort` at
+  all, so the request is byte-for-byte the pre-Thinking one.
+- Precedence in this server is now: run's thinking > global setting > provider
+  default. There is no per-project thinking setting here; project scope is the
+  permission rule store.
+
+Verified by the extension suite: **39 passed, 0 failed**. The existing agent
+reasoning case now also drives a server whose global setting is `high` and
+starts a run with `thinking: "low"` — the request carries
+`reasoning_effort: "low"` and the run reports `thinking: "low"` — then a run
+with `thinking: "off"` under the same global `high`, whose request carries no
+`reasoning_effort` key, and a `thinking: "banana"` create that answers 400
+with `Unknown thinking level`.
+
 ## 3.62.0
 
 Approving a parked action bypassed a permission rule saved while the run was

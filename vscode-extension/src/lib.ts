@@ -1459,12 +1459,15 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       );
       return effective ? { decision: effective.decision, scope: effective.scope } : null;
     },
-    callRouter: (messages) => {
+    callRouter: (messages, runLevel) => {
       const config = options.getConfig();
-      // Agent runs have no composer of their own, so the global setting is the
-      // whole story: desktop parity sends the level it names and no parameter
-      // at all for "off"/unset.
-      const thinking = resolveThinking(undefined, { level: null, command: false, text: "" }, config.thinkingLevel);
+      // A run's own level wins over the global setting (message > agent >
+      // global, as the desktop orders it); "off"/unset sends no parameter.
+      const thinking = resolveThinking(
+        runLevel ?? undefined,
+        { level: null, command: false, text: "" },
+        config.thinkingLevel,
+      );
       return callRouter(config, messages, fetchImpl, undefined, thinking ? thinking.level : null).then(
         (reply) => reply.answer,
       );
@@ -1866,6 +1869,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           stagePolicy: body.stagePolicy,
           stageMaxSteps: body.stageMaxSteps,
           allowMcp: body.allowMcp,
+          thinking: body.thinking,
         });
         if (!result.ok) {
           sendJson(response, result.status || 400, { ok: false, error: result.error });

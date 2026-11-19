@@ -1083,6 +1083,29 @@ test("agent runs send the configured reasoning level, and none when it is off", 
   cleanupTemp(high.workspace);
   cleanupTemp(high.storage);
 
+  // The run's own level wins over the global setting, both ways.
+  const perRun = await makeServer("high");
+  const chosen = await perRun.post("/api/runs", { goal: "look around and stop", thinking: "low" });
+  assert.equal(chosen.status, 200);
+  const finished = await perRun.waitRun(chosen.body.run.id, (data) => data.status === "succeeded");
+  assert.equal(finished.thinking, "low");
+  assert.equal(perRun.bodies[0].reasoning_effort, "low", "the run's own level beats the global one");
+  const quietRun = await perRun.post("/api/runs", { goal: "look around and stop", thinking: "off" });
+  assert.equal(quietRun.status, 200);
+  await perRun.waitRun(quietRun.body.run.id, (data) => data.status === "succeeded");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(perRun.bodies.at(-1), "reasoning_effort"),
+    false,
+    "a run-level off beats a global high and sends nothing",
+  );
+  // A name outside the four levels is refused before a run starts.
+  const bogus = await perRun.post("/api/runs", { goal: "look around and stop", thinking: "banana" });
+  assert.equal(bogus.status, 400);
+  assert.match(bogus.body.error, /Unknown thinking level/);
+  await perRun.embedded.close();
+  cleanupTemp(perRun.workspace);
+  cleanupTemp(perRun.storage);
+
   const off = await makeServer("off");
   const quiet = await off.post("/api/runs", { goal: "look around and stop" });
   assert.equal(quiet.status, 200);

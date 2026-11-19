@@ -10,6 +10,19 @@ import type { ChatMessage } from "./lib";
 import { spawn } from "node:child_process";
 
 /* Constants mirror the desktop's agent.rs. */
+export const RUN_THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
+export type RunThinkingLevel = (typeof RUN_THINKING_LEVELS)[number];
+
+/** The level this run asked for; null means no run-level choice (the global
+    setting applies), undefined means the caller named something unknown. */
+export function parseRunThinking(value: unknown): RunThinkingLevel | null | undefined {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text || text === "default" || text === "model default") return null;
+  return (RUN_THINKING_LEVELS as readonly string[]).includes(text)
+    ? (text as RunThinkingLevel)
+    : undefined;
+}
+
 export const DEFAULT_MAX_STEPS = 12;
 export const HARD_MAX_STEPS = 30;
 const STEP_OUTPUT_CAP = 4_000;
@@ -549,6 +562,8 @@ export interface AgentRun {
   /** Crew stage budget (Step 5) and what happens when a stage exhausts it. */
   stagePolicy?: string;
   stageMaxSteps?: number;
+  /** Reasoning level this run asks for; unset means the global setting. */
+  thinking?: RunThinkingLevel;
   /** MCP access for this run and the catalogue discovered at its start. */
   allowMcp?: boolean;
   mcpTools?: McpPromptTool[];
@@ -618,6 +633,7 @@ export class RunStore {
     autoApprove: boolean; maxSteps: number;
     profile?: string; mode?: string; crew?: string[];
     stagePolicy?: string; stageMaxSteps?: number; allowMcp?: boolean;
+    thinking?: RunThinkingLevel;
   }): AgentRun {
     const now = Date.now() / 1000;
     const run: AgentRun = {
@@ -639,6 +655,7 @@ export class RunStore {
       stagePolicy: input.stagePolicy || "",
       stageMaxSteps: Math.max(0, Math.round(Number(input.stageMaxSteps) || 0)),
       allowMcp: Boolean(input.allowMcp),
+      thinking: input.thinking,
     };
     this.data.runs.push(run);
     this.save();
@@ -740,7 +757,8 @@ export interface AgentRuntimeDeps {
   /** Open workspace root; throws WorkspaceError when none is open. */
   root: () => string;
   /** Shared path-confined helpers from lib.ts (resolveInside, etc.). */
-  callRouter: (messages: ChatMessage[]) => Promise<string>;
+  /** `thinking` is this run's own level, or null for the global setting. */
+  callRouter: (messages: ChatMessage[], thinking?: string | null) => Promise<string>;
   exclusions?: () => string[];
   /** Saved permission rules for the actions this server enforces. */
   permission?: (
@@ -846,6 +864,7 @@ function runSummaryJson(run: AgentRun, stepCount: number): Record<string, unknow
     crew: run.mode === "crew" ? run.crew || [] : undefined,
     stagePolicy: run.stagePolicy || "",
     stageMaxSteps: run.stageMaxSteps || 0,
+    thinking: run.thinking || "",
     allowMcp: Boolean(run.allowMcp),
     mcpTools: (run.mcpTools || []).length,
     mcpErrors: run.mcpErrors || [],
@@ -940,6 +959,7 @@ export class AgentRuntime {
     autoApprove?: unknown; maxSteps?: unknown; projectId?: string;
     profile?: unknown; mode?: unknown; crew?: unknown;
     stagePolicy?: unknown; stageMaxSteps?: unknown; allowMcp?: unknown;
+    thinking?: unknown;
   }): { ok: true; id: string } | { ok: false; error: string; status?: number } {
     const profile = normalizeProfile(input.profile);
     if (!profile) return { ok: false, error: "Unknown agent profile.", status: 400 };
@@ -951,6 +971,12 @@ export class AgentRuntime {
     // none, so here the honest answer is a redirect, not a broken run.
     if (mode === "hybrid") {
       return { ok: false, error: "Hybrid mode needs the desktop app's local model runtime - start hybrid runs in the desktop app.", status: 400 };
+    }
+    // Per-run Thinking: the run's own level wins over the global setting, as a
+    // message wins over it in chat. A name outside the four levels is refused.
+    const thinking = parseRunThinking(input.thinking);
+    if (thinking === undefined) {
+      return { ok: false, error: "Unknown thinking level - use off, low, medium, high, or leave it out.", status: 400 };
     }
     const crew = parseCrew(input as { crew?: unknown }, mode, Boolean(input.allowWrites));
     if (typeof crew === "string") return { ok: false, error: crew, status: 400 };
@@ -984,6 +1010,7 @@ export class AgentRuntime {
       stagePolicy,
       stageMaxSteps,
       allowMcp: Boolean(input.allowMcp),
+      thinking: thinking || undefined,
     });
     this.drive(run.id);
     this.deps.notify(run.id);
@@ -1200,7 +1227,7 @@ export class AgentRuntime {
         return true;
       }
     }
-    const reply = await this.deps.callRouter(messages);
+    const reply = await this.deps.callRouter(messages, run.thinking || null);
     // A cancel can land while the model is thinking: a stopped run must not
     // act on the reply that arrives afterwards (mirrors agent.rs step_once).
     const live = this.store.load(run.id);
@@ -1274,6 +1301,7 @@ Two review rounds reported findings and the run stopped there. Every finding is 
     }
     const reply = await this.deps.callRouter(
       reviewerMessages(run.goal, buildHistory(this.store.steps(run.id))),
+      run.thinking || null,
     );
     if (!reply.trim()) throw new Error("The reviewer agent returned an empty reply.");
     const { approved, findings } = interpretVerdict(reply);

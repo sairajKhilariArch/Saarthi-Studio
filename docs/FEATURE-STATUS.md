@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.62.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.63.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,13 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.63.0 (2026-11-19):** agent runs in the VS Code embedded server can
+name their own reasoning level. `thinking` on `POST /api/runs` accepts the four
+levels, is refused otherwise, is stored and reported on the run, and beats the
+global setting for every step including the team reviewer; `off`/unset sends no
+parameter. **39 passed, 0 failed**, covering run-low over global-high,
+run-off over global-high, and an invalid level as a 400. No per-project
+thinking scope exists here.
 **Revision 3.62.0 (2026-11-19):** an approval bypass in the VS Code agent
 runtime is closed. A run parked with a pending action re-resolves saved rules
 when approved: a deny saved while it waited fails the run, names the rule, and
