@@ -49,7 +49,7 @@ export interface McpLogEntry {
 
 export interface McpServer {
   name: string;
-  transport: "stdio" | "http";
+  transport: "stdio" | "http" | "sse";
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -158,7 +158,7 @@ export function normalizeMcpServer(input: Record<string, unknown>): McpServer {
       enabled: input.enabled === undefined ? true : input.enabled === true,
     };
   }
-  if (transport === "http") {
+  if (transport === "http" || transport === "sse") {
     const url = String(input.url ?? "").trim();
     if (!url) throw new McpError(400, "An HTTP server needs a URL.");
     if (url.length > MAX_URL_CHARS) throw new McpError(400, "That URL is too long.");
@@ -181,7 +181,7 @@ export function normalizeMcpServer(input: Record<string, unknown>): McpServer {
     if (command) throw new McpError(400, "An HTTP server takes a URL, not a command.");
     return {
       name,
-      transport: "http",
+      transport,
       command: "",
       args: [],
       env: {},
@@ -190,11 +190,11 @@ export function normalizeMcpServer(input: Record<string, unknown>): McpServer {
       enabled: input.enabled === undefined ? true : input.enabled === true,
     };
   }
-  // Legacy SSE and anything else: the panel offers them because the desktop
-  // serves them. Saying so is better than saving a server this build cannot use.
+  // Anything else: the panel offers transports because the desktop serves them.
+  // Saying so is better than saving a server this build cannot use.
   throw new McpError(
     400,
-    `The VS Code built-in server speaks stdio and streamable HTTP. ${rawTransport.toUpperCase()} servers and OAuth sign-in need the Sarthi Studio desktop app.`,
+    `The VS Code built-in server speaks stdio, streamable HTTP and SSE. ${rawTransport.toUpperCase()} servers and OAuth sign-in need the Sarthi Studio desktop app.`,
   );
 }
 
@@ -623,6 +623,243 @@ class HttpMcpSession implements McpWire {
   }
 }
 
+/** One legacy SSE MCP server: a GET stream names the POST endpoint, answers
+    arrive on the stream (the pre-streamable-HTTP transport). */
+class SseMcpSession implements McpWire {
+  private pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private nextId = 1;
+  private closed = false;
+  private protocol = MCP_PROTOCOL_VERSION;
+  private version = "";
+  private postUrl = "";
+  private controller?: AbortController;
+  private ready?: Promise<void>;
+  readonly logs: McpLogEntry[] = [];
+
+  constructor(private readonly server: McpServer) {}
+
+  get protocolVersion(): string {
+    return this.protocol;
+  }
+
+  get serverVersion(): string {
+    return this.version;
+  }
+
+  private record(source: McpSource, text: string): void {
+    this.logs.push({ at: Date.now() / 1000, source, text: cap(text, MAX_LOG_LINE) });
+    if (this.logs.length > MAX_LOG_ENTRIES) this.logs.shift();
+  }
+
+  private failAll(reason: string): void {
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+      this.pending.delete(id);
+    }
+  }
+
+  private onMessage(text: string): void {
+    let message: Record<string, unknown>;
+    try {
+      message = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      this.record("server", text);
+      return;
+    }
+    const id = typeof message.id === "number" ? message.id : undefined;
+    if (id !== undefined && (message.result !== undefined || message.error !== undefined)) {
+      const pending = this.pending.get(id);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      if (message.error) {
+        const detail = (message.error as { message?: unknown }).message;
+        pending.reject(new Error(String(detail || "the server returned an error")));
+      } else {
+        pending.resolve((message.result || {}) as Record<string, unknown>);
+      }
+      return;
+    }
+    if (typeof message.method === "string") this.record("server", `notified ${message.method}`);
+  }
+
+  /** Read one SSE stream, split into events, and resolve the endpoint. */
+  private async open(): Promise<void> {
+    if (this.ready) return this.ready;
+    const controller = new AbortController();
+    this.controller = controller;
+    this.ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`${this.server.name} did not name an endpoint within 20 s`));
+      }, MCP_REQUEST_TIMEOUT_MS);
+      const settle = (error?: Error) => {
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      (async () => {
+        this.record("client", `GET ${this.server.url}`);
+        let response: Response;
+        try {
+          response = await fetch(this.server.url, {
+            headers: { Accept: "text/event-stream", ...this.server.headers },
+            signal: controller.signal,
+          });
+        } catch (error) {
+          settle(new Error(`could not reach ${this.server.url}: ${(error as Error).message}`));
+          return;
+        }
+        if (!response.ok) {
+          settle(new Error(`the server answered ${response.status}`));
+          return;
+        }
+        const base = new URL(this.server.url);
+        let buffer = "";
+        let event = "message";
+        const handle = (block: string, eventName: string) => {
+          const data = block
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (!data) return;
+          if (eventName === "endpoint") {
+            // The POST endpoint must stay on the stream's own origin.
+            let target: URL;
+            try {
+              target = new URL(data, base);
+            } catch {
+              settle(new Error("the server named an endpoint that is not a URL"));
+              return;
+            }
+            if (target.origin !== base.origin) {
+              settle(new Error("the server named an endpoint on another origin"));
+              return;
+            }
+            this.postUrl = target.toString();
+            this.record("client", `endpoint ${this.postUrl}`);
+            settle();
+            return;
+          }
+          this.onMessage(data);
+        };
+        try {
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error("the server sent no stream body");
+          const decoder = new TextDecoder();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            for (;;) {
+              const split = buffer.search(/\r?\n\r?\n/);
+              if (split < 0) break;
+              const raw = buffer.slice(0, split);
+              buffer = buffer.slice(split + (buffer[split] === "\r" ? 4 : 2));
+              event = (raw.match(/^event:\s*(.+)$/m)?.[1] || "message").trim();
+              handle(raw, event);
+            }
+          }
+          this.closed = true;
+          this.failAll("the server closed the stream");
+          settle(new Error("the server closed the stream before naming an endpoint"));
+        } catch (error) {
+          this.closed = true;
+          this.failAll("the event stream ended");
+          settle(new Error(`the event stream failed: ${(error as Error).message}`));
+        }
+      })();
+    });
+    return this.ready;
+  }
+
+  private async post(message: Record<string, unknown>): Promise<void> {
+    if (!this.postUrl) throw new Error("the MCP session is not open");
+    const response = await fetch(this.postUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...this.server.headers },
+      body: JSON.stringify(message),
+      signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
+    });
+    // Legacy SSE answers on the stream and acknowledges the POST with 202; a
+    // server may also answer directly, which is the same message either way.
+    if (!response.ok) throw new Error(`the server answered ${response.status}`);
+    const type = (response.headers.get("content-type") || "").toLowerCase();
+    if (type.includes("application/json") && typeof message.id === "number") {
+      const text = await response.text();
+      if (text.trim()) this.onMessage(text);
+    } else {
+      await response.text().catch(() => "");
+    }
+  }
+
+  private request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (this.closed) return Promise.reject(new Error("the MCP session is closed"));
+    this.record("client", `${method} over SSE`);
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${this.server.name} did not answer ${method} within 20 seconds.`));
+      }, MCP_REQUEST_TIMEOUT_MS);
+      this.pending.set(id, { resolve, reject, timer });
+      void this.post({ jsonrpc: "2.0", id, method, params }).catch((error) => {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error as Error);
+      });
+    });
+  }
+
+  async handshake(): Promise<{ protocol: string; version: string; latencyMs: number }> {
+    const started = Date.now();
+    await this.open();
+    const result = await this.request("initialize", {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "sarthi-studio-vscode", version: "2.6.0" },
+    });
+    await this.post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+    this.protocol = String(result.protocolVersion || MCP_PROTOCOL_VERSION);
+    const info = (result.serverInfo || {}) as { version?: unknown };
+    this.version = String(info.version || "");
+    return { protocol: this.protocol, version: this.version, latencyMs: Date.now() - started };
+  }
+
+  async tools(): Promise<McpTool[]> {
+    const result = await this.request("tools/list", {});
+    return toolRows(Array.isArray(result.tools) ? result.tools : []);
+  }
+
+  async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; is_error: boolean }> {
+    const result = await this.request("tools/call", { name: tool, arguments: args });
+    const content = Array.isArray(result.content) ? result.content : [];
+    const text = content
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+      .filter((entry) => entry.type === "text" && typeof entry.text === "string")
+      .map((entry) => String(entry.text))
+      .join("\n");
+    return {
+      text: cap(text, MAX_TEXT) || "(the tool returned no text)",
+      is_error: result.isError === true,
+    };
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.record("client", "closed");
+    this.failAll("the session was closed");
+    try {
+      this.controller?.abort();
+    } catch {
+      // Already aborted.
+    }
+  }
+}
+
 /** Registry, warm sessions and the observations the panel reads. */
 export class McpService {
   private sessions = new Map<string, McpWire>();
@@ -702,7 +939,11 @@ export class McpService {
     if (!server.enabled) throw new McpError(409, `MCP server "${name}" is disabled.`);
     const warm = this.sessions.get(name);
     if (warm) return warm;
-    const session: McpWire = server.transport === "http" ? new HttpMcpSession(server) : new McpSession(server);
+    const session: McpWire = server.transport === "http"
+      ? new HttpMcpSession(server)
+      : server.transport === "sse"
+        ? new SseMcpSession(server)
+        : new McpSession(server);
     this.sessions.set(name, session);
     try {
       await session.handshake();

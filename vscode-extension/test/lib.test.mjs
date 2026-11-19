@@ -1348,6 +1348,112 @@ test("the embedded server runs a real stdio MCP server end to end", async () => 
   cleanupTemp(storage);
 });
 
+test("a legacy SSE MCP server is driven through its one event stream", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const seen = [];
+  const streams = new Set();
+  const server = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/sse") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      // The legacy transport names its POST endpoint in the first event.
+      res.write("event: endpoint\ndata: /messages?session=s1\n\n");
+      streams.add(res);
+      res.on("close", () => streams.delete(res));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/messages?session=s1") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const message = JSON.parse(body);
+        seen.push(message.method);
+        if (message.id === undefined) {
+          res.writeHead(202);
+          res.end();
+          return;
+        }
+        const result = message.method === "initialize"
+          ? { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "sse", version: "1.4.0" } }
+          : message.method === "tools/list"
+            ? { tools: [{ name: "echo", description: "echo it", inputSchema: { type: "object", properties: { text: { type: "string" } } } }] }
+            : { content: [{ type: "text", text: `sse:${message.params.arguments.text}` }] };
+        // Answers travel back on the GET stream, not the POST, as the legacy
+        // transport specifies; the POST only acknowledges with 202.
+        for (const stream of streams) {
+          stream.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n\n`);
+        }
+        res.writeHead(202);
+        res.end();
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/sse`;
+
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const saved = await post("/api/mcp/servers", { name: "sse", transport: "sse", url, enabled: true });
+  assert.equal(saved.status, 200);
+  const listed = await get("/api/mcp");
+  assert.equal(listed.servers[0].transport, "sse");
+  assert.equal(listed.servers[0].url, url);
+
+  const tested = await post("/api/mcp/test", { name: "sse" });
+  assert.equal(tested.status, 200);
+  assert.deepEqual(tested.body.tools.map((tool) => tool.name), ["echo"]);
+  assert.equal(tested.body.version, "1.4.0");
+  assert.deepEqual(seen, ["initialize", "notifications/initialized", "tools/list"]);
+
+  const called = await post("/api/mcp/call", { server: "sse", tool: "echo", arguments: { text: "hi" } });
+  assert.equal(called.status, 200);
+  assert.equal(called.body.text, "sse:hi");
+  assert.equal(seen.at(-1), "tools/call");
+
+  const health = await get("/api/mcp/health");
+  assert.equal(health.servers[0].health, "healthy");
+  assert.equal(health.servers[0].version, "1.4.0");
+
+  // Disconnect must end the stream, not leave it open for the process to keep.
+  const disconnected = await post("/api/mcp/sse/disconnect", {});
+  assert.equal(disconnected.body.disconnected, true);
+  const started = Date.now();
+  while (streams.size > 0 && Date.now() - started < 3000) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(streams.size, 0, "disconnect aborts the GET stream");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+  server.closeAllConnections();
+  await new Promise((resolve) => server.close(resolve));
+});
+
 test("MCP refusals name the reason and keep the registry honest", async () => {
   const workspace = tempDir();
   const storage = tempDir();
@@ -1374,8 +1480,8 @@ test("MCP refusals name the reason and keep the registry honest", async () => {
     return { status: response.status, body: await response.json() };
   };
 
-  // Streamable HTTP is served here since 3.59.0; the legacy SSE transport is
-  // still the desktop's, and the refusal says so.
+  // Streamable HTTP and legacy SSE are both served here; a transport the
+  // desktop has and this build does not is named honestly.
   const remote = await post("/api/mcp/servers", {
     name: "remote",
     transport: "http",
@@ -1384,7 +1490,7 @@ test("MCP refusals name the reason and keep the registry honest", async () => {
   assert.equal(remote.status, 200);
   const legacy = await post("/api/mcp/servers", {
     name: "legacy",
-    transport: "sse",
+    transport: "websocket",
     url: "https://example.com/mcp",
   });
   assert.equal(legacy.status, 400);
@@ -1901,7 +2007,7 @@ test("the embedded server drives a streamable HTTP MCP server", async () => {
     return { status: response.status, body: await response.json() };
   };
 
-  // TLS is required off this machine, and the legacy SSE transport is named honestly.
+  // TLS is required off this machine, and unsupported transports are named.
   const insecure = await post("/api/mcp/servers", {
     name: "remote",
     transport: "http",
@@ -1911,7 +2017,7 @@ test("the embedded server drives a streamable HTTP MCP server", async () => {
   assert.match(insecure.body.error, /https/);
   const legacy = await post("/api/mcp/servers", {
     name: "old",
-    transport: "sse",
+    transport: "websocket",
     url: `http://127.0.0.1:${port}/mcp`,
   });
   assert.equal(legacy.status, 400);

@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.64.0
+
+The VS Code built-in server spoke stdio and streamable HTTP. A legacy SSE MCP
+server — `transport: "sse"`, served by the desktop since Phase 7 — was refused
+with a pointer at the desktop app.
+
+- `parseServer` accepts `sse` on the same rules as `http`: URL required, https
+off loopback, header names reported and values kept server-side.
+- `SseMcpSession` opens one GET stream with `Accept: text/event-stream`. The
+first `endpoint` event names the POST target, which must share the stream's
+own origin. JSON-RPC answers arrive as `message` events and are matched by id
+exactly like stdio; the endpoint and every request are capped at 20 seconds, a
+stream the server closes fails pending calls instead of hanging, and
+`disconnect` aborts the stream and rejects anything still waiting.
+- A 202 acknowledgement and a direct JSON answer are both accepted, so a server
+that answers inline works too.
+- The refusal for any other transport now names what this build does speak
+(stdio, streamable HTTP, SSE) and reserves the desktop app for OAuth.
+
+Verified by the extension suite: **40 passed, 0 failed**, with a real local SSE
+fixture. It receives `initialize`, `notifications/initialized`, `tools/list` and
+`tools/call` in that order on one stream, answers on that stream only, and the
+test reads `sse:hi` back, health reports the fixture's version `1.4.0`, and
+`disconnect` closes the GET stream (asserted on the fixture's own socket count).
+The refusal test now names `websocket` as its unsupported transport.
+
 ## 3.63.0
 
 Agent runs in the VS Code embedded server could only use the global thinking
