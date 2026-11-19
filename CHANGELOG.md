@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.72.0
+
+A full-suite run was not reliably green: three queue tests held the only run slot
+with a 2-second model delay, and under a loaded suite that timer can elapse
+between two setup requests, so the run that was meant to be still running had
+already finished and the assertion failed (`a_queued_run_waits_for_a_free_slot…`,
+`a_run_waits_for_its_dependency_then_starts`,
+`cancelling_a_queued_run_takes_it_out_of_the_queue`).
+
+- The test harness gained `gated_scripted_router`: its answers wait for
+  semaphore permits, so a test holds a run inside its model call until both runs
+  are queued and then releases them. No wall-clock sleep decides the ordering any
+  more, and the three tests run in milliseconds instead of seconds.
+- No production code changed.
+
+Checks: `cargo fmt`, and the full Rust suite run twice — **655 passed, 0 failed,
+1 ignored** both times (previously 1–2 failures per run depending on load); the
+frontend suite was unchanged and last passed 99/99.
+
 ## 3.71.0
 
 The last missing row of Phase 15 was provider adapters: an extension could add

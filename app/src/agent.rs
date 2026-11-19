@@ -7229,6 +7229,43 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         format!("http://{addr}")
     }
 
+    /// A scripted router whose answers wait for permits, so a test can hold a
+    /// run inside its model call instead of racing a sleep: under a loaded suite
+    /// a timer can elapse between two setup requests, and the run under test
+    /// then finishes before the assertion it was meant to be holding.
+    async fn gated_scripted_router(
+        replies: &[&str],
+    ) -> (String, std::sync::Arc<tokio::sync::Semaphore>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+            replies.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+        )));
+        // No permits to start with: nothing answers until the test releases them.
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+        let handler_gate = gate.clone();
+        let app = Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |body: axum::Json<Value>| {
+                let gate = handler_gate.clone();
+                async move {
+                    let _ = body;
+                    let _permit = gate.acquire().await;
+                    let reply = queue.lock().unwrap().pop_front().unwrap_or_else(|| {
+                        "{\"action\":\"fail\",\"reason\":\"mock out of replies\"}".to_string()
+                    });
+                    axum::Json(json!({
+                        "choices": [{ "message": { "role": "assistant", "content": reply } }]
+                    }))
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), gate)
+    }
+
     async fn post_pause(app: &Router, id: &str) -> (StatusCode, String) {
         let response = app
             .clone()
@@ -7580,14 +7617,11 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     #[tokio::test]
     async fn a_queued_run_waits_for_a_free_slot_and_priority_decides_the_order() {
-        let base = slow_scripted_router(
-            &[
-                "{\"action\":\"done\",\"summary\":\"first\"}",
-                "{\"action\":\"done\",\"summary\":\"high priority\"}",
-                "{\"action\":\"done\",\"summary\":\"low priority\"}",
-            ],
-            std::time::Duration::from_millis(2000),
-        )
+        let (base, gate) = gated_scripted_router(&[
+            "{\"action\":\"done\",\"summary\":\"first\"}",
+            "{\"action\":\"done\",\"summary\":\"high priority\"}",
+            "{\"action\":\"done\",\"summary\":\"low priority\"}",
+        ])
         .await;
         let fixture = run_fixture("queue-priority", &base);
         let first = start_run(
@@ -7617,6 +7651,9 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(queued_position(&fixture.state, &low_id).unwrap(), Some(2));
         let high_id = high["run"]["id"].as_str().unwrap().to_string();
 
+        // Both queued while the first run holds the only slot: let the scripted
+        // router answer now, so the ordering is decided by priority alone.
+        gate.add_permits(8);
         let (status, actions) = wait_for_terminal(&fixture.state, &first).await;
         assert_eq!(status, SUCCEEDED, "{actions:?}");
         let (status, actions) = wait_for_terminal(&fixture.state, &high_id).await;
@@ -7633,13 +7670,12 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     #[tokio::test]
     async fn a_run_waits_for_its_dependency_then_starts() {
-        let base = slow_scripted_router(
-            &[
-                "{\"action\":\"done\",\"summary\":\"dependency done\"}",
-                "{\"action\":\"done\",\"summary\":\"dependent done\"}",
-            ],
-            std::time::Duration::from_millis(2000),
-        )
+        // The gate holds the first run inside its model call, so the dependent is
+        // enqueued while the only slot is provably taken.
+        let (base, gate) = gated_scripted_router(&[
+            "{\"action\":\"done\",\"summary\":\"dependency done\"}",
+            "{\"action\":\"done\",\"summary\":\"dependent done\"}",
+        ])
         .await;
         let fixture = run_fixture("queue-dependency", &base);
         let first = start_run(
@@ -7662,6 +7698,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(dependent["run"]["status"], json!(QUEUED), "{dependent}");
         let dependent_id = dependent["run"]["id"].as_str().unwrap().to_string();
 
+        gate.add_permits(8);
         let (status, actions) = wait_for_terminal(&fixture.state, &first).await;
         assert_eq!(status, SUCCEEDED, "{actions:?}");
         let (status, actions) = wait_for_terminal(&fixture.state, &dependent_id).await;
@@ -7714,13 +7751,10 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
 
     #[tokio::test]
     async fn cancelling_a_queued_run_takes_it_out_of_the_queue() {
-        let base = slow_scripted_router(
-            &[
-                "{\"action\":\"done\",\"summary\":\"the only run that executes\"}",
-                "{\"action\":\"done\",\"summary\":\"must never be called\"}",
-            ],
-            std::time::Duration::from_millis(2000),
-        )
+        let (base, gate) = gated_scripted_router(&[
+            "{\"action\":\"done\",\"summary\":\"the only run that executes\"}",
+            "{\"action\":\"done\",\"summary\":\"must never be called\"}",
+        ])
         .await;
         let fixture = run_fixture("queue-cancel", &base);
         let first = start_run(
@@ -7739,6 +7773,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             Some(QUEUED)
         );
         assert_eq!(post_cancel(&fixture.app, &second).await, StatusCode::OK);
+        // The first run only leaves the slot once the queue entry is gone.
+        gate.add_permits(8);
         let (status, actions) = wait_for_terminal(&fixture.state, &second).await;
         assert_eq!(status, CANCELLED, "{actions:?}");
         let (status, actions) = wait_for_terminal(&fixture.state, &first).await;
