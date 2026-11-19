@@ -5138,6 +5138,7 @@ async function loadSettings() {
   $("dailyBudget").value = result.data.daily_budget_usd ? String(result.data.daily_budget_usd) : "";
   $("maxConcurrentRuns").value = String(result.data.max_concurrent_runs || 2);
   $("commandPresets").value = formatCommandPresets(result.data.command_presets || []);
+  $("languageServers").value = formatLanguageServers(result.data.language_servers || []);
   void loadThinkingLevels();
   $("searchApiKey").value = "";
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
@@ -6020,6 +6021,29 @@ function formatCommandPresets(list) {
     .join("\n");
 }
 
+/* One language server per line, `language :: command`, mirroring the saved
+   commands field so the server never has to guess what the user meant. */
+function parseLanguageServers(text) {
+  const servers = [];
+  String(text || "")
+    .split("\n")
+    .forEach((line) => {
+      const at = line.indexOf("::");
+      if (at < 0) return;
+      const language = line.slice(0, at).trim().toLowerCase();
+      const command = line.slice(at + 2).trim();
+      if (!language || !command) return;
+      servers.push({ language, command });
+    });
+  return servers;
+}
+
+function formatLanguageServers(list) {
+  return (list || [])
+    .map((entry) => `${entry.language || ""} :: ${entry.command || ""}`)
+    .join("\n");
+}
+
 async function saveSettings(event) {
   if (event) event.preventDefault();
   const payload = {
@@ -6041,6 +6065,7 @@ async function saveSettings(event) {
     daily_budget_usd: Number($("dailyBudget").value) || 0,
     max_concurrent_runs: Number($("maxConcurrentRuns").value) || 2,
     command_presets: parseCommandPresets($("commandPresets").value),
+    language_servers: parseLanguageServers($("languageServers").value),
   };
   $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);
   const key = $("apiKey").value.trim();

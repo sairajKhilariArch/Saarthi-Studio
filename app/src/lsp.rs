@@ -157,16 +157,95 @@ fn cap(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
 
+#[derive(Debug)]
 struct Launch {
     program: PathBuf,
     args: Vec<String>,
 }
 
-fn launch_for(spec: &ServerSpec) -> Option<Launch> {
-    Some(Launch {
-        program: crate::find_on_path(spec.program)?,
-        args: spec.args.iter().map(|arg| arg.to_string()).collect(),
-    })
+/// The language ids a saved server command may name. Kept beside the built-in
+/// table so a save can never promise a language this build cannot serve.
+pub(crate) const LANGUAGES: &[&str] = &[
+    "rust",
+    "typescript",
+    "javascript",
+    "python",
+    "go",
+    "c",
+    "cpp",
+];
+
+/// A saved `language :: command` line, split into the program and its arguments.
+/// Double quotes group an argument, so a Windows path with a space survives; no
+/// shell is involved, so nothing is expanded or interpreted.
+fn split_command(command: &str) -> Option<(String, Vec<String>)> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for ch in command.trim().chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            ch if ch.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            ch => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    if tokens.is_empty() || quoted {
+        return None;
+    }
+    let program = tokens.remove(0);
+    Some((program, tokens))
+}
+
+/// How to start the server for `spec`: a command the user saved for that
+/// language wins, and the built-in program name is found on `PATH` otherwise.
+/// The error is the sentence the route shows, so "configured but missing" and
+/// "not installed" cannot be confused.
+fn launch_for(spec: &ServerSpec, servers: &[(String, String)]) -> Result<Launch, String> {
+    if let Some((_, command)) = servers
+        .iter()
+        .find(|(language, _)| language == spec.language_id)
+    {
+        let (program, args) = split_command(command).ok_or_else(|| {
+            format!(
+                "The saved language-server command for {} is empty or has an unclosed quote.",
+                spec.language_id
+            )
+        })?;
+        let resolved = crate::find_on_path(&program)
+            .or_else(|| {
+                let direct = std::path::PathBuf::from(&program);
+                direct.is_file().then_some(direct)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "{program} (saved for {} language diagnostics) was not found on PATH or at \
+                     that path.",
+                    spec.language_id
+                )
+            })?;
+        return Ok(Launch {
+            program: resolved,
+            args,
+        });
+    }
+    crate::find_on_path(spec.program)
+        .map(|program| Launch {
+            program,
+            args: spec.args.iter().map(|arg| arg.to_string()).collect(),
+        })
+        .ok_or_else(|| {
+            format!(
+                "{} is not on PATH, so no language-server diagnostics were read.",
+                spec.program
+            )
+        })
 }
 
 /// One `Content-Length` framed JSON-RPC message, or `None` at end of stream.
@@ -530,19 +609,20 @@ async fn diagnostics_route(State(state): State<AppState>, Json(input): Json<Valu
         }))
         .into_response();
     };
-    let Some(launch) = launch_for(spec) else {
-        return Json(json!({
-            "ok": true,
-            "path": path,
-            "server": spec.program,
-            "installed": false,
-            "diagnostics": [],
-            "note": format!(
-                "{} is not on PATH, so no language-server diagnostics were read.",
-                spec.program
-            ),
-        }))
-        .into_response();
+    let servers = crate::language_servers(&state);
+    let launch = match launch_for(spec, &servers) {
+        Ok(launch) => launch,
+        Err(note) => {
+            return Json(json!({
+                "ok": true,
+                "path": path,
+                "server": spec.program,
+                "installed": false,
+                "diagnostics": [],
+                "note": note,
+            }))
+            .into_response();
+        }
     };
     if RUNNING.fetch_add(1, Ordering::SeqCst) >= MAX_CONCURRENT_DIAGNOSTICS {
         RUNNING.fetch_sub(1, Ordering::SeqCst);
@@ -589,24 +669,37 @@ async fn diagnostics_route(State(state): State<AppState>, Json(input): Json<Valu
 
 /// Which servers this build knows about, and whether each is installed. Reads
 /// `PATH` only; it starts nothing.
-async fn servers_route() -> Json<Value> {
+async fn servers_route(State(state): State<AppState>) -> Json<Value> {
+    let saved = crate::language_servers(&state);
     let mut rows: Vec<Value> = Vec::new();
     for spec in SERVERS {
+        // One row per language, so a saved command for `cpp` is visible even
+        // though it shares `clangd` with `c`.
         if rows
             .iter()
-            .any(|row| row.get("server") == Some(&json!(spec.program)))
+            .any(|row| row.get("language") == Some(&json!(spec.language_id)))
         {
             continue;
         }
         let extensions: Vec<&str> = SERVERS
             .iter()
-            .filter(|other| other.program == spec.program)
+            .filter(|other| other.language_id == spec.language_id)
             .flat_map(|other| other.extensions.iter().copied())
             .collect();
+        // A saved command is what actually runs, so it decides `installed` and
+        // is reported verbatim for the settings note.
+        let configured = saved
+            .iter()
+            .find(|(language, _)| language == spec.language_id)
+            .map(|(_, command)| command.clone());
+        let installed = launch_for(spec, &saved).map(|launch| launch.program).ok();
         rows.push(json!({
             "server": spec.program,
+            "language": spec.language_id,
             "extensions": extensions,
-            "installed": crate::find_on_path(spec.program).is_some(),
+            "configured": configured,
+            "installed": installed.is_some(),
+            "program": installed,
         }));
     }
     Json(json!({ "ok": true, "servers": rows }))
@@ -662,6 +755,51 @@ mod tests {
         assert!(
             spec_for(".gitignore").is_none(),
             "a dotfile has no stem, so it is not a Rust file"
+        );
+    }
+
+    /// Issue 45: diagnostics used to be PATH-only. A saved command now wins for
+    /// its language, and a configured program that is not there says so instead
+    /// of being reported as "not on PATH".
+    #[test]
+    fn a_saved_server_command_wins_over_the_builtin_lookup() {
+        let node = crate::find_on_path("node").expect("node is on PATH for the test suite");
+        let spec = spec_for("src/main.rs").expect("rust spec");
+        let saved = vec![(
+            "rust".to_string(),
+            format!("\"{}\" --stdio", node.display()),
+        )];
+        let launch = launch_for(spec, &saved).expect("a saved command resolves");
+        assert_eq!(launch.program, node);
+        assert_eq!(launch.args, vec!["--stdio".to_string()]);
+
+        let missing = vec![(
+            "rust".to_string(),
+            "definitely-not-a-real-lsp-binary".to_string(),
+        )];
+        let error = launch_for(spec, &missing).expect_err("a missing program is refused");
+        assert!(error.contains("saved for rust"), "{error}");
+        assert!(
+            error.contains("definitely-not-a-real-lsp-binary"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_saved_command_splits_on_spaces_and_keeps_a_quoted_path() {
+        assert_eq!(
+            split_command("  rust-analyzer  "),
+            Some(("rust-analyzer".to_string(), Vec::new()))
+        );
+        assert_eq!(
+            split_command("\"/opt/my tools/lsp\" --stdio"),
+            Some(("/opt/my tools/lsp".to_string(), vec!["--stdio".to_string()]))
+        );
+        assert_eq!(split_command("   "), None, "nothing to run");
+        assert_eq!(
+            split_command("\"unclosed --stdio"),
+            None,
+            "an unclosed quote"
         );
     }
 

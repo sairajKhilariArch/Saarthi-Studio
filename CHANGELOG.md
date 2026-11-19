@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.73.0
+
+Language-server diagnostics could only find a server on `PATH`, so a build
+installed under `~/.cargo/bin`, a per-project wrapper or a server that needs its
+own arguments could not be used at all (KNOWN-ISSUES 45).
+
+- Settings now takes **Language servers** as one line per language:
+  `language :: command`. A saved line wins for that language; every other
+  language keeps the built-in `PATH` lookup, so nothing changes for a default
+  install.
+- The language must be one this build serves (rust, typescript, javascript,
+  python, go, c, cpp); an unknown language or a blank command is a 400 rather
+  than a setting that is saved and silently ignored. A later line for the same
+  language replaces the earlier one, and the list is trimmed and capped.
+- The command is split into a program and arguments without a shell — nothing is
+  expanded or interpreted, and a double-quoted path keeps its spaces. An absolute
+  path that exists is used directly; otherwise the program is looked up on `PATH`.
+- A saved program that cannot be found is reported as *"… (saved for rust
+  language diagnostics) was not found on PATH or at that path"*, so a
+  misconfigured server is never mistaken for a missing one, and an unclosed
+  quote is refused with its own sentence.
+- `GET /api/lsp/servers` now answers one row per language with the saved
+  `configured` command and the `program` that would actually run.
+
+Checks: `cargo fmt`, `cargo clippy --no-default-features --all-targets` clean,
+`cargo check` clean, and the full Rust suite **658 passed, 0 failed, 1 ignored**
+(3 new: a saved command wins over the built-in lookup and a missing program names
+itself as configured, quoted/blank/unclosed command splitting, and settings
+normalisation dropping an unknown language, a blank command and keeping the last
+entry per language). `node --check app/static/app.js` clean and the frontend
+suite 99/99. The diagnostics run itself was not re-verified against a live
+language server in this change (the fake-server test still passes), and Clippy
+with default features (the Tauri build) was not run here.
+
 ## 3.72.0
 
 A full-suite run was not reliably green: three queue tests held the only run slot

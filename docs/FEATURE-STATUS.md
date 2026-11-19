@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.71.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.73.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -179,6 +179,10 @@ test proves it with two connections on one database (claim, refusal, a higher
 limit letting it through, and no re-claim of a run that is no longer queued).
 Also lands Phase 9's language-server diagnostics (3.49.0) and Phase 14's
 thinking (3.47.0) and stdio MCP (3.48.0) in the VS Code embedded server.
+**Revision 3.73.0 (2026-11-19):** Issue 45's `PATH`-only half is closed: Settings
+saves a `language :: command` line per language, the diagnostics route prefers it
+over the `PATH` lookup, and a configured program that is missing says so rather
+than looking uninstalled. The one-shot, five-second session remains.
 **Revision 3.49.0 (2026-11-13):** Phase 9's language-server diagnostics.
 `app/src/lsp.rs` is a bounded LSP client (Content-Length JSON-RPC, initialize,
 didOpen, five seconds for `publishDiagnostics`, shutdown, Drop kills the child)

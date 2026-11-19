@@ -813,6 +813,11 @@
               <textarea id="commandPresets" rows="4" spellcheck="false" placeholder="Lint everything :: npm run lint&#10;Release build :: cargo build --release"></textarea>
               <small>One command per line as <code>name :: command</code>. They appear in the Run panel beside the detected build and test commands and go through the same permission check, which shows the whole line before it runs. Each command runs in the open folder through the platform shell.</small>
             </label>
+            <label class="field field-wide" data-feature="saved_commands">
+              <span>Language servers</span>
+              <textarea id="languageServers" rows="3" spellcheck="false" placeholder="rust :: /home/you/.cargo/bin/rust-analyzer&#10;python :: pylsp --check-parent-process"></textarea>
+              <small>One server per line as <code>language :: command</code>, for a server that is not on <code>PATH</code> or needs its own arguments. Languages: rust, typescript, javascript, python, go, c, cpp. Quote a path that contains spaces. Nothing is run through a shell, and a language without a line here keeps the built-in program lookup.</small>
+            </label>
           </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-accent">Save all settings</button>
