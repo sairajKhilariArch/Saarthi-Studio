@@ -56,7 +56,7 @@ against the tree, and the Phase 15 log's stale dependency note was corrected.
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
 | 5 — Run queue | No workstream remains open. Cross-process admission closed in 3.50.0: promotion claims its slot inside one conditional UPDATE, so the live count and the promotion cannot be separated by another process. An abandoned checkout closed in 3.51.0: `POST /api/runs/:id/discard` removes a finished run's worktree and its `run/<short>` branch without touching the workspace. The editor half closed in 3.52.0: a save is recorded in the ledger, so a live run that never read the file refuses the write by name instead of silently replacing the person's change. Caveats that remain are in `KNOWN-ISSUES.md` 20 — a program outside Studio writing a file is still invisible until a fingerprint check. |
-| 9 — Developer environment | A debugger. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0) and language-server diagnostics (3.49.0) are done. |
+| 9 — Developer environment | No named requirement. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0), language-server diagnostics (3.49.0) and the debugger (3.55.0) are done. The editor still has no document engine of its own and `ide.js` has no harness; those are recorded as product choices, not missing routes. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level (3.47.0) and runs stdio MCP servers (3.48.0); remote transports, OAuth, agent-run reasoning and MCP tools in agent prompts remain missing there. |
 | 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
@@ -94,6 +94,16 @@ the workflow engine, and the testing layers are functionally complete. Their
 remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
+
+Delivered in 3.55.0:
+
+- Phase 2's debugger: a Debug Adapter Protocol client that launches a real
+  program under `lldb-dap`, `debugpy` or `dlv dap`, stops at breakpoints and
+  entry, steps, and reads the call stack, scopes, variables and evaluated
+  expressions. Fourteen routes under `/api/debug/*` behind the loopback-origin
+  guard, one session at a time, and a Debug pane in the workbench built on them.
+  The handshake follows the protocol's real order, so debugpy's
+  `launch`-after-`configurationDone` behaviour works instead of deadlocking.
 
 Delivered in 3.54.0:
 

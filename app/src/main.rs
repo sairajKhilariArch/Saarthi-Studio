@@ -33,6 +33,7 @@ mod capabilities;
 mod context;
 mod contract;
 mod cost;
+mod dap;
 mod deepsearch;
 mod diagnostics;
 mod drafts;
@@ -914,6 +915,41 @@ pub(crate) fn save_config_file(path: &FsPath, original: &Config) -> io::Result<(
 
 pub(crate) fn json_error(status: StatusCode, message: impl Into<String>) -> Response<Body> {
     (status, Json(json!({"error": message.into()}))).into_response()
+}
+
+/// `PATH` lookup with `PATHEXT` on Windows, so a check matches what `spawn`
+/// would do. A name with a separator is used as given. Shared by every module
+/// that launches an external tool (language servers, debug adapters).
+pub(crate) fn find_on_path(program: &str) -> Option<std::path::PathBuf> {
+    if program.contains('/') || program.contains('\\') {
+        let candidate = std::path::PathBuf::from(program);
+        return candidate.is_file().then_some(candidate);
+    }
+    let search = std::env::var_os("PATH")?;
+    let extensions: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
+            .split(';')
+            .map(|entry| entry.trim().to_ascii_lowercase())
+            .filter(|entry| !entry.is_empty())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    for directory in std::env::split_paths(&search) {
+        for extension in &extensions {
+            let name = if extension.is_empty() {
+                program.to_string()
+            } else {
+                format!("{program}{extension}")
+            };
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 /// Baseline browser hardening for the local UI. The app has no third-party

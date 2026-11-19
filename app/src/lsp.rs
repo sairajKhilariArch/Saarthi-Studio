@@ -153,40 +153,6 @@ fn file_uri(path: &Path) -> String {
     uri
 }
 
-/// `PATH` lookup with `PATHEXT` on Windows, so the check matches what `spawn`
-/// would do. A name with a separator is used as given.
-fn find_on_path(program: &str) -> Option<PathBuf> {
-    if program.contains('/') || program.contains('\\') {
-        let candidate = PathBuf::from(program);
-        return candidate.is_file().then_some(candidate);
-    }
-    let search = std::env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
-            .split(';')
-            .map(|entry| entry.trim().to_ascii_lowercase())
-            .filter(|entry| !entry.is_empty())
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    for directory in std::env::split_paths(&search) {
-        for extension in &extensions {
-            let name = if extension.is_empty() {
-                program.to_string()
-            } else {
-                format!("{program}{extension}")
-            };
-            let candidate = directory.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
 fn cap(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
@@ -198,7 +164,7 @@ struct Launch {
 
 fn launch_for(spec: &ServerSpec) -> Option<Launch> {
     Some(Launch {
-        program: find_on_path(spec.program)?,
+        program: crate::find_on_path(spec.program)?,
         args: spec.args.iter().map(|arg| arg.to_string()).collect(),
     })
 }
@@ -640,7 +606,7 @@ async fn servers_route() -> Json<Value> {
         rows.push(json!({
             "server": spec.program,
             "extensions": extensions,
-            "installed": find_on_path(spec.program).is_some(),
+            "installed": crate::find_on_path(spec.program).is_some(),
         }));
     }
     Json(json!({ "ok": true, "servers": rows }))
@@ -815,7 +781,7 @@ process.stdin.on("data", (chunk) => {
     fn fake_launch(dir: &Path, fail: bool) -> Launch {
         let script = dir.join("fake-lsp.mjs");
         std::fs::write(&script, FAKE_SERVER).unwrap();
-        let node = find_on_path("node").expect("node is on PATH for the test suite");
+        let node = crate::find_on_path("node").expect("node is on PATH for the test suite");
         let mut args = vec![script.to_string_lossy().to_string()];
         if fail {
             args.push("--fail".to_string());

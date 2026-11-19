@@ -270,6 +270,7 @@
   const BOTTOM_TABS = [
     ["terminal", "Terminal", null],
     ["problems", "Problems", "problemCount"],
+    ["debug", "Debug", null],
     ["runs", "AI runs", "runsCount"],
     ["tasks", "Tasks", null],
     ["output", "Output", null],
@@ -323,6 +324,7 @@
       $("runDiagnostics").classList.add("hidden");
     }
     body.appendChild(problemsPane);
+    body.appendChild(buildDebugPane());
     body.appendChild(makePane("runsPane", "runsBody",
       '<span>Agent runs on this machine</span><button type="button" class="btn btn-quiet btn-small" id="runsRefresh">Refresh</button>',
       "Loading runs…"));
@@ -361,17 +363,379 @@
       button.classList.toggle("active", active);
       button.setAttribute("aria-selected", String(active));
     });
-    [["terminal", "terminalPane"], ["problems", "problemsPane"], ["runs", "runsPane"],
-      ["tasks", "tasksPane"], ["output", "outputPane"]].forEach(([name, paneId]) => {
+    [["terminal", "terminalPane"], ["problems", "problemsPane"], ["debug", "debugPane"],
+      ["runs", "runsPane"], ["tasks", "tasksPane"], ["output", "outputPane"]].forEach(([name, paneId]) => {
       const pane = $(paneId);
       if (pane) pane.classList.toggle("hidden", name !== id);
     });
     if (state.panelShow && !state.panelShow.bottom) togglePanel("bottom");
     if (id === "terminal") showTerminalPanel();
     if (id === "problems") { renderProblems(); void loadRunnerPresets(); void loadWatchStatus(); }
+    if (id === "debug") { void openDebugPane(); } else { stopDebugPolling(); }
     if (id === "runs") void loadRunsPane();
     if (id === "tasks") void loadTasksPane();
     if (id === "output") renderOutput();
+  }
+
+  /* ---------- debugger (Phase 9's Debug Adapter Protocol half) ----------
+     The server owns the adapter process and speaks the protocol; this pane only
+     starts and stops it, moves the target, and shows what it reported. A stop
+     is polled, not pushed: `/api/debug/state` is cheap and holds no lock while
+     the adapter is idle, and the alternative (a second event stream) would be a
+     duplicate transport. Nothing here guesses — a stack that failed to load says
+     so instead of showing empty frames as "no variables". */
+  const debug = {
+    state: null,
+    adapters: null,
+    frames: [],
+    frame: null,
+    scopes: [],
+    variables: new Map(),
+    expanded: new Set(),
+    evals: [],
+    timer: null,
+    stopKey: null,
+  };
+
+  function buildDebugPane() {
+    const pane = el("div", "bottom-pane hidden");
+    pane.id = "debugPane";
+    pane.innerHTML =
+      '<div class="pane-tools debug-tools">' +
+      '<button type="button" class="btn btn-small" id="debugStart" title="Launch the open program under its debugger">Start</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugStop">Stop</button>' +
+      '<span class="debug-sep"></span>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugContinue" title="Continue until the next breakpoint">Continue</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugPause">Pause</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugNext" title="Step over">Over</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugStepIn" title="Step into">In</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugStepOut" title="Step out">Out</button>' +
+      '<span class="debug-sep"></span>' +
+      '<input id="debugLine" class="debug-line" type="number" min="1" inputmode="numeric" placeholder="Line" aria-label="Breakpoint line">' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugAddBreakpoint">Breakpoint</button>' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugRemoveBreakpoint">Clear line</button>' +
+      '<label class="debug-check"><input type="checkbox" id="debugStopEntry" checked> stop at entry</label>' +
+      '<input id="debugProgram" class="debug-program" placeholder="program (default: open file)" aria-label="Program to debug">' +
+      '</div>' +
+      '<div class="pane-scroll debug-body" id="debugBody">' +
+      '<p class="debug-status" id="debugStatusLine">No session. Open a Python, Go, Rust, C or C++ file and press Start.</p>' +
+      '<div class="debug-hint hidden" id="debugHint"></div>' +
+      '<section class="debug-section"><h4>Breakpoints</h4><div id="debugBreakpoints"></div></section>' +
+      '<section class="debug-section"><h4>Call stack</h4><div id="debugFrames"></div></section>' +
+      '<section class="debug-section"><h4>Variables</h4><div id="debugVariables"></div></section>' +
+      '<section class="debug-section"><h4>Console</h4><pre id="debugConsole" class="debug-console" aria-label="Debug console"></pre>' +
+      '<div class="debug-eval"><input id="debugEval" placeholder="Evaluate an expression" aria-label="Expression to evaluate">' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugEvalRun">Evaluate</button></div></section>' +
+      '</div>';
+    pane.querySelector("#debugStart").addEventListener("click", () => void startDebugging());
+    pane.querySelector("#debugStop").addEventListener("click", () => void stopDebugging());
+    pane.querySelector("#debugContinue").addEventListener("click", () => void debugStep("continue"));
+    pane.querySelector("#debugPause").addEventListener("click", () => void debugStep("pause"));
+    pane.querySelector("#debugNext").addEventListener("click", () => void debugStep("next"));
+    pane.querySelector("#debugStepIn").addEventListener("click", () => void debugStep("step-in"));
+    pane.querySelector("#debugStepOut").addEventListener("click", () => void debugStep("step-out"));
+    pane.querySelector("#debugAddBreakpoint").addEventListener("click", () => void toggleBreakpoint(false));
+    pane.querySelector("#debugRemoveBreakpoint").addEventListener("click", () => void toggleBreakpoint(true));
+    pane.querySelector("#debugEvalRun").addEventListener("click", () => void evaluateDebugExpression());
+    pane.querySelector("#debugEval").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void evaluateDebugExpression(); }
+    });
+    pane.querySelector("#debugLine").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); void toggleBreakpoint(false); }
+    });
+    return pane;
+  }
+
+  async function openDebugPane() {
+    startDebugPolling();
+    if (!debug.adapters) {
+      const result = await api("/api/debug/adapters");
+      if (result.ok) debug.adapters = result.data.adapters || [];
+    }
+    renderDebug();
+    await refreshDebug();
+  }
+
+  function startDebugPolling() {
+    if (debug.timer) return;
+    debug.timer = setInterval(() => {
+      if (IDE.bottomTab === "debug") void refreshDebug();
+    }, 1000);
+  }
+
+  function stopDebugPolling() {
+    if (!debug.timer) return;
+    clearInterval(debug.timer);
+    debug.timer = null;
+  }
+
+  async function refreshDebug() {
+    const result = await api("/api/debug/state");
+    if (!result.ok) {
+      const line = $("debugStatusLine");
+      if (line) line.textContent = result.data.error || "Could not read the debugger's state.";
+      return;
+    }
+    const state = result.data;
+    debug.state = state;
+    const stopped = state.stopped;
+    const key = stopped ? `${stopped.reason}:${stopped.threadId || ""}` : null;
+    if (!stopped) {
+      debug.frames = [];
+      debug.frame = null;
+      debug.scopes = [];
+      debug.variables.clear();
+      debug.expanded.clear();
+      debug.stopKey = null;
+    } else if (key !== debug.stopKey) {
+      debug.stopKey = key;
+      void loadDebugStack();
+    }
+    renderDebug();
+  }
+
+  async function loadDebugStack() {
+    const stopped = debug.state && debug.state.stopped;
+    const thread = stopped && stopped.threadId ? `?thread=${encodeURIComponent(stopped.threadId)}` : "";
+    const result = await api(`/api/debug/stack${thread}`);
+    if (!result.ok) { debug.langError = result.data.error || "Could not read the call stack."; renderDebug(); return; }
+    debug.langError = null;
+    debug.frames = result.data.frames || [];
+    debug.frame = null;
+    debug.scopes = [];
+    debug.variables.clear();
+    debug.expanded.clear();
+    renderDebug();
+    const top = debug.frames[0];
+    if (top && top.id != null) void loadDebugScopes(top.id);
+  }
+
+  async function loadDebugScopes(frameId) {
+    const result = await api(`/api/debug/scopes?frame=${encodeURIComponent(frameId)}`);
+    if (!result.ok) { toast(result.data.error || "Could not read this frame's scopes."); return; }
+    debug.frame = frameId;
+    debug.scopes = result.data.scopes || [];
+    debug.variables.clear();
+    debug.expanded.clear();
+    renderDebug();
+    const first = debug.scopes[0];
+    if (first && first.reference) void loadDebugVariables(first.reference);
+  }
+
+  async function loadDebugVariables(reference) {
+    const result = await api(`/api/debug/variables?reference=${encodeURIComponent(reference)}`);
+    if (!result.ok) { toast(result.data.error || "Could not expand those variables."); return; }
+    debug.variables.set(reference, result.data.variables || []);
+    renderDebug();
+  }
+
+  function debugStopped() {
+    return Boolean(debug.state && debug.state.running && debug.state.stopped);
+  }
+
+  async function startDebugging() {
+    const file = activeFile();
+    const override = ($("debugProgram") && $("debugProgram").value.trim()) || "";
+    const source = file ? file.path : "";
+    const program = override || source;
+    if (!program) { toast("Open the program's source file first."); return; }
+    const result = await api("/api/debug/start", {
+      method: "POST",
+      body: JSON.stringify({
+        path: source || program,
+        program,
+        stopOnEntry: $("debugStopEntry") ? $("debugStopEntry").checked : true,
+      }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      const message = result.data.error || "Could not start the debugger.";
+      toast(message);
+      recordProblem("debug", message);
+      renderDebug();
+      return;
+    }
+    debug.stopKey = null;
+    await refreshDebug();
+  }
+
+  async function stopDebugging() {
+    const result = await api("/api/debug/stop", { method: "POST", body: "{}" });
+    if (!result.ok) { toast(result.data.error || "Could not stop the debugger."); return; }
+    debug.stopKey = null;
+    debug.frames = [];
+    debug.frame = null;
+    debug.scopes = [];
+    debug.variables.clear();
+    debug.expanded.clear();
+    debug.evals = [];
+    toast(result.data.stopped ? "Debug session stopped." : "No debug session was running.");
+    await refreshDebug();
+  }
+
+  async function debugStep(command) {
+    const stopped = debug.state && debug.state.stopped;
+    const body = stopped && stopped.threadId ? { threadId: stopped.threadId } : {};
+    const result = await api(`/api/debug/${command}`, { method: "POST", body: JSON.stringify(body) });
+    if (!result.ok) { toast(result.data.error || "The debugger refused that command."); return; }
+    await refreshDebug();
+  }
+
+  async function toggleBreakpoint(remove) {
+    const file = activeFile();
+    if (!file) { toast("Open a file first."); return; }
+    const input = $("debugLine");
+    const line = Number(input.value);
+    if (!Number.isInteger(line) || line < 1) { toast("Enter a line number."); input.focus(); return; }
+    const existing = ((debug.state && debug.state.breakpoints) || {})[file.path] || [];
+    const lines = remove
+      ? existing.filter((breakpoint) => breakpoint.line !== line)
+      : existing.some((breakpoint) => breakpoint.line === line)
+        ? existing
+        : existing.concat([{ line }]);
+    const result = await api("/api/debug/breakpoints", {
+      method: "POST",
+      body: JSON.stringify({ path: file.path, lines }),
+    });
+    if (!result.ok) { toast(result.data.error || "Could not set the breakpoint."); return; }
+    input.value = "";
+    if (result.data.pending) toast(`Breakpoint at ${file.path}:${line} will apply when a session starts.`);
+    await refreshDebug();
+  }
+
+  async function evaluateDebugExpression() {
+    const input = $("debugEval");
+    const expression = input.value.trim();
+    if (!expression) return;
+    if (!debugStopped()) { toast("Pause the program before evaluating an expression."); return; }
+    const body = { expression };
+    if (debug.frame != null) body.frameId = debug.frame;
+    const result = await api("/api/debug/evaluate", { method: "POST", body: JSON.stringify(body) });
+    if (!result.ok) { toast(result.data.error || "Could not evaluate that expression."); return; }
+    debug.evals.push(`> ${expression}\n${result.data.result || "(no value)"}`);
+    if (debug.evals.length > 40) debug.evals.shift();
+    input.value = "";
+    renderDebug();
+  }
+
+  function debugVarRows(reference, depth) {
+    const variables = debug.variables.get(reference);
+    if (!variables) return "";
+    const rows = variables.map((variable, index) => {
+      const expandable = Boolean(variable.reference) && depth < 3;
+      const open = expandable && debug.expanded.has(`${reference}:${index}`);
+      const toggle = expandable
+        ? `<button type="button" class="debug-twisty" data-reference="${variable.reference}" data-key="${reference}:${index}" aria-expanded="${open}">${open ? "▾" : "▸"}</button>`
+        : '<span class="debug-twisty empty"></span>';
+      const children = open ? debugVarRows(variable.reference, depth + 1) : "";
+      return `<div class="debug-var-row"><div class="debug-var">${toggle}<span class="debug-var-name">${escapeHtml(variable.name)}</span>` +
+        `<span class="debug-var-value">${escapeHtml(variable.value)}</span>` +
+        (variable.type ? `<span class="muted">${escapeHtml(variable.type)}</span>` : "") +
+        `</div>${children ? `<div class="debug-children">${children}</div>` : ""}</div>`;
+    });
+    const more = variables.length >= 100 ? '<p class="pane-empty">Only the first 100 variables are shown.</p>' : "";
+    return rows.join("") + more;
+  }
+
+  function renderDebug() {
+    const status = $("debugStatusLine");
+    if (!status) return;
+    const state = debug.state;
+    const running = Boolean(state && state.running);
+    const stopped = state && state.stopped;
+    if (!state) status.textContent = "Checking the debugger…";
+    else if (!running) status.textContent = "No session. Open a program's source file and press Start.";
+    else if (stopped) {
+      status.textContent = `Paused (${stopped.reason || "stopped"})` +
+        (stopped.description ? ` — ${stopped.description}` : "") +
+        (state.adapter ? ` · ${state.adapter}` : "");
+    } else if (state.terminated) status.textContent = `The target has exited${state.exited != null ? ` (${state.exited})` : ""}.`;
+    else status.textContent = `Running${state.adapter ? ` · ${state.adapter}` : ""}${state.program ? ` · ${state.program}` : ""}`;
+
+    const hint = $("debugHint");
+    if (hint) {
+      const missing = (debug.adapters || []).filter((adapter) => !adapter.installed);
+      const installed = (debug.adapters || []).filter((adapter) => adapter.installed);
+      if (debug.adapters && !installed.length) {
+        hint.classList.remove("hidden");
+        hint.innerHTML = "No debug adapter is installed. " +
+          missing.map((adapter) => `<span class="debug-hint-row">${escapeHtml(adapter.id)}: ${escapeHtml(adapter.install)}</span>`).join("");
+      } else {
+        hint.classList.add("hidden");
+      }
+    }
+
+    const breakpoints = (state && state.breakpoints) || {};
+    const list = $("debugBreakpoints");
+    if (list) {
+      const rows = Object.keys(breakpoints).sort().flatMap((path) => {
+        const items = Array.isArray(breakpoints[path]) ? breakpoints[path] : [];
+        return items.map((breakpoint) =>
+          `<button type="button" class="debug-breakpoint" data-path="${escapeHtml(path)}" data-line="${breakpoint.line}">` +
+          `<span class="debug-dot"></span>${escapeHtml(path)}:${breakpoint.line}` +
+          (breakpoint.condition ? `<span class="muted"> if ${escapeHtml(breakpoint.condition)}</span>` : "") +
+          "</button>");
+      });
+      list.innerHTML = rows.length ? rows.join("") : '<p class="pane-empty">No breakpoints. Choose a line and press Breakpoint.</p>';
+      list.querySelectorAll(".debug-breakpoint").forEach((row) => {
+        row.addEventListener("click", () => {
+          const path = row.dataset.path, line = Number(row.dataset.line);
+          void (async () => {
+            await openFile(path);
+            if (line) focusLine(line, 1);
+          })();
+        });
+      });
+    }
+
+    const frames = $("debugFrames");
+    if (frames) {
+      if (debug.langError) frames.innerHTML = `<p class="pane-error">${escapeHtml(debug.langError)}</p>`;
+      else if (!debug.frames.length) frames.innerHTML = '<p class="pane-empty">No frames. Pause the target to read its call stack.</p>';
+      else {
+        frames.innerHTML = debug.frames.map((frame) =>
+          `<button type="button" class="debug-frame${frame.id === debug.frame ? " active" : ""}" data-frame="${frame.id}">` +
+          `<span class="debug-frame-name">${escapeHtml(frame.name || "frame")}</span>` +
+          `<span class="muted">${escapeHtml((frame.path || "").split(/[\\/]/).pop() || "")}${frame.line ? `:${frame.line}` : ""}</span>` +
+          "</button>").join("");
+        frames.querySelectorAll(".debug-frame").forEach((row) => {
+          row.addEventListener("click", () => void loadDebugScopes(Number(row.dataset.frame)));
+        });
+      }
+    }
+
+    const variables = $("debugVariables");
+    if (variables) {
+      if (!debug.scopes.length) variables.innerHTML = '<p class="pane-empty">No scopes. Pause the target to read its variables.</p>';
+      else {
+        variables.innerHTML = debug.scopes.map((scope) =>
+          `<div class="debug-scope">${escapeHtml(scope.name)}${scope.expensive ? ' <span class="muted">(lazy)</span>' : ""}</div>` +
+          (debug.variables.has(scope.reference)
+            ? debugVarRows(scope.reference, 0)
+            : `<button type="button" class="debug-scope-load" data-reference="${scope.reference}">${scope.expensive ? "Read this scope" : "Read"}</button>`)).join("");
+        variables.querySelectorAll(".debug-scope-load").forEach((button) => {
+          button.addEventListener("click", () => void loadDebugVariables(Number(button.dataset.reference)));
+        });
+        variables.querySelectorAll(".debug-twisty[data-reference]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const key = button.dataset.key;
+            const reference = Number(button.dataset.reference);
+            if (debug.expanded.has(key)) { debug.expanded.delete(key); renderDebug(); return; }
+            debug.expanded.add(key);
+            if (!debug.variables.has(reference)) void loadDebugVariables(reference);
+            else renderDebug();
+          });
+        });
+      }
+    }
+
+    const consoleBox = $("debugConsole");
+    if (consoleBox) {
+      const atBottom = consoleBox.scrollTop + consoleBox.clientHeight >= consoleBox.scrollHeight - 4;
+      const lines = ((state && state.console) || []).concat(debug.evals.flatMap((entry) => [entry, ""]));
+      consoleBox.textContent = lines.length ? lines.join("\n") : "Nothing yet. The target's output appears here.";
+      if (atBottom) consoleBox.scrollTop = consoleBox.scrollHeight;
+    }
   }
 
   /* ---------- status bar ---------- */

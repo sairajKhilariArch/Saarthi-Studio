@@ -347,3 +347,39 @@ body.no-right { --right-w: 0px; }
   .app > .ai-dock { display: none; }
   .app > .bottom-panel { grid-column: 3 / 4; }
 }
+
+/* ---------- Debug pane (Phase 9) -----------------------------------------
+ * The pane reads like the rest of the workbench: one status line, then the
+ * four things a stopped program is inspected through. Controls wrap rather
+ * than overflow, because the bottom panel can be resized very narrow. */
+.debug-tools { flex-wrap: wrap; gap: 5px; }
+.debug-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 3px; }
+.debug-tools input { background: var(--surface-2); border: 1px solid var(--line); color: var(--text); border-radius: 5px; font: inherit; font-size: 11px; padding: 3px 6px; }
+.debug-tools input[type="number"] { width: 62px; }
+.debug-tools .debug-program { flex: 1; min-width: 150px; max-width: 320px; }
+.debug-check { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--mute); }
+.debug-body { overflow-y: auto; }
+.debug-status { margin: 0; padding: 7px 8px; font-size: 11.5px; color: var(--text); border-bottom: 1px solid var(--line); }
+.debug-hint { margin: 0; padding: 7px 8px; border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--mute); }
+.debug-hint-row { display: block; padding-left: 10px; }
+.debug-section { padding: 6px 8px 10px; border-bottom: 1px solid var(--line); }
+.debug-section h4 { margin: 2px 0 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mute); }
+.debug-breakpoint, .debug-frame { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 11.5px; padding: 3px 4px; border-radius: 5px; cursor: pointer; }
+.debug-breakpoint:hover, .debug-frame:hover { background: var(--surface-3); }
+.debug-frame.active { background: var(--surface-3); }
+.debug-frame-name { font-family: var(--mono); }
+.debug-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger, #e06c75); flex: none; }
+.debug-scope { font-size: 11px; color: var(--text); margin: 6px 0 2px; font-weight: 600; }
+.debug-var { display: flex; align-items: baseline; gap: 6px; font-family: var(--mono); font-size: 11.5px; padding-left: 4px; }
+.debug-var .debug-var { padding-left: 14px; }
+.debug-var-name { color: var(--tok-prop); }
+.debug-var-value { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.debug-twisty { width: 14px; height: 14px; flex: none; border: 0; background: transparent; color: var(--mute); font: inherit; font-size: 10px; cursor: pointer; padding: 0; }
+.debug-twisty.empty { cursor: default; }
+.debug-console { margin: 0; padding: 6px 8px; max-height: 150px; overflow: auto; background: var(--code-bg); color: var(--code-ink); border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 11px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.debug-eval { display: flex; gap: 6px; margin-top: 6px; }
+.debug-eval input { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); border-radius: 5px; font: inherit; font-size: 11.5px; padding: 4px 7px; }
+.pane-error { color: var(--danger, #e06c75); font-size: 11.5px; padding: 8px 2px; }
+.debug-children { padding-left: 14px; border-left: 1px solid var(--line); margin-left: 6px; }
+.debug-scope-load { display: inline-block; margin: 2px 0 4px 4px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-2); color: var(--mute); font: inherit; font-size: 10.5px; cursor: pointer; }
+.debug-scope-load:hover { color: var(--text); border-color: var(--accent); }

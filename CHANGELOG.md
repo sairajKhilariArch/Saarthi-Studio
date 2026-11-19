@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.55.0
+
+Phase 9's debugger. The IDE could run a program and kill it, but nothing could
+pause it, look inside it or step it. This is a real Debug Adapter Protocol
+client: the target is a process being debugged by the adapter already installed
+on the machine, not a replayed log.
+
+Backend (`app/src/dap.rs`, merged behind the workspace router's loopback-origin
+guard):
+
+- Adapter discovery and `GET /api/debug/adapters` for `lldb-dap`/`lldb-vscode`
+  (Rust, C, C++), `debugpy` (Python) and `dlv dap` (Go). A missing adapter names
+  what to install; Python's `debugpy` is a module, so the list and the launch
+  path both run `import debugpy.adapter` rather than calling a bare `python3`
+  "installed". The adapter's argv comes from a fixed table, and the target must
+  be a file inside the open folder — nothing from a request reaches a shell.
+- Session lifecycle: `POST /api/debug/start` (gated on the `command` permission,
+  because it runs a program), `POST /api/debug/stop`, and `GET /api/debug/state`
+  returning adapter, program, breakpoints, the stop reason, termination/exit
+  code and a console ring of the target's own output. One session at a time; a
+  refused handshake or launch kills the adapter and leaves no session behind.
+- Breakpoints: `POST /api/debug/breakpoints` takes one file and lines, with
+  optional conditions, applies them to a live session and otherwise keeps them
+  for the next start. Empty list clears the file.
+- Movement: `continue`, `pause`, `next`, `step-in`, `step-out`, each choosing the
+  stopped thread when the request does not name one.
+- Inspection: `stack`, `scopes`, `variables` and `evaluate`, capped at 50 frames,
+  20 scopes and 100 variables; a nested value is fetched one level per request,
+  and text is capped rather than pasted whole.
+- The handshake follows the protocol's real order: `launch` is sent, the adapter's
+  `initialized` event is awaited, breakpoints are set, `configurationDone` is
+  sent, and only then is the launch's answer read. debugpy answers `launch` only
+  after `configurationDone`; waiting for it first deadlocked every real Python
+  session — the fake adapter in the suite now reproduces that ordering.
+
+Frontend (`app/static/ide.js`, `ide.css`): a **Debug** bottom tab with Start and
+Stop, Continue/Pause/Over/In/Out, a line number plus Breakpoint/Clear line, a
+program override and stop-at-entry, the breakpoint list (clicking one opens the
+file at its line), the call stack (clicking a frame loads its scopes), scopes and
+variables with lazy expansion, a console carrying the target's output and adapter
+messages, and an expression box evaluated in the selected frame. The pane polls
+`/api/debug/state` once a second while it is open and says what to install when
+no adapter is usable.
+
 ## 3.54.0
 
 Phase 1's version-extraction guard. `scripts/ci/version.sh` fixed the v1.26.1
