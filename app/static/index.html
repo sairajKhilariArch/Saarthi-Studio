@@ -616,6 +616,17 @@
           <div id="crewTemplates" class="crew-chips run-crew-input hidden"></div>
             <small>Hybrid keeps your files on this machine: the cloud only writes the plan and answers when the local model gets stuck. Team adds an independent review pass before a run is called complete. Crew runs its stages one after another through the shared step log.</small>
           </div>
+          <div class="field">
+            <span>Reasoning for this run</span>
+            <select id="runThinking" class="run-profile-select">
+              <option value="" selected>Default — the agent level set in Settings</option>
+              <option value="off">Off — no reasoning effort sent</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+            <small>A run-level choice beats the agent level in Settings for this run's own steps. Providers that ignore reasoning effort are unaffected.</small>
+          </div>
           <div class="run-perms">
             <label class="run-perm"><input id="runAllowWrites" type="checkbox" checked><span>May write files</span></label>
             <label class="run-perm"><input id="runAllowCommands" type="checkbox"><span>May run commands</span></label>

@@ -9376,6 +9376,9 @@ function renderRunCard(run) {
     ? ` · crew: ${run.crew.join(" → ")}`
     : run.mode ? ` · ${run.mode}` : "";
   const profileTag = run.profile && run.profile !== "coding" ? ` · ${run.profile}` : "";
+  // A run that named its own reasoning level says so; blank means the agent
+  // level from Settings applied, which needs no label of its own.
+  const thinkingTag = run.thinking ? ` · think: ${run.thinking}` : "";
   // The discovered tool count comes from the run's own catalogue snapshot, so
   // a run that found nothing says so instead of implying it had tools.
   const mcpTag = run.allowMcp ? ` · mcp: ${run.mcpTools || 0} tool${run.mcpTools === 1 ? "" : "s"}` : "";
@@ -9397,7 +9400,7 @@ function renderRunCard(run) {
   if (ctxMemory.length) ctxParts.push(`${ctxMemory.length} memory`);
   if (ctxCode.length) ctxParts.push(`${ctxCode.length} code`);
   const contextTag = ctxParts.length ? ` · given ${ctxParts.join(" + ")}` : "";
-  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${retryTag}${profileTag}${modeTag}${modelTag}${tokenTag}${mcpTag}${contextTag}`;
+  meta.textContent = `${run.steps} step${run.steps === 1 ? "" : "s"}${durationTag} · ${runAgo(run.updatedAt)}${queueTag}${depTag}${retryTag}${profileTag}${thinkingTag}${modeTag}${modelTag}${tokenTag}${mcpTag}${contextTag}`;
   if (ctxParts.length) {
     meta.title = `Given at start:\n${[...ctxMemory, ...ctxCode].join("\n")}`;
   }
@@ -9783,6 +9786,8 @@ async function submitRun(event) {
     allowMcp: $("runAllowMcp").checked,
     autoApprove: $("runAutoApprove").checked,
   };
+  // A run-level Thinking choice; blank keeps the agent level from Settings.
+  if ($("runThinking").value) payload.thinking = $("runThinking").value;
   const priority = Number($("runPriority").value);
   if (priority) payload.priority = priority;
   // Dependencies are ids the server validates; blank means "start as soon as a

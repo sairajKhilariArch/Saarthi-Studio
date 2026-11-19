@@ -1326,6 +1326,9 @@ pub(crate) struct StepOptions {
     pub structured: bool,
     pub mcp_tools: bool,
     pub extension_tools: bool,
+    /// This run's own Thinking level, above the agent scope a step otherwise
+    /// resolves from config. `None` keeps the agent scope.
+    pub thinking: Option<thinking::ThinkingLevel>,
 }
 
 /// The agent's step seam: the same routing, breaker and fallback chain as chat,
@@ -1343,7 +1346,11 @@ pub(crate) async fn call_model_step(
     if cfg.local_chat {
         return call_model(state, messages, model_override).await;
     }
-    let level = thinking::ThinkingLevel::parse(&cfg.run_thinking_level);
+    // A run that named its own level wins over the agent scope (the desktop's
+    // run-level rung, above agent and below any per-message directive).
+    let level = options
+        .thinking
+        .or_else(|| thinking::ThinkingLevel::parse(&cfg.run_thinking_level));
     let model = match model_override {
         Some(model) => model.to_string(),
         None => {
@@ -5521,6 +5528,7 @@ mod tests {
             structured: true,
             mcp_tools: false,
             extension_tools: false,
+            thinking: None,
         };
         let (answer, meta) =
             call_model_step(&state, messages.clone(), Some("openai:step-model"), options)

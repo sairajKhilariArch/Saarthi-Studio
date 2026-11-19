@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.68.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.69.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.69.0 (2026-11-19):** Thinking gained its run rung on the desktop: a
+run may name `off`/`low`/`medium`/`high` (stored on `agent_runs.thinking`,
+reported as `thinking`, used by the executor's steps above the agent scope,
+inherited by crew stages and retries), with a Runs-form select and a card tag.
+Focused tests pass; the full suite was not run.
 **Revision 3.68.0 (2026-11-19):** the VS Code embedded server signs in to MCP
 over OAuth. Discovery (RFC 9728 then RFC 8414 with an issuer check), dynamic
 registration (RFC 7591), PKCE S256, a loopback callback, refresh inside a 30 s
@@ -882,7 +887,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Native OpenAI Platform provider (Responses API) | Working (1.29.0) — `openai.rs`, own key, `openai:` model ids, buffered + streaming + agent calls |
 | Thinking control (off/low/medium/high/model default) | Working (1.30.0) — composer Think control, levels from `/api/thinking/levels` |
 | `@Thinking` shortcut + literal escape | Working (1.29.0/1.30.0) — stripped server-side before storage, hinted in the composer, `\@Thinking` stays literal |
-| Scope precedence (message > agent > project > global) | Working (1.29.0) — `projects.thinking` column migrated in place, agent scope from config |
+| Scope precedence (message > run > agent > project > global) | Working (1.29.0, run scope 3.69.0) — `projects.thinking` column migrated in place, agent scope from config, and a per-run `thinking` on `POST /api/runs` stored on `agent_runs.thinking`, used by the executor's steps and carried by crew stages and retries |
 | Reasoning summaries / progress surfacing | Working (1.30.0) — collapsible card fed by the provider's summary frames |
 | Platform key in Settings (write-only) + key test | Working (1.30.0) — `/api/openai/test`, no tokens spent |
 | Structured output for agent steps | Working (3.12.0) — `text.format` `json_schema` on a platform pick, one retry without it and the refusal remembered; router and local calls unchanged |

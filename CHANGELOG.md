@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.69.0
+
+Thinking had a message scope and an agent scope (the Settings value every run
+inherited) but no rung between them: a single run could not ask for a different
+reasoning effort without changing the setting for every run.
+
+- `POST /api/runs` accepts `thinking` (`off`/`low`/`medium`/`high`; blank,
+  `null`, `default` and `model default` mean "the agent level", and any other
+  value answers 400 before a row exists). The choice is stored on the run and
+  reported as `thinking` in the run JSON, so the Runs panel can show it.
+- The executor's steps use it through `StepOptions.thinking`, above the
+  `run_thinking_level` agent setting; crew stages keep it across handoffs,
+  because a stage is the same run.
+- A retry carries the level of the run it restarts, like its permissions,
+  profile and budgets.
+- `agent_runs` gains a `thinking` column through the existing additive
+  migration, so an older database upgrades in place and every existing run
+  reads as "agent level".
+- The Runs form has a "Reasoning for this run" select and each card shows
+  `think: <level>` when the run named one.
+
+Focused checks: `cargo check --no-default-features` clean, `agent::tests::a_run_names_its_own_thinking_level`
+passes (aliases, the four levels, and a refusal for `banana` and for a
+non-string), and `agent::tests::the_runs_list_query_maps_every_column` passes
+with the new column in the list query, which is the guard that the mapping and
+the SQL agree. The full Rust suite and a browser pass were not run.
+
 ## 3.68.0
 
 The VS Code built-in server refused OAuth sign-in for MCP servers: an HTTP

@@ -506,6 +506,8 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         // Tokens this run's model calls reported. Summed as the run works, so the
         // monitor can show a per-agent total without re-reading every request.
         "ALTER TABLE agent_runs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0",
+        // This run's own Thinking level ("" = the agent scope in config).
+        "ALTER TABLE agent_runs ADD COLUMN thinking TEXT NOT NULL DEFAULT ''",
         // Queue ordering (higher first, creation time breaks ties) and the runs
         // that must succeed before this one may start (JSON array of ids).
         "ALTER TABLE agent_runs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
@@ -579,6 +581,9 @@ struct RunRow {
     /// the memory and code labels behind it. Empty for runs started before the
     /// column existed.
     context: String,
+    /// The Thinking level this run named ("off"/"low"/"medium"/"high"), or
+    /// "" for "use the agent scope from config".
+    thinking: String,
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
@@ -610,6 +615,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         started_at: row.get(24)?,
         retry_of: row.get(25)?,
         context: row.get(26)?,
+        thinking: row.get(27)?,
     })
 }
 
@@ -822,7 +828,7 @@ fn load_run(state: &AppState, run_id: &str) -> Result<Option<RunRow>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, goal, status, allow_writes, allow_commands, auto_approve, \
-             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at, retry_of, context FROM agent_runs WHERE id=?1",
+             max_steps, pending_action, error, created_at, updated_at, router_config, model, profile, mode, crew, stage_policy, stage_max_steps, allow_mcp, mcp_tools, tokens, priority, depends_on, started_at, retry_of, context, thinking FROM agent_runs WHERE id=?1",
         )
         .map_err(|e| e.to_string())?;
     stmt.query_row([run_id], row_to_run)
@@ -855,6 +861,33 @@ fn count_live_slots(state: &AppState) -> Result<i64, String> {
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())
+}
+
+/// A run's own Thinking level. "" means "use the agent scope from config", so
+/// a caller that leaves the field out is not asking for anything; any other
+/// word outside the four levels is refused rather than silently ignored.
+fn parse_run_thinking(input: &Value) -> Result<String, String> {
+    let raw = match input.get("thinking") {
+        None | Some(Value::Null) => return Ok(String::new()),
+        Some(Value::String(text)) => text.trim().to_string(),
+        Some(_) => {
+            return Err(
+                "Unknown thinking level — use off, low, medium, high, or leave it out.".to_string(),
+            )
+        }
+    };
+    if raw.is_empty()
+        || raw.eq_ignore_ascii_case("default")
+        || raw.eq_ignore_ascii_case("model default")
+    {
+        return Ok(String::new());
+    }
+    match crate::thinking::ThinkingLevel::parse(&raw) {
+        Some(level) => Ok(level.as_str().to_string()),
+        None => {
+            Err("Unknown thinking level — use off, low, medium, high, or leave it out.".to_string())
+        }
+    }
 }
 
 /// Priority is a small ordering hint, not a scheduler: clamped to a range an API
@@ -1258,6 +1291,7 @@ fn run_json(row: &RunRow, steps: i64) -> Value {
         "profile": row.profile, "mode": row.mode,
         "stagePolicy": row.stage_policy, "stageMaxSteps": row.stage_max_steps,
         "allowMcp": row.allow_mcp, "mcpTools": mcp_tool_count(&row.mcp_tools),
+        "thinking": row.thinking,
         "tokens": row.tokens,
         "priority": row.priority,
         "dependsOn": serde_json::from_str::<Vec<String>>(&row.depends_on).unwrap_or_default(),
@@ -2511,6 +2545,8 @@ fn view_run(run: &RunRow, profile: &str) -> RunRow {
         started_at: run.started_at,
         context: run.context.clone(),
         retry_of: run.retry_of.clone(),
+        // A crew stage still reasons at the level the whole run asked for.
+        thinking: run.thinking.clone(),
     }
 }
 
@@ -2601,6 +2637,8 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         structured: true,
         mcp_tools: run.allow_mcp && mcp_catalog_block(&run.mcp_tools).is_some(),
         extension_tools: !extension_tools.is_empty(),
+        // The run's own level, when it named one; otherwise the agent scope.
+        thinking: crate::thinking::ThinkingLevel::parse(&run.thinking),
     };
     messages.push(json!({ "role": "system", "content": PLACEHOLDER_RULES }));
     // Team handoff: the run just came back from the REVIEWER with findings.
@@ -3804,6 +3842,12 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     } else {
         serde_json::to_string(&depends_on).unwrap_or_default()
     };
+    // A run may name its own Thinking level, above the agent scope in config.
+    // Every other spelling is refused before a row exists, like the mode.
+    let thinking = match parse_run_thinking(&input) {
+        Ok(level) => level,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
     let stamp = now();
     // Reproducible-run record: freeze the routing config as it was when the
     // run started, so the run shows which model setup produced it. A run may
@@ -3817,13 +3861,13 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on,thinking) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
             params![
                 id, project_id, goal, QUEUED,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
                 snapshot, base_model, profile, mode, crew_json, stage_policy, stage_max_steps,
-                allow_mcp, priority, depends_json
+                allow_mcp, priority, depends_json, thinking
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -3866,12 +3910,12 @@ const RUN_LIST_SQL: &str = "SELECT r.id, r.project_id, r.goal, r.status, r.allow
  r.allow_commands, r.auto_approve, r.max_steps, r.pending_action, r.error, r.created_at, \
  r.updated_at, r.router_config, r.model, r.profile, r.mode, r.crew, r.stage_policy, \
  r.stage_max_steps, r.allow_mcp, r.mcp_tools, r.tokens, \
- r.priority, r.depends_on, r.started_at, r.retry_of, r.context, \
+ r.priority, r.depends_on, r.started_at, r.retry_of, r.context, r.thinking, \
  (SELECT COUNT(*) FROM agent_steps s WHERE s.run_id = r.id) AS steps \
  FROM agent_runs r ORDER BY r.created_at DESC LIMIT 50";
 
 /// Zero-based column index of the step count in `RUN_LIST_SQL`.
-const RUN_LIST_STEPS_COLUMN: usize = 27;
+const RUN_LIST_STEPS_COLUMN: usize = 28;
 
 async fn list_runs(State(state): State<AppState>) -> Response {
     let conn = match db(&state) {
@@ -4927,13 +4971,13 @@ async fn retry_run(
     let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,retry_of) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,retry_of,thinking) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
             params![
                 id, run.project_id, goal, QUEUED,
                 run.allow_writes, run.allow_commands, run.auto_approve, run.max_steps, stamp,
                 snapshot, base_model, run.profile, run.mode, run.crew, run.stage_policy,
-                run.stage_max_steps, run.allow_mcp, priority, run_id
+                run.stage_max_steps, run.allow_mcp, priority, run_id, run.thinking
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -5386,6 +5430,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             started_at: 0.0,
             context: String::new(),
             retry_of: String::new(),
+            thinking: String::new(),
         };
         // Coding + every flag on: writes are allowed outright.
         assert!(matches!(
@@ -5514,6 +5559,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             started_at: 0.0,
             context: String::new(),
             retry_of: String::new(),
+            thinking: String::new(),
         }
     }
 
@@ -5801,6 +5847,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             started_at: 0.0,
             context: String::new(),
             retry_of: String::new(),
+            thinking: String::new(),
         };
         assert!(!run.allow_writes);
         assert!(run.allow_commands);
@@ -5842,6 +5889,7 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             started_at: 0.0,
             context: String::new(),
             retry_of: String::new(),
+            thinking: String::new(),
         };
         assert!(matches!(
             PermissionGate::decides(&run, &Action::Read { path: "x".into() }),
@@ -7043,6 +7091,8 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
         assert_eq!(run.mode, "crew");
         assert_eq!(run.crew, "[\"coding\"]");
         assert_eq!(run.stage_policy, "skip");
+        // A row written before the column existed reads as "agent scope".
+        assert_eq!(run.thinking, "");
         assert_eq!(run.stage_max_steps, 5);
         assert!(run.allow_mcp);
         assert_eq!(mcp_tool_count(&run.mcp_tools), 0);
@@ -8710,5 +8760,34 @@ if __name__ == \"__main__\":\n    num = int(sys.argv[1])\n    print(\"EVEN\" if 
             .unwrap();
         assert_eq!(live, 2);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A run's own Thinking level is the run-level rung above the agent scope.
+    /// Leaving it out must mean "nothing named", never a guessed level, and a
+    /// word outside the four levels must fail before a row exists.
+    #[test]
+    fn a_run_names_its_own_thinking_level() {
+        assert_eq!(parse_run_thinking(&json!({})).unwrap(), "");
+        assert_eq!(parse_run_thinking(&json!({"thinking": null})).unwrap(), "");
+        assert_eq!(parse_run_thinking(&json!({"thinking": "   "})).unwrap(), "");
+        assert_eq!(
+            parse_run_thinking(&json!({"thinking": "Default"})).unwrap(),
+            ""
+        );
+        assert_eq!(
+            parse_run_thinking(&json!({"thinking": "model default"})).unwrap(),
+            ""
+        );
+        assert_eq!(
+            parse_run_thinking(&json!({"thinking": "HIGH"})).unwrap(),
+            "high"
+        );
+        assert_eq!(
+            parse_run_thinking(&json!({"thinking": "off"})).unwrap(),
+            "off"
+        );
+        let error = parse_run_thinking(&json!({"thinking": "banana"})).unwrap_err();
+        assert!(error.contains("Unknown thinking level"), "{error}");
+        assert!(parse_run_thinking(&json!({"thinking": 3})).is_err());
     }
 }
