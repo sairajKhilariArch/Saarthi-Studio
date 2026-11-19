@@ -1100,10 +1100,17 @@ export class McpService {
     return this.closeSession(name);
   }
 
-  /** Close every warm process; the server shutdown path calls this. */
-  async shutdown(): Promise<void> {
-    for (const name of [...this.sessions.keys()]) {
+  /** Close every warm session and report which ones were open. */
+  async disconnectAll(): Promise<string[]> {
+    const names = [...this.sessions.keys()];
+    for (const name of names) {
       await this.closeSession(name).catch(() => undefined);
     }
+    return names;
+  }
+
+  /** Close every warm process; the server shutdown path calls this. */
+  async shutdown(): Promise<void> {
+    await this.disconnectAll();
   }
 }

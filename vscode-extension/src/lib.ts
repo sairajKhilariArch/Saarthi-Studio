@@ -2128,6 +2128,18 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         }
         return;
       }
+      /* The safety release: cancel every live run and close every warm MCP
+         session. Deliberately not policy-gated — a deny rule must never hold
+         the release shut — but every firing is audited, as on the desktop. */
+      if (routePath === "/api/emergency-stop" && method === "POST") {
+        if (!permissionsWritable()) return;
+        const runs = agentRuntime.cancelAll();
+        const servers = await mcp.disconnectAll();
+        const detail = `stopped ${runs.length} live run${runs.length === 1 ? "" : "s"} and ${servers.length} MCP session${servers.length === 1 ? "" : "s"}`;
+        permissions.record("emergency-stop", "", "allow", "session", activeProject() || "", detail);
+        sendJson(response, 200, { ok: true, runs, terminals: [], mcp: servers, message: detail });
+        return;
+      }
       if (routePath === "/api/permissions/revoke" && method === "POST") {
         if (!permissionsWritable()) return;
         const body = await readBody(request);

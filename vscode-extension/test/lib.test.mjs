@@ -1348,6 +1348,116 @@ test("the embedded server runs a real stdio MCP server end to end", async () => 
   cleanupTemp(storage);
 });
 
+test("the emergency stop cancels every live run and closes MCP sessions", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const script = path.join(storage, "fake-mcp.mjs");
+  fs.writeFileSync(script, FAKE_MCP);
+  // A router that answers slowly keeps both runs live while the stop fires.
+  const router = http.createServer((request, response) => {
+    request.on("data", () => undefined);
+    request.on("end", () => {
+      setTimeout(() => {
+        if (response.destroyed) return;
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({
+          model: "auto",
+          provider: "mock",
+          choices: [{ message: { content: '{"action":"done","summary":"late"}' } }],
+        }));
+      }, 5000);
+    });
+  });
+  await new Promise((resolve) => router.listen(0, "127.0.0.1", resolve));
+  const port = router.address().port;
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    getConfig: () => ({
+      routerBaseUrl: `http://127.0.0.1:${port}/v1`,
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 8000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await (await fetch(`${embedded.url}/api/runs/${id}`)).json();
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  };
+
+  await post("/api/mcp/servers", {
+    name: "echo",
+    transport: "stdio",
+    command: process.execPath,
+    args: [script],
+    enabled: true,
+  });
+  const warmed = await post("/api/mcp/test", { name: "echo" });
+  assert.equal(warmed.status, 200);
+
+  const first = await post("/api/runs", { goal: "wait for the stop" });
+  const second = await post("/api/runs", { goal: "wait too" });
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  await waitRun(first.body.run.id, (data) => data.status === "running");
+  await waitRun(second.body.run.id, (data) => data.status === "running");
+
+  const stopped = await post("/api/emergency-stop", {});
+  assert.equal(stopped.status, 200);
+  assert.deepEqual([...stopped.body.runs].sort(), [first.body.run.id, second.body.run.id].sort());
+  assert.deepEqual(stopped.body.terminals, []);
+  assert.deepEqual(stopped.body.mcp, ["echo"]);
+  assert.match(stopped.body.message, /stopped 2 live runs and 1 MCP session/);
+
+  for (const id of [first.body.run.id, second.body.run.id]) {
+    const cancelled = await waitRun(id, (data) => data.status === "cancelled");
+    assert.match(cancelled.error, /global emergency stop/);
+    const last = cancelled.stepList.at(-1);
+    assert.equal(last.action, "emergency-stop");
+    assert.match(last.output, /global emergency stop/);
+  }
+
+  // A second firing is honest about finding nothing, and the release is
+  // audited even when it stopped nothing.
+  const again = await post("/api/emergency-stop", {});
+  assert.deepEqual(again.body.runs, []);
+  assert.deepEqual(again.body.mcp, []);
+  assert.match(again.body.message, /stopped 0 live runs and 0 MCP sessions/);
+  const audit = await get("/api/permissions/audit?limit=50");
+  assert.ok(audit.entries.some((entry) => entry.action === "emergency-stop" && /stopped 2 live runs/.test(entry.detail)));
+
+  // A page from another origin cannot fire the release.
+  const foreign = await fetch(`${embedded.url}/api/emergency-stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+    body: "{}",
+  });
+  assert.equal(foreign.status, 403);
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+  router.closeAllConnections();
+  await new Promise((resolve) => router.close(resolve));
+});
+
 test("a legacy SSE MCP server is driven through its one event stream", async () => {
   const workspace = tempDir();
   const storage = tempDir();

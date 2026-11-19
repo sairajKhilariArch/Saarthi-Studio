@@ -19,6 +19,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 export type PermitAction = "fs_write" | "command" | "mcp_tool";
+/** The safety release is recorded too, as it is on the desktop. */
+export type PermitAuditAction = PermitAction | "emergency-stop";
 export type PermitDecision = "allow" | "ask" | "deny";
 export type PermitScope = "once" | "session" | "project" | "always";
 
@@ -34,7 +36,7 @@ export interface PermitRule {
 }
 
 export interface PermitAuditEntry {
-  action: PermitAction;
+  action: PermitAuditAction;
   target: string;
   decision: PermitDecision;
   scope: PermitScope;
@@ -175,7 +177,7 @@ export class PermissionStore {
   }
 
   record(
-    action: PermitAction,
+    action: PermitAuditAction,
     target: string,
     decision: PermitDecision,
     scope: PermitScope,

@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.64.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.65.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.65.0 (2026-11-19):** the VS Code embedded server has the safety
+release. `POST /api/emergency-stop` cancels every live run with an
+`emergency-stop` step, closes every warm MCP session, answers the desktop's
+`runs`/`mcp`/`message` shape, is not policy-gated, audits every firing and
+refuses a foreign origin. **41 passed, 0 failed**.
 **Revision 3.64.0 (2026-11-19):** the VS Code embedded server speaks the legacy
 SSE MCP transport. One GET stream names the same-origin POST endpoint, JSON-RPC
 answers arrive as `message` events on that stream and are matched by id, and
@@ -43,7 +48,7 @@ drive the shared panel through the same four routes. A deny ends an agent run by
 name and refuses an MCP call with 403; `ask` forces a pause even with
 Auto-approve; `allow` removes a pause but never widens a run's flags. **38
 passed, 0 failed**, including a second process over the same folder applying a
-saved rule. Not implemented: the other eight actions and emergency stop.
+saved rule. Emergency stop arrived in 3.65.0. Not implemented: the other eight actions.
 **Revision 3.60.0 (2026-11-19):** MCP calls in the VS Code embedded server are
 checked against the tool's own `inputSchema` with the desktop's bounded keyword
 subset (`mcpschema.ts`), including a depth limit and the same messages; the

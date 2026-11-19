@@ -1025,6 +1025,22 @@ export class AgentRuntime {
     return run.status === RUNNING || run.status === AWAITING_APPROVAL;
   }
 
+  /** Emergency stop: cancel every live run in one pass, mirroring cancel. */
+  cancelAll(reason = "Cancelled by the global emergency stop."): string[] {
+    const stopped: string[] = [];
+    for (const run of this.store.list(1000)) {
+      if (!this.isLive(run)) continue;
+      // Flag before finishing: a step already in flight must not write over
+      // the cancelled record when its reply arrives.
+      this.stopping.add(run.id);
+      this.store.appendStep(run.id, "emergency-stop", "Emergency stop.", reason);
+      this.store.finish(run.id, CANCELLED, reason);
+      this.deps.notify(run.id);
+      stopped.push(run.id);
+    }
+    return stopped;
+  }
+
   cancel(id: string): { ok: boolean; status?: string; error?: string } {
     const run = this.store.load(id);
     if (!run) return { ok: false, error: "No such run." };

@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.65.0
+
+Phase 10's safety release was desktop-only: the VS Code embedded server had no
+`POST /api/emergency-stop`, so a stuck run or a warm MCP process could only be
+stopped one at a time.
+
+- `POST /api/emergency-stop` cancels every live agent run in one pass. Each
+run is flagged before it is finished (so a step still in flight cannot write
+over the cancelled record), gets an `emergency-stop` step, and fails to
+`cancelled` with the reason the desktop uses.
+- Every warm MCP session is closed by name and reported, and the reply has the
+desktop's shape: `runs`, `terminals` (empty — this server runs no terminal
+sessions), `mcp` and a `message` such as `stopped 2 live runs and 1 MCP
+session`.
+- The route is deliberately not policy-gated — a deny rule must never hold the
+safety release shut — but every firing is recorded in the permission audit as
+`emergency-stop`, even when it stops nothing. A page from another origin is
+refused with 403 like every other mutation.
+
+Verified by the extension suite: **41 passed, 0 failed**. The new case warms a
+stdio MCP session, starts two runs against a deliberately slow router, fires
+the stop, and sees both runs `cancelled` with an `emergency-stop` step, the
+session named in `mcp`, the audit entry reading `stopped 2 live runs and 1 MCP
+session`, a second firing answering zeroes, and a foreign-origin POST refused.
+
 ## 3.64.0
 
 The VS Code built-in server spoke stdio and streamable HTTP. A legacy SSE MCP
