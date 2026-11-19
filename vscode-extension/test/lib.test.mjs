@@ -1703,6 +1703,96 @@ test("saved permission rules block, allow and outlive the built-in server", asyn
   cleanupTemp(storage);
 });
 
+test("a deny rule saved while a run waits blocks the approved action", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const script = path.join(storage, "fake-mcp.mjs");
+  fs.writeFileSync(script, FAKE_MCP);
+  const replies = [
+    '{"action":"mcp","server":"echo","tool":"echo","arguments":{"text":"should never run"}}',
+  ];
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl: async () => new Response(
+      JSON.stringify({
+        model: "auto",
+        provider: "mock",
+        choices: [{ message: { content: replies.length ? replies.shift() : '{"action":"done","summary":"unexpected"}' } }],
+      }),
+      { status: 200 },
+    ),
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 10000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await (await fetch(`${embedded.url}/api/runs/${id}`)).json();
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const saved = await post("/api/mcp/servers", {
+    name: "echo",
+    transport: "stdio",
+    command: process.execPath,
+    args: [script],
+    enabled: true,
+  });
+  assert.equal(saved.status, 200);
+
+  // The run parks at the MCP call, waiting for a click.
+  const paused = await post("/api/runs", { goal: "call the tool", allowMcp: true });
+  assert.equal(paused.status, 200);
+  const waiting = await waitRun(paused.body.run.id, (data) => data.status === "awaiting_approval");
+  assert.equal(waiting.pendingAction.tag, "mcp");
+
+  // A deny saved while it waits must apply to the action it already queued.
+  const denied = await post("/api/permissions/grant", {
+    action: "mcp_tool",
+    target: "echo.echo",
+    decision: "deny",
+    scope: "always",
+  });
+  assert.equal(denied.status, 200);
+
+  const approved = await post(`/api/runs/${paused.body.run.id}/approve`, { approve: true });
+  assert.equal(approved.status, 403);
+  assert.match(approved.body.error, /saved permission rule denies mcp_tool on "echo\.echo"/);
+
+  const blocked = await waitRun(paused.body.run.id, (data) => data.status === "failed");
+  assert.match(blocked.error, /saved permission rule denies mcp_tool/);
+  const attempt = blocked.stepList.find((step) => step.action === "mcp");
+  assert.match(attempt.output, /Settings → Permissions/);
+  assert.equal(
+    blocked.stepList.some((step) => step.output === "echo:should never run"),
+    false,
+    "the tool was never reached",
+  );
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
 test("the embedded server drives a streamable HTTP MCP server", async () => {
   const workspace = tempDir();
   const storage = tempDir();

@@ -1008,7 +1008,10 @@ export class AgentRuntime {
     return { ok: true, status: CANCELLED };
   }
 
-  async approve(runId: string, approve: boolean): Promise<{ ok: boolean; status?: string; error?: string }> {
+  async approve(
+    runId: string,
+    approve: boolean,
+  ): Promise<{ ok: boolean; status?: string; error?: string; code?: number }> {
     const run = this.store.load(runId);
     if (!run) return { ok: false, error: "No such run." };
     if (run.status !== AWAITING_APPROVAL || !run.pendingAction) {
@@ -1025,6 +1028,16 @@ export class AgentRuntime {
       this.store.finish(runId, FAILED, "You rejected the action the agent needed.");
       this.deps.notify(runId);
       return { ok: true, status: FAILED };
+    }
+    // A rule saved while this run waited applies to the pending action too:
+    // approval is consent for the action, never a bypass of policy.
+    const saved = this.savedRule(run, parsed.action);
+    if (saved?.decision === "deny") {
+      const message = `A saved permission rule denies ${saved.action} on "${saved.target}". Change it in Settings → Permissions.`;
+      this.store.appendStep(runId, actionTag(parsed.action), pendingSummary(parsed.action), message);
+      this.store.finish(runId, FAILED, message);
+      this.deps.notify(runId);
+      return { ok: false, error: message, code: 403 };
     }
     let root: string;
     try {

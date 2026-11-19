@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.62.0
+
+Approving a parked action bypassed a permission rule saved while the run was
+waiting. The action was queued before the rule existed, so `approve` executed
+it without re-checking policy — a person who parked a run, then saved a deny,
+would watch the deny be ignored.
+
+- `AgentRuntime.approve` now resolves the saved rules against the pending
+action before anything runs. A deny records the attempt on the run, fails it
+with the rule named and answers the approval route with **403** instead of 200.
+- The route passes that code through (it previously answered every refusal
+with 400), so the Runs panel can tell a policy refusal from a bad request.
+- `ask` and `allow` rules keep their existing meaning: the pending action is
+already an approval request, and an allow that was saved while waiting does
+not make the click unnecessary — the click is still the approval.
+
+Verified by the extension suite: **39 passed, 0 failed**, with a new case that
+parks a run on an MCP call, saves `deny mcp_tool echo.echo` while it waits,
+then approves it. The approval answers 403, the run fails with the rule named,
+the step points at Settings → Permissions, and the tool is never reached (no
+`echo:` step exists in the log).
+
 ## 3.61.0
 
 The VS Code embedded server had no permission store, so a saved deny never

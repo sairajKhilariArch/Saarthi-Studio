@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.61.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.62.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.62.0 (2026-11-19):** an approval bypass in the VS Code agent
+runtime is closed. A run parked with a pending action re-resolves saved rules
+when approved: a deny saved while it waited fails the run, names the rule, and
+answers the approval route 403; the tool is never reached. **39 passed, 0
+failed**, including that exact sequence.
 **Revision 3.61.0 (2026-11-19):** the VS Code embedded server gained a
 permission store. Rules live in `permissions.json`, resolve the desktop's way
 (longest target, deny > ask > allow, then narrower scope; `once` consumed),

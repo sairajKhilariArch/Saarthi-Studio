@@ -1890,7 +1890,11 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
             return;
           }
           const result = await agentRuntime.approve(id, body.approve);
-          sendJson(response, result.ok ? 200 : 400, result.ok ? { ok: true, status: result.status } : { ok: false, error: result.error });
+          sendJson(
+            response,
+            result.ok ? 200 : result.code || 400,
+            result.ok ? { ok: true, status: result.status } : { ok: false, error: result.error },
+          );
           return;
         }
         if (runSegments[1] === "cancel") {
