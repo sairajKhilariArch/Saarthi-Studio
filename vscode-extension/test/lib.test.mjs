@@ -1874,7 +1874,7 @@ test("saved permission rules block, allow and outlive the built-in server", asyn
   assert.equal(saved.status, 200);
 
   const listed = await (await fetch(`${embedded.url}/api/permissions`)).json();
-  assert.deepEqual(listed.actions.map((entry) => entry.id), ["fs_write", "command", "mcp_tool"]);
+  assert.deepEqual(listed.actions.map((entry) => entry.id), ["fs_read", "fs_write", "command", "mcp_tool"]);
   assert.deepEqual(listed.rules, []);
 
   // A foreign page cannot write policy.
@@ -1936,6 +1936,101 @@ test("saved permission rules block, allow and outlive the built-in server", asyn
   assert.equal(run.status, 200);
   const finished = await waitRun(embedded, run.body.run.id, (data) => data.status === "succeeded");
   assert.equal(finished.stepList.find((step) => step.action === "mcp").output, "echo:allowed");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("a saved fs_read rule guards what the agent can read", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  fs.writeFileSync(path.join(workspace, "secret.txt"), "TOP SECRET", "utf8");
+  fs.writeFileSync(path.join(workspace, "notes.txt"), "public notes", "utf8");
+  const replies = [];
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl: async () => {
+      const content = replies.length ? replies.shift() : '{"action":"fail","reason":"mock out of replies"}';
+      return new Response(
+        JSON.stringify({ model: "auto", provider: "mock", choices: [{ message: { content } }] }),
+        { status: 200 },
+      );
+    },
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 10000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await (await fetch(`${embedded.url}/api/runs/${id}`)).json();
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  assert.equal((await get("/api/permissions")).actions[0].id, "fs_read");
+  const denied = await post("/api/permissions/grant", {
+    action: "fs_read",
+    target: "secret.txt",
+    decision: "deny",
+    scope: "always",
+  });
+  assert.equal(denied.status, 200);
+
+  // A read the rule denies ends the run by name and never puts the bytes in
+  // the log — the point of denying a read is that the model cannot see it.
+  replies.push('{"action":"read","path":"secret.txt"}');
+  const blocked = await post("/api/runs", { goal: "read the secret" });
+  assert.equal(blocked.status, 200);
+  const stopped = await waitRun(blocked.body.run.id, (data) => data.status === "failed");
+  assert.match(stopped.error, /saved permission rule denies fs_read on "secret\.txt"/);
+  assert.match(stopped.stepList.find((step) => step.action === "read").output, /Settings → Permissions/);
+  assert.equal(
+    stopped.stepList.some((step) => /TOP SECRET/.test(step.output)),
+    false,
+    "the denied file's contents never reached the log or the prompt",
+  );
+  const audit = await get("/api/permissions/audit?limit=25");
+  assert.ok(audit.entries.some((entry) => entry.action === "fs_read" && /denied by a saved rule/.test(entry.detail)));
+
+  // A saved ask turns a read into an approval pause; the click is the yes.
+  await post("/api/permissions/revoke", { action: "fs_read", target: "secret.txt" });
+  const asked = await post("/api/permissions/grant", {
+    action: "fs_read",
+    target: "notes.txt",
+    decision: "ask",
+    scope: "once",
+  });
+  assert.equal(asked.status, 200);
+  replies.push('{"action":"read","path":"notes.txt"}');
+  replies.push('{"action":"done","summary":"read the notes"}');
+  const parked = await post("/api/runs", { goal: "read the notes" });
+  const waiting = await waitRun(parked.body.run.id, (data) => data.status === "awaiting_approval");
+  assert.equal(waiting.pendingAction.tag, "read");
+  assert.match(waiting.pendingAction.summary, /notes\.txt/);
+  const approved = await post(`/api/runs/${parked.body.run.id}/approve`, { approve: true });
+  assert.equal(approved.status, 200);
+  const finished = await waitRun(parked.body.run.id, (data) => data.status === "succeeded");
+  assert.equal(finished.stepList.find((step) => step.action === "read").output, "public notes");
 
   await embedded.close();
   cleanupTemp(workspace);

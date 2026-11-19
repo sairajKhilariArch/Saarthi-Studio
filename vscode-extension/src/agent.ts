@@ -1413,6 +1413,9 @@ The second review round still reported findings. They are kept in this log verba
   ): { action: string; target: string; decision: "allow" | "ask" | "deny" } | null {
     if (!this.deps.permission) return null;
     const targets: Partial<Record<AgentAction["action"], [string, string]>> = {
+      // Listing a folder is reading it: a deny on fs_read covers both.
+      read: ["fs_read", action.path || ""],
+      list: ["fs_read", action.path || ""],
       write: ["fs_write", action.path || ""],
       command: ["command", action.command || ""],
       mcp: ["mcp_tool", `${action.server || ""}.${action.tool || ""}`],

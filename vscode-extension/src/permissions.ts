@@ -5,6 +5,9 @@
 // stores and resolves the three actions this server can actually enforce, so a
 // saved rule means something here instead of being a checkbox that lies:
 //
+//   * fs_read   — a file the agent reads or a folder it lists (allowed by
+//                 default here, as on the desktop, so a deny is the useful
+//                 rule: it keeps a path out of the model's reach);
 //   * fs_write  — a file the agent writes (and the editor's own save route is
 //                 left to the person driving it);
 //   * command   — a command line the agent runs;
@@ -18,7 +21,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export type PermitAction = "fs_write" | "command" | "mcp_tool";
+export type PermitAction = "fs_read" | "fs_write" | "command" | "mcp_tool";
 /** The safety release is recorded too, as it is on the desktop. */
 export type PermitAuditAction = PermitAction | "emergency-stop";
 export type PermitDecision = "allow" | "ask" | "deny";
@@ -52,6 +55,7 @@ export interface PermitEffective {
 
 /** What the shared Permissions panel is told this server enforces. */
 export const PERMIT_ACTIONS: Array<{ id: PermitAction; description: string; default: PermitDecision }> = [
+  { id: "fs_read", description: "Have an agent read a file or list a folder in the open folder", default: "allow" },
   { id: "fs_write", description: "Have an agent create, change or delete files in the open folder", default: "ask" },
   { id: "command", description: "Have an agent run a shell command in the workspace", default: "ask" },
   { id: "mcp_tool", description: "Call a tool exposed by a registered MCP server", default: "ask" },
@@ -62,7 +66,7 @@ const MAX_AUDIT = 200;
 const MAX_TARGET = 1000;
 
 function isAction(value: unknown): value is PermitAction {
-  return value === "fs_write" || value === "command" || value === "mcp_tool";
+  return value === "fs_read" || value === "fs_write" || value === "command" || value === "mcp_tool";
 }
 
 function isDecision(value: unknown): value is PermitDecision {

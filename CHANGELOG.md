@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.66.0
+
+The embedded server enforced `fs_write`, `command` and `mcp_tool`, but an agent
+could read any file in the workspace regardless of policy — so a rule meant to
+keep a path away from the model had nothing to act on.
+
+- `fs_read` is a fourth enforced action. It covers a file the agent reads and a
+folder it lists, and its default is `allow` (as on the desktop), so existing
+runs behave exactly as before; a saved rule is what changes behaviour.
+- `deny` ends the run naming the path, with the step pointing at Settings →
+Permissions, and the file's bytes never enter the log or the next prompt.
+- `ask` turns the read into an approval pause; approving executes it once.
+- `allow` keeps a read unremarkable, and a `once` rule is still consumed by
+answering.
+- `GET /api/permissions` now lists four actions, so the shared Settings panel
+shows and edits `fs_read` alongside the others.
+
+Verified by the extension suite: **42 passed, 0 failed**. The new case saves
+`deny fs_read secret.txt`, has an agent attempt to read it, and asserts the run
+fails with the rule named while no log step ever contains the file's contents;
+it then saves `ask fs_read notes.txt` as a `once` rule, sees the run park at
+`awaiting_approval` with a `read` pending summary, approves it, and reads
+`public notes` back in the step log.
+
 ## 3.65.0
 
 Phase 10's safety release was desktop-only: the VS Code embedded server had no

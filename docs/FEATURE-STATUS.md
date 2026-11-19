@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.65.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.66.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,11 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.66.0 (2026-11-19):** the VS Code embedded server enforces
+`fs_read`. A deny ends the run naming the path and keeps the file's bytes out
+of the log and the next prompt; an ask parks the read for approval; the default
+stays allow, so existing runs are unchanged. **42 passed, 0 failed**. Seven
+desktop actions remain unenforced there.
 **Revision 3.65.0 (2026-11-19):** the VS Code embedded server has the safety
 release. `POST /api/emergency-stop` cancels every live run with an
 `emergency-stop` step, closes every warm MCP session, answers the desktop's
@@ -48,7 +53,7 @@ drive the shared panel through the same four routes. A deny ends an agent run by
 name and refuses an MCP call with 403; `ask` forces a pause even with
 Auto-approve; `allow` removes a pause but never widens a run's flags. **38
 passed, 0 failed**, including a second process over the same folder applying a
-saved rule. Emergency stop arrived in 3.65.0. Not implemented: the other eight actions.
+saved rule. Emergency stop arrived in 3.65.0 and `fs_read` in 3.66.0. Not implemented: the remaining seven actions.
 **Revision 3.60.0 (2026-11-19):** MCP calls in the VS Code embedded server are
 checked against the tool's own `inputSchema` with the desktop's bounded keyword
 subset (`mcpschema.ts`), including a depth limit and the same messages; the
