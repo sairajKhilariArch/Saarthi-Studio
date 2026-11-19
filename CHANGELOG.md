@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.70.0
+
+Phase 15 had no UI extensions: an extension could add wasm tools but nothing the
+user could look at, so "UI extensions" stayed missing from the roadmap.
+
+- A manifest may now declare `panels`: up to 8 entries of `id`, `title` and a
+  relative `.html` `entry` inside the extension folder. Panel ids are validated,
+  unique and lowercase; the entry must exist and stay inside the folder (the
+  same containment check an `entry` or a tool module gets), and a panel declares
+  no `runtime`, because it is markup rather than code this app executes.
+- `GET /api/extensions/:id/panels/:panel` serves one declared panel as
+  `text/html; charset=utf-8`, `no-store`, `nosniff`, and a CSP of
+  `default-src 'none'` with inline styles and scripts only — no network, no
+  external assets, no forms, `base-uri 'none'`, `frame-ancestors 'self'`. The
+  path is resolved through `workspace::resolve_inside`, so a folder swapped after
+  installation still cannot escape it, and a panel over 512 KB or not UTF-8 is
+  refused rather than clipped.
+- An unknown extension, an undeclared panel and a folder that requires a newer
+  Studio answer 404/409 with the reason; discovery lists each extension's panels
+  so Settings can show them.
+- Settings → Extensions lists a panel's title in the row and opens it in a
+  `sandbox="allow-scripts"` frame (opaque origin), which cannot read the app,
+  its API, your projects or your settings.
+
+Checks: `cargo check --no-default-features` clean, `cargo fmt` applied, and the
+extension tests pass (25 in `extensions::tests`, including a panel served from a
+scratch folder, an undeclared panel and a traversal-shaped id refused, a
+non-HTML entry, a missing file, a duplicate id, an empty title and a ninth panel
+all rejected); the frontend suite passes 99/99 and `node --check app/static/app.js`
+is clean. The full Rust suite, a browser pass over the new frame and provider
+adapters (still missing) were not run.
+
 ## 3.69.0
 
 Thinking had a message scope and an agent scope (the Settings value every run

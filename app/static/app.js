@@ -4886,6 +4886,25 @@ async function cancelExtension(extension) {
   toast(result.data.detail || (result.data.cancelled ? "Stop requested." : "No run in progress."));
 }
 
+/* A panel is extension markup shown in a sandboxed frame: no network, no
+   same-origin access, no forms. The server clamps it further with a CSP. */
+function openExtensionPanel(extension, panel) {
+  const modal = $("extensionPanelModal");
+  const frame = $("extensionPanelFrame");
+  if (!modal || !frame) return;
+  $("extensionPanelTitle").textContent = panel.title || extension.name || "Extension panel";
+  $("extensionPanelNote").textContent = `${extension.name || extension.id} ${extension.version || ""} draws this panel in a sandbox with no network and no access to the app, your projects or your settings.`.trim();
+  $("extensionPanelClose").onclick = closeExtensionPanel;
+  frame.src = `/api/extensions/${encodeURIComponent(extension.id)}/panels/${encodeURIComponent(panel.id)}`;
+  showModal(modal);
+}
+
+function closeExtensionPanel() {
+  const frame = $("extensionPanelFrame");
+  if (frame) frame.removeAttribute("src");
+  hideModal($("extensionPanelModal"));
+}
+
 async function removeExtension(extension) {
   if (!confirm(`Remove the extension "${extension.id}"? Its folder moves to .removed.`)) return;
   const result = await api(`/api/extensions/${encodeURIComponent(extension.id)}/remove`, {
@@ -4935,14 +4954,19 @@ async function loadExtensions() {
     const small = document.createElement("small");
     const permissions = Array.isArray(extension.permissions) ? extension.permissions : [];
     const tools = Array.isArray(extension.tools) ? extension.tools : [];
+    const panels = Array.isArray(extension.panels) ? extension.panels : [];
     const toolSummary = tools.length
       ? `${tools.length} tool${tools.length === 1 ? "" : "s"}: ${tools.map((tool) => tool.name).join(", ")}`
       : "";
     const blocked = extension.runnable === false ? String(extension.blockedReason || "") : "";
+    const panelSummary = panels.length
+      ? `${panels.length} panel${panels.length === 1 ? "" : "s"}: ${panels.map((panel) => panel.title).join(", ")}`
+      : "";
     small.textContent = extension.valid
       ? [
           extension.description || (permissions.length ? permissions.join(", ") : "no permissions requested"),
           toolSummary,
+          panelSummary,
           blocked,
         ]
           .filter(Boolean)
@@ -4966,6 +4990,15 @@ async function loadExtensions() {
     row.appendChild(badge);
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";
+    // A panel opens for any valid, compatible extension: it is markup, not a
+    // script, so it does not need the runtime that Run requires.
+    if (extension.valid === true && extension.compatible !== false) {
+      panels.forEach((panel) => {
+        const open = rowButton(panel.title || "Panel", () => openExtensionPanel(extension, panel));
+        open.title = `Open the panel \"${panel.title || panel.id}\" in a sandboxed frame`;
+        actions.appendChild(open);
+      });
+    }
     if (extension.runnable === true) {
       if (state.extensionsRunning.has(extension.id)) {
         // A run holds the request open, so the row shows the live state and

@@ -899,7 +899,10 @@ arguments, `env.result` takes exactly one answer. `POST
 behind a new `extension_tool` permission action whose `ask` default refuses
 because the route has no prompt, and records the call in `extension_runs`.
 
-Remaining: no provider adapters and no UI extensions. Installing grants no
+Remaining: no provider adapters (UI panels arrived in 3.70.0: a manifest
+declares `panels`, each a relative `.html` view served under a
+`default-src 'none'` CSP and rendered in a sandboxed frame with an opaque
+origin, so a panel can draw but cannot act). Installing grants no
 capability by itself; the reachable surface is the two workspace pairs, the
 extension's own data folder, the tool ABI and `last_error`. A dependency is
 judged on presence, and since 3.9.0 a dependency cycle is detected and blocks a
@@ -928,9 +931,9 @@ the failing field. The prompt lists each tool's required argument names, and the
 route checks the saved permission rule before the arguments, so a denied call
 stays denied.
 
-What remains in this phase: there are no provider adapters and no UI extensions,
-and a dependency cycle or an update path that re-checks a folder after the app is
-upgraded is still missing.
+What remains in this phase: there are no provider adapters (UI panels arrived in
+3.70.0), and an update path that re-checks a folder after the app is upgraded is
+still missing.
 
 ## Phase 16 — Testing
 

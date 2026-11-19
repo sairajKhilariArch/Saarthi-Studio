@@ -867,7 +867,7 @@
 
           <section id="settings-extensions" class="settings-section card form-card-inner hidden" data-feature="extensions">
           <h2 class="form-group-title">Extensions</h2>
-          <p>Folders with a <code>manifest.json</code> in the directory below. Installing means putting a folder in place. A <code>runtime: "wasm"</code> extension runs in a sandbox with no network or clock access; it can reach the open folder only through <code>workspace.read</code> / <code>workspace.write</code> and its own data folder through <code>data_read</code> / <code>data_write</code>, and every call is checked against the rules in Permissions and audited. A write needs an allow rule there, because an extension cannot answer a prompt. Capabilities without a sandbox function are listed with the reason they cannot run yet. A manifest may also declare <code>tools</code>: each is a module run on demand with its JSON arguments, which answers once through the tool ABI. Calling one needs an <code>extension_tool</code> allow rule, because a call has no prompt to answer. One run per extension is allowed; while it is in flight the row shows Running… and a Cancel action, which stops the module at its next host call — a module that only computes still ends at its fuel limit.</p>
+          <p>Folders with a <code>manifest.json</code> in the directory below. Installing means putting a folder in place. A <code>runtime: "wasm"</code> extension runs in a sandbox with no network or clock access; it can reach the open folder only through <code>workspace.read</code> / <code>workspace.write</code> and its own data folder through <code>data_read</code> / <code>data_write</code>, and every call is checked against the rules in Permissions and audited. A write needs an allow rule there, because an extension cannot answer a prompt. Capabilities without a sandbox function are listed with the reason they cannot run yet. A manifest may also declare <code>tools</code>: each is a module run on demand with its JSON arguments, which answers once through the tool ABI. Calling one needs an <code>extension_tool</code> allow rule, because a call has no prompt to answer. One run per extension is allowed; while it is in flight the row shows Running… and a Cancel action, which stops the module at its next host call — a module that only computes still ends at its fuel limit. A manifest may also declare <code>panels</code>: each is an HTML view rendered in a sandboxed frame with no network, no access to the app or its API and no way to read your projects, so a panel can draw but cannot act.</p>
           <p class="muted" id="extensionsDirectory"></p>
           <label class="field">
             <span>Folder to install</span>
@@ -881,7 +881,18 @@
           <div id="extensionsList" class="list-block"></div>
           <p class="muted">Recent runs</p>
           <div id="extensionRuns" class="list-block"></div>
-          </section>
+        </section>
+
+        <div id="extensionPanelModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="extensionPanelTitle">
+          <div class="modal-card">
+            <header class="modal-head">
+              <h2 id="extensionPanelTitle">Extension panel</h2>
+              <button id="extensionPanelClose" class="icon-btn" aria-label="Close panel"><svg class="icon"><use href="#i-close"/></svg></button>
+            </header>
+            <p class="modal-copy" id="extensionPanelNote"></p>
+            <iframe id="extensionPanelFrame" class="extension-panel-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Extension panel"></iframe>
+          </div>
+        </div>
 
           <section id="settings-permissions" class="settings-section card form-card-inner hidden" data-feature="permissions">
           <h2 class="form-group-title">Permissions</h2>

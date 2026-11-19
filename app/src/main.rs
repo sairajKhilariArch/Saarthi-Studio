@@ -4751,6 +4751,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         .route("/api/extensions", get(extensions::list))
         .route("/api/extensions/install", post(extensions::install))
         .route("/api/extensions/:id/remove", post(extensions::remove))
+        .route("/api/extensions/:id/panels/:panel", get(extensions::panel))
         .route("/api/extensions/:id/run", post(extensions::run))
         .route("/api/extensions/:id/cancel", post(extensions::cancel))
         .route(

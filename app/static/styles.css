@@ -853,6 +853,12 @@ kbd {
 }
 .folder-recent button:hover { background: var(--surface); color: var(--accent); border-color: var(--accent); }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+/* An extension panel: sandboxed markup from a folder the user installed. */
+#extensionPanelModal .modal-card { width: min(880px, 100%); }
+.extension-panel-frame {
+  display: block; width: 100%; min-height: 420px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--panel); color-scheme: normal;
+}
 
 .toast {
   position: fixed; right: 18px; bottom: 18px; z-index: 80; max-width: 420px;

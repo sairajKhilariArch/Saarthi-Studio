@@ -46,7 +46,7 @@
 
 use crate::AppState;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
@@ -94,6 +94,12 @@ const MAX_TOOL_ARGUMENT_BYTES: usize = 64 * 1024;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const MAX_AUTHOR_CHARS: usize = 80;
 const MAX_ENTRY_CHARS: usize = 160;
+/// UI contributions: a panel is one HTML file shown in a sandboxed frame. It
+/// gets no data bridge and no network (see [`panel`]), so these limits bound
+/// only what the app has to render.
+const MAX_PANELS: usize = 8;
+const MAX_PANEL_TITLE_CHARS: usize = 80;
+const MAX_PANEL_BYTES: u64 = 512 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Manifest {
@@ -117,7 +123,19 @@ struct Manifest {
     /// Tools the agent may call. Each one runs as its own sandboxed module, so a
     /// manifest declaring tools must declare the wasm runtime.
     tools: Vec<Tool>,
+    /// UI panels this extension contributes (read-only HTML views).
+    panels: Vec<Panel>,
     permissions: Vec<String>,
+}
+
+/// One UI contribution: an HTML file inside the extension folder, rendered in
+/// a sandboxed frame. Distinct from `entries`/`tools`, which are wasm modules.
+#[derive(Clone, Debug, PartialEq)]
+struct Panel {
+    id: String,
+    title: String,
+    /// Relative `.html` path inside the extension folder.
+    entry: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -443,6 +461,54 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
     if !tools.is_empty() && runtime.as_deref() != Some("wasm") {
         return Err("Tools need runtime: \"wasm\" — only the sandbox can run them.".to_string());
     }
+    // A panel is markup, not code the app executes, so it needs no runtime.
+    let panels = match raw.get("panels") {
+        None => Vec::new(),
+        Some(Value::Array(list)) => {
+            if list.is_empty() {
+                return Err("panels must not be empty when present.".to_string());
+            }
+            if list.len() > MAX_PANELS {
+                return Err(format!("panels: at most {MAX_PANELS} entries are allowed."));
+            }
+            let mut panels: Vec<Panel> = Vec::new();
+            for entry in list {
+                if !entry.is_object() {
+                    return Err("Each panel must be an object.".to_string());
+                }
+                let panel_id = clean_text(entry.get("id").and_then(Value::as_str), 40);
+                if !valid_id(&panel_id) {
+                    return Err(format!(
+                        "panel id \"{panel_id}\" must be 1-40 lowercase letters, digits, - or _."
+                    ));
+                }
+                if panels.iter().any(|panel| panel.id == panel_id) {
+                    return Err(format!("panel \"{panel_id}\" is declared twice."));
+                }
+                let title = clean_text(
+                    entry.get("title").and_then(Value::as_str),
+                    MAX_PANEL_TITLE_CHARS,
+                );
+                if title.is_empty() {
+                    return Err(format!("panel \"{panel_id}\" needs a title."));
+                }
+                let panel_entry =
+                    clean_text(entry.get("entry").and_then(Value::as_str), MAX_ENTRY_CHARS);
+                if !valid_entry(&panel_entry) || !panel_entry.ends_with(".html") {
+                    return Err(format!(
+                        "panel \"{panel_id}\" entry must be a relative .html path inside the extension folder."
+                    ));
+                }
+                panels.push(Panel {
+                    id: panel_id,
+                    title,
+                    entry: panel_entry,
+                });
+            }
+            panels
+        }
+        Some(_) => return Err("panels must be a list of objects.".to_string()),
+    };
     let permissions = match raw.get("permissions") {
         None => Vec::new(),
         Some(Value::Array(list)) => {
@@ -480,6 +546,7 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         requires_studio,
         dependencies,
         tools,
+        panels,
         permissions,
     })
 }
@@ -596,6 +663,7 @@ fn invalid(folder: &str, error: String) -> Value {
         "dependencyCycle": [],
         "incompatibleDependencies": [],
         "tools": [],
+        "panels": [],
         "permissions": [],
         "valid": false,
         "compatible": false,
@@ -859,6 +927,13 @@ fn read_manifest(folder: &Path, name: &str) -> Result<Manifest, String> {
             check_entry(folder, entry, &format!("tool \"{}\" entry", tool.name))?;
         }
     }
+    for panel in &parsed.panels {
+        check_entry(
+            folder,
+            &panel.entry,
+            &format!("panel \"{}\" entry", panel.id),
+        )?;
+    }
     Ok(parsed)
 }
 
@@ -984,6 +1059,17 @@ fn inspect_for(dir: &Path, app_version: &str) -> Vec<Value> {
                     "dependencyCycle": cycle.unwrap_or_default(),
                     "incompatibleDependencies": incompatible_dependencies,
                     "tools": tools,
+                    "panels": manifest
+                        .panels
+                        .iter()
+                        .map(|panel| {
+                            json!({
+                                "id": panel.id,
+                                "title": panel.title,
+                                "entry": panel.entry,
+                            })
+                        })
+                        .collect::<Vec<Value>>(),
                     "permissions": manifest.permissions,
                     "valid": true,
                     "compatible": incompatible.is_none(),
@@ -1005,6 +1091,111 @@ pub(crate) async fn list(State(state): State<AppState>) -> Response {
         "extensions": inspect(&dir),
     }))
     .into_response()
+}
+
+/// The HTML of one declared panel, or the status and message the route answers
+/// with. Pure apart from the file read, so a test drives it against a scratch
+/// extensions directory.
+fn panel_file(dir: &Path, id: &str, panel_id: &str) -> Result<String, (StatusCode, String)> {
+    if !valid_id(id) || !valid_id(panel_id) {
+        return Err((StatusCode::NOT_FOUND, "No such panel.".to_string()));
+    }
+    let folder = dir.join(id);
+    if !folder.is_dir() {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown extension: {id}")));
+    }
+    let manifest = read_manifest(&folder, id).map_err(|error| (StatusCode::CONFLICT, error))?;
+    // A folder written for a newer Studio is a real extension this build must
+    // not render, exactly as it must not run.
+    if let Some(reason) = compatibility_block(&manifest, env!("CARGO_PKG_VERSION")) {
+        return Err((StatusCode::CONFLICT, reason));
+    }
+    let panel = manifest
+        .panels
+        .iter()
+        .find(|panel| panel.id == panel_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("Extension \"{id}\" declares no panel \"{panel_id}\"."),
+            )
+        })?;
+    // The manifest check already proved containment; resolving again here means
+    // a folder swapped after installation still cannot escape.
+    let path = crate::workspace::resolve_inside(&folder, &panel.entry).map_err(|error| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("Panel not readable: {}", error.message()),
+        )
+    })?;
+    let meta = fs::metadata(&path).map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            format!(
+                "Panel \"{panel_entry}\" is missing.",
+                panel_entry = panel.entry
+            ),
+        )
+    })?;
+    if meta.len() > MAX_PANEL_BYTES {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "That panel is {} KB; a panel may be up to {} KB.",
+                meta.len() / 1024,
+                MAX_PANEL_BYTES / 1024
+            ),
+        ));
+    }
+    let bytes = fs::read(&path).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Panel not readable: {error}"),
+        )
+    })?;
+    String::from_utf8(bytes).map_err(|_| {
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "That panel is not UTF-8 text.".to_string(),
+        )
+    })
+}
+
+/// Serve one UI panel. The frame is sandboxed by the app, and this response
+/// clamps it further: no network, no external assets, inline styles and scripts
+/// only, no forms, no top-level navigation — so an extension's markup can draw
+/// but cannot reach the app, its API or the machine.
+pub(crate) async fn panel(
+    State(state): State<AppState>,
+    AxumPath((id, panel_id)): AxumPath<(String, String)>,
+) -> Response {
+    match panel_file(&extensions_dir(&state), &id, &panel_id) {
+        Ok(html) => {
+            let mut response = (StatusCode::OK, html).into_response();
+            let headers = response.headers_mut();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            headers.insert(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            );
+            headers.insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static(
+                    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
+                     img-src data:; font-src data:; media-src data:; form-action 'none'; \
+                     base-uri 'none'; frame-ancestors 'self'",
+                ),
+            );
+            response
+        }
+        Err((status, message)) => {
+            (status, Json(json!({ "ok": false, "error": message }))).into_response()
+        }
+    }
 }
 
 pub(crate) async fn install(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
@@ -1881,6 +2072,7 @@ mod tests {
             requires_studio: None,
             dependencies: Vec::new(),
             tools: Vec::new(),
+            panels: Vec::new(),
             permissions: permissions.into_iter().map(str::to_string).collect(),
         };
         assert!(run_block(&manifest(None, vec![]))
@@ -2537,6 +2729,123 @@ mod tests {
             "{:?}",
             entries[0]["error"]
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn write_panel_extension(dir: &Path, manifest: &str, files: &[(&str, &str)]) {
+        let folder = dir.join("panel-pack");
+        fs::create_dir_all(&folder).expect("extension folder");
+        fs::write(folder.join("manifest.json"), manifest).expect("manifest");
+        for (name, body) in files {
+            let path = folder.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("panel folder");
+            }
+            fs::write(path, body).expect("panel file");
+        }
+    }
+
+    /// A panel is markup, so it needs no runtime and no permissions: the
+    /// extension stays installable and valid while being non-runnable on purpose.
+    #[test]
+    fn a_panel_is_markup_and_needs_no_runtime() {
+        let root = scratch("panels");
+        let dir = root.join("extensions");
+        write_panel_extension(
+            &dir,
+            r#"{"id":"panel-pack","name":"Panel Pack","version":"1.0.0","description":"Draws a card","panels":[{"id":"card","title":"A card","entry":"panels/card.html"}]}"#,
+            &[("panels/card.html", "<!doctype html><h1>Hi</h1>")],
+        );
+        let entries = inspect(&dir);
+        assert_eq!(entries[0]["valid"], true);
+        assert_eq!(entries[0]["panels"][0]["id"], "card");
+        assert_eq!(entries[0]["panels"][0]["title"], "A card");
+        assert_eq!(entries[0]["panels"][0]["entry"], "panels/card.html");
+        // Declared, valid, and honestly not a script this build can run.
+        assert_eq!(entries[0]["runnable"], false);
+
+        let html = panel_file(&dir, "panel-pack", "card").expect("panel served");
+        assert!(html.contains("Hi"), "{html}");
+        // An undeclared panel and an unknown extension are refused by name.
+        let missing = panel_file(&dir, "panel-pack", "ghost").expect_err("undeclared");
+        assert_eq!(missing.0, StatusCode::NOT_FOUND);
+        assert!(missing.1.contains("declares no panel"), "{}", missing.1);
+        let unknown = panel_file(&dir, "nobody", "card").expect_err("unknown");
+        assert_eq!(unknown.0, StatusCode::NOT_FOUND);
+        // A traversal-shaped id never reaches the filesystem.
+        assert_eq!(
+            panel_file(&dir, "..", "card").unwrap_err().0,
+            StatusCode::NOT_FOUND
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The manifest rules that keep a panel honest: it must be HTML inside the
+    /// folder, named once, and limited in number.
+    #[test]
+    fn a_panel_manifest_is_validated() {
+        let root = scratch("panels-bad");
+        let dir = root.join("extensions");
+        write_panel_extension(
+            &dir,
+            r#"{"id":"panel-pack","name":"Panel Pack","version":"1.0.0","panels":[{"id":"card","title":"A card","entry":"card.js"}]}"#,
+            &[("card.js", "console.log(1);")],
+        );
+        let entries = inspect(&dir);
+        assert_eq!(entries[0]["valid"], false);
+        assert!(
+            entries[0]["error"].as_str().unwrap_or("").contains(".html"),
+            "{:?}",
+            entries[0]["error"]
+        );
+
+        // A declared but missing file is invalid, naming the panel.
+        write_panel_extension(
+            &dir,
+            r#"{"id":"panel-pack","name":"Panel Pack","version":"1.0.0","panels":[{"id":"card","title":"A card","entry":"card.html"}]}"#,
+            &[],
+        );
+        let entries = inspect(&dir);
+        assert_eq!(entries[0]["valid"], false);
+        assert!(
+            entries[0]["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("panel \"card\" entry"),
+            "{:?}",
+            entries[0]["error"]
+        );
+
+        // A duplicate id, an empty title and a ninth panel are all refused.
+        for (label, body) in [
+            (
+                "duplicate",
+                r#""panels":[{"id":"card","title":"One","entry":"a.html"},{"id":"card","title":"Two","entry":"b.html"}]"#,
+            ),
+            (
+                "title",
+                r#""panels":[{"id":"card","title":"","entry":"a.html"}]"#,
+            ),
+        ] {
+            let raw = serde_json::from_str::<Value>(&format!(
+                r#"{{"id":"panel-pack","name":"P","version":"1.0.0",{body}}}"#
+            ))
+            .expect("json");
+            assert!(
+                parse_manifest("panel-pack", &raw).is_err(),
+                "{label} must be refused"
+            );
+        }
+        let many = (0..9)
+            .map(|index| format!(r#"{{"id":"p{index}","title":"P","entry":"a.html"}}"#))
+            .collect::<Vec<String>>()
+            .join(",");
+        let raw = serde_json::from_str::<Value>(&format!(
+            r#"{{"id":"panel-pack","name":"P","version":"1.0.0","panels":[{many}]}}"#
+        ))
+        .expect("json");
+        let error = parse_manifest("panel-pack", &raw).expect_err("nine panels");
+        assert!(error.contains("at most"), "{error}");
         let _ = fs::remove_dir_all(&root);
     }
 }
