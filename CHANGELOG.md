@@ -1,5 +1,40 @@
 # Changelog
 
+## 3.58.0
+
+Agent runs in the VS Code embedded server can use MCP tools. The shared Runs
+form already offered "May call MCP tools" and posted `allowMcp`; this server
+ignored both, so the checkbox did nothing.
+
+- `parseAction` accepts an `mcp` action (`mcp`, `mcp-call` or `mcp_call`) with
+  `server` and `tool` required and `arguments` passed through unchanged; a
+  non-object `arguments` is a parse error, not a silently empty call.
+- `POST /api/runs` honours `allowMcp`, and refuses it when no enabled server is
+  registered — the same refusal the desktop gives, so a run cannot promise a
+  tool nothing can answer.
+- At run start each enabled server is handshaken once and its tools are
+  snapshotted onto the run (`mcpTools` count in the summary). The step prompt
+  lists up to 24 of them as `server.tool` with a trimmed description and the
+  required argument names, and counts the rest. A server that fails is named in
+  `mcpErrors`; the run continues without it.
+- Gating has the same shape as commands: `allowMcp` off refuses the step and
+  fails the run naming the missing permission; on, the first call pauses for
+  approval (`pendingAction.tag` is `mcp`) unless the run was started with
+  Auto-approve, and the approved call executes through the same warm session.
+  A tool's own `isError` result becomes a non-fatal `mcp-error` step the model
+  reads and can repair.
+- Arguments are not pre-validated here: the MCP server's own schema is the
+  authority, and a bad call comes back as that server's error. The desktop
+  validates against a bounded JSON Schema subset first; this server does not.
+
+Verified by the extension suite: **35 passed, 0 failed** (portable Node
+22.14.0), with a new case against the suite's real stdio fake server and a fake
+router — the create refusal with no server, the catalogue line in the prompt
+(`echo.echo: echo the text back (required: text)`), a real call whose step
+output is `echo:from the agent`, a run without `allowMcp` failing on the
+denied step, and a non-auto-approved run pausing with `pendingAction.tag: mcp`
+then executing the approved call.
+
 ## 3.57.0
 
 The VS Code embedded server ignored Thinking for agent runs, and its test suite

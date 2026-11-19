@@ -1440,6 +1440,10 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       }
       return options.workspaceRoot;
     },
+    mcp: {
+      catalog: () => mcp.catalog(),
+      call: (server, tool, args) => mcp.call(server, tool, args),
+    },
     callRouter: (messages) => {
       const config = options.getConfig();
       // Agent runs have no composer of their own, so the global setting is the
@@ -1817,6 +1821,15 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       }
       if (routePath === "/api/runs" && method === "POST") {
         const body = await readBody(request);
+        // Desktop parity: a run may only promise MCP tools when there is an
+        // enabled server to answer, otherwise the checkbox is an empty promise.
+        if (body.allowMcp && !mcp.list().some((server) => server.enabled)) {
+          sendJson(response, 400, {
+            ok: false,
+            error: "Register an enabled MCP server before starting a run that may call one.",
+          });
+          return;
+        }
         const result = agentRuntime.create({
           goal: body.goal,
           allowWrites: body.allowWrites,
@@ -1829,6 +1842,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           crew: body.crew,
           stagePolicy: body.stagePolicy,
           stageMaxSteps: body.stageMaxSteps,
+          allowMcp: body.allowMcp,
         });
         if (!result.ok) {
           sendJson(response, result.status || 400, { ok: false, error: result.error });

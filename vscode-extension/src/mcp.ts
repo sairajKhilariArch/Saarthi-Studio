@@ -480,6 +480,37 @@ export class McpService {
     this.record(name);
   }
 
+  /** The tools of every enabled server, as the agent prompt lists them.
+      A server that fails to answer is named in `errors`, never fatal: a run
+      still works when one MCP server is down. */
+  async catalog(): Promise<{
+    tools: Array<{ server: string; name: string; description: string; required: string[] }>;
+    errors: string[];
+  }> {
+    const tools: Array<{ server: string; name: string; description: string; required: string[] }> = [];
+    const errors: string[] = [];
+    for (const server of this.servers().filter((entry) => entry.enabled)) {
+      try {
+        const tested = await this.test(server.name);
+        for (const tool of tested.tools.slice(0, MAX_TOOLS)) {
+          const schema = (tool.input_schema || {}) as Record<string, unknown>;
+          const required = Array.isArray(schema.required)
+            ? schema.required.filter((name): name is string => typeof name === "string" && Boolean(name))
+            : [];
+          tools.push({
+            server: server.name,
+            name: tool.name,
+            description: tool.description || "",
+            required,
+          });
+        }
+      } catch (error) {
+        errors.push(`${server.name}: ${(error as Error).message}`);
+      }
+    }
+    return { tools, errors };
+  }
+
   async test(name: string): Promise<{ tools: McpTool[]; protocol: string; version: string; latency_ms: number }> {
     const started = Date.now();
     try {

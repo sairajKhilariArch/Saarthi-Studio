@@ -1402,3 +1402,113 @@ test("MCP refusals name the reason and keep the registry honest", async () => {
   cleanupTemp(workspace);
   cleanupTemp(storage);
 });
+
+test("agent runs list and call MCP tools only when the run allows it", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const script = path.join(storage, "fake-mcp.mjs");
+  fs.writeFileSync(script, FAKE_MCP);
+  const bodies = [];
+  const replies = [];
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      const content = replies.length ? replies.shift() : '{"action":"fail","reason":"mock out of replies"}';
+      return new Response(
+        JSON.stringify({ model: "auto", provider: "mock", choices: [{ message: { content } }] }),
+        { status: 200 },
+      );
+    },
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (id, predicate, ms = 10000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await (await fetch(`${embedded.url}/api/runs/${id}`)).json();
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  // A run cannot promise tools when no server could answer the call.
+  const refused = await post("/api/runs", { goal: "use a tool", allowMcp: true });
+  assert.equal(refused.status, 400);
+  assert.match(refused.body.error, /enabled MCP server/);
+
+  const saved = await post("/api/mcp/servers", {
+    name: "echo",
+    transport: "stdio",
+    command: process.execPath,
+    args: [script],
+    enabled: true,
+  });
+  assert.equal(saved.status, 200);
+
+  replies.push('{"action":"mcp","server":"echo","tool":"echo","arguments":{"text":"from the agent"}}');
+  replies.push('{"action":"done","summary":"the echo tool answered"}');
+  const started = await post("/api/runs", {
+    goal: "echo something through the MCP server, then stop",
+    allowMcp: true,
+    autoApprove: true,
+  });
+  assert.equal(started.status, 200);
+  const done = await waitRun(started.body.run.id, (data) => data.status === "succeeded");
+  assert.equal(done.allowMcp, true);
+  assert.equal(done.mcpTools, 2);
+  assert.deepEqual(done.mcpErrors, []);
+  const call = done.stepList.find((step) => step.action === "mcp");
+  assert.ok(call, "the MCP call is in the run log");
+  assert.match(call.summary, /call echo\.echo/);
+  assert.equal(call.output, "echo:from the agent");
+
+  // The first prompt listed the discovered tool and its required argument.
+  const prompt = bodies[0].messages.map((message) => message.content).join("\n");
+  assert.match(prompt, /mcp: 2 tool\(s\), listed below/);
+  assert.match(prompt, /echo\.echo: echo the text back \(required: text\)/);
+  assert.match(prompt, /"action":"mcp"/);
+
+  // The same action in a run started without the permission is refused.
+  replies.push('{"action":"mcp","server":"echo","tool":"echo","arguments":{"text":"nope"}}');
+  const denied = await post("/api/runs", { goal: "use a tool anyway", autoApprove: true });
+  assert.equal(denied.status, 200);
+  const failed = await waitRun(denied.body.run.id, (data) => data.status === "failed");
+  assert.match(failed.error, /MCP tool calls/);
+  const attempt = failed.stepList.find((step) => step.action === "mcp");
+  assert.match(attempt.output, /without that permission/);
+
+  // Without Auto-approve the call pauses, and the click runs the real tool.
+  replies.push('{"action":"mcp","server":"echo","tool":"echo","arguments":{"text":"after approval"}}');
+  const paused = await post("/api/runs", { goal: "needs one click", allowMcp: true });
+  assert.equal(paused.status, 200);
+  const waiting = await waitRun(paused.body.run.id, (data) => data.status === "awaiting_approval");
+  assert.equal(waiting.pendingAction.tag, "mcp");
+  assert.match(waiting.pendingAction.summary, /call echo\.echo/);
+  replies.push('{"action":"done","summary":"the approved call ran"}');
+  const approved = await post(`/api/runs/${paused.body.run.id}/approve`, { approve: true });
+  assert.equal(approved.status, 200);
+  const resumed = await waitRun(paused.body.run.id, (data) => data.status === "succeeded");
+  assert.equal(resumed.stepList.find((step) => step.action === "mcp").output, "echo:after approval");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});

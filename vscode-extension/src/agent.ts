@@ -29,13 +29,27 @@ export const INTERRUPTED = "interrupted";
 /* actions                                                             */
 
 export interface AgentAction {
-  action: "think" | "list" | "read" | "write" | "command" | "done" | "fail";
+  action: "think" | "list" | "read" | "write" | "command" | "mcp" | "done" | "fail";
   summary?: string;
   reason?: string;
   path?: string;
   content?: string;
   command?: string;
+  server?: string;
+  tool?: string;
+  arguments?: Record<string, unknown>;
 }
+
+/** One MCP tool advertised to a run's prompts (agent.rs mcp_tools). */
+export interface McpPromptTool {
+  server: string;
+  name: string;
+  description?: string;
+  required?: string[];
+}
+
+/** agent.rs MCP_PROMPT_TOOLS: the rest are counted, not printed. */
+export const MCP_PROMPT_TOOLS = 24;
 
 export function actionTag(action: AgentAction): string {
   return action.action;
@@ -51,6 +65,8 @@ export function pendingSummary(action: AgentAction): string {
       return `read ${action.path}`;
     case "list":
       return `list ${action.path || "."}`;
+    case "mcp":
+      return capChars(`call ${action.server}.${action.tool} (${JSON.stringify(action.arguments || {})})`, 200);
     default:
       return "";
   }
@@ -77,6 +93,25 @@ export function parseAction(reply: string): { ok: true; action: AgentAction } | 
       case "read": return { ok: true, action: { action: "read", path: field("path") } };
       case "write": return { ok: true, action: { action: "write", path: field("path"), content: field("content") } };
       case "command": return { ok: true, action: { action: "command", command: field("command") } };
+      case "mcp":
+      case "mcp-call":
+      case "mcp_call": {
+        // Arguments pass through unchanged, like agent.rs: the tool's own
+        // schema is the authority, and the MCP server rejects a bad call.
+        const args = value.arguments;
+        if (args !== undefined && (typeof args !== "object" || args === null || Array.isArray(args))) {
+          return { ok: false, error: '"arguments" must be an object' };
+        }
+        return {
+          ok: true,
+          action: {
+            action: "mcp",
+            server: field("server"),
+            tool: field("tool"),
+            arguments: (args as Record<string, unknown> | undefined) || {},
+          },
+        };
+      }
       case "done": return { ok: true, action: { action: "done", summary: field("summary") } };
       case "fail": return { ok: true, action: { action: "fail", reason: field("reason") } };
       default: return { ok: false, error: `unknown action "${tag}"` };
@@ -270,8 +305,12 @@ export function unifiedDiff(oldText: string | null, next: string, filePath: stri
 
 /** The standing instruction plus the goal and capped history. */
 export function buildMessages(
-  run: { goal: string; allowWrites: boolean; allowCommands: boolean; autoApprove: boolean; profile?: string },
+  run: {
+    goal: string; allowWrites: boolean; allowCommands: boolean; autoApprove: boolean;
+    profile?: string; allowMcp?: boolean;
+  },
   history: string,
+  mcpTools: McpPromptTool[] = [],
 ): ChatMessage[] {
   // Profile rules override what the checkboxes say: the gate backs the
   // prompt up, so a denied tool is both forbidden in text and refused.
@@ -282,6 +321,12 @@ export function buildMessages(
     (!run.allowCommands
       ? "command FORBIDDEN - never emit it"
       : run.autoApprove ? "command" : "command (each command first waits for user approval)");
+  const mcpRule = run.allowMcp
+    ? mcpTools.length
+      ? `${mcpTools.length} tool(s), listed below`
+      : "none discovered (no enabled server answered)"
+    : "none (this run may not call MCP tools)";
+  const mcpBlock = mcpPromptBlock(mcpTools);
   const system = `${profileRole(profile)} Reply with ` +
     `EXACTLY ONE JSON object and nothing else - no markdown fences, no prose. Choose one:
 ` +
@@ -295,12 +340,17 @@ export function buildMessages(
 ` +
     `{"action":"command","command":"build/test command"} run a shell command in the workspace
 ` +
+    (mcpTools.length
+      ? `{"action":"mcp","server":"...","tool":"...","arguments":{...}} call a listed MCP tool
+`
+      : "") +
     `{"action":"done","summary":"..."} the goal is met and you verified it
 ` +
     `{"action":"fail","reason":"..."} you cannot meet the goal
 
 ` +
-    `Permitted tools for this run: read: always; write: ${writeRule}; command: ${commandRule}.`;
+    `Permitted tools for this run: read: always; write: ${writeRule}; command: ${commandRule}; mcp: ${mcpRule}.` +
+    (mcpBlock ? `\n\n${mcpBlock}` : "");
   const user = `Workspace goal:
 ${run.goal}
 
@@ -311,6 +361,25 @@ ${history}
     `Choose the next single step as one JSON action. If a previous step errored, ` +
     `diagnose it and repair your approach; if you already verified success, emit done.`;
   return [{ role: "system", content: system }, { role: "user", content: user }];
+}
+
+/** The catalogue as prompt lines; sized and capped like agent.rs. */
+function mcpPromptBlock(tools: McpPromptTool[]): string {
+  if (!tools.length) return "";
+  const lines = ["MCP tools this run may call (server.tool — required arguments):"];
+  for (const tool of tools.slice(0, MCP_PROMPT_TOOLS)) {
+    let line = `- ${tool.server}.${tool.name}`;
+    const description = String(tool.description || "").trim();
+    if (description) line += `: ${capChars(description, 160)}`;
+    const required = (tool.required || []).filter((name) => typeof name === "string" && name);
+    if (required.length) line += ` (required: ${required.join(", ")})`;
+    lines.push(line);
+  }
+  if (tools.length > MCP_PROMPT_TOOLS) {
+    lines.push(`... and ${tools.length - MCP_PROMPT_TOOLS} more tool(s) not shown.`);
+  }
+  lines.push('Call one with {"action":"mcp","server":"...","tool":"...","arguments":{...}}; arguments must match the tool\'s own schema.');
+  return lines.join("\n");
 }
 
 /** Logged steps, newest first with a cap; outputs are privacy-masked. */
@@ -480,6 +549,10 @@ export interface AgentRun {
   /** Crew stage budget (Step 5) and what happens when a stage exhausts it. */
   stagePolicy?: string;
   stageMaxSteps?: number;
+  /** MCP access for this run and the catalogue discovered at its start. */
+  allowMcp?: boolean;
+  mcpTools?: McpPromptTool[];
+  mcpErrors?: string[];
 }
 
 export interface AgentStep {
@@ -544,7 +617,7 @@ export class RunStore {
     projectId: string; goal: string; allowWrites: boolean; allowCommands: boolean;
     autoApprove: boolean; maxSteps: number;
     profile?: string; mode?: string; crew?: string[];
-    stagePolicy?: string; stageMaxSteps?: number;
+    stagePolicy?: string; stageMaxSteps?: number; allowMcp?: boolean;
   }): AgentRun {
     const now = Date.now() / 1000;
     const run: AgentRun = {
@@ -565,6 +638,7 @@ export class RunStore {
       crew: Array.isArray(input.crew) ? input.crew : [],
       stagePolicy: input.stagePolicy || "",
       stageMaxSteps: Math.max(0, Math.round(Number(input.stageMaxSteps) || 0)),
+      allowMcp: Boolean(input.allowMcp),
     };
     this.data.runs.push(run);
     this.save();
@@ -580,6 +654,15 @@ export class RunStore {
 
   load(id: string): AgentRun | null {
     return this.data.runs.find((run) => run.id === id) || null;
+  }
+
+  /** The run-start catalogue snapshot (agent.rs mcp_tools). */
+  setMcpTools(id: string, tools: McpPromptTool[], errors: string[]): void {
+    const run = this.load(id);
+    if (!run) return;
+    run.mcpTools = tools;
+    run.mcpErrors = errors;
+    this.saveRun(run);
   }
 
   private saveRun(run: AgentRun): void {
@@ -659,6 +742,15 @@ export interface AgentRuntimeDeps {
   /** Shared path-confined helpers from lib.ts (resolveInside, etc.). */
   callRouter: (messages: ChatMessage[]) => Promise<string>;
   exclusions?: () => string[];
+  /** MCP catalogue and calls, wired to the extension's stdio client. */
+  mcp?: {
+    catalog: () => Promise<{ tools: McpPromptTool[]; errors: string[] }>;
+    call: (
+      server: string,
+      tool: string,
+      args: Record<string, unknown>,
+    ) => Promise<{ text: string; is_error: boolean }>;
+  };
   notify: (runId: string | null) => void;
 }
 
@@ -748,6 +840,9 @@ function runSummaryJson(run: AgentRun, stepCount: number): Record<string, unknow
     crew: run.mode === "crew" ? run.crew || [] : undefined,
     stagePolicy: run.stagePolicy || "",
     stageMaxSteps: run.stageMaxSteps || 0,
+    allowMcp: Boolean(run.allowMcp),
+    mcpTools: (run.mcpTools || []).length,
+    mcpErrors: run.mcpErrors || [],
   };
 }
 
@@ -769,6 +864,12 @@ function allowed(run: AgentRun, action: AgentAction): { kind: "allowed" | "needs
     return { kind: "denied", need: "command execution (this profile never runs commands)" };
   if (action.action === "write" && !run.allowWrites) return { kind: "denied", need: "file writes" };
   if (action.action === "command" && !run.allowCommands) return { kind: "denied", need: "command execution" };
+  if (action.action === "mcp") {
+    if (!run.allowMcp) return { kind: "denied", need: "MCP tool calls" };
+    // Same shape as a command: the first call waits for an approval click
+    // unless the run was started with Auto-approve.
+    if (!run.autoApprove) return { kind: "needs-approval" };
+  }
   if ((action.action === "write" || action.action === "command") && !run.autoApprove) return { kind: "needs-approval" };
   return { kind: "allowed" };
 }
@@ -832,7 +933,7 @@ export class AgentRuntime {
     goal?: unknown; allowWrites?: unknown; allowCommands?: unknown;
     autoApprove?: unknown; maxSteps?: unknown; projectId?: string;
     profile?: unknown; mode?: unknown; crew?: unknown;
-    stagePolicy?: unknown; stageMaxSteps?: unknown;
+    stagePolicy?: unknown; stageMaxSteps?: unknown; allowMcp?: unknown;
   }): { ok: true; id: string } | { ok: false; error: string; status?: number } {
     const profile = normalizeProfile(input.profile);
     if (!profile) return { ok: false, error: "Unknown agent profile.", status: 400 };
@@ -876,6 +977,7 @@ export class AgentRuntime {
       crew,
       stagePolicy,
       stageMaxSteps,
+      allowMcp: Boolean(input.allowMcp),
     });
     this.drive(run.id);
     this.deps.notify(run.id);
@@ -926,7 +1028,9 @@ export class AgentRuntime {
       this.deps.notify(runId);
       return { ok: false, error: (error as Error).message };
     }
-    const outcome = await dispatchTool(root, parsed.action);
+    const outcome = parsed.action.action === "mcp"
+      ? await this.runMcp(parsed.action)
+      : await dispatchTool(root, parsed.action);
     if (!outcome.ok) {
       this.store.finish(runId, FAILED, outcome.error);
       this.deps.notify(runId);
@@ -974,6 +1078,19 @@ export class AgentRuntime {
   /** The bounded loop: model step, gate, execute, log, repeat. */
   drive(runId: string): void {
     void (async () => {
+      const opening = this.store.load(runId);
+      // Discovered once, before the first prompt (agent.rs catalog_mcp_tools):
+      // a resumed run keeps the snapshot it already has, and a server that
+      // fails is recorded rather than aborting the run.
+      if (opening?.allowMcp && this.deps.mcp && opening.mcpTools === undefined) {
+        try {
+          const catalog = await this.deps.mcp.catalog();
+          this.store.setMcpTools(runId, catalog.tools, catalog.errors);
+        } catch (error) {
+          this.store.setMcpTools(runId, [], [`MCP discovery failed: ${(error as Error).message}`]);
+        }
+        this.deps.notify(runId);
+      }
       for (;;) {
         const run = this.store.load(runId);
         if (!run || run.status !== RUNNING) break;
@@ -1023,7 +1140,7 @@ export class AgentRuntime {
       allowCommands: run.allowCommands && profileCanCommand(stageProfile),
     };
     const lastStep = steps.length ? steps[steps.length - 1].action : "";
-    const messages = buildMessages(staged, buildHistory(steps));
+    const messages = buildMessages(staged, buildHistory(steps), staged.mcpTools || []);
     // Team handoff: the run just came back from the REVIEWER with findings.
     if (mode === "team" && (lastStep === "review" || lastStep === "handoff")) {
       messages.push({ role: "user", content: TEAM_REPAIR_DIRECTIVE });
@@ -1205,7 +1322,7 @@ The second review round still reported findings. They are kept in this log verba
       this.store.appendStep(run.id, actionTag(action), summary, output);
       return true;
     }
-    const outcome = await dispatchTool(root, action);
+    const outcome = action.action === "mcp" ? await this.runMcp(action) : await dispatchTool(root, action);
     if (!outcome.ok) {
       // Not fatal: the next model step sees the error and can repair.
       this.store.appendStep(run.id, `${actionTag(action)}-error`, summary, outcome.error);
@@ -1213,5 +1330,19 @@ The second review round still reported findings. They are kept in this log verba
     }
     this.store.appendStep(run.id, actionTag(action), summary, outcome.output, outcome.checkpoint);
     return true;
+  }
+
+  /** One MCP call; a tool's own is_error is a step the model can read. */
+  private async runMcp(action: AgentAction): Promise<ToolOutcome> {
+    if (!this.deps.mcp) return { ok: false, error: "This server has no MCP client." };
+    try {
+      const result = await this.deps.mcp.call(action.server || "", action.tool || "", action.arguments || {});
+      if (result.is_error) {
+        return { ok: false, error: result.text || `${action.server}.${action.tool} reported an error.` };
+      }
+      return { ok: true, output: result.text, checkpoint: "", oldContent: null };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
   }
 }

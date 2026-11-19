@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.57.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.58.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.58.0 (2026-11-19):** agent runs in the VS Code embedded server can
+use MCP tools. `parseAction` gained an `mcp` action, `POST /api/runs` honours
+`allowMcp` (the shared form's checkbox previously did nothing) and refuses it
+with no enabled server, each enabled server is handshaken once at run start and
+its tools listed in the prompt with required argument names, and calls are
+gated like commands — refused without the permission, paused for approval
+otherwise, and executed through the warm session. A tool's `isError` is a
+non-fatal step. The suite's new case covers all four paths against the real
+fake stdio server: **35 passed, 0 failed**. Not pre-validated: a call's
+arguments against the tool's schema (the desktop does that first).
 **Revision 3.57.0 (2026-11-19):** the VS Code embedded server's agent runs
 honour Thinking. Every agent step had ignored `freeAiStudio.thinkingLevel`,
 because the runtime's `callRouter` passed no level; it now resolves the global
