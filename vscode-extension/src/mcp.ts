@@ -1,16 +1,18 @@
-// MCP for the VS Code extension's built-in server: the desktop's stdio subset.
+// MCP for the VS Code extension's built-in server.
 //
 // The desktop app owns the full MCP manager (`app/src/mcp.rs`): three
 // transports, pooled sessions, OAuth, the permission store and a supervisor.
-// This module deliberately implements the smallest honest subset that the
-// shared Settings → MCP panel can drive while the desktop app is closed:
+// This module implements the subset that the shared Settings → MCP panel can
+// drive while the desktop app is closed:
 //
-//   * stdio servers only, started from a command the user registered;
+//   * stdio servers started from a command the user registered;
+//   * streamable HTTP servers (POST JSON-RPC, JSON or SSE answers, an
+//     `Mcp-Session-Id` kept for the session, custom headers for a bearer
+//     token the user supplies);
 //   * one warm session per server, opened on Test / health check / a tool call
 //     and closed by Disconnect, Remove or the process exiting;
-//   * JSON-RPC 2.0 over newline-delimited JSON, the MCP stdio framing;
 //   * no server-to-client requests (they are answered with -32601) and no
-//     OAuth or header transport.
+//     legacy SSE transport or OAuth sign-in — those need the desktop app.
 //
 // Nothing here invents an observation: a report is only "healthy" after a real
 // handshake, and a failure keeps the server's own error text.
@@ -24,6 +26,8 @@ import { createInterface } from "node:readline";
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_REQUEST_TIMEOUT_MS = 20_000;
 const MAX_SERVERS = 32;
+const MAX_URL_CHARS = 2000;
+const MAX_BODY_CHARS = 1024 * 1024;
 const MAX_ARGS = 32;
 const MAX_ARG_CHARS = 500;
 const MAX_ENV_PAIRS = 32;
@@ -44,10 +48,12 @@ export interface McpLogEntry {
 
 export interface McpServer {
   name: string;
-  transport: "stdio";
+  transport: "stdio" | "http";
   command: string;
   args: string[];
   env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
   enabled: boolean;
 }
 
@@ -125,33 +131,76 @@ export function normalizeMcpServer(input: Record<string, unknown>): McpServer {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) {
     throw new McpError(400, "A server needs a name of letters, digits, `-` or `_` (up to 64).");
   }
-  const transport = String(input.transport ?? "stdio").trim().toLowerCase() || "stdio";
-  if (transport !== "stdio") {
-    // The panel offers the other transports because the desktop serves them;
-    // saying so is better than saving a server this process cannot start.
-    throw new McpError(
-      400,
-      `The VS Code built-in server starts stdio servers only. ${transport.toUpperCase()} servers, headers and OAuth sign-in need the Sarthi Studio desktop app.`,
-    );
-  }
-  const command = String(input.command ?? "").trim();
-  if (!command) throw new McpError(400, "A stdio server needs a command to run.");
-  if (command.length > MAX_ARG_CHARS) throw new McpError(400, "That command is too long.");
-  if (!noControl(command)) throw new McpError(400, "The command cannot contain control characters.");
-  const args = stringList(input.args, MAX_ARGS, MAX_ARG_CHARS, "Arguments");
-  const env = pairs(input.env, "Environment", /^[A-Za-z_][A-Za-z0-9_]*$/);
+  const rawTransport = String(input.transport ?? "stdio").trim().toLowerCase() || "stdio";
+  const transport = rawTransport === "streamable-http" || rawTransport === "streamable_http"
+    ? "http"
+    : rawTransport;
   const headers = pairs(input.headers, "Headers", /^[A-Za-z0-9-]{1,64}$/);
-  if (Object.keys(headers).length) {
-    throw new McpError(400, "A stdio server takes no headers; a remote server needs the desktop app.");
+  if (transport === "stdio") {
+    const command = String(input.command ?? "").trim();
+    if (!command) throw new McpError(400, "A stdio server needs a command to run.");
+    if (command.length > MAX_ARG_CHARS) throw new McpError(400, "That command is too long.");
+    if (!noControl(command)) throw new McpError(400, "The command cannot contain control characters.");
+    const args = stringList(input.args, MAX_ARGS, MAX_ARG_CHARS, "Arguments");
+    const env = pairs(input.env, "Environment", /^[A-Za-z_][A-Za-z0-9_]*$/);
+    if (Object.keys(headers).length) {
+      throw new McpError(400, "A stdio server takes no headers; use an HTTP server for those.");
+    }
+    return {
+      name,
+      transport: "stdio",
+      command,
+      args,
+      env,
+      url: "",
+      headers: {},
+      enabled: input.enabled === undefined ? true : input.enabled === true,
+    };
   }
-  return {
-    name,
-    transport: "stdio",
-    command,
-    args,
-    env,
-    enabled: input.enabled === undefined ? true : input.enabled === true,
-  };
+  if (transport === "http") {
+    const url = String(input.url ?? "").trim();
+    if (!url) throw new McpError(400, "An HTTP server needs a URL.");
+    if (url.length > MAX_URL_CHARS) throw new McpError(400, "That URL is too long.");
+    if (!noControl(url)) throw new McpError(400, "The URL cannot contain control characters.");
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new McpError(400, "That URL is not a valid http(s) address.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new McpError(400, "An MCP URL must start with http:// or https://.");
+    }
+    // The desktop's rule: plain http only to this machine; anything remote is
+    // TLS, so a token is never sent in the clear across a network.
+    if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+      throw new McpError(400, "Use https:// for a remote MCP server; plain http is only for this machine.");
+    }
+    const command = String(input.command ?? "").trim();
+    if (command) throw new McpError(400, "An HTTP server takes a URL, not a command.");
+    return {
+      name,
+      transport: "http",
+      command: "",
+      args: [],
+      env: {},
+      url: parsed.toString(),
+      headers,
+      enabled: input.enabled === undefined ? true : input.enabled === true,
+    };
+  }
+  // Legacy SSE and anything else: the panel offers them because the desktop
+  // serves them. Saying so is better than saving a server this build cannot use.
+  throw new McpError(
+    400,
+    `The VS Code built-in server speaks stdio and streamable HTTP. ${rawTransport.toUpperCase()} servers and OAuth sign-in need the Sarthi Studio desktop app.`,
+  );
+}
+
+/** The desktop's loopback rule for a plain-http URL. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "::1" || host === "0.0.0.0" || /^127\./.test(host);
 }
 
 function readRegistry(file: string): McpServer[] {
@@ -207,8 +256,40 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
+/** What the service needs from either transport. */
+interface McpWire {
+  readonly logs: McpLogEntry[];
+  readonly protocolVersion: string;
+  readonly serverVersion: string;
+  handshake(): Promise<{ protocol: string; version: string; latencyMs: number }>;
+  tools(): Promise<McpTool[]>;
+  call(tool: string, args: Record<string, unknown>): Promise<{ text: string; is_error: boolean }>;
+  close(): Promise<void>;
+}
+
+/** JSON-RPC answers carried in an SSE body (one message per data event). */
+function sseAnswers(body: string): Record<string, unknown>[] {
+  const messages: Record<string, unknown>[] = [];
+  for (const block of body.split(/\r?\n\r?\n/)) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n")
+      .trim();
+    if (!data || data === "[DONE]") continue;
+    try {
+      const parsed = JSON.parse(data) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") messages.push(parsed);
+    } catch {
+      // A non-JSON event is a keep-alive or a comment, not an answer.
+    }
+  }
+  return messages;
+}
+
 /** One live MCP stdio process and its JSON-RPC conversation. */
-class McpSession {
+class McpSession implements McpWire {
   private child?: ChildProcessWithoutNullStreams;
   private pending = new Map<number, Pending>();
   private nextId = 1;
@@ -389,9 +470,161 @@ class McpSession {
   }
 }
 
+/** One streamable-HTTP MCP server: one POST per message, JSON or SSE answer. */
+class HttpMcpSession implements McpWire {
+  private nextId = 1;
+  private closed = false;
+  private protocol = MCP_PROTOCOL_VERSION;
+  private version = "";
+  private sessionId = "";
+  readonly logs: McpLogEntry[] = [];
+
+  constructor(private readonly server: McpServer) {}
+
+  get protocolVersion(): string {
+    return this.protocol;
+  }
+
+  get serverVersion(): string {
+    return this.version;
+  }
+
+  private record(source: McpSource, text: string): void {
+    this.logs.push({ at: Date.now() / 1000, source, text: cap(text, MAX_LOG_LINE) });
+    if (this.logs.length > MAX_LOG_ENTRIES) this.logs.shift();
+  }
+
+  /** Send one JSON-RPC message; header values never reach the log. */
+  private async post(
+    message: Record<string, unknown>,
+    expectAnswer: boolean,
+  ): Promise<Record<string, unknown> | null> {
+    if (this.closed) throw new Error("the MCP session is closed");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      ...this.server.headers,
+    };
+    if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MCP_REQUEST_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(this.server.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(message),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      const reason = (error as Error).name === "AbortError"
+        ? "no answer within 20 s"
+        : (error as Error).message;
+      throw new Error(`could not reach ${this.server.url}: ${reason}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    // The server assigns the session on initialize; every later call carries it.
+    const session = response.headers.get("mcp-session-id");
+    if (session) this.sessionId = cap(session, 200);
+    if (!response.ok) {
+      const detail = cap(await response.text().catch(() => ""), 400);
+      throw new Error(`the server answered ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+    if (!expectAnswer) {
+      await response.text().catch(() => "");
+      return null;
+    }
+    const body = cap(await response.text(), MAX_BODY_CHARS);
+    const type = (response.headers.get("content-type") || "").toLowerCase();
+    let answers: Record<string, unknown>[];
+    if (type.includes("text/event-stream")) {
+      answers = sseAnswers(body);
+    } else {
+      try {
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        answers = parsed && typeof parsed === "object" ? [parsed] : [];
+      } catch {
+        throw new Error(`the server answered ${String(message.method)} with something that is not JSON`);
+      }
+    }
+    const answer = answers.find(
+      (entry) => entry.id === message.id && (entry.result !== undefined || entry.error !== undefined),
+    );
+    if (!answer) {
+      throw new Error(`the server answered ${String(message.method)} without a matching JSON-RPC result`);
+    }
+    return answer;
+  }
+
+  private async request(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    this.record("client", `${method} over HTTP`);
+    const answer = await this.post({ jsonrpc: "2.0", id: this.nextId++, method, params }, true);
+    if (answer?.error) {
+      const detail = (answer.error as { message?: unknown }).message;
+      throw new Error(String(detail || "the server returned an error"));
+    }
+    return (answer?.result || {}) as Record<string, unknown>;
+  }
+
+  async handshake(): Promise<{ protocol: string; version: string; latencyMs: number }> {
+    const started = Date.now();
+    this.record("client", `POST ${this.server.url}`);
+    const result = await this.request("initialize", {
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: "sarthi-studio-vscode", version: "2.6.0" },
+    });
+    await this.post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, false);
+    this.protocol = String(result.protocolVersion || MCP_PROTOCOL_VERSION);
+    const info = (result.serverInfo || {}) as { version?: unknown };
+    this.version = String(info.version || "");
+    return { protocol: this.protocol, version: this.version, latencyMs: Date.now() - started };
+  }
+
+  async tools(): Promise<McpTool[]> {
+    const result = await this.request("tools/list", {});
+    return toolRows(Array.isArray(result.tools) ? result.tools : []);
+  }
+
+  async call(tool: string, args: Record<string, unknown>): Promise<{ text: string; is_error: boolean }> {
+    const result = await this.request("tools/call", { name: tool, arguments: args });
+    const content = Array.isArray(result.content) ? result.content : [];
+    const text = content
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+      .filter((entry) => entry.type === "text" && typeof entry.text === "string")
+      .map((entry) => String(entry.text))
+      .join("\n");
+    return {
+      text: cap(text, MAX_TEXT) || "(the tool returned no text)",
+      is_error: result.isError === true,
+    };
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.record("client", "closed");
+    if (!this.sessionId) return;
+    try {
+      // Best effort: a server may not implement DELETE, and that is fine.
+      await fetch(this.server.url, {
+        method: "DELETE",
+        headers: { ...this.server.headers, "Mcp-Session-Id": this.sessionId },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      // Closing is local either way.
+    }
+  }
+}
+
 /** Registry, warm sessions and the observations the panel reads. */
 export class McpService {
-  private sessions = new Map<string, McpSession>();
+  private sessions = new Map<string, McpWire>();
   private reports = new Map<string, McpReport>();
   private logs = new Map<string, McpLogEntry[]>();
 
@@ -419,9 +652,10 @@ export class McpService {
       enabled: server.enabled,
       command: server.command,
       args: server.args,
-      url: "",
+      url: server.url,
       environment: Object.keys(server.env),
-      headers: [],
+      // Names only: a header value is often a bearer token.
+      headers: Object.keys(server.headers),
     }));
   }
 
@@ -458,12 +692,12 @@ export class McpService {
     writeRegistry(this.file, servers);
   }
 
-  private async session(name: string): Promise<McpSession> {
+  private async session(name: string): Promise<McpWire> {
     const server = this.find(name);
     if (!server.enabled) throw new McpError(409, `MCP server "${name}" is disabled.`);
     const warm = this.sessions.get(name);
     if (warm) return warm;
-    const session = new McpSession(server);
+    const session: McpWire = server.transport === "http" ? new HttpMcpSession(server) : new McpSession(server);
     this.sessions.set(name, session);
     try {
       await session.handshake();

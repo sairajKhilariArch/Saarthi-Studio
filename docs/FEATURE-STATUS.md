@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.58.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.59.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.59.0 (2026-11-19):** the VS Code embedded server speaks streamable
+HTTP MCP. A URL is required, plain `http` is loopback-only, custom headers are
+allowed for this transport, answers may be JSON or SSE, and the server's
+`Mcp-Session-Id` is reused with a best-effort `DELETE` on close. Both
+transports share one interface, so test, health, calls, the catalogue and agent
+runs work over HTTP. Legacy SSE and OAuth remain the desktop's. Verified with a
+real local HTTP fixture: **36 passed, 0 failed** (TLS refusal, header names
+only, token and session on the wire, SSE parse, `http:hi`, one DELETE).
 **Revision 3.58.0 (2026-11-19):** agent runs in the VS Code embedded server can
 use MCP tools. `parseAction` gained an `mcp` action, `POST /api/runs` honours
 `allowMcp` (the shared form's checkbox previously did nothing) and refuses it

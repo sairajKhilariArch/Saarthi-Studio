@@ -1339,14 +1339,21 @@ test("MCP refusals name the reason and keep the registry honest", async () => {
     return { status: response.status, body: await response.json() };
   };
 
-  // The panel offers HTTP/SSE because the desktop serves them; this server says so.
+  // Streamable HTTP is served here since 3.59.0; the legacy SSE transport is
+  // still the desktop's, and the refusal says so.
   const remote = await post("/api/mcp/servers", {
     name: "remote",
     transport: "http",
     url: "https://example.com/mcp",
   });
-  assert.equal(remote.status, 400);
-  assert.match(remote.body.error, /desktop app/);
+  assert.equal(remote.status, 200);
+  const legacy = await post("/api/mcp/servers", {
+    name: "legacy",
+    transport: "sse",
+    url: "https://example.com/mcp",
+  });
+  assert.equal(legacy.status, 400);
+  assert.match(legacy.body.error, /desktop app/);
   const headers = await post("/api/mcp/servers", {
     name: "headed",
     transport: "stdio",
@@ -1509,6 +1516,148 @@ test("agent runs list and call MCP tools only when the run allows it", async () 
   assert.equal(resumed.stepList.find((step) => step.action === "mcp").output, "echo:after approval");
 
   await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("the embedded server drives a streamable HTTP MCP server", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const seen = [];
+  let deleted = 0;
+  const remote = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      if (request.method === "DELETE") {
+        deleted += 1;
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      let message = {};
+      try { message = body ? JSON.parse(body) : {}; } catch { /* answered below */ }
+      seen.push({
+        method: message.method || "",
+        session: request.headers["mcp-session-id"] || "",
+        auth: request.headers.authorization || "",
+      });
+      if (message.method === "initialize") {
+        response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "sess-1" });
+        response.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "httpfake", version: "7.7.7" } },
+        }));
+        return;
+      }
+      if (message.method === "notifications/initialized") {
+        response.writeHead(202);
+        response.end();
+        return;
+      }
+      if (message.method === "tools/list") {
+        // Streamable HTTP allows the answer to arrive as SSE.
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(`event: message\ndata: ${JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { tools: [{ name: "echo", description: "echo over http", inputSchema: { type: "object", required: ["text"] } }] },
+        })}\n\n`);
+        return;
+      }
+      if (message.method === "tools/call") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: { content: [{ type: "text", text: `http:${message.params.arguments.text}` }] },
+        }));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown method" } }));
+    });
+  });
+  await new Promise((resolve) => remote.listen(0, "127.0.0.1", resolve));
+  const port = remote.address().port;
+
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  // TLS is required off this machine, and the legacy SSE transport is named honestly.
+  const insecure = await post("/api/mcp/servers", {
+    name: "remote",
+    transport: "http",
+    url: "http://example.com/mcp",
+  });
+  assert.equal(insecure.status, 400);
+  assert.match(insecure.body.error, /https/);
+  const legacy = await post("/api/mcp/servers", {
+    name: "old",
+    transport: "sse",
+    url: `http://127.0.0.1:${port}/mcp`,
+  });
+  assert.equal(legacy.status, 400);
+  assert.match(legacy.body.error, /desktop app/);
+
+  const saved = await post("/api/mcp/servers", {
+    name: "remote",
+    transport: "http",
+    url: `http://127.0.0.1:${port}/mcp`,
+    headers: { Authorization: "Bearer test-token" },
+    enabled: true,
+  });
+  assert.equal(saved.status, 200);
+  const listed = await get("/api/mcp");
+  assert.equal(listed.servers[0].transport, "http");
+  assert.equal(listed.servers[0].url, `http://127.0.0.1:${port}/mcp`);
+  // The panel sees header names only; a value is often a bearer token.
+  assert.deepEqual(listed.servers[0].headers, ["Authorization"]);
+
+  const tested = await post("/api/mcp/test", { name: "remote" });
+  assert.equal(tested.status, 200);
+  assert.deepEqual(tested.body.tools.map((tool) => tool.name), ["echo"]);
+  assert.deepEqual(tested.body.tools[0].input_schema.required, ["text"]);
+  assert.equal(tested.body.version, "7.7.7");
+  assert.equal(tested.body.protocol, "2024-11-05");
+  // The token rode every request and the assigned session was reused.
+  assert.equal(seen.find((entry) => entry.method === "initialize").auth, "Bearer test-token");
+  assert.equal(seen.find((entry) => entry.method === "tools/list").session, "sess-1");
+
+  const called = await post("/api/mcp/call", { server: "remote", tool: "echo", arguments: { text: "hi" } });
+  assert.equal(called.status, 200);
+  assert.equal(called.body.text, "http:hi");
+  assert.equal(called.body.is_error, false);
+
+  const disconnected = await post("/api/mcp/remote/disconnect", {});
+  assert.equal(disconnected.body.disconnected, true);
+  assert.equal(deleted, 1);
+
+  await embedded.close();
+  // Keep-alive sockets would otherwise hold the fixture open.
+  remote.closeAllConnections();
+  await new Promise((resolve) => remote.close(resolve));
   cleanupTemp(workspace);
   cleanupTemp(storage);
 });

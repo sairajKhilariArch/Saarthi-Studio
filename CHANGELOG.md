@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.59.0
+
+The VS Code embedded server's MCP client only spoke stdio, so the shared
+Settings → MCP panel's HTTP option was refused with a pointer at the desktop
+app. It now speaks streamable HTTP.
+
+- `normalizeMcpServer` accepts `transport: "http"` (and `streamable-http`),
+  requires a URL and refuses a command; plain `http://` is allowed only to this
+  machine, so a remote server is TLS and a token is never sent in the clear.
+  Custom headers are accepted for the HTTP transport (a stdio server still
+  refuses them). Legacy SSE and any other transport are still refused with a
+  message naming the desktop app.
+- New `HttpMcpSession`: one POST per JSON-RPC message, `Accept:
+  application/json, text/event-stream`, and answers parsed as either JSON or
+  SSE `data:` events. The server's `Mcp-Session-Id` is captured on initialize
+  and sent on every later request; Disconnect issues a best-effort `DELETE`.
+  A 20-second deadline, a 1 MiB body cap and errors that keep the server's own
+  status and detail apply, mirroring the stdio session.
+- Both transports implement one `McpWire` interface, so Test, health checks,
+  tool calls, the tool catalogue and agent-run MCP use work unchanged over
+  HTTP — `GET /api/mcp` reports the URL and header *names* only, never a value.
+- Not implemented here, and named in `KNOWN-ISSUES.md` #44: the legacy SSE
+  transport and OAuth sign-in/discovery, both of which the desktop app serves.
+
+Verified by the extension suite: **36 passed, 0 failed**, with a new case
+against a real local HTTP MCP fixture — the refusals (plain http off this
+machine; `sse` naming the desktop), save and list (URL, header names only),
+`test` returning the tool with its required argument, the bearer token and the
+assigned session id observed on the real requests, the SSE answer parsed from
+`tools/list`, a tool call returning `http:hi`, and `DELETE` on disconnect.
+
 ## 3.58.0
 
 Agent runs in the VS Code embedded server can use MCP tools. The shared Runs
