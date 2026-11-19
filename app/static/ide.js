@@ -412,6 +412,7 @@
       '<button type="button" class="btn btn-quiet btn-small" id="debugStepOut" title="Step out">Out</button>' +
       '<span class="debug-sep"></span>' +
       '<input id="debugLine" class="debug-line" type="number" min="1" inputmode="numeric" placeholder="Line" aria-label="Breakpoint line">' +
+      '<input id="debugCondition" class="debug-condition" placeholder="condition (optional)" aria-label="Breakpoint condition">' +
       '<button type="button" class="btn btn-quiet btn-small" id="debugAddBreakpoint">Breakpoint</button>' +
       '<button type="button" class="btn btn-quiet btn-small" id="debugRemoveBreakpoint">Clear line</button>' +
       '<label class="debug-check"><input type="checkbox" id="debugStopEntry" checked> stop at entry</label>' +
@@ -585,21 +586,24 @@
     const file = activeFile();
     if (!file) { toast("Open a file first."); return; }
     const input = $("debugLine");
+    const conditionInput = $("debugCondition");
     const line = Number(input.value);
     if (!Number.isInteger(line) || line < 1) { toast("Enter a line number."); input.focus(); return; }
+    const condition = conditionInput ? conditionInput.value.trim() : "";
     const existing = ((debug.state && debug.state.breakpoints) || {})[file.path] || [];
     const lines = remove
       ? existing.filter((breakpoint) => breakpoint.line !== line)
       : existing.some((breakpoint) => breakpoint.line === line)
-        ? existing
-        : existing.concat([{ line }]);
+        ? existing.map((breakpoint) => breakpoint.line === line ? { line, condition } : breakpoint)
+        : existing.concat([{ line, condition }]);
     const result = await api("/api/debug/breakpoints", {
       method: "POST",
       body: JSON.stringify({ path: file.path, lines }),
     });
     if (!result.ok) { toast(result.data.error || "Could not set the breakpoint."); return; }
     input.value = "";
-    if (result.data.pending) toast(`Breakpoint at ${file.path}:${line} will apply when a session starts.`);
+    if (conditionInput) conditionInput.value = "";
+    if (!result.data.applied) toast(`Breakpoint at ${file.path}:${line} is saved and applies when a session starts.`);
     await refreshDebug();
   }
 

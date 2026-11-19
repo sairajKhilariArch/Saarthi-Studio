@@ -383,3 +383,4 @@ body.no-right { --right-w: 0px; }
 .debug-children { padding-left: 14px; border-left: 1px solid var(--line); margin-left: 6px; }
 .debug-scope-load { display: inline-block; margin: 2px 0 4px 4px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-2); color: var(--mute); font: inherit; font-size: 10.5px; cursor: pointer; }
 .debug-scope-load:hover { color: var(--text); border-color: var(--accent); }
+.debug-tools .debug-condition { width: 180px; }

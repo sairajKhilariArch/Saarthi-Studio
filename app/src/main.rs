@@ -514,6 +514,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     embeddings::initialize(conn).map_err(|error| format!("embeddings: {error}"))?;
     index::initialize(conn).map_err(|error| format!("code index: {error}"))?;
     drafts::initialize(conn).map_err(|error| format!("editor drafts: {error}"))?;
+    dap::initialize(conn).map_err(|error| format!("debugger breakpoints: {error}"))?;
     agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
     migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))

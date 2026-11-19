@@ -36,6 +36,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use rusqlite::params;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
@@ -44,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -196,20 +197,123 @@ struct Session {
 /// activity: two sessions would fight over the same workspace folder.
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 
-/// Breakpoints set before a session started. The UI can click a gutter before
-/// pressing Start; the next session applies them.
-static PENDING: Mutex<Breakpoints> = Mutex::new(BTreeMap::new());
-
 fn session() -> MutexGuard<'static, Option<Session>> {
     SESSION
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn pending() -> MutexGuard<'static, Breakpoints> {
-    PENDING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// Breakpoints are stored in the app's own database, per workspace folder, so
+/// closing the window or restarting does not silently lose them. A row names a
+/// file inside that folder; nothing here writes the workspace.
+pub(crate) fn initialize(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS debug_breakpoints (
+            root TEXT NOT NULL,
+            path TEXT NOT NULL,
+            line INTEGER NOT NULL,
+            condition TEXT NOT NULL DEFAULT '',
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (root, path, line)
+        );",
+    )
+}
+
+fn now_seconds() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn folder_key(root: &Path) -> String {
+    root.to_string_lossy().to_string()
+}
+
+/// What the folder's breakpoints are, read fresh: a second window (or a restart)
+/// sees what the first one stored rather than a copy held in memory.
+fn load_stored(db: &Path, root: &Path) -> Result<Breakpoints, String> {
+    let conn = crate::open_db(db).map_err(|error| error.to_string())?;
+    let mut statement = conn
+        .prepare(
+            "SELECT path, line, condition FROM debug_breakpoints WHERE root = ?1 \
+             ORDER BY path ASC, line ASC",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![folder_key(root)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut map = Breakpoints::new();
+    for row in rows {
+        let (path, line, condition) = row.map_err(|error| error.to_string())?;
+        // A stored row is data, not a location to trust: a path that no longer
+        // satisfies the folder rules is ignored instead of mapped elsewhere.
+        let Ok(path) = clean_path(&path) else {
+            continue;
+        };
+        map.entry(path)
+            .or_default()
+            .push(Breakpoint { line, condition });
+    }
+    Ok(map)
+}
+
+/// Replace one file's rows. An empty list clears the file.
+fn store_file(db: &Path, root: &Path, path: &str, list: &[Breakpoint]) -> Result<(), String> {
+    let mut conn = crate::open_db(db).map_err(|error| error.to_string())?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let folder = folder_key(root);
+    tx.execute(
+        "DELETE FROM debug_breakpoints WHERE root = ?1 AND path = ?2",
+        params![folder, path],
+    )
+    .map_err(|error| error.to_string())?;
+    let updated = now_seconds();
+    for breakpoint in list {
+        tx.execute(
+            "INSERT INTO debug_breakpoints(root, path, line, condition, updated_at) \
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![folder, path, breakpoint.line, breakpoint.condition, updated],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn check_caps(breakpoints: &Breakpoints) -> Result<(), (StatusCode, String)> {
+    if breakpoints.len() > MAX_BREAKPOINT_FILES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("At most {MAX_BREAKPOINT_FILES} files can hold breakpoints at once."),
+        ));
+    }
+    let lines: usize = breakpoints.values().map(Vec::len).sum();
+    if lines > MAX_BREAKPOINTS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("At most {MAX_BREAKPOINTS} breakpoints can be set at once."),
+        ));
+    }
+    Ok(())
+}
+
+/// The breakpoints an idle session reports, with the database's own message when
+/// the read fails rather than an empty list that would look like "none set".
+fn persisted_breakpoints(db: &Path, root: Option<&Path>) -> (Value, Option<String>) {
+    let Some(root) = root else {
+        return (json!({}), None);
+    };
+    match load_stored(db, root) {
+        Ok(map) => (breakpoints_json(&map), None),
+        Err(message) => (json!({}), Some(message)),
+    }
 }
 
 /// One `Content-Length` framed JSON message, or `None` at end of stream.
@@ -758,10 +862,9 @@ fn breakpoints_json(breakpoints: &Breakpoints) -> Value {
 
 fn state_of(guard: &Option<Session>) -> Value {
     let Some(session) = guard.as_ref() else {
-        let breakpoints = pending().clone();
         return json!({
             "running": false,
-            "breakpoints": breakpoints_json(&breakpoints),
+            "breakpoints": Value::Object(serde_json::Map::new()),
             "console": [],
         });
     };
@@ -1084,9 +1187,14 @@ fn parse_breakpoints(value: &Value) -> Result<Vec<Breakpoint>, (StatusCode, Stri
     Ok(list)
 }
 
-/// Set (or clear) the breakpoints of one file. With no session they are kept for
-/// the next start, so a person can mark lines before pressing Start.
-fn set_breakpoints(input: &Value) -> Result<Value, (StatusCode, String)> {
+/// Set (or clear) the breakpoints of one file. They are stored first, so a
+/// refusal from a live adapter never loses the person's intent; a session then
+/// gets them immediately, and the next start reads the same rows.
+fn set_breakpoints(state: &AppState, input: &Value) -> Result<Value, (StatusCode, String)> {
+    let root = state
+        .workspace
+        .root()
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.message().to_string()))?;
     let path = clean_path(
         input
             .get("path")
@@ -1094,44 +1202,41 @@ fn set_breakpoints(input: &Value) -> Result<Value, (StatusCode, String)> {
             .unwrap_or_default(),
     )?;
     let list = parse_breakpoints(input.get("lines").unwrap_or(&Value::Null))?;
-    let mut guard = session();
-    match guard.as_mut() {
-        Some(session) => {
-            let applied = apply_breakpoints(session, &path, &list)?;
-            if list.is_empty() {
-                session.breakpoints.remove(&path);
-            } else {
-                session.breakpoints.insert(path.clone(), list);
-            }
-            Ok(json!({
-                "path": path,
-                "applied": true,
-                "pending": false,
-                "verified": applied["verified"],
-            }))
-        }
-        None => {
-            let mut store = pending();
-            if store.len() >= MAX_BREAKPOINT_FILES && !store.contains_key(&path) {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!("At most {MAX_BREAKPOINT_FILES} files can hold breakpoints at once."),
-                ));
-            }
-            let count = list.len();
-            if list.is_empty() {
-                store.remove(&path);
-            } else {
-                store.insert(path.clone(), list);
-            }
-            Ok(json!({
-                "path": path,
-                "applied": false,
-                "pending": true,
-                "lines": count,
-            }))
-        }
+    let mut next = load_stored(&state.database_path, &root)
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    next.remove(&path);
+    if !list.is_empty() {
+        next.insert(path.clone(), list.clone());
     }
+    check_caps(&next)?;
+    store_file(&state.database_path, &root, &path, &list)
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    let count = list.len();
+    let verified = apply_and_record(&path, &list, next)?;
+    Ok(json!({
+        "path": path,
+        "applied": verified.is_some(),
+        "persisted": true,
+        "lines": count,
+        "verified": verified.as_ref().map(|answer| answer["verified"].clone()),
+    }))
+}
+
+/// Give one file's breakpoints to the live session, if there is one, and keep the
+/// folder's full set on it for the state view. No session is not an error: the
+/// rows are already stored for the next start.
+fn apply_and_record(
+    path: &str,
+    list: &[Breakpoint],
+    all: Breakpoints,
+) -> Result<Option<Value>, (StatusCode, String)> {
+    let mut guard = session();
+    let Some(session) = guard.as_mut() else {
+        return Ok(None);
+    };
+    let answer = apply_breakpoints(session, path, list)?;
+    session.breakpoints = all;
+    Ok(Some(answer))
 }
 
 fn adapters_json() -> Value {
@@ -1273,7 +1378,8 @@ fn start_session(state: &AppState, input: &Value) -> Result<Value, (StatusCode, 
         .unwrap_or(false);
     let breakpoints = match input.get("breakpoints") {
         Some(value) => parse_breakpoint_files(value)?,
-        None => pending().clone(),
+        None => load_stored(&state.database_path, &root)
+            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?,
     };
     begin(SessionOptions {
         launch,
@@ -1311,8 +1417,17 @@ async fn adapters_route() -> Json<Value> {
     Json(adapters_json())
 }
 
-async fn state_route() -> Json<Value> {
-    Json(state_json())
+async fn state_route(State(state): State<AppState>) -> Json<Value> {
+    let mut value = state_json();
+    if value.get("running").and_then(Value::as_bool) == Some(false) {
+        let root = state.workspace.root().ok();
+        let (breakpoints, error) = persisted_breakpoints(&state.database_path, root.as_deref());
+        value["breakpoints"] = breakpoints;
+        if let Some(error) = error {
+            value["breakpointsError"] = json!(error);
+        }
+    }
+    Json(value)
 }
 
 async fn start_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
@@ -1356,8 +1471,8 @@ async fn stop_route() -> Response {
     }
 }
 
-async fn breakpoints_route(Json(input): Json<Value>) -> Response {
-    match tokio::task::spawn_blocking(move || set_breakpoints(&input)).await {
+async fn breakpoints_route(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    match tokio::task::spawn_blocking(move || set_breakpoints(&state, &input)).await {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err((status, message))) => json_error(status, message),
         Err(_) => json_error(
@@ -1642,6 +1757,91 @@ while True:
     }
 
     #[test]
+    fn breakpoints_are_stored_per_folder() {
+        let dir = scratch("breakpoint-store");
+        let db = dir.join("history.sqlite3");
+        let root = dir.join("workspace");
+        let elsewhere = dir.join("elsewhere");
+        std::fs::create_dir_all(&root).expect("workspace");
+        std::fs::create_dir_all(&elsewhere).expect("other folder");
+        let conn = crate::open_db(&db).expect("database");
+        initialize(&conn).expect("schema");
+        drop(conn);
+
+        store_file(
+            &db,
+            &root,
+            "main.py",
+            &[Breakpoint {
+                line: 3,
+                condition: "count > 1".to_string(),
+            }],
+        )
+        .expect("store one");
+        store_file(
+            &db,
+            &root,
+            "src/lib.rs",
+            &[Breakpoint {
+                line: 9,
+                condition: String::new(),
+            }],
+        )
+        .expect("store two");
+        let stored = load_stored(&db, &root).expect("load");
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored["main.py"][0].condition, "count > 1");
+        assert!(load_stored(&db, &elsewhere)
+            .expect("another folder")
+            .is_empty());
+
+        // Clearing one file leaves the other, and the idle state reads the rows.
+        store_file(&db, &root, "main.py", &[]).expect("clear");
+        assert_eq!(load_stored(&db, &root).expect("reload").len(), 1);
+        let (value, error) = persisted_breakpoints(&db, Some(&root));
+        assert!(error.is_none());
+        assert_eq!(value["src/lib.rs"][0]["line"], json!(9));
+        assert_eq!(persisted_breakpoints(&db, None).0, json!({}));
+
+        let mut full = Breakpoints::new();
+        for index in 0..MAX_BREAKPOINT_FILES {
+            full.insert(
+                format!("file{index}.py"),
+                vec![Breakpoint {
+                    line: 1,
+                    condition: String::new(),
+                }],
+            );
+        }
+        assert!(check_caps(&full).is_ok());
+        full.insert(
+            "one-more.py".to_string(),
+            vec![Breakpoint {
+                line: 1,
+                condition: String::new(),
+            }],
+        );
+        assert!(check_caps(&full).is_err());
+        let mut many = Breakpoints::new();
+        many.insert(
+            "big.py".to_string(),
+            (1..=MAX_BREAKPOINTS as i64)
+                .map(|line| Breakpoint {
+                    line,
+                    condition: String::new(),
+                })
+                .collect(),
+        );
+        assert!(check_caps(&many).is_ok());
+        many.get_mut("big.py").expect("file").push(Breakpoint {
+            line: MAX_BREAKPOINTS as i64 + 1,
+            condition: String::new(),
+        });
+        assert!(check_caps(&many).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn breakpoints_are_parsed_ordered_and_bounded() {
         let list = parse_breakpoints(&json!([{"line": 9}, {"line": 2, "condition": "x > 1"}, 2]))
             .expect("parse");
@@ -1710,12 +1910,19 @@ while True:
             state_json()
         );
 
-        let applied = set_breakpoints(&json!({
-            "path": "main.py",
-            "lines": [{"line": 2, "condition": "count > 1"}],
-        }))
-        .expect("breakpoints apply");
-        assert_eq!(applied["applied"], json!(true));
+        let whole_file = vec![Breakpoint {
+            line: 2,
+            condition: "count > 1".to_string(),
+        }];
+        let applied = apply_and_record(
+            "main.py",
+            &whole_file,
+            [("main.py".to_string(), whole_file.clone())]
+                .into_iter()
+                .collect(),
+        )
+        .expect("breakpoints apply")
+        .expect("a live session");
         assert_eq!(applied["verified"], json!(1));
         assert_eq!(
             state_json()["breakpoints"]["main.py"][0]["condition"],

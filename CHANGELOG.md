@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.56.0
+
+The debugger forgot everything when the window closed. Breakpoints lived in a
+process-wide map, so a breakpoint set before a restart existed only until it,
+and the pane could not attach a condition to a line even though the route
+supported one.
+
+- New `debug_breakpoints` table (`root`, `path`, `line`, `condition`,
+  `updated_at`; primary key on the first three), created by `dap::initialize`
+  alongside the other additive tables. A row names a file inside one workspace
+  folder; nothing in the module writes the folder.
+- `POST /api/debug/breakpoints` now validates the folder's whole set against the
+  existing limits (20 files, 200 lines), writes the file's lines and conditions
+  in one transaction, and only then applies them to a live session — a refused
+  adapter no longer loses the person's intent. An empty list clears the file.
+- `GET /api/debug/state` reads the stored rows while no session runs, so a new
+  process, a second window or a folder reopened later shows the same
+  breakpoints; a read failure is reported as `breakpointsError` rather than as
+  an empty list that looks like "none set".
+- `POST /api/debug/start` takes the stored breakpoints for the folder when the
+  request does not name its own, so pressing Start after a restart applies what
+  the person had marked instead of starting with none.
+- The Debug pane gained an optional condition field beside the line, and sends
+  the condition with the line; the list already rendered `if <condition>`. The
+  saved/pending wording now reflects `applied` from the server.
+
+Verified by restarting a real headless server over the same data folder: a
+breakpoint at `main.py:3` with `count > 1` was stored, the process was killed and
+started again, and `state` returned it unchanged; opening a different folder
+reported none, and the workbench's Debug tab showed `main.py:3 if count > 1`.
+
 ## 3.55.0
 
 Phase 9's debugger. The IDE could run a program and kill it, but nothing could

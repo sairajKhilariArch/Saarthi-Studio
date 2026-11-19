@@ -95,6 +95,16 @@ remaining notes are caveats, not missing subsystems.
 
 ## Phase 1 — CI/CD and release reliability (in progress)
 
+Delivered in 3.56.0:
+
+- The debugger's breakpoints survive a restart. `debug_breakpoints` stores
+  `(root, path, line, condition)` per workspace folder; the breakpoint route
+  validates the folder's set against the 20-file/200-line limits, writes it in
+  one transaction, then applies it to a live adapter, and an empty list clears
+  the file. `state` and a session start read the rows back, so a second window
+  or a reopened folder sees the same lines; a different folder sees none. The
+  pane gained a condition field.
+
 Delivered in 3.55.0:
 
 - Phase 2's debugger: a Debug Adapter Protocol client that launches a real
