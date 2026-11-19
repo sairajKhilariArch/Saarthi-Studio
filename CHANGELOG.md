@@ -1,5 +1,33 @@
 # Changelog
 
+## 3.71.0
+
+The last missing row of Phase 15 was provider adapters: an extension could add
+tools and panels but could not tell Studio about a gateway.
+
+- A manifest may now declare `providers`: up to 8 presets of `id`, `name`,
+  `baseUrl` and optional `model`, `keyUrl`, `note`. Each is validated when the
+  manifest is read — id rules and uniqueness, a name, an `https` endpoint
+  off-machine (`http` only for a localhost gateway), no credentials, query or
+  fragment in the URL, and an http(s) `keyUrl` — because the app acts on it.
+- `GET /api/extensions/providers` returns the presets of valid, compatible
+  folders only, each tagged with the extension, its name and version, so a
+  folder that needs a newer Studio can never add an endpoint.
+- Settings appends them to the backend preset row under a "From extensions"
+  label; picking one fills the base URL (and model when the preset names one),
+  shows the preset's note and key link, and the existing router client makes the
+  request with your saved key. An extension never sees a key and never makes a
+  call, which is why this stays declarative rather than in-sandbox HTTP.
+
+Checks: `cargo fmt` applied, `cargo check --no-default-features` clean, and
+`extensions::tests` passes 27/27 (2 new: a good preset with model and key URL
+parses, a localhost `http` endpoint is allowed while `http` off-machine, embedded
+credentials, duplicate ids, a missing name or URL, a `javascript:` key URL and a
+non-list `providers` are refused; and only valid, compatible folders contribute
+presets, each naming its extension). `node --check app/static/app.js` is clean
+and the frontend suite passes 99/99. The full Rust suite and a live call against
+an extension-declared gateway were not run.
+
 ## 3.70.0
 
 Phase 15 had no UI extensions: an extension could add wasm tools but nothing the

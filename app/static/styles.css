@@ -1424,6 +1424,13 @@ kbd {
   border-color: var(--accent-border);
   background: var(--surface-3);
 }
+/* A divider in the preset row: the built-in platforms came first, these were
+   contributed by installed extensions. */
+.preset-chip-label {
+  color: var(--dim); font-size: 10px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; background: transparent; border-color: transparent;
+  cursor: default; padding: 5px 2px;
+}
 .preset-keylink { font-size: 11px; color: var(--accent); justify-self: start; }
 .preset-keylink:hover { text-decoration: underline; }
 

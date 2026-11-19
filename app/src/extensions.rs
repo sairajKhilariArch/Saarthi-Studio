@@ -100,6 +100,11 @@ const MAX_ENTRY_CHARS: usize = 160;
 const MAX_PANELS: usize = 8;
 const MAX_PANEL_TITLE_CHARS: usize = 80;
 const MAX_PANEL_BYTES: u64 = 512 * 1024;
+/// Provider contributions are declarative presets: an endpoint the existing
+/// router client can talk to, plus the model id and key page to suggest. The
+/// extension never sees the key and never makes the request itself.
+const MAX_PROVIDER_PRESETS: usize = 8;
+const MAX_PROVIDER_URL_CHARS: usize = 2000;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Manifest {
@@ -125,7 +130,22 @@ struct Manifest {
     tools: Vec<Tool>,
     /// UI panels this extension contributes (read-only HTML views).
     panels: Vec<Panel>,
+    /// Provider presets this extension contributes. Declarative: the app still
+    /// performs the request and holds the key.
+    providers: Vec<ProviderPreset>,
     permissions: Vec<String>,
+}
+
+/// One provider preset: an OpenAI-compatible endpoint, the model to preselect
+/// and where a person gets a key. Nothing here is executed by the extension.
+#[derive(Clone, Debug, PartialEq)]
+struct ProviderPreset {
+    id: String,
+    name: String,
+    base_url: String,
+    model: String,
+    key_url: String,
+    note: String,
 }
 
 /// One UI contribution: an HTML file inside the extension folder, rendered in
@@ -509,6 +529,83 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         }
         Some(_) => return Err("panels must be a list of objects.".to_string()),
     };
+    // Provider presets. Declarative only: the app makes the request and holds
+    // the key, so a contributed preset is checked like configuration, not code.
+    let providers = match raw.get("providers") {
+        None => Vec::new(),
+        Some(Value::Array(list)) => {
+            if list.is_empty() {
+                return Err("providers must not be empty when present.".to_string());
+            }
+            if list.len() > MAX_PROVIDER_PRESETS {
+                return Err(format!(
+                    "providers: at most {MAX_PROVIDER_PRESETS} entries are allowed."
+                ));
+            }
+            let mut providers: Vec<ProviderPreset> = Vec::new();
+            for entry in list {
+                if !entry.is_object() {
+                    return Err("Each provider preset must be an object.".to_string());
+                }
+                let preset_id = clean_text(entry.get("id").and_then(Value::as_str), 40);
+                if !valid_id(&preset_id) {
+                    return Err(format!(
+                        "provider id \"{preset_id}\" must be 1-40 lowercase letters, digits, - or _."
+                    ));
+                }
+                if providers.iter().any(|preset| preset.id == preset_id) {
+                    return Err(format!("provider \"{preset_id}\" is declared twice."));
+                }
+                let name = clean_text(entry.get("name").and_then(Value::as_str), 80);
+                if name.is_empty() {
+                    return Err(format!("provider \"{preset_id}\" needs a name."));
+                }
+                let base_url = entry
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                valid_provider_url(&base_url)
+                    .map_err(|reason| format!("provider \"{preset_id}\" baseUrl: {reason}"))?;
+                let model = clean_text(entry.get("model").and_then(Value::as_str), 200);
+                let key_url = entry
+                    .get("keyUrl")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !key_url.is_empty() {
+                    let parsed = reqwest::Url::parse(&key_url)
+                        .map_err(|e| format!("provider \"{preset_id}\" keyUrl: {e}"))?;
+                    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+                        return Err(format!(
+                            "provider \"{preset_id}\" keyUrl must be an http(s) URL."
+                        ));
+                    }
+                    if key_url.chars().count() > MAX_PROVIDER_URL_CHARS {
+                        return Err(format!(
+                            "provider \"{preset_id}\" keyUrl is longer than {MAX_PROVIDER_URL_CHARS} characters."
+                        ));
+                    }
+                }
+                let note = clean_text(
+                    entry.get("note").and_then(Value::as_str),
+                    MAX_DESCRIPTION_CHARS,
+                );
+                providers.push(ProviderPreset {
+                    id: preset_id,
+                    name,
+                    base_url,
+                    model,
+                    key_url,
+                    note,
+                });
+            }
+            providers
+        }
+        Some(_) => return Err("providers must be a list of objects.".to_string()),
+    };
     let permissions = match raw.get("permissions") {
         None => Vec::new(),
         Some(Value::Array(list)) => {
@@ -547,8 +644,43 @@ fn parse_manifest(folder: &str, raw: &Value) -> Result<Manifest, String> {
         dependencies,
         tools,
         panels,
+        providers,
         permissions,
     })
+}
+
+/// A provider endpoint the router client may be pointed at. Off-machine this
+/// must be https; http is only for a loopback gateway. Credentials never belong
+/// in the URL, and a query or fragment would change what the endpoint means.
+fn valid_provider_url(url: &str) -> Result<(), String> {
+    if url.chars().count() > MAX_PROVIDER_URL_CHARS {
+        return Err(format!(
+            "URL is longer than {MAX_PROVIDER_URL_CHARS} characters."
+        ));
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("A provider URL must not embed credentials.".to_string());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("A provider URL must not carry a query or fragment.".to_string());
+    }
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" => {
+            let host = parsed.host_str().unwrap_or("");
+            let local = host == "localhost"
+                || host == "127.0.0.1"
+                || host == "::1"
+                || host.ends_with(".localhost");
+            if local {
+                Ok(())
+            } else {
+                Err("Use an https URL; http is only allowed for a localhost gateway.".to_string())
+            }
+        }
+        _ => Err("Use an http(s) provider URL.".to_string()),
+    }
 }
 
 /// Numeric triple comparison. Both sides are validated as `1.2.3` before they
@@ -664,6 +796,7 @@ fn invalid(folder: &str, error: String) -> Value {
         "incompatibleDependencies": [],
         "tools": [],
         "panels": [],
+        "providers": [],
         "permissions": [],
         "valid": false,
         "compatible": false,
@@ -1070,6 +1203,20 @@ fn inspect_for(dir: &Path, app_version: &str) -> Vec<Value> {
                             })
                         })
                         .collect::<Vec<Value>>(),
+                    "providers": manifest
+                        .providers
+                        .iter()
+                        .map(|preset| {
+                            json!({
+                                "id": preset.id,
+                                "name": preset.name,
+                                "baseUrl": preset.base_url,
+                                "model": preset.model,
+                                "keyUrl": preset.key_url,
+                                "note": preset.note,
+                            })
+                        })
+                        .collect::<Vec<Value>>(),
                     "permissions": manifest.permissions,
                     "valid": true,
                     "compatible": incompatible.is_none(),
@@ -1091,6 +1238,37 @@ pub(crate) async fn list(State(state): State<AppState>) -> Response {
         "extensions": inspect(&dir),
     }))
     .into_response()
+}
+
+/// Every provider preset contributed by an extension this build can use. Only
+/// valid and compatible folders are read, so an extension that needs a newer
+/// Studio cannot add an endpoint; each preset names the extension that gave it,
+/// so the settings row can say where it came from.
+fn provider_presets(dir: &Path) -> Vec<Value> {
+    let mut presets = Vec::new();
+    for entry in inspect(dir) {
+        if entry["valid"] != true || entry["compatible"] != true {
+            continue;
+        }
+        let extension = entry["id"].as_str().unwrap_or("").to_string();
+        let extension_name = entry["name"].as_str().unwrap_or("").to_string();
+        let extension_version = entry["version"].as_str().unwrap_or("").to_string();
+        for preset in entry["providers"].as_array().cloned().unwrap_or_default() {
+            let mut preset = preset;
+            if let Some(map) = preset.as_object_mut() {
+                map.insert("extension".to_string(), json!(extension));
+                map.insert("extensionName".to_string(), json!(extension_name));
+                map.insert("extensionVersion".to_string(), json!(extension_version));
+            }
+            presets.push(preset);
+        }
+    }
+    presets
+}
+
+pub(crate) async fn provider_presets_route(State(state): State<AppState>) -> Response {
+    let dir = extensions_dir(&state);
+    Json(json!({ "ok": true, "presets": provider_presets(&dir) })).into_response()
 }
 
 /// The HTML of one declared panel, or the status and message the route answers
@@ -2073,6 +2251,7 @@ mod tests {
             dependencies: Vec::new(),
             tools: Vec::new(),
             panels: Vec::new(),
+            providers: Vec::new(),
             permissions: permissions.into_iter().map(str::to_string).collect(),
         };
         assert!(run_block(&manifest(None, vec![]))
@@ -2846,6 +3025,92 @@ mod tests {
         .expect("json");
         let error = parse_manifest("panel-pack", &raw).expect_err("nine panels");
         assert!(error.contains("at most"), "{error}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A provider preset is configuration the app acts on, so it is checked at
+    /// parse time: https off-machine, no credentials in the URL, unique id.
+    #[test]
+    fn a_provider_preset_is_validated() {
+        let base = |extra: &str| {
+            serde_json::from_str::<Value>(&format!(
+                r#"{{"id":"gw","name":"GW","version":"1.0.0",{extra}}}"#
+            ))
+            .expect("json")
+        };
+        let good = base(
+            r#""providers":[{"id":"mine","name":"My Gateway","baseUrl":"https://gateway.example/v1","model":"gw-large","keyUrl":"https://gateway.example/keys"}]"#,
+        );
+        let manifest = parse_manifest("gw", &good).expect("valid preset");
+        assert_eq!(manifest.providers.len(), 1);
+        assert_eq!(manifest.providers[0].base_url, "https://gateway.example/v1");
+        assert_eq!(manifest.providers[0].model, "gw-large");
+        // A localhost gateway may be plain http; nothing else may.
+        assert!(parse_manifest(
+            "gw",
+            &base(r#""providers":[{"id":"local","name":"Local","baseUrl":"http://localhost:3001/v1"}]"#)
+        )
+        .is_ok());
+        for (label, body) in [
+            (
+                "http off-machine",
+                r#""providers":[{"id":"mine","name":"My","baseUrl":"http://gateway.example/v1"}]"#,
+            ),
+            (
+                "credentials",
+                r#""providers":[{"id":"mine","name":"My","baseUrl":"https://user:pass@gateway.example/v1"}]"#,
+            ),
+            (
+                "duplicate",
+                r#""providers":[{"id":"mine","name":"One","baseUrl":"https://a.example/v1"},{"id":"mine","name":"Two","baseUrl":"https://b.example/v1"}]"#,
+            ),
+            (
+                "no name",
+                r#""providers":[{"id":"mine","baseUrl":"https://a.example/v1"}]"#,
+            ),
+            ("no url", r#""providers":[{"id":"mine","name":"My"}]"#),
+            (
+                "bad key url",
+                r#""providers":[{"id":"mine","name":"My","baseUrl":"https://a.example/v1","keyUrl":"javascript:alert(1)"}]"#,
+            ),
+            ("not a list", r#""providers":{"id":"mine"}"#),
+        ] {
+            assert!(
+                parse_manifest("gw", &base(body)).is_err(),
+                "{label} must be refused"
+            );
+        }
+    }
+
+    /// Only a valid, compatible folder contributes presets, and each one names
+    /// the extension it came from.
+    #[test]
+    fn only_usable_folders_contribute_provider_presets() {
+        let root = scratch("providers");
+        let dir = root.join("extensions");
+        let write = |id: &str, body: &str| {
+            let folder = dir.join(id);
+            fs::create_dir_all(&folder).expect("folder");
+            fs::write(folder.join("manifest.json"), body).expect("manifest");
+        };
+        write(
+            "gw-pack",
+            r#"{"id":"gw-pack","name":"Gateway Pack","version":"1.2.0","providers":[{"id":"mine","name":"My Gateway","baseUrl":"https://gateway.example/v1"}]}"#,
+        );
+        write(
+            "bad-pack",
+            r#"{"id":"bad-pack","name":"Bad","version":"1.0.0","providers":[{"id":"bad","name":"Bad","baseUrl":"http://plain.example/v1"}]}"#,
+        );
+        write(
+            "future-pack",
+            r#"{"id":"future-pack","name":"Future","version":"1.0.0","requiresStudio":"99.0.0","providers":[{"id":"future","name":"Future","baseUrl":"https://future.example/v1"}]}"#,
+        );
+        let presets = provider_presets(&dir);
+        assert_eq!(presets.len(), 1, "{presets:?}");
+        assert_eq!(presets[0]["extension"], "gw-pack");
+        assert_eq!(presets[0]["extensionName"], "Gateway Pack");
+        assert_eq!(presets[0]["extensionVersion"], "1.2.0");
+        assert_eq!(presets[0]["baseUrl"], "https://gateway.example/v1");
         let _ = fs::remove_dir_all(&root);
     }
 }

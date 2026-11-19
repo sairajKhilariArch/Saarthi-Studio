@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.70.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.71.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,14 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.71.0 (2026-11-19):** Phase 15's last missing row closes: a manifest
+declares `providers` (≤8), validated at parse time (https off-machine, http only
+for loopback, no credentials in the URL) and served by
+`GET /api/extensions/providers` for valid, compatible folders; Settings appends
+them to the backend preset row, and the app still makes the request with the
+person's key. Both remaining rows are Working, so the phase's open gap is the
+sandbox surface (no network, terminal or MCP host functions) rather than a
+missing contribution type. 27 extension tests pass (2 new), frontend 99/99.
 **Revision 3.70.0 (2026-11-19):** Phase 15 gains UI extensions: a manifest
 declares `panels` (≤8, relative `.html`, no runtime), served by
 `GET /api/extensions/:id/panels/:panel` under a `default-src 'none'` CSP and
@@ -497,8 +505,9 @@ dependency that itself needs a newer build now blocks the folder that needs it
 (`incompatibleDependencies` plus a named reason), and `inspect_for` proves a
 listing re-judges a folder against the running build, so an upgrade frees it with
 nothing stored to go stale. UI panels arrived in 3.70.0 (`panels` in the
-manifest, served under a locked-down CSP into a sandboxed frame); provider
-adapters are what remain
+manifest, served under a locked-down CSP into a sandboxed frame) and provider
+adapters in 3.71.0 (declarative `providers` presets that the app, not the
+extension, uses to make the request); the sandbox surface is what remains
 in the phase.
 
 **Revision 3.13.0 (2026-11-12):** Phase 4's last gap closes: a platform step also
@@ -828,7 +837,7 @@ below carry the evidence.
 | 12 | Live monitoring | Working | — |
 | 13 | Workflow builder | Working | browser layout test only; rendering and the drag gesture are harness-tested (3.16.0), a workflow cancel stops the child agent runs it started (3.15.0) |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; contract-driven UI gating shipped in 3.22.0 |
-| 15 | Extension ecosystem | Partial | provider adapters |
+| 15 | Extension ecosystem | Partial | sandbox surface beyond workspace + own data (no network, terminal or MCP host functions) |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 | Observability | Working | — |
 | 18 | Installation and updates | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |
@@ -1087,7 +1096,7 @@ it needs, and both are enforced rather than displayed.
 | Run history | Working (2.24.0) | `extension_runs` records extension, project, start, duration, exit code, fuel, host calls and error for every run that reached the sandbox, including loader failures and cancellations; `GET /api/extension-runs` returns the newest 50 and Settings lists them |
 | Compatibility and dependencies | Working (2.25.0) | `requiresStudio` (numeric per-part floor against `CARGO_PKG_VERSION`) marks a manifest `valid` but `compatible: false` when this build is older, and both run and install are refused with both versions named; `apiVersion` defaults to 1 and refuses a higher number at parse; `dependencies` (≤16, deduped, validated, no self-reference) are reported as `missingDependencies` and block a run, not an install. Discovery reads every manifest before judging any. Not covered: a dependency's own compatibility, dependency cycles, and an update path that would re-check after the app is upgraded |
 | Custom tools | Working (2.27.0) | `tools` in the manifest (≤16; name, description, optional `.wasm` entry, optional `inputSchema`; the wasm runtime is required and each module is checked like the entry) and the `env.arguments`/`env.result` ABI; `POST /api/extensions/:id/tools/:tool` runs one in the same sandbox with the same budgets, grants, one-run rule and cancel, answering `{result, reported, run}`, gated by `extension_tool` (default ask; `ask` refuses with instructions because the route cannot prompt). Since 2.27.0 the agent's tool loop offers them too: the prompt carries a labelled catalogue of every valid, runnable folder's tools (none when nothing is installed), the `extension` step is gated by the same `extension_tool` permission on the same `extension/tool` target, and the call runs through the same sandbox, budgets, grants, one-run rule, cancel boundary, `extension_runs` row and host-call audit, with `env.result` becoming the step output. Since 2.28.0 the declared `inputSchema` is enforced on every call before the module is loaded (MCP's bounded keyword subset, boolean schemas honoured, an unreadable schema refused) and the prompt lists each tool's required argument names; not covered: keywords outside that subset |
-| Provider adapters | Missing | — |
+| Provider adapters | Working, declarative (3.71.0) | A manifest declares `providers` (≤8: id, name, `baseUrl`, optional `model`, `keyUrl`, `note`). Checked at parse time: id rules and uniqueness, a name, `https` off-machine or `http` only for a loopback gateway, no credentials/query/fragment in the URL, an http(s) `keyUrl`. `GET /api/extensions/providers` returns the presets of valid, compatible folders, each naming its extension, and Settings appends them to the backend preset row so picking one fills the base URL and model — the request is still made by the app with the person's own key, so an extension never sees a key or makes a call. Not covered: an adapter that speaks a non-OpenAI wire format, per-preset auth header styles beyond Bearer, and provider capability metadata contributed by an extension |
 | UI extensions | Working (3.70.0) | A manifest declares `panels` (≤8: id, title, relative `.html` entry, no runtime needed — markup, not code). `GET /api/extensions/:id/panels/:panel` serves one declared panel as `text/html` with `no-store`, `nosniff` and `default-src 'none'` + inline style/script only (no network, no external assets, no forms, `frame-ancestors 'self'`), resolved through `workspace::resolve_inside`; over 512 KB or non-UTF-8 is refused, and unknown/undeclared/incompatible answer 404/409 by name. Settings lists a panel's title and renders it in a `sandbox="allow-scripts"` frame with an opaque origin, so it cannot reach the app, its API, projects or settings. Not covered: a data bridge to the app (panels are presentational by design), panel-scoped permissions, and a browser-run test of the frame |
 
 ## Phase 16 — Testing and quality

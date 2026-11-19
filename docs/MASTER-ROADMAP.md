@@ -58,7 +58,7 @@ against the tree, and the Phase 15 log's stale dependency note was corrected.
 | 5 — Run queue | No workstream remains open. Cross-process admission closed in 3.50.0: promotion claims its slot inside one conditional UPDATE, so the live count and the promotion cannot be separated by another process. An abandoned checkout closed in 3.51.0: `POST /api/runs/:id/discard` removes a finished run's worktree and its `run/<short>` branch without touching the workspace. The editor half closed in 3.52.0: a save is recorded in the ledger, so a live run that never read the file refuses the write by name instead of silently replacing the person's change. Caveats that remain are in `KNOWN-ISSUES.md` 20 — a program outside Studio writing a file is still invisible until a fingerprint check. |
 | 9 — Developer environment | No named requirement. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0), language-server diagnostics (3.49.0) and the debugger (3.55.0) are done. The editor still has no document engine of its own and `ide.js` has no harness; those are recorded as product choices, not missing routes. |
 | 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level (3.47.0) and runs stdio MCP servers (3.48.0); remote transports, OAuth, agent-run reasoning and MCP tools in agent prompts remain missing there. |
-| 15 — Extensions | Provider adapters and UI extensions. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
+| 15 — Extensions | Custom tools, UI panels (3.70.0) and declarative provider presets (3.71.0). Remaining: a sandbox surface beyond workspace and the extension's own data. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
 ### Smaller named gaps
@@ -899,10 +899,13 @@ arguments, `env.result` takes exactly one answer. `POST
 behind a new `extension_tool` permission action whose `ask` default refuses
 because the route has no prompt, and records the call in `extension_runs`.
 
-Remaining: no provider adapters (UI panels arrived in 3.70.0: a manifest
-declares `panels`, each a relative `.html` view served under a
+Every contribution type is now reachable: wasm tools, UI panels (3.70.0: a
+manifest declares `panels`, each a relative `.html` view served under a
 `default-src 'none'` CSP and rendered in a sandboxed frame with an opaque
-origin, so a panel can draw but cannot act). Installing grants no
+origin, so a panel can draw but cannot act) and provider presets (3.71.0: a
+manifest declares `providers`; the app, never the extension, makes the request
+with the person's key, and off-machine endpoints must be https). Installing
+grants no
 capability by itself; the reachable surface is the two workspace pairs, the
 extension's own data folder, the tool ABI and `last_error`. A dependency is
 judged on presence, and since 3.9.0 a dependency cycle is detected and blocks a
@@ -931,9 +934,9 @@ the failing field. The prompt lists each tool's required argument names, and the
 route checks the saved permission rule before the arguments, so a denied call
 stays denied.
 
-What remains in this phase: there are no provider adapters (UI panels arrived in
-3.70.0), and an update path that re-checks a folder after the app is upgraded is
-still missing.
+What remains in this phase: the sandbox offers no network, terminal or MCP host
+functions, and an update path that re-checks a folder after the app is upgraded
+is still missing.
 
 ## Phase 16 — Testing
 
@@ -1165,7 +1168,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 12 Agent monitoring | Working | — |
 | 13 Workflows | Working | automated browser coverage; child agent cancellation |
 | 14 Cross-platform | Partial | Android/VS Code subsets; contract-driven UI gating in 3.22.0 |
-| 15 Extensions | Partial | provider adapters and UI extensions |
+| 15 Extensions | Partial | sandbox surface beyond workspace + own data (no network, terminal or MCP host functions); declarative provider presets and UI panels shipped in 3.70.0–3.71.0 |
 | 16 Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 Observability | Working | — |
 | 18 Install and update | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |

@@ -4338,25 +4338,69 @@ const BACKEND_PRESETS = [
   },
 ];
 
+/* Providers an installed extension contributes (`providers` in its manifest).
+   Declarative only: the app still makes the request with the person's key. */
+let EXTENSION_PRESETS = [];
+
+function backendPresetList() {
+  return BACKEND_PRESETS.concat(EXTENSION_PRESETS);
+}
+
+async function loadExtensionPresets() {
+  try {
+    const response = await fetch("/api/extensions/providers");
+    const data = await response.json();
+    EXTENSION_PRESETS = Array.isArray(data.presets)
+      ? data.presets.map((preset) => ({
+          id: `ext:${preset.extension}:${preset.id}`,
+          name: preset.name,
+          baseUrl: preset.baseUrl || "",
+          model: preset.model || "",
+          note:
+            preset.note ||
+            `Provided by the ${preset.extensionName || preset.extension} extension. Studio makes the request with your key.`,
+          keyUrl: preset.keyUrl || "",
+          extension: preset.extension,
+        }))
+      : [];
+  } catch {
+    // An unreachable listing leaves the built-in presets alone.
+    EXTENSION_PRESETS = [];
+  }
+  renderBackendPresets();
+}
+
 function renderBackendPresets() {
   const host = $("backendPresets");
   if (!host) return;
   host.replaceChildren();
-  BACKEND_PRESETS.forEach((preset) => {
+  const add = (preset) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "preset-chip";
     button.textContent = preset.name;
     button.dataset.preset = preset.id;
+    if (preset.extension) button.title = `Provided by the ${preset.extension} extension`;
     button.setAttribute("role", "option");
     button.addEventListener("click", () => applyBackendPreset(preset.id));
     host.appendChild(button);
-  });
+  };
+  BACKEND_PRESETS.forEach(add);
+  // Extension presets sit after the built-ins and only when a folder declared one.
+  if (EXTENSION_PRESETS.length) {
+    const label = document.createElement("span");
+    label.className = "preset-chip preset-chip-label";
+    label.textContent = "From extensions";
+    host.appendChild(label);
+    EXTENSION_PRESETS.forEach(add);
+  }
   markActivePreset();
 }
 
 function presetForBaseUrl(url) {
-  return BACKEND_PRESETS.find((preset) => preset.baseUrl && preset.baseUrl === url) || null;
+  return (
+    backendPresetList().find((preset) => preset.baseUrl && preset.baseUrl === url) || null
+  );
 }
 
 function markActivePreset() {
@@ -4386,7 +4430,7 @@ function markActivePreset() {
 }
 
 function applyBackendPreset(id) {
-  const preset = BACKEND_PRESETS.find((entry) => entry.id === id);
+  const preset = backendPresetList().find((entry) => entry.id === id);
   if (!preset) return;
   $("baseUrl").value = preset.baseUrl;
   if (preset.model) {
@@ -4920,6 +4964,9 @@ async function removeExtension(extension) {
 }
 
 async function loadExtensions() {
+  // A folder's provider presets ride on the same walk, so the settings row and
+  // the list can never disagree about what is installed.
+  void loadExtensionPresets();
   const host = $("extensionsList");
   if (!host) return;
   const result = await api("/api/extensions");
@@ -10037,6 +10084,7 @@ async function cancelAgentRun(runId) {
   renderContextChip();
   renderSkillChip();
   renderBackendPresets();
+  void loadExtensionPresets();
   state.lastContextTokens = null;
   setTimeout(updateContextMeter, 50);
   await Promise.all([loadSettings(), loadProjects(), loadConversations(), loadWorkspace()]);
