@@ -22,6 +22,8 @@ import {
 } from "./agent";
 import type { AgentStep } from "./agent";
 import { McpError, McpService } from "./mcp";
+// Re-exported so `node --test` can exercise the MCP argument check directly.
+export { validateArguments } from "./mcpschema";
 
 /* ------------------------------------------------------------------ */
 /* types + constants                                                   */

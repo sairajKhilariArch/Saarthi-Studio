@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.59.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.60.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.60.0 (2026-11-19):** MCP calls in the VS Code embedded server are
+checked against the tool's own `inputSchema` with the desktop's bounded keyword
+subset (`mcpschema.ts`), including a depth limit and the same messages; the
+tool list is cached per session, an unknown tool name is refused, and a
+malformed call is a 400 before anything reaches the server. An agent-run call's
+refusal becomes a non-fatal `mcp-error` step. **37 passed, 0 failed**.
 **Revision 3.59.0 (2026-11-19):** the VS Code embedded server speaks streamable
 HTTP MCP. A URL is required, plain `http` is loopback-only, custom headers are
 allowed for this transport, answers may be JSON or SSE, and the server's

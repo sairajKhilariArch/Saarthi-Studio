@@ -32,6 +32,7 @@ import {
   renameEntry,
   deleteEntry,
   workspaceOutline,
+  validateArguments,
 } from "../dist/lib.mjs";
 import {
   capChars,
@@ -1280,6 +1281,17 @@ test("the embedded server runs a real stdio MCP server end to end", async () => 
   assert.equal(called.body.text, "echo:hi");
   assert.equal(called.body.is_error, false);
 
+  // A call the tool's own schema refuses never reaches the server.
+  const missing = await post("/api/mcp/call", { server: "echo", tool: "echo", arguments: {} });
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /Missing required argument "text"/);
+  const wrongType = await post("/api/mcp/call", { server: "echo", tool: "echo", arguments: { text: 5 } });
+  assert.equal(wrongType.status, 400);
+  assert.match(wrongType.body.error, /must be string/);
+  const noSuchTool = await post("/api/mcp/call", { server: "echo", tool: "nope", arguments: {} });
+  assert.equal(noSuchTool.status, 400);
+  assert.match(noSuchTool.body.error, /no tool named "nope"/);
+
   // A tool that reports its own failure is not a transport failure.
   const failedTool = await post("/api/mcp/call", { server: "echo", tool: "fail", arguments: {} });
   assert.equal(failedTool.status, 200);
@@ -1518,6 +1530,54 @@ test("agent runs list and call MCP tools only when the run allows it", async () 
   await embedded.close();
   cleanupTemp(workspace);
   cleanupTemp(storage);
+});
+
+test("MCP arguments are checked against the tool's own bounded schema", () => {
+  const schema = {
+    type: "object",
+    required: ["path", "options"],
+    properties: {
+      path: { type: "string", minLength: 1, maxLength: 20 },
+      mode: { type: "string", enum: ["read", "write"] },
+      count: { type: "integer", minimum: 1, maximum: 10, multipleOf: 2 },
+      flags: { type: "array", items: { type: "boolean" }, maxItems: 2, uniqueItems: true },
+      pair: { type: "array", items: [{ type: "string" }, { type: "number" }] },
+      options: {
+        type: "object",
+        required: ["deep"],
+        properties: { deep: { $ref: "#/definitions/level" } },
+        additionalProperties: false,
+      },
+    },
+    definitions: { level: { type: "integer", exclusiveMinimum: 0 } },
+  };
+
+  assert.equal(validateArguments(schema, { path: "a", options: { deep: 2 } }), null);
+  // 1.0 is an integer, and an unknown format keyword is the server's business.
+  assert.equal(validateArguments(schema, { path: "a", options: { deep: 2 }, count: 2 }), null);
+  assert.match(validateArguments(schema, {}), /Missing required argument "path"/);
+  assert.match(validateArguments(schema, []), /must be a JSON object/);
+  assert.match(validateArguments(schema, { path: 4, options: { deep: 1 } }), /must be string/);
+  assert.match(validateArguments(schema, { path: "", options: { deep: 1 } }), /at least 1 characters/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1 }, mode: "run" }), /must be one of/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1 }, count: 3 }), /must be a multiple of 2/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1 }, count: 12 }), /must be at most 10/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1 }, flags: [true, true] }), /must not repeat/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1 }, flags: [true, false, true] }), /at most 2 items/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1 }, pair: ["x", "y"] }), /pair\[1\]" must be number/);
+  // A local $ref is followed; a schema this size cannot recurse forever.
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 0 } }), /greater than 0/);
+  assert.match(validateArguments(schema, { path: "a", options: { deep: 1, extra: true } }), /not declared by the tool/);
+  assert.match(validateArguments(schema, { path: "a", options: {} }), /Missing required argument "options\.deep"/);
+  const deep = { type: "object", properties: { self: { $ref: "#" } } };
+  let nested = {};
+  for (let index = 0; index < 40; index += 1) nested = { self: nested };
+  assert.equal(validateArguments(deep, nested), null, "depth limit accepts rather than crashes");
+  // Keywords outside the subset are not guesses: pattern is left to the server.
+  assert.equal(
+    validateArguments({ type: "object", properties: { name: { type: "string", pattern: "^a$" } } }, { name: "zzz" }),
+    null,
+  );
 });
 
 test("the embedded server drives a streamable HTTP MCP server", async () => {

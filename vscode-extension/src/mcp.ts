@@ -22,6 +22,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
+import { validateArguments } from "./mcpschema";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_REQUEST_TIMEOUT_MS = 20_000;
@@ -627,6 +628,8 @@ export class McpService {
   private sessions = new Map<string, McpWire>();
   private reports = new Map<string, McpReport>();
   private logs = new Map<string, McpLogEntry[]>();
+  /** Tools of the current session, so a call checks the schema it was shown. */
+  private toolCache = new Map<string, McpTool[]>();
 
   constructor(private readonly file: string) {}
 
@@ -679,6 +682,7 @@ export class McpService {
     // A changed command must not keep talking to the old process.
     void this.closeSession(server.name).catch(() => undefined);
     this.reports.delete(server.name);
+    this.toolCache.delete(server.name);
     if (index === -1) servers.push(server);
     else servers[index] = server;
     writeRegistry(this.file, servers);
@@ -689,6 +693,7 @@ export class McpService {
     const servers = this.servers().filter((entry) => entry.name !== name);
     await this.closeSession(name);
     this.reports.delete(name);
+    this.toolCache.delete(name);
     writeRegistry(this.file, servers);
   }
 
@@ -750,6 +755,7 @@ export class McpService {
     try {
       const session = await this.session(name);
       const tools = await session.tools();
+      this.toolCache.set(name, tools);
       this.observe(name, {
         name,
         health: "healthy",
@@ -789,6 +795,14 @@ export class McpService {
     if (!tool.trim()) throw new McpError(400, "Name a tool to call.");
     try {
       const session = await this.session(name);
+      const tools = this.toolCache.get(name) || (await session.tools());
+      this.toolCache.set(name, tools);
+      const known = tools.find((entry) => entry.name === tool);
+      if (!known) throw new McpError(400, `MCP server "${name}" has no tool named "${tool}".`);
+      // The server's own schema is the authority; this refuses what it would
+      // certainly refuse, with a message the model can repair from.
+      const problem = validateArguments(known.input_schema, args);
+      if (problem) throw new McpError(400, problem);
       return await session.call(tool, args);
     } catch (error) {
       if (error instanceof McpError) throw error;
@@ -834,6 +848,7 @@ export class McpService {
     const session = this.sessions.get(name);
     if (!session) return false;
     this.sessions.delete(name);
+    this.toolCache.delete(name);
     await session.close();
     this.logs.set(name, [...session.logs]);
     return true;

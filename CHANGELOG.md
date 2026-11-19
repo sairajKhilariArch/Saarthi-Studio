@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.60.0
+
+MCP tool calls in the VS Code embedded server were forwarded with whatever
+arguments the model produced. The desktop checks a call against the tool's own
+`inputSchema` first; the extension now does the same.
+
+- New `vscode-extension/src/mcpschema.ts` ports the desktop's bounded validator
+  (`app/src/mcp.rs`): `type`, `enum`, `const`, `required`, `properties`,
+  `additionalProperties`, `items` (schema and draft-4 tuple form),
+  `minItems`/`maxItems`, `uniqueItems`, `minLength`/`maxLength`, `minimum`,
+  `maximum`, `exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`,
+  `minProperties`/`maxProperties`, `allOf`/`anyOf`/`oneOf`/`not` and local
+  `$ref`s, with the same depth limit (16) and the same message text. `pattern`,
+  `format`, `propertyNames` and remote references stay the server's business,
+  because refusing a call the server would accept is worse than letting the
+  server refuse one with its own message. `1.0` counts as an integer.
+- `McpService.call` looks the tool up in the session's tool list (cached from
+  `test`, refreshed on a call, dropped on save, remove or disconnect), answers
+  `400` for a tool the server does not list, and answers `400` with the
+  validator's reason before anything is sent when the arguments are malformed.
+  An agent-run MCP call surfaces the same reason as a non-fatal `mcp-error`
+  step, so the model can repair it on the next step.
+
+Verified by the extension suite: **37 passed, 0 failed**. The new unit case
+covers required and nested required fields, non-object arguments, type, length,
+enum, `multipleOf`, bounds, `uniqueItems`, `maxItems`, tuple `items`, a local
+`$ref`, `additionalProperties: false`, the depth limit (accepts, never
+crashes), and `pattern` being left to the server. Route assertions against the
+suite's real fake stdio server prove a missing argument, a wrong type and an
+unknown tool are all refused with 400 before the call reaches it.
+
 ## 3.59.0
 
 The VS Code embedded server's MCP client only spoke stdio, so the shared
