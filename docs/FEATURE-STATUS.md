@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.66.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.67.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.67.0 (2026-11-19):** saved permission rules hold on the VS Code
+embedded server's person-driven editor routes too — `fs_read` on reading a
+file, listing a folder and the artifact listing, `fs_write` on writing,
+creating, renaming (both ends) and deleting — answering 403 for a deny while
+`ask` leaves a click alone because the click is the approval. **43 passed, 0
+failed**.
 **Revision 3.66.0 (2026-11-19):** the VS Code embedded server enforces
 `fs_read`. A deny ends the run naming the path and keeps the file's bytes out
 of the log and the next prompt; an ask parks the read for approval; the default
@@ -48,12 +54,12 @@ failed**, including that exact sequence.
 **Revision 3.61.0 (2026-11-19):** the VS Code embedded server gained a
 permission store. Rules live in `permissions.json`, resolve the desktop's way
 (longest target, deny > ask > allow, then narrower scope; `once` consumed),
-cover the three actions it can enforce (`fs_write`, `command`, `mcp_tool`), and
+cover the four actions it can enforce (`fs_read`, `fs_write`, `command`, `mcp_tool`), and
 drive the shared panel through the same four routes. A deny ends an agent run by
 name and refuses an MCP call with 403; `ask` forces a pause even with
 Auto-approve; `allow` removes a pause but never widens a run's flags. **38
 passed, 0 failed**, including a second process over the same folder applying a
-saved rule. Emergency stop arrived in 3.65.0 and `fs_read` in 3.66.0. Not implemented: the remaining seven actions.
+saved rule. Emergency stop arrived in 3.65.0 and `fs_read` in 3.66.0, and since 3.67.0 a saved deny also blocks the person-driven editor routes (read, list, artifact listing, write, create, rename, delete) with a 403 and an audit row. Not implemented: the remaining seven actions.
 **Revision 3.60.0 (2026-11-19):** MCP calls in the VS Code embedded server are
 checked against the tool's own `inputSchema` with the desktop's bounded keyword
 subset (`mcpschema.ts`), including a depth limit and the same messages; the

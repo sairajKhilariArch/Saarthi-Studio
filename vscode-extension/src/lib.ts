@@ -23,6 +23,7 @@ import {
 import type { AgentStep } from "./agent";
 import { McpError, McpService } from "./mcp";
 import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
+import type { PermitAction } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
 export { validateArguments } from "./mcpschema";
 
@@ -1687,6 +1688,10 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       });
       return false;
     };
+    /** A saved deny blocks a route a person clicks too; the `ask` scope does
+       not, because the click on that route is itself the approval. */
+    const policyDenial = (action: PermitAction, target: string, audit = true): string | null =>
+      permissions.deniedForUser(action, target, activeProject() || "", audit);
     const mcpFailed = (error: unknown): void => {
       const status = error instanceof McpError ? error.status : 502;
       sendJson(response, status, { ok: false, error: (error as Error).message });
@@ -2332,7 +2337,13 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
       /* artifacts: every readable file in the open folder -------------- */
       if (routePath === "/api/workspace/files" && method === "GET") {
-        sendJson(response, 200, listArtifacts(requireRoot(options)));
+        const listing = listArtifacts(requireRoot(options));
+        // A file a saved fs_read deny covers is not offered as an artifact
+        // either — the point of denying a read is that nothing opens it.
+        const files = listing.files.filter((file) =>
+          !policyDenial("fs_read", file.path, false),
+        );
+        sendJson(response, 200, { ...listing, files, count: files.length });
         return;
       }
 
@@ -2497,19 +2508,37 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
       if (routePath === "/api/workspace/entries" && method === "GET") {
         const root = requireRoot(options);
-        sendJson(response, 200, listDir(root, url.searchParams.get("path") || ""));
+        const folder = url.searchParams.get("path") || "";
+        const denial = policyDenial("fs_read", folder);
+        if (denial) {
+          sendJson(response, 403, { ok: false, error: denial });
+          return;
+        }
+        sendJson(response, 200, listDir(root, folder));
         return;
       }
 
       if (routePath === "/api/workspace/file") {
         const root = requireRoot(options);
         if (method === "GET") {
-          sendJson(response, 200, readTextFile(root, url.searchParams.get("path") || ""));
+          const wanted = url.searchParams.get("path") || "";
+          const denial = policyDenial("fs_read", wanted);
+          if (denial) {
+            sendJson(response, 403, { ok: false, error: denial });
+            return;
+          }
+          sendJson(response, 200, readTextFile(root, wanted));
           return;
         }
         if (method === "PUT" || method === "POST") {
           const body = await readBody(request);
-          sendJson(response, 200, writeTextFile(root, String(body.path || ""), String(body.content ?? "")));
+          const wanted = String(body.path || "");
+          const denial = policyDenial("fs_write", wanted);
+          if (denial) {
+            sendJson(response, 403, { ok: false, error: denial });
+            return;
+          }
+          sendJson(response, 200, writeTextFile(root, wanted, String(body.content ?? "")));
           return;
         }
       }
@@ -2517,21 +2546,41 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       if (routePath === "/api/workspace/create" && method === "POST") {
         const root = requireRoot(options);
         const body = await readBody(request);
-        sendJson(response, 200, createEntry(root, String(body.path || ""), body.dir === true));
+        const wanted = String(body.path || "");
+        const denial = policyDenial("fs_write", wanted);
+        if (denial) {
+          sendJson(response, 403, { ok: false, error: denial });
+          return;
+        }
+        sendJson(response, 200, createEntry(root, wanted, body.dir === true));
         return;
       }
 
       if (routePath === "/api/workspace/rename" && method === "POST") {
         const root = requireRoot(options);
         const body = await readBody(request);
-        sendJson(response, 200, renameEntry(root, String(body.from || ""), String(body.to || "")));
+        const from = String(body.from || "");
+        const to = String(body.to || "");
+        // A rename touches two paths: a deny on either end blocks it.
+        const denial = policyDenial("fs_write", from) || policyDenial("fs_write", to);
+        if (denial) {
+          sendJson(response, 403, { ok: false, error: denial });
+          return;
+        }
+        sendJson(response, 200, renameEntry(root, from, to));
         return;
       }
 
       if (routePath === "/api/workspace/delete" && method === "POST") {
         const root = requireRoot(options);
         const body = await readBody(request);
-        sendJson(response, 200, deleteEntry(root, String(body.path || "")));
+        const wanted = String(body.path || "");
+        const denial = policyDenial("fs_write", wanted);
+        if (denial) {
+          sendJson(response, 403, { ok: false, error: denial });
+          return;
+        }
+        sendJson(response, 200, deleteEntry(root, wanted));
         return;
       }
 

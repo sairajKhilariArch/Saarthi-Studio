@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.67.0
+
+Saved permission rules reached the agent's own actions and the MCP panel's call
+route, but the editor routes a person clicks sat outside policy: with
+`deny fs_read secret.txt` saved, opening that file in the built-in editor still
+returned its contents, and the write route still overwrote it.
+
+- The person-driven workspace routes now resolve saved rules. `fs_read` gates
+  reading a file (`GET /api/workspace/file`), listing a folder
+  (`GET /api/workspace/entries`) and the artifact listing; `fs_write` gates
+  writing a file, creating, renaming and deleting an entry.
+- `deny` answers 403 with the same message the agent path uses and audits the
+  block. A rename is checked at both ends, so moving a file into a denied path
+  is refused as well as moving one out of it.
+- The artifact listing drops files a saved `fs_read` deny covers, without
+  writing one audit row per file.
+- `ask` deliberately does not gate these routes: the click on the route is
+  itself the approval, exactly as on the desktop, so only a deny changes what a
+  person can do.
+- `PermissionStore.deniedForUser` takes an `audit` flag so a single request
+  that checks many targets can stay silent.
+
+Verified by the extension suite: **43 passed, 0 failed**. The new case saves
+`deny fs_read secret.txt`, sees the read route answer 403 with no `content`
+field while `notes.txt` still opens, then saves `deny fs_write secret.txt` and
+sees the write route refuse with the file unchanged on disk. The artifact
+listing no longer offers `secret.txt`. `deny fs_write locked.txt` refuses to
+create it and refuses a rename into it (leaving the source in place), while an
+ordinary create and delete still work, and the audit records both denials.
+
 ## 3.66.0
 
 The embedded server enforced `fs_write`, `command` and `mcp_tool`, but an agent

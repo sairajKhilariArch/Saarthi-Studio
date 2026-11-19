@@ -2037,6 +2037,103 @@ test("a saved fs_read rule guards what the agent can read", async () => {
   cleanupTemp(storage);
 });
 
+test("a saved deny blocks the editor routes a person clicks", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  fs.writeFileSync(path.join(workspace, "secret.txt"), "TOP SECRET", "utf8");
+  fs.writeFileSync(path.join(workspace, "notes.txt"), "public notes", "utf8");
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl: async () => new Response(
+      JSON.stringify({ model: "auto", provider: "mock", choices: [{ message: { content: '{"action":"done","summary":"ok"}' } }] }),
+      { status: 200 },
+    ),
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const call = async (route, method, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  // Policy is two-sided: a saved deny holds on the routes the person drives,
+  // not only on the agent's own actions.
+  const granted = await call("/api/permissions/grant", "POST", {
+    action: "fs_read",
+    target: "secret.txt",
+    decision: "deny",
+    scope: "always",
+  });
+  assert.equal(granted.status, 200);
+
+  const blockedRead = await call("/api/workspace/file?path=secret.txt", "GET");
+  assert.equal(blockedRead.status, 403);
+  assert.match(blockedRead.body.error, /saved permission rule denies fs_read on "secret\.txt"/);
+  assert.equal("content" in blockedRead.body, false, "a denied read never returns the bytes");
+  const openRead = await call("/api/workspace/file?path=notes.txt", "GET");
+  assert.equal(openRead.status, 200);
+  assert.equal(openRead.body.content, "public notes");
+
+  // Reading and writing are separate actions: the write needs its own rule.
+  const writeRule = await call("/api/permissions/grant", "POST", {
+    action: "fs_write",
+    target: "secret.txt",
+    decision: "deny",
+    scope: "always",
+  });
+  assert.equal(writeRule.status, 200);
+  const blockedWrite = await call("/api/workspace/file", "PUT", { path: "secret.txt", content: "overwritten" });
+  assert.equal(blockedWrite.status, 403);
+  assert.equal(fs.readFileSync(path.join(workspace, "secret.txt"), "utf8"), "TOP SECRET");
+
+  const artifacts = await call("/api/workspace/files", "GET");
+  const names = artifacts.body.files.map((file) => file.path);
+  assert.equal(names.includes("secret.txt"), false, "a denied file is not offered as an artifact");
+  assert.ok(names.includes("notes.txt"));
+  assert.equal(artifacts.body.count, names.length);
+
+  await call("/api/permissions/grant", "POST", {
+    action: "fs_write",
+    target: "locked.txt",
+    decision: "deny",
+    scope: "always",
+  });
+  const blockedCreate = await call("/api/workspace/create", "POST", { path: "locked.txt" });
+  assert.equal(blockedCreate.status, 403);
+  assert.equal(fs.existsSync(path.join(workspace, "locked.txt")), false);
+
+  const created = await call("/api/workspace/create", "POST", { path: "draft.txt" });
+  assert.equal(created.status, 200);
+  const blockedRename = await call("/api/workspace/rename", "POST", { from: "draft.txt", to: "locked.txt" });
+  assert.equal(blockedRename.status, 403, "a rename into a denied path is blocked");
+  assert.equal(fs.existsSync(path.join(workspace, "draft.txt")), true);
+  const blockedDelete = await call("/api/workspace/delete", "POST", { path: "locked.txt" });
+  assert.equal(blockedDelete.status, 403);
+  const deleted = await call("/api/workspace/delete", "POST", { path: "draft.txt" });
+  assert.equal(deleted.status, 200);
+  assert.equal(fs.existsSync(path.join(workspace, "draft.txt")), false);
+
+  const audit = await call("/api/permissions/audit?limit=50", "GET");
+  assert.ok(audit.body.entries.some((entry) => entry.action === "fs_write" && /denied by a saved rule/.test(entry.detail)));
+  assert.ok(audit.body.entries.some((entry) => entry.action === "fs_read" && entry.target === "secret.txt"));
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
 test("a deny rule saved while a run waits blocks the approved action", async () => {
   const workspace = tempDir();
   const storage = tempDir();

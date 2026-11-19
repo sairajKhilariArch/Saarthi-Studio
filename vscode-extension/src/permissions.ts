@@ -314,11 +314,15 @@ export class PermissionStore {
     return { decision: rule.decision, scope: rule.scope };
   }
 
-  /** Only a saved deny blocks a person-driven route; a click is the yes. */
-  deniedForUser(action: PermitAction, target: string, project: string): string | null {
+  /**
+   * Only a saved deny blocks a person-driven route; a click is the yes.
+   * `audit` is off when one request checks many targets (an artifact listing),
+   * so a folder full of denied files cannot flood the trail.
+   */
+  deniedForUser(action: PermitAction, target: string, project: string, audit = true): string | null {
     const rule = resolveRule(this.rules(), action, target, project);
     if (!rule || rule.decision !== "deny") return null;
-    this.record(action, target, "deny", rule.scope, project, "denied by a saved rule");
+    if (audit) this.record(action, target, "deny", rule.scope, project, "denied by a saved rule");
     return `A saved permission rule denies ${action} on "${target || "everything"}". Change it in Settings → Permissions.`;
   }
 }
