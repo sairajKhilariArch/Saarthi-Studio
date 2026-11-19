@@ -742,6 +742,12 @@ export interface AgentRuntimeDeps {
   /** Shared path-confined helpers from lib.ts (resolveInside, etc.). */
   callRouter: (messages: ChatMessage[]) => Promise<string>;
   exclusions?: () => string[];
+  /** Saved permission rules for the actions this server enforces. */
+  permission?: (
+    action: string,
+    target: string,
+    project: string,
+  ) => { decision: "allow" | "ask" | "deny"; scope: string } | null;
   /** MCP catalogue and calls, wired to the extension's stdio client. */
   mcp?: {
     catalog: () => Promise<{ tools: McpPromptTool[]; errors: string[] }>;
@@ -1289,12 +1295,23 @@ The second review round still reported findings. They are kept in this log verba
   /** Permission gate, approval gate, execute, log — mirrors agent.rs. */
   private async executeStep(run: AgentRun, action: AgentAction): Promise<boolean> {
     const gate = allowed(run, action);
+    // A saved rule can only make this stricter, or remove an approval pause the
+    // run's own flags required; it never widens what the run may do.
+    const saved = this.savedRule(run, action);
+    if (saved?.decision === "deny") {
+      const message = `A saved permission rule denies ${saved.action} on "${saved.target}". Change it in Settings → Permissions.`;
+      this.store.appendStep(run.id, actionTag(action), pendingSummary(action), message);
+      this.store.finish(run.id, FAILED, message);
+      return false;
+    }
     if (gate.kind === "denied") {
       this.store.appendStep(run.id, actionTag(action), pendingSummary(action), `Attempted ${gate.need}, but this run started without that permission.`);
       this.store.finish(run.id, FAILED, `The model needed ${gate.need}, but the run started without that permission. Start a new run with it allowed.`);
       return false;
     }
-    if (gate.kind === "needs-approval") {
+    const needsApproval =
+      saved?.decision === "allow" ? false : gate.kind === "needs-approval" || saved?.decision === "ask";
+    if (needsApproval) {
       const last = this.store.lastExecuted(run.id);
       if (last && last.action === action.action && last.summary === pendingSummary(action)) {
         this.store.appendStep(run.id, actionTag(action), pendingSummary(action), "This exact action already ran — continuing instead of repeating it.");
@@ -1330,6 +1347,23 @@ The second review round still reported findings. They are kept in this log verba
     }
     this.store.appendStep(run.id, actionTag(action), summary, outcome.output, outcome.checkpoint);
     return true;
+  }
+
+  /** The saved rule that applies to this action, if one does. */
+  private savedRule(
+    run: AgentRun,
+    action: AgentAction,
+  ): { action: string; target: string; decision: "allow" | "ask" | "deny" } | null {
+    if (!this.deps.permission) return null;
+    const targets: Partial<Record<AgentAction["action"], [string, string]>> = {
+      write: ["fs_write", action.path || ""],
+      command: ["command", action.command || ""],
+      mcp: ["mcp_tool", `${action.server || ""}.${action.tool || ""}`],
+    };
+    const entry = targets[action.action];
+    if (!entry) return null;
+    const effective = this.deps.permission(entry[0], entry[1], run.projectId || "");
+    return effective ? { action: entry[0], target: entry[1], decision: effective.decision } : null;
   }
 
   /** One MCP call; a tool's own is_error is a step the model can read. */

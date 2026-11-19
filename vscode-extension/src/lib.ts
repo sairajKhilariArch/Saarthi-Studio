@@ -22,6 +22,7 @@ import {
 } from "./agent";
 import type { AgentStep } from "./agent";
 import { McpError, McpService } from "./mcp";
+import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
 export { validateArguments } from "./mcpschema";
 
@@ -1277,6 +1278,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   // Its own registry beside the conversation store: the VS Code settings are
   // read-only to this server, so the panel's Save writes here instead.
   const mcp = new McpService(path.join(path.dirname(options.storeFile), "mcp.json"));
+  // The three actions this server can enforce (agent writes, agent commands,
+  // MCP tool calls); the desktop owns the full policy engine.
+  const permissions = new PermissionStore(path.join(path.dirname(options.storeFile), "permissions.json"));
 
   function skillRoots(): Array<{ source: string; dir: string }> {
     const roots = [{ source: "built-in", dir: path.join(options.uiDir, "skills") }];
@@ -1445,6 +1449,15 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     mcp: {
       catalog: () => mcp.catalog(),
       call: (server, tool, args) => mcp.call(server, tool, args),
+    },
+    permission: (action, target, project) => {
+      const effective = permissions.check(
+        action as "fs_write" | "command" | "mcp_tool",
+        target,
+        project,
+        true,
+      );
+      return effective ? { decision: effective.decision, scope: effective.scope } : null;
     },
     callRouter: (messages) => {
       const config = options.getConfig();
@@ -1660,6 +1673,14 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       sendJson(response, 403, {
         ok: false,
         error: "A page from another origin cannot change MCP servers.",
+      });
+      return false;
+    };
+    const permissionsWritable = (): boolean => {
+      if (sameOrigin()) return true;
+      sendJson(response, 403, {
+        ok: false,
+        error: "A page from another origin cannot change permission rules.",
       });
       return false;
     };
@@ -2078,6 +2099,39 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       }
 
       /* MCP: the desktop's stdio subset ------------------------------- */
+      /* permissions -------------------------------------------------- */
+      if (routePath === "/api/permissions" && method === "GET") {
+        sendJson(response, 200, { ok: true, actions: PERMIT_ACTIONS, rules: permissions.rules() });
+        return;
+      }
+      if (routePath === "/api/permissions/audit" && method === "GET") {
+        const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit")) || 50));
+        sendJson(response, 200, { ok: true, entries: permissions.audit(limit) });
+        return;
+      }
+      if (routePath === "/api/permissions/grant" && method === "POST") {
+        if (!permissionsWritable()) return;
+        const body = await readBody(request);
+        try {
+          const rule = permissions.grant(body, activeProject() || "");
+          sendJson(response, 200, { ok: true, rule });
+        } catch (error) {
+          sendJson(response, 400, { ok: false, error: (error as Error).message });
+        }
+        return;
+      }
+      if (routePath === "/api/permissions/revoke" && method === "POST") {
+        if (!permissionsWritable()) return;
+        const body = await readBody(request);
+        try {
+          const removed = permissions.revoke(body, activeProject() || "");
+          sendJson(response, 200, { ok: true, removed });
+        } catch (error) {
+          sendJson(response, 400, { ok: false, error: (error as Error).message });
+        }
+        return;
+      }
+
       if (routePath === "/api/mcp" && method === "GET") {
         sendJson(response, 200, { ok: true, servers: mcp.list() });
         return;
@@ -2135,6 +2189,15 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           body.arguments && typeof body.arguments === "object" && !Array.isArray(body.arguments)
             ? (body.arguments as Record<string, unknown>)
             : {};
+        const denial = permissions.deniedForUser(
+          "mcp_tool",
+          `${String(body.server || "")}.${String(body.tool || "")}`,
+          activeProject() || "",
+        );
+        if (denial) {
+          sendJson(response, 403, { ok: false, error: denial });
+          return;
+        }
         try {
           const result = await mcp.call(String(body.server || ""), String(body.tool || ""), args);
           sendJson(response, 200, { ok: true, text: result.text, is_error: result.is_error });

@@ -1,5 +1,41 @@
 # Changelog
 
+## 3.61.0
+
+The VS Code embedded server had no permission store, so a saved deny never
+reached it and every decision came only from a run's per-run flags.
+
+- New `vscode-extension/src/permissions.ts` stores rules beside the conversation
+  store (`permissions.json`, mode 0600 on POSIX) and resolves them the desktop's
+  way: the longest matching target wins, then deny > ask > allow, then the
+  narrower scope (`once`, `session`, `project`, `always`). Three actions are
+  enforced because this server can actually act on them: `fs_write`, `command`
+  and `mcp_tool`. A `once` rule is consumed by answering.
+- Routes match the desktop's shapes, so the shared Settings → Permissions panel
+  drives it unchanged: `GET /api/permissions` (actions and rules),
+  `GET /api/permissions/audit?limit=` (the newest 200 decisions and edits),
+  `POST /api/permissions/grant` and `POST /api/permissions/revoke`. Mutations
+  refuse a foreign origin.
+- Agent runs consult the rules. A deny ends the run naming the action and
+  target; `ask` forces an approval pause even when Auto-approve is on; `allow`
+  removes the pause the run's flags would have required, but never widens them
+  (a run started without `allowWrites` still cannot write).
+- An MCP call from the panel checks for a saved deny and answers 403 before any
+  request reaches the server. With no rule, the click is the consent, exactly as
+  before.
+- Not implemented, and named in `KNOWN-ISSUES.md` #44: the other eight desktop
+  actions (network, git, router installs, updates, uninstall, settings,
+  extension tools), the emergency-stop route, and the desktop's full policy
+  engine. A rule for an action this server does not enforce cannot be saved.
+
+Verified by the extension suite: **38 passed, 0 failed**, with a new case
+against the suite's real fake stdio server and a fake router — the three
+actions listed with no rules, a cross-origin grant refused, a saved deny ending
+an agent run by name and refusing the panel's call with 403, both decisions in
+the audit trail, a revoke that removes the rule, and a saved `allow` reloaded
+by a second server process over the same data folder that lets a run call the
+tool without an approval pause (`echo:allowed`).
+
 ## 3.60.0
 
 MCP tool calls in the VS Code embedded server were forwarded with whatever

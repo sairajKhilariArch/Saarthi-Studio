@@ -1580,6 +1580,129 @@ test("MCP arguments are checked against the tool's own bounded schema", () => {
   );
 });
 
+test("saved permission rules block, allow and outlive the built-in server", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const script = path.join(storage, "fake-mcp.mjs");
+  fs.writeFileSync(script, FAKE_MCP);
+  const replies = [];
+  const start = () => startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    fetchImpl: async () => {
+      const content = replies.length ? replies.shift() : '{"action":"fail","reason":"mock out of replies"}';
+      return new Response(
+        JSON.stringify({ model: "auto", provider: "mock", choices: [{ message: { content } }] }),
+        { status: 200 },
+      );
+    },
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const call = async (embedded, route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const waitRun = async (embedded, id, predicate, ms = 10000) => {
+    const started = Date.now();
+    for (;;) {
+      const data = await (await fetch(`${embedded.url}/api/runs/${id}`)).json();
+      if (predicate(data)) return data;
+      if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  let embedded = await start();
+  const saved = await call(embedded, "/api/mcp/servers", {
+    name: "echo",
+    transport: "stdio",
+    command: process.execPath,
+    args: [script],
+    enabled: true,
+  });
+  assert.equal(saved.status, 200);
+
+  const listed = await (await fetch(`${embedded.url}/api/permissions`)).json();
+  assert.deepEqual(listed.actions.map((entry) => entry.id), ["fs_write", "command", "mcp_tool"]);
+  assert.deepEqual(listed.rules, []);
+
+  // A foreign page cannot write policy.
+  const crossOrigin = await fetch(`${embedded.url}/api/permissions/grant`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://evil.example" },
+    body: JSON.stringify({ action: "mcp_tool", target: "echo.echo", decision: "deny", scope: "always" }),
+  });
+  assert.equal(crossOrigin.status, 403);
+
+  const denied = await call(embedded, "/api/permissions/grant", {
+    action: "mcp_tool",
+    target: "echo.echo",
+    decision: "deny",
+    scope: "always",
+  });
+  assert.equal(denied.status, 200);
+
+  // The agent cannot call it: the saved deny ends the run by name.
+  replies.push('{"action":"mcp","server":"echo","tool":"echo","arguments":{"text":"no"}}');
+  const blocked = await call(embedded, "/api/runs", { goal: "call the tool", allowMcp: true, autoApprove: true });
+  assert.equal(blocked.status, 200);
+  const stopped = await waitRun(embedded, blocked.body.run.id, (data) => data.status === "failed");
+  assert.match(stopped.error, /saved permission rule denies mcp_tool on "echo\.echo"/);
+  assert.match(stopped.stepList.find((step) => step.action === "mcp").output, /Settings → Permissions/);
+
+  // A person-driven route is refused too, with the same reason.
+  const refusedCall = await call(embedded, "/api/mcp/call", { server: "echo", tool: "echo", arguments: { text: "x" } });
+  assert.equal(refusedCall.status, 403);
+  assert.match(refusedCall.body.error, /saved permission rule denies mcp_tool/);
+
+  const audit = await (await fetch(`${embedded.url}/api/permissions/audit?limit=25`)).json();
+  assert.ok(audit.entries.some((entry) => entry.action === "mcp_tool" && /denied by a saved rule/.test(entry.detail)));
+  assert.ok(audit.entries.some((entry) => /rule saved/.test(entry.detail)));
+
+  const revoked = await call(embedded, "/api/permissions/revoke", { action: "mcp_tool", target: "echo.echo" });
+  assert.equal(revoked.status, 200);
+  assert.equal(revoked.body.removed, 1);
+  assert.deepEqual((await (await fetch(`${embedded.url}/api/permissions`)).json()).rules, []);
+
+  // A saved allow removes the approval pause the run would otherwise hit,
+  // and the rule is on disk: a fresh server process still applies it.
+  const allowed = await call(embedded, "/api/permissions/grant", {
+    action: "mcp_tool",
+    target: "echo.echo",
+    decision: "allow",
+    scope: "always",
+  });
+  assert.equal(allowed.status, 200);
+  await embedded.close();
+
+  embedded = await start();
+  const reloaded = await (await fetch(`${embedded.url}/api/permissions`)).json();
+  assert.equal(reloaded.rules.length, 1);
+  assert.equal(reloaded.rules[0].decision, "allow");
+  replies.push('{"action":"mcp","server":"echo","tool":"echo","arguments":{"text":"allowed"}}');
+  replies.push('{"action":"done","summary":"the call ran without a pause"}');
+  const run = await call(embedded, "/api/runs", { goal: "call the allowed tool", allowMcp: true });
+  assert.equal(run.status, 200);
+  const finished = await waitRun(embedded, run.body.run.id, (data) => data.status === "succeeded");
+  assert.equal(finished.stepList.find((step) => step.action === "mcp").output, "echo:allowed");
+
+  await embedded.close();
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
 test("the embedded server drives a streamable HTTP MCP server", async () => {
   const workspace = tempDir();
   const storage = tempDir();
