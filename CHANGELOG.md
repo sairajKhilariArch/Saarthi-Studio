@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.57.0
+
+The VS Code embedded server ignored Thinking for agent runs, and its test suite
+had a stale assertion that had never been observed green here.
+
+- Agent runs now resolve the same reasoning level chat does and send
+  `reasoning_effort` for low/medium/high, with no parameter at all for `off` or
+  unset. A run has no composer of its own, so `freeAiStudio.thinkingLevel` is
+  the only scope that applies to it; before this, the setting changed chat
+  turns while every agent step quietly asked the provider for its default.
+- Fixed the 3.48.0 assertion that expected `supportsCapability(..., "mcp")` to
+  be false one line after asserting `features.mcp === true`. The negative case
+  now names `git`, which the embedded server honestly reports as false.
+- The extension suite ran on this machine for the first time: portable Node
+  22.14.0, checked against nodejs.org's published SHA-256 and kept outside the
+  project. `node --test test/lib.test.mjs`: **34 passed, 0 failed** in nine
+  seconds. The new case starts a real agent run against a fake router and
+  asserts the request body carries `reasoning_effort: "high"` for `high` and no
+  such key at all for `off`.
+
+Still absent from the embedded server, and unchanged here: HTTP/SSE MCP
+transports, headers and OAuth (refused with a message naming the desktop app),
+MCP tools in agent prompts, and a permission store (`KNOWN-ISSUES.md` #44).
+
 ## 3.56.0
 
 The debugger forgot everything when the window closed. Breakpoints lived in a

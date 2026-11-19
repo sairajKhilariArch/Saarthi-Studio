@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.56.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.57.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.57.0 (2026-11-19):** the VS Code embedded server's agent runs
+honour Thinking. Every agent step had ignored `freeAiStudio.thinkingLevel`,
+because the runtime's `callRouter` passed no level; it now resolves the global
+setting and sends `reasoning_effort` for low/medium/high, none for off/unset. A
+new test drives a real agent run against a fake router and asserts the body for
+both cases. The extension suite also ran here for the first time — portable Node
+22.14.0 from nodejs.org, SHA-256 checked — **34 passed, 0 failed**, which
+included correcting a stale 3.48.0 assertion that called MCP unsupported beside
+`features.mcp === true`. Still missing there: HTTP/SSE MCP, headers, OAuth, MCP
+tools in agent prompts and any saved permission rule (`KNOWN-ISSUES.md` #44).
 **Revision 3.56.0 (2026-11-18):** breakpoints became durable. A new
 `debug_breakpoints` table keeps `(root, path, line, condition)` per workspace
 folder; the breakpoint route validates the folder's whole set (20 files, 200

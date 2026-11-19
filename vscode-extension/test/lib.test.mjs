@@ -298,7 +298,10 @@ test("built-in server chats through the router and serves the workspace", async 
   assert.equal(capabilities.features.chat, true);
   assert.equal(capabilities.features.mcp, true);
   assert.equal(supportsCapability(capabilities, "chat"), true);
-  assert.equal(supportsCapability(capabilities, "mcp"), false);
+  // 3.48.0 made MCP a real stdio client here, so the embedded server advertises
+  // it; the negative case names a capability it still refuses.
+  assert.equal(supportsCapability(capabilities, "mcp"), true);
+  assert.equal(supportsCapability(capabilities, "git"), false);
   assert.match(capabilitySummary(capabilities), /contract 1/);
 
   const created = await post("/api/conversations", { title: "Smoke test" });
@@ -1017,6 +1020,81 @@ test("thinking resolves message choice above directive above the global setting"
   assert.deepEqual(resolveThinking(undefined, directive, "low"), { level: "medium", scope: "message" });
   assert.deepEqual(resolveThinking("banana", none, "low"), { level: "low", scope: "global" });
   assert.equal(resolveThinking("", none, ""), null);
+});
+
+test("agent runs send the configured reasoning level, and none when it is off", async () => {
+  const makeServer = async (thinkingLevel) => {
+    const workspace = tempDir();
+    const storage = tempDir();
+    const bodies = [];
+    const embedded = await startEmbeddedServer({
+      uiDir: path.join(process.cwd(), "media", "ui"),
+      storeFile: path.join(storage, "history.json"),
+      workspaceRoot: workspace,
+      fetchImpl: async (_url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return new Response(
+          JSON.stringify({
+            model: "auto",
+            provider: "mock",
+            choices: [{ message: { content: '{"action":"done","summary":"nothing to change"}' } }],
+          }),
+          { status: 200 },
+        );
+      },
+      getConfig: () => ({
+        routerBaseUrl: "http://127.0.0.1:3001/v1",
+        apiKey: "",
+        model: "auto",
+        contextBudgetTokens: 4000,
+        historyMessages: 4,
+        sendWorkspaceOutline: false,
+        thinkingLevel,
+      }),
+    });
+    const post = async (route, payload) => {
+      const response = await fetch(`${embedded.url}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const waitRun = async (id, predicate, ms = 8000) => {
+      const started = Date.now();
+      for (;;) {
+        const data = await (await fetch(`${embedded.url}/api/runs/${id}`)).json();
+        if (predicate(data)) return data;
+        if (Date.now() - started > ms) throw new Error(`timeout; status=${data.status} error=${data.error}`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    return { embedded, workspace, storage, bodies, post, waitRun };
+  };
+
+  const high = await makeServer("high");
+  const started = await high.post("/api/runs", { goal: "look around and stop" });
+  assert.equal(started.status, 200);
+  await high.waitRun(started.body.run.id, (data) => data.status === "succeeded");
+  assert.ok(high.bodies.length >= 1, "an agent step asks the router for a reply");
+  assert.equal(high.bodies[0].reasoning_effort, "high", "the run carries the global thinking level");
+  await high.embedded.close();
+  cleanupTemp(high.workspace);
+  cleanupTemp(high.storage);
+
+  const off = await makeServer("off");
+  const quiet = await off.post("/api/runs", { goal: "look around and stop" });
+  assert.equal(quiet.status, 200);
+  await off.waitRun(quiet.body.run.id, (data) => data.status === "succeeded");
+  assert.ok(off.bodies.length >= 1);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(off.bodies[0], "reasoning_effort"),
+    false,
+    "off sends no reasoning parameter at all",
+  );
+  await off.embedded.close();
+  cleanupTemp(off.workspace);
+  cleanupTemp(off.storage);
 });
 
 test("built-in server asks the router for the reasoning level and says where it came from", async () => {
