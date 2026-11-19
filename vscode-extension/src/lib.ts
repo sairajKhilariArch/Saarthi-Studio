@@ -22,6 +22,7 @@ import {
 } from "./agent";
 import type { AgentStep } from "./agent";
 import { McpError, McpService } from "./mcp";
+import { McpOAuth } from "./mcpoauth";
 import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
 import type { PermitAction } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
@@ -1199,6 +1200,9 @@ export interface EmbeddedServerOptions {
   /** Router admin port used by the console proxy (FreeLLMAPI: 3001). */
   routerPort?: number;
   log?: (message: string) => void;
+  /** Where an OAuth sign-in opens its authorize URL; the platform browser by
+      default. `node --test` passes its own opener, so no browser is spawned. */
+  openBrowser?: (url: string) => void;
 }
 
 export interface EmbeddedServer {
@@ -1278,7 +1282,10 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
   const activeProject = (): string | null => projectsStore.read().active || null;
   // Its own registry beside the conversation store: the VS Code settings are
   // read-only to this server, so the panel's Save writes here instead.
-  const mcp = new McpService(path.join(path.dirname(options.storeFile), "mcp.json"));
+  // OAuth sign-ins for http/sse MCP servers live beside the registry, in a
+  // 0600 file: the access and refresh tokens never reach the settings file.
+  const oauth = new McpOAuth(path.join(path.dirname(options.storeFile), "mcp-oauth.json"));
+  const mcp = new McpService(path.join(path.dirname(options.storeFile), "mcp.json"), oauth);
   // The three actions this server can enforce (agent writes, agent commands,
   // MCP tool calls); the desktop owns the full policy engine.
   const permissions = new PermissionStore(path.join(path.dirname(options.storeFile), "permissions.json"));
@@ -2188,13 +2195,97 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         if (!mcpWritable()) return;
         const body = await readBody(request);
         try {
-          await mcp.remove(String(body.name || ""));
+          const name = String(body.name || "");
+          await mcp.remove(name);
+          // Removing a server also forgets its sign-in: re-adding the same
+          // name must not silently reuse a token the user meant to drop.
+          oauth.forget(name);
           sendJson(response, 200, { ok: true });
         } catch (error) {
           mcpFailed(error);
         }
         return;
       }
+      /* OAuth sign-in for a remote MCP server ------------------------ */
+      /* The shared panel's contract, as the desktop serves it:
+         GET  /api/mcp/:name/oauth/status, POST .../oauth/start,
+         POST .../oauth/forget. The callback lands on the flow's own loopback
+         listener, so no route here holds a code or a token. */
+      const oauthRoute = /^\/api\/mcp\/([^/]+)\/oauth\/(status|start|forget)$/.exec(routePath);
+      if (oauthRoute) {
+        const name = decodeURIComponent(oauthRoute[1] || "");
+        const what = oauthRoute[2] || "";
+        const row = mcp.list().find((entry) => entry.name === name);
+        if (!row) {
+          sendJson(response, 404, { ok: false, error: `Unknown MCP server: ${name}` });
+          return;
+        }
+        const transport = String(row.transport || "");
+        const manual = (Array.isArray(row.headers) ? (row.headers as string[]) : [])
+          .some((key) => key.toLowerCase() === "authorization");
+        if (what === "status" && method === "GET") {
+          // Booleans and an expiry only: a token value never reaches the panel.
+          sendJson(response, 200, {
+            ok: true,
+            transport,
+            url: String(row.url || ""),
+            manual_header: manual,
+            ...oauth.status(name),
+          });
+          return;
+        }
+        if (what === "start" && method === "POST") {
+          if (!mcpWritable()) return;
+          // Drain the panel's {approve} body so the socket stays usable.
+          await readBody(request);
+          if (transport === "stdio") {
+            sendJson(response, 400, {
+              ok: false,
+              error: "A stdio server is a local program and needs no OAuth sign-in.",
+            });
+            return;
+          }
+          if (manual) {
+            sendJson(response, 400, {
+              ok: false,
+              error: "This server carries a hand-written authorization header; remove it before signing in.",
+            });
+            return;
+          }
+          try {
+            const status = await oauth.authorize({
+              name,
+              url: String(row.url || ""),
+              openBrowser: options.openBrowser || ((target: string) => openInSystemBrowser(target)),
+            });
+            // The warm session was opened without a token; the next call must
+            // reconnect so it carries the new one.
+            await mcp.disconnect(name).catch(() => undefined);
+            sendJson(response, 200, {
+              ok: true,
+              name,
+              authorized: status.authorized,
+              expires_at: status.expires_at,
+              has_refresh: status.has_refresh,
+              message: "Signed in. The connection carries your OAuth token now.",
+            });
+          } catch (error) {
+            sendJson(response, 502, { ok: false, error: (error as Error).message });
+          }
+          return;
+        }
+        if (what === "forget" && method === "POST") {
+          if (!mcpWritable()) return;
+          await readBody(request);
+          oauth.forget(name);
+          await mcp.disconnect(name).catch(() => undefined);
+          sendJson(response, 200, { ok: true, name, message: "OAuth session removed." });
+          return;
+        }
+        sendJson(response, 405, { ok: false, error: `${method} is not how you ${what} an MCP sign-in.` });
+        return;
+      }
+
       if (routePath === "/api/mcp/test" && method === "POST") {
         if (!mcpWritable()) return;
         const body = await readBody(request);

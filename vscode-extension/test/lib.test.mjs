@@ -4,6 +4,7 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 
 import {
   ConversationStore,
@@ -43,6 +44,7 @@ import {
   sanitize,
   unifiedDiff,
 } from "../dist/agent.mjs";
+import { discoverOAuth, pkceChallenge, pkceVerifier, wellKnownCandidates } from "../dist/mcpoauth.mjs";
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "studio-test-"));
@@ -2364,4 +2366,258 @@ test("the embedded server drives a streamable HTTP MCP server", async () => {
   await new Promise((resolve) => remote.close(resolve));
   cleanupTemp(workspace);
   cleanupTemp(storage);
+});
+
+test("an HTTP MCP server signs in over OAuth and carries the token", async () => {
+  const workspace = tempDir();
+  const storage = tempDir();
+  const seen = [];
+  let authorizeHits = 0;
+  let challenge = "";
+  const fake = http.createServer((request, response) => {
+    const base = `http://127.0.0.1:${fake.address().port}`;
+    const url = new URL(`http://127.0.0.1${request.url}`);
+    const json = (status, body) => {
+      response.writeHead(status, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
+    if (url.pathname === "/.well-known/oauth-protected-resource") {
+      json(200, { resource: `${base}/mcp`, authorization_servers: [base] });
+      return;
+    }
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      json(200, {
+        issuer: base,
+        authorization_endpoint: `${base}/authorize`,
+        token_endpoint: `${base}/token`,
+        registration_endpoint: `${base}/register`,
+        scopes_supported: ["mcp"],
+      });
+      return;
+    }
+    if (url.pathname === "/register" && request.method === "POST") {
+      json(200, { client_id: "client-abc", client_secret: "", scope: "mcp" });
+      return;
+    }
+    if (url.pathname === "/authorize") {
+      authorizeHits += 1;
+      // PKCE and the RFC 8707 resource travel with the request.
+      assert.equal(url.searchParams.get("response_type"), "code");
+      assert.equal(url.searchParams.get("client_id"), "client-abc");
+      assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+      assert.equal(url.searchParams.get("resource"), `${base}/mcp`);
+      assert.equal(url.searchParams.get("scope"), "mcp");
+      challenge = url.searchParams.get("code_challenge") || "";
+      const target = new URL(url.searchParams.get("redirect_uri") || "");
+      target.searchParams.set("code", "code-1");
+      target.searchParams.set("state", url.searchParams.get("state") || "");
+      response.writeHead(302, { Location: target.toString() });
+      response.end();
+      return;
+    }
+    if (url.pathname === "/token" && request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const form = new URLSearchParams(body);
+        const digest = createHash("sha256")
+          .update(form.get("code_verifier") || "")
+          .digest("base64")
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        if (form.get("grant_type") !== "authorization_code" || form.get("code") !== "code-1" || digest !== challenge) {
+          json(400, { error: "invalid_grant" });
+          return;
+        }
+        json(200, { access_token: "token-1", refresh_token: "refresh-1", token_type: "Bearer", expires_in: 3600 });
+      });
+      return;
+    }
+    if (url.pathname === "/mcp" && request.method === "POST") {
+      if (request.headers.authorization !== "Bearer token-1") {
+        seen.push("refused");
+        json(401, { error: "unauthorized" });
+        return;
+      }
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const message = body ? JSON.parse(body) : {};
+        if (message.method === "initialize") {
+          seen.push("initialize");
+          response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "sess-1" });
+          response.end(JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "locked", version: "8.8.8" } },
+          }));
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          response.writeHead(202);
+          response.end();
+          return;
+        }
+        if (message.method === "tools/list") {
+          json(200, {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: { tools: [{ name: "echo", description: "echo behind OAuth", inputSchema: { type: "object", required: ["text"] } }] },
+          });
+          return;
+        }
+        if (message.method === "tools/call") {
+          json(200, {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: { content: [{ type: "text", text: `oauth:${message.params.arguments.text}` }] },
+          });
+          return;
+        }
+        json(200, { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown method" } });
+      });
+      return;
+    }
+    response.writeHead(404, { "Content-Type": "text/plain" });
+    response.end("not found");
+  });
+  await new Promise((resolve) => fake.listen(0, "127.0.0.1", resolve));
+  const port = fake.address().port;
+
+  const embedded = await startEmbeddedServer({
+    uiDir: path.join(process.cwd(), "media", "ui"),
+    storeFile: path.join(storage, "history.json"),
+    workspaceRoot: workspace,
+    // The sign-in opens its authorize URL here instead of a real browser; the
+    // fake provider's redirect lands on the module's own loopback callback.
+    openBrowser: (target) => { void fetch(target).catch(() => undefined); },
+    getConfig: () => ({
+      routerBaseUrl: "http://127.0.0.1:3001/v1",
+      apiKey: "",
+      model: "auto",
+      contextBudgetTokens: 4000,
+      historyMessages: 4,
+      sendWorkspaceOutline: false,
+    }),
+  });
+  const get = async (route) => (await fetch(`${embedded.url}${route}`)).json();
+  const post = async (route, payload) => {
+    const response = await fetch(`${embedded.url}${route}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const saved = await post("/api/mcp/servers", {
+    name: "locked",
+    transport: "http",
+    url: `http://127.0.0.1:${port}/mcp`,
+    enabled: true,
+  });
+  assert.equal(saved.status, 200);
+
+  // Before signing in there is no token, so the server's 401 is the answer.
+  const before = await post("/api/mcp/test", { name: "locked" });
+  assert.equal(before.status, 502);
+  assert.match(before.body.error, /401/);
+  assert.equal((await get("/api/mcp/locked/oauth/status")).authorized, false);
+
+  const started = await post("/api/mcp/locked/oauth/start", { approve: true });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.equal(started.body.authorized, true);
+  assert.equal(started.body.has_refresh, true);
+  assert.match(started.body.message, /Signed in/);
+  assert.equal(authorizeHits, 1);
+
+  const status = await get("/api/mcp/locked/oauth/status");
+  assert.equal(status.registered, true);
+  assert.equal(status.authorized, true);
+  assert.equal(status.transport, "http");
+  assert.equal(status.manual_header, false);
+  assert.equal(status.has_refresh, true);
+  assert.ok(status.expires_at > Date.now() / 1000);
+
+  const tested = await post("/api/mcp/test", { name: "locked" });
+  assert.equal(tested.status, 200, JSON.stringify(tested.body));
+  assert.equal(tested.body.version, "8.8.8");
+  assert.ok(seen.includes("initialize"));
+  const called = await post("/api/mcp/call", { server: "locked", tool: "echo", arguments: { text: "hi" } });
+  assert.equal(called.status, 200);
+  assert.equal(called.body.text, "oauth:hi");
+
+  // Forgetting the session clears the token and closes the warm connection.
+  const forgotten = await post("/api/mcp/locked/oauth/forget", { name: "locked" });
+  assert.equal(forgotten.status, 200);
+  assert.equal(forgotten.body.message, "OAuth session removed.");
+  assert.equal((await get("/api/mcp/locked/oauth/status")).authorized, false);
+  const refused = await post("/api/mcp/test", { name: "locked" });
+  assert.equal(refused.status, 502);
+  assert.match(refused.body.error, /401/);
+
+  // Unknown servers, stdio servers and a hand-written header are refused by
+  // name, not guessed at.
+  assert.equal((await post("/api/mcp/ghost/oauth/start", { approve: true })).status, 404);
+  await post("/api/mcp/servers", { name: "local", transport: "stdio", command: "node", args: ["-e", "0"] });
+  const local = await post("/api/mcp/local/oauth/start", { approve: true });
+  assert.equal(local.status, 400);
+  assert.match(local.body.error, /stdio server is a local program/);
+  await post("/api/mcp/servers", {
+    name: "manual",
+    transport: "http",
+    url: `http://127.0.0.1:${port}/mcp`,
+    headers: { Authorization: "Bearer hand-written" },
+  });
+  const handWritten = await post("/api/mcp/manual/oauth/start", { approve: true });
+  assert.equal(handWritten.status, 400);
+  assert.match(handWritten.body.error, /hand-written authorization header/);
+  const manualStatus = await get("/api/mcp/manual/oauth/status");
+  assert.equal(manualStatus.manual_header, true);
+  assert.equal(manualStatus.authorized, false);
+
+  await embedded.close();
+  fake.closeAllConnections();
+  await new Promise((resolve) => fake.close(resolve));
+  cleanupTemp(workspace);
+  cleanupTemp(storage);
+});
+
+test("OAuth discovery refuses metadata that claims another issuer", async () => {
+  const { server, url } = await listen((request, response) => {
+    if ((request.url || "").startsWith("/.well-known/oauth-authorization-server")) {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        issuer: "http://somewhere.else",
+        authorization_endpoint: "http://somewhere.else/authorize",
+        token_endpoint: "http://somewhere.else/token",
+      }));
+      return;
+    }
+    response.writeHead(404, { "Content-Type": "text/plain" });
+    response.end("no");
+  });
+
+  // A document found at one place that claims another issuer is not trusted.
+  await assert.rejects(
+    () => discoverOAuth(`${url}/mcp`),
+    /does not match where it was found; refusing it/,
+  );
+
+  // The well-known spellings and the PKCE pair are standards shaped.
+  assert.deepEqual(
+    wellKnownCandidates("http://127.0.0.1:9/mcp", ".well-known/oauth-protected-resource"),
+    [
+      "http://127.0.0.1:9/.well-known/oauth-protected-resource/mcp",
+      "http://127.0.0.1:9/.well-known/oauth-protected-resource",
+      "http://127.0.0.1:9/mcp/.well-known/oauth-protected-resource",
+    ],
+  );
+  const verifier = pkceVerifier();
+  assert.match(verifier, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(pkceChallenge("verifier"), createHash("sha256").update("verifier").digest("base64url"));
+
+  server.closeAllConnections?.();
+  await new Promise((resolve) => server.close(resolve));
 });

@@ -11,8 +11,9 @@
 //     token the user supplies);
 //   * one warm session per server, opened on Test / health check / a tool call
 //     and closed by Disconnect, Remove or the process exiting;
-//   * no server-to-client requests (they are answered with -32601) and no
-//     legacy SSE transport or OAuth sign-in — those need the desktop app.
+//   * OAuth sign-in for an http/sse server that asks for it (`mcpoauth.ts`),
+//     with the stored token attached and refreshed before each request;
+//   * no server-to-client requests (they are answered with -32601).
 //
 // Nothing here invents an observation: a report is only "healthy" after a real
 // handshake, and a failure keeps the server's own error text.
@@ -23,6 +24,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { validateArguments } from "./mcpschema";
+import type { McpOAuth } from "./mcpoauth";
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export const MCP_REQUEST_TIMEOUT_MS = 20_000;
@@ -194,7 +196,7 @@ export function normalizeMcpServer(input: Record<string, unknown>): McpServer {
   // Saying so is better than saving a server this build cannot use.
   throw new McpError(
     400,
-    `The VS Code built-in server speaks stdio, streamable HTTP and SSE. ${rawTransport.toUpperCase()} servers and OAuth sign-in need the Sarthi Studio desktop app.`,
+    `The VS Code built-in server speaks stdio, streamable HTTP and SSE. ${rawTransport.toUpperCase()} servers need the Sarthi Studio desktop app.`,
   );
 }
 
@@ -480,7 +482,7 @@ class HttpMcpSession implements McpWire {
   private sessionId = "";
   readonly logs: McpLogEntry[] = [];
 
-  constructor(private readonly server: McpServer) {}
+  constructor(private readonly server: McpServer, private readonly oauth?: McpOAuth) {}
 
   get protocolVersion(): string {
     return this.protocol;
@@ -495,6 +497,12 @@ class HttpMcpSession implements McpWire {
     if (this.logs.length > MAX_LOG_ENTRIES) this.logs.shift();
   }
 
+  /** The server's own headers plus a stored OAuth token, when one applies. */
+  private async authHeaders(): Promise<Record<string, string>> {
+    const extra = this.oauth ? await this.oauth.header(this.server) : {};
+    return { ...this.server.headers, ...extra };
+  }
+
   /** Send one JSON-RPC message; header values never reach the log. */
   private async post(
     message: Record<string, unknown>,
@@ -504,7 +512,7 @@ class HttpMcpSession implements McpWire {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
-      ...this.server.headers,
+      ...(await this.authHeaders()),
     };
     if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
     const controller = new AbortController();
@@ -614,7 +622,7 @@ class HttpMcpSession implements McpWire {
       // Best effort: a server may not implement DELETE, and that is fine.
       await fetch(this.server.url, {
         method: "DELETE",
-        headers: { ...this.server.headers, "Mcp-Session-Id": this.sessionId },
+        headers: { ...(await this.authHeaders()), "Mcp-Session-Id": this.sessionId },
         signal: AbortSignal.timeout(5000),
       });
     } catch {
@@ -636,7 +644,7 @@ class SseMcpSession implements McpWire {
   private ready?: Promise<void>;
   readonly logs: McpLogEntry[] = [];
 
-  constructor(private readonly server: McpServer) {}
+  constructor(private readonly server: McpServer, private readonly oauth?: McpOAuth) {}
 
   get protocolVersion(): string {
     return this.protocol;
@@ -649,6 +657,12 @@ class SseMcpSession implements McpWire {
   private record(source: McpSource, text: string): void {
     this.logs.push({ at: Date.now() / 1000, source, text: cap(text, MAX_LOG_LINE) });
     if (this.logs.length > MAX_LOG_ENTRIES) this.logs.shift();
+  }
+
+  /** The server's own headers plus a stored OAuth token, when one applies. */
+  private async authHeaders(): Promise<Record<string, string>> {
+    const extra = this.oauth ? await this.oauth.header(this.server) : {};
+    return { ...this.server.headers, ...extra };
   }
 
   private failAll(reason: string): void {
@@ -704,7 +718,7 @@ class SseMcpSession implements McpWire {
         let response: Response;
         try {
           response = await fetch(this.server.url, {
-            headers: { Accept: "text/event-stream", ...this.server.headers },
+            headers: { Accept: "text/event-stream", ...(await this.authHeaders()) },
             signal: controller.signal,
           });
         } catch (error) {
@@ -779,7 +793,7 @@ class SseMcpSession implements McpWire {
     if (!this.postUrl) throw new Error("the MCP session is not open");
     const response = await fetch(this.postUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...this.server.headers },
+      headers: { "Content-Type": "application/json", ...(await this.authHeaders()) },
       body: JSON.stringify(message),
       signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
     });
@@ -868,7 +882,7 @@ export class McpService {
   /** Tools of the current session, so a call checks the schema it was shown. */
   private toolCache = new Map<string, McpTool[]>();
 
-  constructor(private readonly file: string) {}
+  constructor(private readonly file: string, private readonly oauth?: McpOAuth) {}
 
   private servers(): McpServer[] {
     return readRegistry(this.file);
@@ -940,9 +954,9 @@ export class McpService {
     const warm = this.sessions.get(name);
     if (warm) return warm;
     const session: McpWire = server.transport === "http"
-      ? new HttpMcpSession(server)
+      ? new HttpMcpSession(server, this.oauth)
       : server.transport === "sse"
-        ? new SseMcpSession(server)
+        ? new SseMcpSession(server, this.oauth)
         : new McpSession(server);
     this.sessions.set(name, session);
     try {

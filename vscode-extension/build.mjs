@@ -51,7 +51,11 @@ await build({
 
 if (withTests) {
   await build({
-    entryPoints: [join(here, "src", "lib.ts"), join(here, "src", "agent.ts")],
+    entryPoints: [
+      join(here, "src", "lib.ts"),
+      join(here, "src", "agent.ts"),
+      join(here, "src", "mcpoauth.ts"),
+    ],
     outdir: join(here, "dist"),
     outExtension: { ".js": ".mjs" },
     bundle: true,

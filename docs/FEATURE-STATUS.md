@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.67.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.68.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,12 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
 
+**Revision 3.68.0 (2026-11-19):** the VS Code embedded server signs in to MCP
+over OAuth. Discovery (RFC 9728 then RFC 8414 with an issuer check), dynamic
+registration (RFC 7591), PKCE S256, a loopback callback, refresh inside a 30 s
+margin, and the desktop's routes (`/api/mcp/:name/oauth/{status,start,forget}`)
+so the shared panel's Sign in button works; tokens live in a 0600 file, not an
+OS keychain. **45 passed, 0 failed**.
 **Revision 3.67.0 (2026-11-19):** saved permission rules hold on the VS Code
 embedded server's person-driven editor routes too — `fs_read` on reading a
 file, listing a folder and the artifact listing, `fs_write` on writing,

@@ -1,5 +1,45 @@
 # Changelog
 
+## 3.68.0
+
+The VS Code built-in server refused OAuth sign-in for MCP servers: an HTTP
+server that expected a bearer token could only be used by pasting the token into
+a header by hand, and the shared Settings → MCP panel's Sign in button had no
+route behind it.
+
+- `mcpoauth.ts` ports `app/src/mcp_oauth.rs`: protected-resource discovery
+  (RFC 9728) names the authorization server, that server's metadata (RFC 8414)
+  must claim the issuer it was found at — a document found elsewhere that claims
+  another issuer is refused — with the OIDC spelling as a fallback.
+- A server with no client registration gets one (RFC 7591) as a public client;
+  PKCE (`S256`) protects the code, and the `resource` indicator travels on both
+the authorize and token requests.
+- One sign-in runs on a loopback callback listener with an ephemeral port, opens
+  the authorize URL in the platform browser, exchanges the code and stores the
+  session in a 0600 `mcp-oauth.json` beside the conversation store.
+- A stored token within 30 seconds of its expiry is refreshed before a request
+  carries it; a server with its own `Authorization` header keeps it, and a
+  stdio server is never given one.
+- The routes match the desktop so the shared panel works unchanged:
+  `GET /api/mcp/:name/oauth/status`, `POST .../oauth/start` and
+  `POST .../oauth/forget`. Status answers booleans, the transport, whether a
+  hand-written header is in use and the expiry — never a token value.
+- Removing a server forgets its sign-in, so re-adding the same name cannot
+  silently reuse credentials the user meant to drop.
+- `startEmbeddedServer` accepts an `openBrowser` opener, so a test drives a
+  whole sign-in without spawning a browser.
+
+Verified by the extension suite: **45 passed, 0 failed**. A local fake provider
+serves protected-resource metadata, authorization-server metadata, dynamic
+registration, an authorize endpoint that checks PKCE/state/resource and a token
+endpoint that verifies the verifier's SHA-256 against the stored challenge; the
+MCP endpoint answers 401 until `Bearer token-1` arrives. The case asserts the
+401 before signing in, a real sign-in, status showing registered/authorized/expiry/
+refresh, a tool list and a tool call carrying the token, then that forgetting
+restores the 401; unknown servers (404), stdio servers and servers with a
+hand-written header (400) are refused. A second case proves the discovery
+refusal of mismatched issuer metadata and the PKCE/well-known shapes.
+
 ## 3.67.0
 
 Saved permission rules reached the agent's own actions and the MCP panel's call
