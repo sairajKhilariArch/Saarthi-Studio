@@ -326,11 +326,11 @@ body.no-bottom { --bottom-h: 0px; }
 .thread-list { flex: 1; overflow-y: auto; min-height: 60px; padding-right: 2px; }
 .thread-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 8px; border-radius: 7px; margin-bottom: 1px;
+  padding: 8px 8px; border-radius: 9px; margin-bottom: 1px;
   color: var(--dim); font-size: 12.5px; text-align: left; position: relative;
 }
 .thread-item:hover { background: var(--surface); color: var(--text); }
-.thread-item.active { background: var(--surface-2); color: var(--text); }
+.thread-item.active { background: var(--accent-soft); color: var(--text); }
 .thread-item .thread-time {
   flex: none;
   font-size: 10.5px;
@@ -584,9 +584,9 @@ tr:last-child td { border-bottom: 0; }
 .chat-column { max-width: 840px; margin: 0 auto; padding: 26px 28px 8px; }
 .welcome { text-align: center; padding: 44px 0 30px; }
 .welcome-mark {
-  width: 46px; height: 46px; margin: 0 auto 18px; border-radius: 12px;
-  display: grid; place-items: center; background: #111;
-  border: 1px solid #111; color: #fff;
+  width: 46px; height: 46px; margin: 0 auto 18px; border-radius: 14px;
+  display: grid; place-items: center; background: var(--accent-soft);
+  border: 1px solid var(--accent-border); color: var(--accent);
 }
 .welcome-mark .icon { width: 24px; height: 24px; }
 .welcome h1 { font-family: var(--display); font-size: 27px; letter-spacing: -.02em; margin: 0 0 10px; font-weight: 600; }
@@ -594,10 +594,10 @@ tr:last-child td { border-bottom: 0; }
 .suggestions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; text-align: left; }
 .suggestion {
   display: flex; align-items: center; gap: 11px; padding: 13px 14px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  color: var(--text); text-align: left;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  color: var(--text); text-align: left; transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-.suggestion:hover { background: var(--surface); border-color: var(--line-strong); }
+.suggestion:hover { background: var(--surface); border-color: var(--line-strong); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
 .suggestion-icon {
   width: 28px; height: 28px; flex: none; border-radius: 7px; display: grid; place-items: center;
   background: var(--surface-2); color: var(--accent);
@@ -610,16 +610,19 @@ tr:last-child td { border-bottom: 0; }
 .msg { animation: rise .18s ease both; }
 .msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .msg-avatar {
-  width: 21px; height: 21px; border-radius: 6px; display: grid; place-items: center;
+  width: 21px; height: 21px; border-radius: 8px; display: grid; place-items: center;
   background: var(--surface-2); color: var(--dim); font-size: 9px; font-weight: 700; flex: none;
 }
 .msg-avatar .icon { width: 12px; height: 12px; }
 .msg-avatar.assistant { background: var(--accent-soft); color: var(--accent); }
 .msg-author { font-size: 11.5px; font-weight: 600; color: var(--dim); }
 .msg-meta { font-size: 11px; color: var(--mute); margin-left: auto; }
+/* Assistant replies read as plain prose on the canvas, Claude-style: the
+   card chrome belongs to the user's bubbles and to errors, not to every
+   answer. Code blocks and attachments keep their own surfaces. */
 .msg-card {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-  padding: 11px 14px; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: transparent; border: 0; border-radius: 0;
+  padding: 2px 0; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .msg-body { font-size: 13.5px; line-height: 1.72; color: var(--text-strong); overflow-wrap: anywhere; }
 .msg-body > :first-child { margin-top: 0; }
@@ -668,9 +671,10 @@ tr:last-child td { border-bottom: 0; }
 .msg-user .msg-card {
   max-width: 82%;
   margin-left: auto;
-  background: var(--surface-3);
-  border-color: var(--line);
-  border-radius: 12px 12px 4px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 16px 16px 6px 16px;
+  padding: 12px 16px;
 }
 .msg-user .msg-attachment { margin-left: auto; }
 .msg-user .msg-actions { justify-content: flex-end; }
@@ -686,18 +690,22 @@ tr:last-child td { border-bottom: 0; }
 .composer-shell { flex: none; padding: 8px 28px 18px; background: linear-gradient(180deg, transparent, var(--bg) 28%); }
 .composer {
   max-width: 840px; margin: 0 auto; padding: 10px 12px 8px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 13px;
-  box-shadow: var(--shadow-1);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
+  box-shadow: var(--shadow-1); transition: border-color .15s, box-shadow .15s;
 }
-.composer:focus-within { border-color: var(--accent); }
+.composer:focus-within { border-color: var(--accent); box-shadow: var(--shadow-1), 0 0 0 3px var(--accent-ring); }
 .composer textarea {
   width: 100%; resize: none; border: 0; background: transparent;
   color: var(--text); font-size: 13.5px; line-height: 1.6; padding: 4px 4px 8px;
   max-height: 190px; min-height: 26px;
 }
 .composer textarea::placeholder { color: var(--placeholder); }
-.composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 6px; border-top: 1px solid var(--line-soft); }
+/* The card's focus ring is the indicator; suppress the global focus-visible
+   outline on the inner textarea so focus never draws a double ring. */
+.composer textarea:focus-visible { outline: none; }
+.composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 6px; border-top: 1px solid var(--line-soft); flex-wrap: wrap; }
 .composer-left, .composer-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.composer-right { margin-left: auto; }
 .kbd-hint { font-size: 11px; color: var(--faint); white-space: nowrap; }
 kbd {
   font-family: var(--sans); font-size: 11px; padding: 1px 4px; border-radius: 4px;
@@ -719,8 +727,11 @@ kbd {
 .mode-btn:hover { color: var(--text); }
 .mode-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mode-btn.active { color: var(--accent-ink); background: var(--accent); font-weight: 600; }
-.send-btn { padding: 7px 12px; }
-.send-btn .icon { width: 13px; height: 13px; stroke-width: 2; }
+/* DeepSeek-style send: a filled accent squircle with the arrow alone; the
+   label stays in the title attribute for hover and assistive tech. The auto
+   margin keeps it in the right corner even when the dock wraps the bar. */
+.send-btn { width: 32px; height: 32px; padding: 0; border-radius: 10px; font-size: 0; display: grid; place-items: center; margin-left: auto; flex: none; }
+.send-btn .icon { width: 15px; height: 15px; stroke-width: 2; }
 .context-chip {
   display: inline-flex; align-items: center; gap: 7px; margin: 0 0 8px 2px;
   padding: 4px 5px 4px 9px; border-radius: 6px;

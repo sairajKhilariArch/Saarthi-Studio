@@ -1803,7 +1803,7 @@ function addMessage(role, content, options = {}) {
   const head = document.createElement("div");
   head.className = "msg-head";
   head.innerHTML = `<span class="msg-avatar ${role === "assistant" ? "assistant" : ""}">` +
-    `${role === "assistant" ? icon("spark") : icon("user")}</span>` +
+    `${role === "assistant" ? icon("tardigrade") : icon("user")}</span>` +
     `<span class="msg-author">${role === "assistant" ? "Sarthi Studio" : "You"}</span>` +
     `<span class="msg-meta"></span>`;
   if (meta) {
