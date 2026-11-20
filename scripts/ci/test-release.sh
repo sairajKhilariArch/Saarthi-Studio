@@ -126,12 +126,18 @@ else
 fi
 
 mkdir -p "$tmp/packages"
-"$py" - "$tmp/packages" <<'PY'
+"$py" - "$tmp/packages" "$here/../../android/app/build.gradle.kts" <<'PY'
 import json
+import re
 import sys
 import zipfile
 
 out = sys.argv[1]
+# The smoke reads the launch activity's namespace from the real project file;
+# the fixtures must carry the same descriptor or they test a different app.
+gradle = open(sys.argv[2], encoding="utf-8").read()
+namespace = re.search(r'namespace\s*=\s*"([^"]+)"', gradle).group(1)
+descriptor = f"L{namespace.replace('.', '/')}/MainActivity;".encode()
 
 
 def vsix(name, entry=True, secret=False):
@@ -156,23 +162,49 @@ def vsix(name, entry=True, secret=False):
             archive.writestr("extension/.env", "API_KEY=do-not-ship\n")
 
 
-def apk(name, bundle=True, signed=True):
+def apk(name, launch=True, signed=True):
+    # The app is native Java: no React Native bundle or libraries. The dex
+    # must carry the launch activity, and the signature is a v1 META-INF
+    # block (the v2 fixture below covers the scheme AGP actually writes).
     with zipfile.ZipFile(f"{out}/{name}", "w") as archive:
         archive.writestr("AndroidManifest.xml", b"\x03\x00\x08\x00" + b"\x00" * 16)
-        archive.writestr("classes.dex", b"dex\n035\x00" + b"\x00" * 64)
+        dex = b"dex\n035\x00" + b"\x00" * 64
+        if launch:
+            dex += descriptor
+        archive.writestr("classes.dex", dex)
         archive.writestr("resources.arsc", b"\x02\x00\x0c\x00" + b"\x00" * 32)
-        if bundle:
-            archive.writestr("assets/index.android.bundle", "var x = 1;\n" * 8)
-        archive.writestr("lib/arm64-v8a/libreact_native_so.so", b"\x7fELF" + b"\x00" * 64)
         if signed:
             archive.writestr("META-INF/CERT.RSA", b"\x30\x82" + b"\x00" * 32)
+
+
+def add_v2_block(name):
+    # Insert a minimal APK Signing Block with a v2 ID pair before the central
+    # directory and shift the EOCD's directory offset, exactly where a real
+    # v2-signed APK carries it.
+    path = f"{out}/{name}"
+    raw = open(path, "rb").read()
+    eocd = raw.rfind(b"PK\x05\x06")
+    cd = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
+    pair = (4).to_bytes(8, "little") + (0x7109871A).to_bytes(4, "little")
+    size = (len(pair) + 24).to_bytes(8, "little")
+    block = size + pair + size + b"APK Sig Block 42"
+    moved = raw[:cd] + block + raw[cd:]
+    offset_at = eocd + len(block) + 16
+    moved = (
+        moved[:offset_at]
+        + (cd + len(block)).to_bytes(4, "little")
+        + moved[offset_at + 4:]
+    )
+    open(path, "wb").write(moved)
 
 
 vsix("good.vsix")
 vsix("no-entry.vsix", entry=False)
 vsix("secret.vsix", secret=True)
 apk("good.apk")
-apk("no-bundle.apk", bundle=False)
+apk("good-v2.apk", signed=False)
+add_v2_block("good-v2.apk")
+apk("no-launch.apk", launch=False)
 apk("unsigned.apk", signed=False)
 PY
 
@@ -203,12 +235,20 @@ else
   cat "$tmp/apk-good.out" >&2
   die "apk smoke rejected an installable apk"
 fi
-if bash "$apk_smoke" "$tmp/packages/no-bundle.apk" >"$tmp/apk-bundle.out" 2>&1; then
-  die "apk smoke accepted an apk with no JavaScript bundle"
+if bash "$apk_smoke" "$tmp/packages/good-v2.apk" >"$tmp/apk-v2.out" 2>&1; then
+  grep -q 'APK Signature Scheme v2' "$tmp/apk-v2.out" ||
+    die "the v2 signature was not named"
+  pass "apk smoke accepts a v2-signed apk with no v1 entries"
 else
-  grep -q 'index.android.bundle' "$tmp/apk-bundle.out" ||
-    die "apk failure did not name the missing bundle"
-  pass "apk smoke rejects an apk with no JavaScript bundle"
+  cat "$tmp/apk-v2.out" >&2
+  die "apk smoke rejected a v2-signed apk"
+fi
+if bash "$apk_smoke" "$tmp/packages/no-launch.apk" >"$tmp/apk-launch.out" 2>&1; then
+  die "apk smoke accepted an apk whose dex lacks the launch activity"
+else
+  grep -q 'MainActivity' "$tmp/apk-launch.out" ||
+    die "apk failure did not name the missing launch activity"
+  pass "apk smoke rejects an apk whose dex lacks the launch activity"
 fi
 if bash "$apk_smoke" "$tmp/packages/unsigned.apk" >"$tmp/apk-unsigned.out" 2>&1; then
   die "apk smoke accepted an unsigned apk"

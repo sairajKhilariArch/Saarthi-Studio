@@ -161,6 +161,46 @@ close → hidden, thread click → revealed, send → message persisted and the
 router path answered (honest no-key error in the keyless scratch config);
 desktop 1600px layout unchanged. Frontend suite 100/100.
 
+## Release-pipeline round (2026-11-20, after the first push)
+
+The v3.74.1/v3.74.2 tag pushes exposed four more gate bugs; all fixed and
+verified, and **v3.74.4 published complete with all 11 assets** (release
+run #81, success):
+
+- B9: `smoke-apk.sh` demanded React Native parts (JS bundle, .so libs) and
+  v1-only signatures from a native Java app signed v2-only at minSdk 26;
+  `android-ci.yml` tested pre-rename `com/sarthi/studio` paths. Re-aimed at
+  the real install contract (3.74.3). Verified against locally built real
+  artifacts: APK 8/8, AAB 7/7, 34/34 Android unit tests; Android CI #64 green.
+- B10: the deb gate read `steps.meta.outputs.version` in a job with no
+  `id: meta` step → demanded a versionless filename. Now reads
+  `needs.preflight.outputs.version` (3.74.4).
+- B11: the Windows gate ran bash backslash continuations under the job's
+  pwsh default shell without `shell: bash` → a literal `\` became an
+  expected artifact name. Fixed + contract guard (3.74.4).
+- B12: `test-release.sh` APK fixtures still encoded the RN contract, so the
+  Linux CI "release asset gate" step failed after the smoke fix. Fixtures
+  now carry the launch-activity descriptor (namespace read from the real
+  Gradle file), a v2 signing-block fixture, and a missing-launch failure
+  case (3.74.5). 18/18.
+
+Guards added to `verify-release-contract.sh`: jobs reading
+`steps.meta.outputs` must define the step; bash continuations under pwsh
+defaults need `shell: bash`. `test-version.sh` 26/26.
+
+## Full-project sweep (2026-11-20, at 3.74.5)
+
+Every tracked file class checked: 33 shell scripts `bash -n` clean; all
+static JS `node --check` clean; 2 Python files compile; Rust fmt + 664
+tests + clippy `-D warnings` clean (headless); frontend 100/100; extension
+tsc + 45/45 + build; website astro check + build + check:build (CI env);
+CI scripts: test-version 26, test-release 18, test-artifacts 12,
+test-bundle 13, test-linux-metadata 9, test-e2e 34 (real binary, mock
+provider, kill/restart, corrupt-DB recovery) — all 0 failed.
+test-installer skips locally (no WiX/dotnet); the MSI itself built and
+smoked on Windows CI in release run #81. gui-feature builds remain blocked
+by missing webkit2gtk on this machine (CI covers them: Windows/macOS green).
+
 ## Security review (scanned areas)
 
 - SQL: all queries parameterized; the only `format!` SQL interpolates the
