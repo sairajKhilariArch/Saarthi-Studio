@@ -1,0 +1,108 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Card from '../../components/Card.astro';
+import Icon from '../../components/Icon.astro';
+import { LATEST_RELEASE, ASSETS } from '../../lib/releases';
+import { SITE } from '../../lib/site';
+import { withBase } from '../../lib/url';
+
+const platforms = [
+  {
+    icon: 'terminal',
+    name: 'Linux',
+    body: 'Debian package, AppImage, and a portable tarball for x86_64.',
+    href: '/download/linux/',
+  },
+  {
+    icon: 'monitor',
+    name: 'Windows',
+    body: 'Per-user MSI installer or a portable zip. Windows 10/11, x86_64.',
+    href: '/download/windows/',
+  },
+  {
+    icon: 'laptop',
+    name: 'macOS',
+    body: 'One universal build for Apple Silicon and Intel. Unsigned.',
+    href: '/download/macos/',
+  },
+  {
+    icon: 'smartphone',
+    name: 'Android',
+    body: 'Companion client: direct router mode or Desktop Host mode. Android 8.0+.',
+    href: '/download/android/',
+  },
+  {
+    icon: 'code',
+    name: 'VS Code',
+    body: 'The same workspace inside your editor, with an embedded server.',
+    href: '/download/vscode/',
+  },
+] as const;
+---
+
+<BaseLayout
+  title="Downloads — Sarthi Studio"
+  description="Download Sarthi Studio for Linux, Windows, macOS, Android, and VS Code. Every asset comes from the signed release workflow with SHA-256 checksums."
+>
+  <PageHero
+    eyebrow="Downloads"
+    title="Get Sarthi Studio"
+    description="Pick your platform. Every file below is attached to the latest GitHub release by the release workflow, and every release ships a SHA256SUMS.txt so you can verify what you downloaded."
+    breadcrumb={[{ label: 'Downloads' }]}
+  />
+
+  <section class="section">
+    <div class="container">
+      <div class="release-banner">
+        <strong>Latest release: {LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">Published {LATEST_RELEASE.date} · 11 assets · all platforms</span>
+        <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
+          Release notes ↗
+        </a>
+        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">
+          SHA256SUMS.txt ↗
+        </a>
+      </div>
+
+      <div class="platform-grid">
+        {
+          platforms.map((platform) => (
+            <Card href={withBase(platform.href)} class="platform-card">
+              <span class="platform-icon">
+                <Icon name={platform.icon} size={20} />
+              </span>
+              <h3>{platform.name}</h3>
+              <p>{platform.body}</p>
+              <span class="text-link">
+                View downloads
+                <Icon name="arrow-right" size={15} />
+              </span>
+            </Card>
+          ))
+        }
+      </div>
+
+      <div class="note-card">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>Verify before you install.</strong> Each release attaches
+          <code>SHA256SUMS.txt</code>. After downloading, run
+          <code>sha256sum -c SHA256SUMS.txt</code> (Linux/macOS) or
+          <code>Get-FileHash</code> (PowerShell) and compare. Builds are
+          produced by the public release workflow; desktop installers are
+          not yet code-signed, so your OS may warn on first launch — the
+          platform pages explain exactly what to expect.
+        </div>
+      </div>
+
+      <p class="section-footnote">
+        Prefer to build from source? The repository's
+        <a href={SITE.readme} target="_blank" rel="noopener noreferrer">README</a>
+        documents the one-command installer, and
+        <a href={withBase('/docs/getting-started/')}>Getting started</a>
+        walks through first-run setup on every platform.
+      </p>
+    </div>
+  </section>
+</BaseLayout>

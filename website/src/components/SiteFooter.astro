@@ -12,19 +12,29 @@ const columns: Array<{ title: string; links: FooterLink[] }> = [
   {
     title: 'Product',
     links: [
-      { label: 'Capabilities', href: withBase('/#capabilities') },
+      { label: 'Features', href: withBase('/#capabilities') },
       { label: 'How it works', href: withBase('/#how-it-works') },
-      { label: 'Platforms', href: withBase('/#platforms') },
-      { label: 'Source', href: withBase('/#source') },
+      { label: 'Downloads', href: withBase('/download/') },
+      { label: 'Releases', href: SITE.releases, external: true },
+    ],
+  },
+  {
+    title: 'Downloads',
+    links: [
+      { label: 'Linux', href: withBase('/download/linux/') },
+      { label: 'Windows', href: withBase('/download/windows/') },
+      { label: 'macOS', href: withBase('/download/macos/') },
+      { label: 'Android', href: withBase('/download/android/') },
+      { label: 'VS Code', href: withBase('/download/vscode/') },
     ],
   },
   {
     title: 'Documentation',
     links: [
-      { label: 'README', href: SITE.readme, external: true },
-      { label: 'Architecture', href: SITE.architecture, external: true },
-      { label: 'Feature status', href: SITE.featureStatus, external: true },
-      { label: 'Testing strategy', href: SITE.testing, external: true },
+      { label: 'Getting started', href: withBase('/docs/getting-started/') },
+      { label: 'Providers & models', href: withBase('/docs/providers/') },
+      { label: 'Agents & runs', href: withBase('/docs/agents/') },
+      { label: 'Privacy & security', href: withBase('/docs/privacy/') },
     ],
   },
   {
@@ -32,7 +42,7 @@ const columns: Array<{ title: string; links: FooterLink[] }> = [
     links: [
       { label: 'GitHub repository', href: SITE.repo, external: true },
       { label: 'Issues', href: SITE.issues, external: true },
-      { label: 'Releases', href: SITE.releases, external: true },
+      { label: 'Architecture', href: SITE.architecture, external: true },
       { label: 'MIT license', href: SITE.license, external: true },
     ],
   },

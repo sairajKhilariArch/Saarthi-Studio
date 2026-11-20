@@ -1,0 +1,30 @@
+---
+interface Props {
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  breadcrumb?: Array<{ label: string; href?: string }>;
+}
+
+const { eyebrow, title, description, breadcrumb } = Astro.props;
+---
+
+<section class="page-hero">
+  <div class="container">
+    {
+      breadcrumb && (
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          {breadcrumb.map((crumb, index) => (
+            <span>
+              {index > 0 && <span aria-hidden="true">/</span>}
+              {crumb.href ? <a href={crumb.href}>{crumb.label}</a> : <span aria-current="page">{crumb.label}</span>}
+            </span>
+          ))}
+        </nav>
+      )
+    }
+    {eyebrow && <p class="eyebrow">{eyebrow}</p>}
+    <h1>{title}</h1>
+    {description && <p class="page-hero-lead">{description}</p>}
+  </div>
+</section>

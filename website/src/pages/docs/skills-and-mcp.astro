@@ -1,0 +1,40 @@
+---
+import DocLayout from '../../components/DocLayout.astro';
+import { withBase } from '../../lib/url';
+---
+
+<DocLayout
+  title="Skills & MCP"
+  description="SKILL.md packs, discovery paths, the composer skill picker, and MCP servers over stdio, HTTP, and SSE with tool permissions."
+>
+  <h2>Skills</h2>
+  <p>
+    A skill is a <code>SKILL.md</code> pack: prompt text that teaches the
+    assistant a procedure. Skills are discovered from the opened project,
+    your user config directory, <code>~/.agents/skills</code>, and a
+    bundled set. Enable or disable them, inspect their content, and
+    enabled skills are injected into the chat system prompt.
+  </p>
+  <p>
+    The composer's <strong>Skill</strong> chip attaches one skill to a
+    single message, and keyword auto-suggest can propose one from your
+    draft. Skills are prompt text, not executed code — there are no
+    per-skill permissions because a skill cannot run anything by itself.
+  </p>
+
+  <h2>MCP servers</h2>
+  <p>
+    Studio connects to Model Context Protocol servers over
+    <strong>stdio</strong>, <strong>HTTP</strong>, and <strong>SSE</strong>.
+    Tools are discovered automatically, validated against their schemas,
+    and gated by permissions before the model can call them. The
+    Connections view shows live status for each server.
+  </p>
+
+  <h2>How they differ</h2>
+  <ul>
+    <li><strong>Skills</strong> change what the assistant <em>knows how to do</em> — instructions, injected as text.</li>
+    <li><strong>MCP tools</strong> change what it <em>can call</em> — real capabilities, permission-gated.</li>
+    <li><strong>Agents</strong> combine both inside the bounded run loop; see <a href={withBase('/docs/agents/')}>Agents &amp; runs</a>.</li>
+  </ul>
+</DocLayout>

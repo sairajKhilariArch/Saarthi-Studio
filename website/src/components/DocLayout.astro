@@ -1,0 +1,84 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Icon from './Icon.astro';
+import { DOCS_NAV, DOCS_ORDER } from '../lib/docs';
+import { withBase } from '../lib/url';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const current = Astro.url.pathname;
+
+const index = DOCS_ORDER.findIndex((entry) => withBase(entry.href) === current);
+const previous = index > 0 ? DOCS_ORDER[index - 1] : null;
+const next = index >= 0 && index < DOCS_ORDER.length - 1 ? DOCS_ORDER[index + 1] : null;
+---
+
+<BaseLayout title={title} description={description}>
+  <div class="docs-shell">
+    <div class="container docs-grid">
+      <aside class="docs-sidebar">
+        <nav aria-label="Documentation">
+          <a class="docs-home" href={withBase('/docs/')}>
+            <Icon name="book" size={16} />
+            Documentation
+          </a>
+          {
+            DOCS_NAV.map((group) => (
+              <div class="docs-group">
+                <h3>{group.title}</h3>
+                {group.items.map((item) => (
+                  <a
+                    href={withBase(item.href)}
+                    aria-current={withBase(item.href) === current ? 'page' : undefined}
+                  >
+                    {item.label}
+                  </a>
+                ))}
+              </div>
+            ))
+          }
+        </nav>
+      </aside>
+
+      <article class="docs-content">
+        <header class="docs-head">
+          <p class="eyebrow">Documentation</p>
+          <h1>{title.replace(' — Sarthi Studio', '')}</h1>
+        </header>
+        <div class="prose">
+          <slot />
+        </div>
+        {
+          (previous || next) && (
+            <nav class="docs-pager" aria-label="Previous and next document">
+              {previous ? (
+                <a href={withBase(previous.href)} rel="prev">
+                  <span>Previous</span>
+                  <strong>
+                    <Icon name="arrow-right" size={15} class="flip" />
+                    {previous.label}
+                  </strong>
+                </a>
+              ) : (
+                <span />
+              )}
+              {next && (
+                <a href={withBase(next.href)} rel="next" class="next">
+                  <span>Next</span>
+                  <strong>
+                    {next.label}
+                    <Icon name="arrow-right" size={15} />
+                  </strong>
+                </a>
+              )}
+            </nav>
+          )
+        }
+      </article>
+    </div>
+  </div>
+</BaseLayout>

@@ -1,0 +1,88 @@
+---
+import DocLayout from '../../components/DocLayout.astro';
+import { withBase } from '../../lib/url';
+---
+
+<DocLayout
+  title="Providers & models"
+  description="Routers and presets, local Ollama models, fallback chains, Thinking controls, deep search, and embeddings in Sarthi Studio."
+>
+  <p>
+    Studio is model-agnostic: it speaks the OpenAI-compatible API, so any
+    endpoint that speaks it can power chat and agents. You choose where
+    requests go; nothing is sent anywhere else.
+  </p>
+
+  <h2>Routers and presets</h2>
+  <p>
+    Settings ships presets for twelve OpenAI-compatible platforms —
+    FreeLLMAPI, OmniRoute, Hugging Face, Groq, Cerebras, Gemini, OpenAI,
+    OpenRouter, Mistral, Cloudflare, Together, and Novita. Pick a preset,
+    paste the endpoint's API key, and test the connection.
+  </p>
+  <p>
+    With FreeLLMAPI, Studio can also manage the router's lifecycle: it
+    starts the router when it is stopped and stops it on exit
+    <em>only if Studio started it</em>. A router you launched yourself
+    keeps running. The embedded router console exposes providers, the
+    model catalog, routing strategy, analytics, and logs over loopback.
+  </p>
+  <blockquote>
+    Provider keys are typed into the router, never stored by Studio.
+    Studio keeps only the router's unified key, server-side, in a
+    permission-restricted configuration file.
+  </blockquote>
+
+  <h2>Local models (Ollama)</h2>
+  <p>
+    The Local AI panel detects your hardware, lists local models, and
+    pulls new ones with progress. A local model needs no router key and
+    no network: chat, context, and history all stay on the machine.
+    Local models also serve embeddings for semantic index search when
+    you prefix the embedding model with <code>local:</code>.
+  </p>
+
+  <h2>Fallback and health</h2>
+  <p>
+    Fallback chains, circuit breaking, and provider health are owned by
+    the router and depend on available provider quota — free tiers are
+    not unlimited. Studio surfaces provider health and the usage/error
+    log with latency and token counts when the provider reports them.
+    Price and context-window figures are shown only when a provider
+    publishes them.
+  </p>
+
+  <h2>Thinking and deep search</h2>
+  <ul>
+    <li>
+      <strong>Thinking.</strong> On providers that support reasoning
+      controls, the composer's Think chip selects the effort level; the
+      default follows the model.
+    </li>
+    <li>
+      <strong>Deep search.</strong> A composer toggle that researches the
+      question with planned web queries (Exa/Tavily) or a provider's
+      built-in web tools, streams each step, and replies with cited
+      sources.
+    </li>
+  </ul>
+
+  <h2>Context budget</h2>
+  <p>
+    Every request is sized like a coding agent's: a hard per-request
+    ceiling (6k tokens by default), a names-only project outline, old
+    attachments replaced by one-line markers, and head/tail cropping so
+    a long thread never resends itself. The composer shows a live
+    <code>~used / budget</code> meter. Media attachments are folded into
+    the request only for the newest user message, so history never
+    re-sends stale images or audio.
+  </p>
+
+  <h2>Embeddings</h2>
+  <p>
+    Semantic search over the codebase index is optional and stays off
+    until you set an embedding model — either a router model or a
+    <code>local:</code> Ollama model. Word search always works without
+    one. See <a href={withBase('/docs/workspace/')}>Workspace &amp; IDE</a>.
+  </p>
+</DocLayout>

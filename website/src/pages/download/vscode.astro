@@ -1,0 +1,90 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Icon from '../../components/Icon.astro';
+import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { withBase } from '../../lib/url';
+
+const others = [
+  { label: 'Linux', href: '/download/linux/' },
+  { label: 'Windows', href: '/download/windows/' },
+  { label: 'macOS', href: '/download/macos/' },
+  { label: 'Android', href: '/download/android/' },
+];
+---
+
+<BaseLayout
+  title="Download for VS Code — Sarthi Studio"
+  description="The Sarthi Studio VS Code extension: install the VSIX, embed the desktop app or run the built-in server, attach files and selections to chat."
+>
+  <PageHero
+    eyebrow="Downloads · VS Code"
+    title="Sarthi Studio for VS Code"
+    description="The same workspace inside your editor. If the desktop app is running, the extension embeds it; if not, it starts its own built-in server with the same chat, skills, and history."
+    breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'VS Code' }]}
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="release-banner">
+        <strong>{LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">VS Code 1.85+ · published {LATEST_RELEASE.date}</span>
+        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+      </div>
+
+      <div class="asset-list">
+        <div class="asset-row">
+          <div class="asset-info">
+            <span class="asset-name">{ASSETS.vsix.name}</span>
+            <span class="asset-note">VS Code extension package — install from the Extensions view or the CLI.</span>
+          </div>
+          <span class="asset-size">{formatBytes(ASSETS.vsix.size)}</span>
+          <a class="asset-dl" href={ASSETS.vsix.url}>
+            <Icon name="download" size={15} />
+            Download
+          </a>
+        </div>
+      </div>
+
+      <h2 class="docs-hub-label">Install</h2>
+      <ol class="install-steps">
+        <li>
+          <h3>From the Extensions view</h3>
+          <p>
+            Open Extensions, click the <code>…</code> menu, choose
+            <strong>Install from VSIX…</strong>, and pick the downloaded file.
+          </p>
+        </li>
+        <li>
+          <h3>Or from the CLI</h3>
+          <p><code>code --install-extension free-ai-studio-vscode.vsix</code></p>
+        </li>
+        <li>
+          <h3>Open the panel</h3>
+          <p>
+            The Sarthi Studio view appears in the activity bar. Editor
+            commands attach the active file or the current selection to a
+            message, so the model sees exactly what you are looking at.
+          </p>
+        </li>
+      </ol>
+
+      <div class="note-card">
+        <Icon name="code" size={18} />
+        <div>
+          <strong> Honest limits of the built-in server.</strong> It is a
+          Node process inside the extension host: there is <strong>no
+          terminal panel</strong> (use VS Code's own terminal), no router
+          start/stop supervision, and the folder scope is the workspace VS
+          Code has open. The desktop app remains the full product.
+        </div>
+      </div>
+
+      <nav class="platform-nav" aria-label="Other platforms">
+        <a href={withBase('/download/')}>All platforms</a>
+        <a href={withBase('/download/vscode/')} aria-current="page">VS Code</a>
+        {others.map((p) => <a href={withBase(p.href)}>{p.label}</a>)}
+      </nav>
+    </div>
+  </section>
+</BaseLayout>

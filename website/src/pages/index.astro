@@ -6,6 +6,7 @@ import Card from '../components/Card.astro';
 import Icon from '../components/Icon.astro';
 import Section from '../components/Section.astro';
 import { SITE } from '../lib/site';
+import { LATEST_RELEASE } from '../lib/releases';
 import { getSourceVersion } from '../lib/source';
 import { withBase } from '../lib/url';
 
@@ -15,10 +16,10 @@ const features = [
   {
     icon: 'terminal',
     title: 'A real developer workspace',
-    body: 'Projects, a live file tree, tabbed editing, a real PTY terminal, Git operations, and build or test diagnostics in the folder you open.',
+    body: 'Projects, a live file tree, tabbed editing with syntax highlighting, a real PTY terminal, Git operations, language-server diagnostics, and DAP debugging in the folder you open.',
     status: 'Implemented',
     tone: 'success',
-    limit: 'No editor engine, debugger, watch mode, or arbitrary command presets yet.',
+    limit: 'The editor is a focused text editor, not a full editor engine; attach-style debugging is adapter-dependent.',
   },
   {
     icon: 'bot',
@@ -55,89 +56,48 @@ const features = [
   {
     icon: 'shield',
     title: 'Local by default',
-    body: 'A loopback-only service, OS keychain for secrets, path-confined workspace access, permission rules, an audit trail, and a global emergency stop.',
+    body: 'A loopback-only service, permission-restricted key storage, path-confined workspace access, permission rules, an audit trail, and a global emergency stop.',
     status: 'Implemented',
     tone: 'success',
-    limit: 'Installers and macOS builds are unsigned; builds vary by release.',
+    limit: 'Installers and macOS builds are unsigned; verify checksums before installing.',
   },
 ] as const;
 
 const steps = [
   {
     title: 'Get a build',
-    body: 'Download the asset for your platform from GitHub Releases, or install the VS Code extension. The release page lists the files that actually exist.',
+    body: 'Pick your platform on the downloads page — every asset comes from the release workflow with SHA-256 checksums.',
+    href: '/download/',
   },
   {
     title: 'Connect your models',
     body: 'Point Studio at FreeLLMAPI or another OpenAI-compatible router, or run a local model through Ollama. Keys stay on your machine.',
+    href: '/docs/providers/',
   },
   {
     title: 'Open your project',
     body: 'Work inside a folder you choose: browse and edit files, search the workspace, use the terminal, and run Git or build commands.',
+    href: '/docs/workspace/',
   },
   {
     title: 'Delegate, then review',
     body: 'Start an agent task. Approve privileged steps, inspect the step log and diff, and keep, restore, or apply the result yourself.',
+    href: '/docs/agents/',
   },
 ] as const;
 
 const platforms = [
-  {
-    icon: 'terminal',
-    name: 'Linux',
-    body: 'Portable tarball, AppImage, and Debian packaging produced by the release workflow.',
-    badge: 'Desktop',
-    tone: 'neutral',
-  },
-  {
-    icon: 'monitor',
-    name: 'Windows',
-    body: 'Portable zip and a per-user MSI produced by the release workflow. WebView2 ships with Windows 10/11.',
-    badge: 'Desktop',
-    tone: 'neutral',
-  },
-  {
-    icon: 'laptop',
-    name: 'macOS',
-    body: 'Universal arm64 + x86_64 build. Unsigned, so the first launch needs right-click → Open.',
-    badge: 'Unsigned',
-    tone: 'warning',
-  },
-  {
-    icon: 'smartphone',
-    name: 'Android',
-    body: 'Companion client with Direct Router and Desktop Host modes. Host-mode chat is non-streaming.',
-    badge: 'Companion',
-    tone: 'neutral',
-  },
-  {
-    icon: 'code',
-    name: 'VS Code',
-    body: 'Extension with an embedded server when the desktop app is not running. It has no terminal panel.',
-    badge: 'Extension',
-    tone: 'neutral',
-  },
+  { icon: 'terminal', name: 'Linux', body: 'Debian package, AppImage, and portable tarball.', href: '/download/linux/' },
+  { icon: 'monitor', name: 'Windows', body: 'Per-user MSI or portable zip. WebView2 included.', href: '/download/windows/' },
+  { icon: 'laptop', name: 'macOS', body: 'Universal Apple Silicon + Intel build.', href: '/download/macos/' },
+  { icon: 'smartphone', name: 'Android', body: 'Companion client with router and Host modes.', href: '/download/android/' },
+  { icon: 'code', name: 'VS Code', body: 'The workspace inside your editor.', href: '/download/vscode/' },
 ] as const;
 
-const sources = [
-  {
-    icon: 'book',
-    title: 'README',
-    body: 'Install paths, first-run setup, the feature list, and where local data lives.',
-    href: SITE.readme,
-  },
-  {
-    icon: 'layers',
-    title: 'Architecture',
-    body: 'The verified runtime shape, Rust modules, HTTP surface, and persistence model.',
-    href: SITE.architecture,
-  },
-  {
-    icon: 'check',
-    title: 'Feature status',
-    body: 'Per-requirement status with evidence, named limitations, and the remaining gaps.',
-    href: SITE.featureStatus,
-  },
+const docsTeaser = [
+  { icon: 'download', title: 'Getting started', body: 'From download to a first reviewed agent change.', href: '/docs/getting-started/' },
+  { icon: 'route', title: 'Providers & models', body: 'Routers, presets, local models, Thinking, deep search.', href: '/docs/providers/' },
+  { icon: 'shield', title: 'Privacy & security', body: 'Exactly what stays local and what leaves.', href: '/docs/privacy/' },
 ] as const;
 ---
 
@@ -163,12 +123,12 @@ const sources = [
           you point them.
         </p>
         <div class="hero-actions">
-          <Button href={SITE.releases} size="lg">
-            Download a build
+          <Button href={withBase('/download/')} size="lg">
+            Download {LATEST_RELEASE.tag}
             <Icon name="download" size={18} />
           </Button>
-          <Button href="#capabilities" variant="secondary" size="lg">
-            See what is inside
+          <Button href={withBase('/docs/getting-started/')} variant="secondary" size="lg">
+            Read the docs
             <Icon name="arrow-right" size={18} />
           </Button>
         </div>
@@ -192,15 +152,15 @@ const sources = [
           </div>
           <img
             src={withBase('/screenshots/brand-shell-dark.png')}
-            width="1440"
-            height="900"
-            alt="The Sarthi Studio desktop shell in dark theme, with the thread sidebar, chat, and file workspace."
+            width="2400"
+            height="1350"
+            alt="The Sarthi Studio desktop shell in dark theme: thread sidebar, file workspace, chat dock, and terminal."
             fetchpriority="high"
             decoding="async"
           />
         </div>
         <p class="hero-caption">
-          Desktop shell, dark theme. Repository screenshot captured at 2.51.0.
+          The Sarthi One design, dark theme — captured from the current source tree.
         </p>
       </div>
     </div>
@@ -285,9 +245,9 @@ const sources = [
         <div class="media-frame">
           <img
             src={withBase('/screenshots/local-ai-dark.png')}
-            width="655"
-            height="711"
-            alt="Local AI settings showing model controls, hardware information, and a pull action."
+            width="2400"
+            height="1350"
+            alt="The Local AI panel showing local model controls and hardware information."
             loading="lazy"
             decoding="async"
           />
@@ -359,6 +319,10 @@ const sources = [
             <span class="step-number">{String(index + 1).padStart(2, '0')}</span>
             <h3>{step.title}</h3>
             <p>{step.body}</p>
+            <a class="text-link" href={withBase(step.href)}>
+              Learn more
+              <Icon name="arrow-right" size={14} />
+            </a>
           </li>
         ))
       }
@@ -369,54 +333,54 @@ const sources = [
     id="platforms"
     eyebrow="Platforms"
     title="The same workspace, where you work"
-    description="Desktop is the primary product and host. Android and VS Code are companion surfaces, with honest capability limits."
+    description="Desktop is the primary product and host. Android and VS Code are companion surfaces, with honest capability limits. Each platform has its own download page."
+    class="section-soft"
   >
     <div class="platform-grid">
       {
         platforms.map((platform) => (
-          <article class="card platform-card">
+          <Card href={withBase(platform.href)} class="platform-card">
             <span class="platform-icon">
               <Icon name={platform.icon} size={20} />
             </span>
             <h3>{platform.name}</h3>
             <p>{platform.body}</p>
-            <Badge tone={platform.tone} label={platform.badge} />
-          </article>
-        ))
-      }
-    </div>
-    <p class="section-footnote">
-      Formats vary by release, and the latest tag may not contain every file.
-      <a href={SITE.releases} target="_blank" rel="noopener noreferrer">
-        Browse the actual release assets
-      </a>
-      rather than relying on a fixed download link.
-    </p>
-  </Section>
-
-  <Section
-    id="source"
-    eyebrow="Source of truth"
-    title="Read what the site is built from"
-    description="The public site follows the repository's maintained documentation. These are the documents behind the claims on this page."
-    class="section-soft"
-  >
-    <div class="source-grid">
-      {
-        sources.map((source) => (
-          <Card href={source.href} class="source-card">
-            <span class="source-icon">
-              <Icon name={source.icon} size={20} />
-            </span>
-            <h3>{source.title}</h3>
-            <p>{source.body}</p>
-            <span class="source-arrow" aria-hidden="true">
-              <Icon name="arrow-up-right" size={17} />
+            <span class="text-link">
+              Downloads
+              <Icon name="arrow-right" size={15} />
             </span>
           </Card>
         ))
       }
     </div>
+  </Section>
+
+  <Section
+    id="docs"
+    eyebrow="Documentation"
+    title="Short documents, honest limits"
+    description="Every claim on this site is written from the maintained source tree. Start with getting started, or go straight to the topic you need."
+  >
+    <div class="source-grid">
+      {
+        docsTeaser.map((doc) => (
+          <Card href={withBase(doc.href)} class="source-card">
+            <span class="source-icon">
+              <Icon name={doc.icon} size={20} />
+            </span>
+            <h3>{doc.title}</h3>
+            <p>{doc.body}</p>
+            <span class="source-arrow" aria-hidden="true">
+              <Icon name="arrow-right" size={17} />
+            </span>
+          </Card>
+        ))
+      }
+    </div>
+    <p class="section-footnote">
+      <a href={withBase('/docs/')}>Browse all documentation</a> — providers, agents,
+      the workspace IDE, skills and MCP, privacy, and troubleshooting.
+    </p>
   </Section>
 
   <section class="section cta-section">
@@ -431,12 +395,12 @@ const sources = [
           </p>
         </div>
         <div class="cta-actions">
-          <Button href={SITE.repo} size="lg">
-            <Icon name="github" size={18} />
-            View on GitHub
+          <Button href={withBase('/download/')} size="lg">
+            <Icon name="download" size={18} />
+            Download {LATEST_RELEASE.tag}
           </Button>
-          <Button href={SITE.releases} variant="secondary" size="lg">
-            Latest releases
+          <Button href={SITE.repo} variant="secondary" size="lg">
+            View on GitHub
             <Icon name="arrow-up-right" size={17} />
           </Button>
         </div>

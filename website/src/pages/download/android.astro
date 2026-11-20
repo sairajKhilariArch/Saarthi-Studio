@@ -1,0 +1,107 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Icon from '../../components/Icon.astro';
+import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { withBase } from '../../lib/url';
+
+const others = [
+  { label: 'Linux', href: '/download/linux/' },
+  { label: 'Windows', href: '/download/windows/' },
+  { label: 'macOS', href: '/download/macos/' },
+  { label: 'VS Code', href: '/download/vscode/' },
+];
+---
+
+<BaseLayout
+  title="Download for Android — Sarthi Studio"
+  description="The Sarthi Studio Android companion: APK for Android 8.0+, AAB for store-style signing, direct router and Desktop Host modes."
+>
+  <PageHero
+    eyebrow="Downloads · Android"
+    title="Sarthi Studio for Android"
+    description="A native companion client, not a wrapped web view. Chat with your router directly from the phone, or pair with your desktop over the secured Host API."
+    breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'Android' }]}
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="release-banner">
+        <strong>{LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">Android 8.0+ (API 26) · published {LATEST_RELEASE.date}</span>
+        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+      </div>
+
+      <div class="asset-list">
+        <div class="asset-row">
+          <div class="asset-info">
+            <span class="asset-name">{ASSETS.androidApk.name}</span>
+            <span class="asset-note">Sideload-ready APK — this is the file you install on a phone.</span>
+          </div>
+          <span class="asset-size">{formatBytes(ASSETS.androidApk.size)}</span>
+          <a class="asset-dl" href={ASSETS.androidApk.url}>
+            <Icon name="download" size={15} />
+            Download
+          </a>
+        </div>
+        <div class="asset-row">
+          <div class="asset-info">
+            <span class="asset-name">{ASSETS.androidAab.name}</span>
+            <span class="asset-note">Android App Bundle — for Play-style signing pipelines, not direct installation.</span>
+          </div>
+          <span class="asset-size">{formatBytes(ASSETS.androidAab.size)}</span>
+          <a class="asset-dl secondary" href={ASSETS.androidAab.url}>
+            <Icon name="download" size={15} />
+            Download
+          </a>
+        </div>
+      </div>
+
+      <h2 class="docs-hub-label">Install the APK</h2>
+      <ol class="install-steps">
+        <li>
+          <h3>Allow the install</h3>
+          <p>
+            Android asks once: allow <strong>install unknown apps</strong> for
+            the browser or file manager you opened the APK with. The APK is
+            unsigned by a store key, so this step is expected.
+          </p>
+        </li>
+        <li>
+          <h3>Open the APK</h3>
+          <p>
+            Tap the downloaded file and confirm. The app installs as
+            <strong>Sarthi Studio</strong> with the guide-star icon.
+          </p>
+        </li>
+        <li>
+          <h3>Choose a connection mode</h3>
+          <p>
+            <strong>Direct Router</strong> — point the app at your
+            OpenAI-compatible router URL and key; the phone talks to the
+            router itself. <strong>Desktop Host</strong> — pair with your
+            desktop's Host API (TLS + pairing token) to use the desktop's
+            workspace and history from the phone.
+          </p>
+        </li>
+      </ol>
+
+      <div class="note-card">
+        <Icon name="smartphone" size={18} />
+        <div>
+          <strong>Companion, not a replica.</strong> Host-mode chat is
+          non-streaming, and the phone does not run agents or terminals —
+          those stay on the desktop. See
+          <a href={withBase('/docs/privacy/')}>Privacy &amp; security</a>
+          for how pairing tokens and TLS protect the Host API.
+        </div>
+      </div>
+
+      <nav class="platform-nav" aria-label="Other platforms">
+        <a href={withBase('/download/')}>All platforms</a>
+        <a href={withBase('/download/android/')} aria-current="page">Android</a>
+        {others.map((p) => <a href={withBase(p.href)}>{p.label}</a>)}
+      </nav>
+    </div>
+  </section>
+</BaseLayout>

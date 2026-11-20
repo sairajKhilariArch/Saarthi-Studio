@@ -3,6 +3,12 @@ import Icon from './Icon.astro';
 import ThemeToggle from './ThemeToggle.astro';
 import { NAV, SITE } from '../lib/site';
 import { withBase } from '../lib/url';
+
+const path = Astro.url.pathname;
+const isActive = (href: string) =>
+  href.startsWith('/#')
+    ? path === withBase('/')
+    : path.startsWith(withBase(href));
 ---
 
 <header class="site-header">
@@ -22,12 +28,21 @@ import { withBase } from '../lib/url';
     <nav class="desktop-nav" aria-label="Primary navigation">
       {
         NAV.map((item) => (
-          <a href={withBase(item.href)}>{item.label}</a>
+          <a
+            href={withBase(item.href)}
+            aria-current={isActive(item.href) ? 'page' : undefined}
+          >
+            {item.label}
+          </a>
         ))
       }
     </nav>
 
     <div class="header-actions">
+      <a class="header-cta" href={withBase('/download/')}>
+        <Icon name="download" size={15} />
+        Download
+      </a>
       <a
         class="icon-button"
         href={SITE.repo}

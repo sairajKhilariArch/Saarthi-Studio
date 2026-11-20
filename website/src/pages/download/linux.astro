@@ -1,0 +1,113 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Icon from '../../components/Icon.astro';
+import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { withBase } from '../../lib/url';
+
+const assets = [
+  { asset: ASSETS.linuxDeb, note: 'Debian/Ubuntu package — installs a menu entry and the free-ai-studio command.' },
+  { asset: ASSETS.linuxAppImage, note: 'Single-file portable app. No installation, no root.' },
+  { asset: ASSETS.linuxTar, note: 'Portable tarball — extract and run the binary directly.' },
+];
+
+const others = [
+  { label: 'Windows', href: '/download/windows/' },
+  { label: 'macOS', href: '/download/macos/' },
+  { label: 'Android', href: '/download/android/' },
+  { label: 'VS Code', href: '/download/vscode/' },
+];
+---
+
+<BaseLayout
+  title="Download for Linux — Sarthi Studio"
+  description="Sarthi Studio for Linux x86_64: Debian package, AppImage, and portable tarball, with install steps and checksum verification."
+>
+  <PageHero
+    eyebrow="Downloads · Linux"
+    title="Sarthi Studio for Linux"
+    description="Three formats, one app. The native window uses WebKitGTK; if you prefer a browser tab or a headless server, the same binary does both."
+    breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'Linux' }]}
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="release-banner">
+        <strong>{LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">x86_64 · published {LATEST_RELEASE.date}</span>
+        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+      </div>
+
+      <div class="asset-list">
+        {
+          assets.map(({ asset, note }) => (
+            <div class="asset-row">
+              <div class="asset-info">
+                <span class="asset-name">{asset.name}</span>
+                <span class="asset-note">{note}</span>
+              </div>
+              <span class="asset-size">{formatBytes(asset.size)}</span>
+              <a class="asset-dl" href={asset.url}>
+                <Icon name="download" size={15} />
+                Download
+              </a>
+            </div>
+          ))
+        }
+      </div>
+
+      <h2 class="docs-hub-label">Install</h2>
+      <ol class="install-steps">
+        <li>
+          <h3>Debian / Ubuntu (.deb)</h3>
+          <p>
+            <code>sudo dpkg -i free-ai-studio_{LATEST_RELEASE.version}-1_amd64.deb</code>,
+            then launch <strong>Sarthi Studio</strong> from your applications menu or run
+            <code>free-ai-studio</code>.
+          </p>
+        </li>
+        <li>
+          <h3>AppImage</h3>
+          <p>
+            <code>chmod +x sarthi-studio_{LATEST_RELEASE.version}_x86_64.AppImage</code>
+            and run it. Nothing else is installed; delete the file to remove the app.
+          </p>
+        </li>
+        <li>
+          <h3>Portable tarball</h3>
+          <p>
+            Extract, verify the checksum, and run <code>./free-ai-studio</code>.
+            Add <code>--browser</code> to open the UI in your default browser, or
+            <code>--no-gui</code> to serve it headless.
+          </p>
+        </li>
+      </ol>
+
+      <div class="note-card">
+        <Icon name="cpu" size={18} />
+        <div>
+          <strong>Runtime dependencies.</strong> The native window needs
+          WebKitGTK 4.1 and GTK 3 (package names vary: <code>libwebkit2gtk-4.1-0</code>
+          on Debian/Ubuntu, <code>webkit2gtk4.1</code> on Arch). Without them,
+          use <code>--browser</code> — the UI is identical.
+        </div>
+      </div>
+
+      <div class="note-card">
+        <Icon name="database" size={18} />
+        <div>
+          <strong>Where your data lives.</strong> Configuration in
+          <code>~/.config/free-ai-studio/</code>, conversations and runs in a SQLite
+          database under <code>~/.local/share/free-ai-studio/</code>. Uninstalling
+          the app never touches these unless you delete them yourself.
+        </div>
+      </div>
+
+      <nav class="platform-nav" aria-label="Other platforms">
+        <a href={withBase('/download/')} >All platforms</a>
+        <a href={withBase('/download/linux/')} aria-current="page">Linux</a>
+        {others.map((p) => <a href={withBase(p.href)}>{p.label}</a>)}
+      </nav>
+    </div>
+  </section>
+</BaseLayout>

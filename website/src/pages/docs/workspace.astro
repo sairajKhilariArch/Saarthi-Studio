@@ -1,0 +1,78 @@
+---
+import DocLayout from '../../components/DocLayout.astro';
+import { withBase } from '../../lib/url';
+---
+
+<DocLayout
+  title="Workspace & IDE"
+  description="Projects, the file explorer, the editor, the terminal, Git, language diagnostics, debugging, spaces, and the codebase index."
+>
+  <p>
+    The workspace is a real developer environment, not a chat window
+    bolted onto an editor. Everything below operates inside the folder
+    you explicitly open.
+  </p>
+
+  <h2>Projects and files</h2>
+  <p>
+    Keep multiple projects with server-side scoping: thread lists filter
+    by the active project, and opening a project reopens its folder.
+    The explorer browses the tree; create, rename, and delete files and
+    folders with unsaved-change protection. A scratch pad holds one-off
+    code, and any file can be attached to chat as context.
+  </p>
+
+  <h2>The editor</h2>
+  <p>
+    Tabbed editing with syntax highlighting, line numbers,
+    <code>Ctrl+S</code> atomic saves (temp file + rename), and
+    <code>Tab</code> indentation. It is a focused text editor — not a
+    full editor engine — and it never executes code itself.
+  </p>
+
+  <h2>Terminal and Git</h2>
+  <p>
+    A real PTY terminal follows the workspace directory. Git operations
+    (status, commit, merge, rebase, worktrees) are available from the
+    source-control view, and agent runs can hand their worktree back to
+    you for the final commit.
+  </p>
+
+  <h2>Diagnostics and debugging</h2>
+  <p>
+    Language servers provide live diagnostics in the Problems panel:
+    configure a server per language (or point at a saved binary when it
+    is not on PATH), and errors stream in as you edit. The Debug panel
+    speaks the Debug Adapter Protocol for launch-style debugging.
+    Attach-style debugging depends on the adapter's own protocol shape
+    and is still being hardened — treat it as experimental.
+  </p>
+
+  <h2>Index, memory, spaces</h2>
+  <ul>
+    <li>
+      <strong>Codebase index.</strong> A bounded index of the open folder
+      with symbol search. Search by words always works; search by
+      meaning needs an embedding model (router or <code>local:</code>),
+      and symbols are embedded once and cached.
+    </li>
+    <li>
+      <strong>Project memory.</strong> Decisions, preferences, tasks, and
+      facts you record are retrieved into chat and agent runs when they
+      share words with the message — and the reply says which records it
+      was given.
+    </li>
+    <li>
+      <strong>Spaces.</strong> Saved working contexts you can switch
+      between without losing threads.
+    </li>
+  </ul>
+
+  <h2>Confinement</h2>
+  <p>
+    Workspace paths are canonicalised; <code>..</code> escapes, absolute
+    paths outside the folder, and symlinks leaving it are rejected.
+    Binary files and files over 1&nbsp;MB are refused by the editor API,
+    and workspace routes reject non-loopback hosts and foreign origins.
+  </p>
+</DocLayout>

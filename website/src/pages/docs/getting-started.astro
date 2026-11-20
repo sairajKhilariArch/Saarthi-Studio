@@ -1,0 +1,95 @@
+---
+import DocLayout from '../../components/DocLayout.astro';
+import { withBase } from '../../lib/url';
+---
+
+<DocLayout
+  title="Getting started"
+  description="Install Sarthi Studio, connect your first model, open a project, and run your first chat and agent task."
+>
+  <p>
+    Sarthi Studio is a local-first AI development workspace: one Rust
+    service owns your conversations, files, terminals, agents, and model
+    traffic, and the UI is the same whether it runs in the native window
+    or a browser. This page takes you from a download to a first reviewed
+    agent change.
+  </p>
+
+  <h2>1. Install for your platform</h2>
+  <p>
+    Grab the current release from the <a href={withBase('/download/')}>downloads section</a> —
+    there is a dedicated page with install steps for
+    <a href={withBase('/download/linux/')}>Linux</a>,
+    <a href={withBase('/download/windows/')}>Windows</a>,
+    <a href={withBase('/download/macos/')}>macOS</a>,
+    <a href={withBase('/download/android/')}>Android</a>, and
+    <a href={withBase('/download/vscode/')}>VS Code</a>.
+    Verify the SHA-256 against the release's <code>SHA256SUMS.txt</code> before installing.
+  </p>
+  <p>
+    On first launch the app opens its own window and starts the local
+    service at <code>http://127.0.0.1:8765</code>. Prefer a browser tab?
+    Run <code>free-ai-studio --browser</code>. Want a headless server?
+    <code>free-ai-studio --no-gui</code>.
+  </p>
+
+  <h2>2. Connect a model</h2>
+  <p>
+    Studio talks to OpenAI-compatible endpoints. Two common paths:
+  </p>
+  <ul>
+    <li>
+      <strong>A router.</strong> Point Settings at FreeLLMAPI or another
+      compatible router and paste its unified API key. The router owns
+      provider credentials, fallback chains, and budgets — Studio never
+      stores upstream provider keys.
+    </li>
+    <li>
+      <strong>A local model.</strong> Run Ollama on the same machine and
+      pick a model in the Local AI panel. Nothing leaves the computer.
+    </li>
+  </ul>
+  <p>
+    Use the connection test in Settings to confirm the round trip before
+    your first message. Details live in
+    <a href={withBase('/docs/providers/')}>Providers &amp; models</a>.
+  </p>
+
+  <h2>3. Open a project</h2>
+  <p>
+    Choose <strong>Open folder…</strong> and pick the codebase you want to
+    work on. Everything workspace-related is confined to that folder:
+    the file tree, the editor, search, the terminal's working directory,
+    and Git operations. You can keep several projects and switch between
+    them; threads are scoped to the active project.
+  </p>
+
+  <h2>4. First chat</h2>
+  <p>
+    Ask a question in the composer. Attach context with the
+    <strong>Context</strong> chip (open files, selections), attach a skill
+    with the <strong>Skill</strong> chip, or toggle <strong>Deep</strong>
+    for cited web research. Replies stream in with a working Stop button,
+    and the token meter shows how much of the request budget you are
+    using.
+  </p>
+
+  <h2>5. First agent run</h2>
+  <p>
+    Switch the composer to <strong>Build</strong> mode and describe a
+    change. The agent plans steps, and privileged actions — file writes
+    and commands — pause for your approval. Inspect the step log and
+    diffs, then keep, restore, or apply the result. Writing runs can work
+    in an isolated Git worktree so your checkout stays untouched until
+    you decide. The full model is in
+    <a href={withBase('/docs/agents/')}>Agents &amp; runs</a>.
+  </p>
+
+  <h2>Where to go next</h2>
+  <ul>
+    <li><a href={withBase('/docs/workspace/')}>Workspace &amp; IDE</a> — editor, terminal, Git, diagnostics, debugging.</li>
+    <li><a href={withBase('/docs/skills-and-mcp/')}>Skills &amp; MCP</a> — extend what the assistant knows and can call.</li>
+    <li><a href={withBase('/docs/privacy/')}>Privacy &amp; security</a> — exactly what stays local and what leaves.</li>
+    <li><a href={withBase('/docs/troubleshooting/')}>Troubleshooting</a> — when something does not start.</li>
+  </ul>
+</DocLayout>

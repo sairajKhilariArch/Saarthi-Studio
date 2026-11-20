@@ -1,0 +1,103 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Icon from '../../components/Icon.astro';
+import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { withBase } from '../../lib/url';
+
+const assets = [
+  { asset: ASSETS.macApp, note: 'The .app bundle, zipped — drag to Applications.' },
+  { asset: ASSETS.macTar, note: 'Command-line tarball — extract and run ./free-ai-studio.' },
+];
+
+const others = [
+  { label: 'Linux', href: '/download/linux/' },
+  { label: 'Windows', href: '/download/windows/' },
+  { label: 'Android', href: '/download/android/' },
+  { label: 'VS Code', href: '/download/vscode/' },
+];
+---
+
+<BaseLayout
+  title="Download for macOS — Sarthi Studio"
+  description="Sarthi Studio for macOS: one universal build for Apple Silicon and Intel, with Gatekeeper first-launch instructions."
+>
+  <PageHero
+    eyebrow="Downloads · macOS"
+    title="Sarthi Studio for macOS"
+    description="One universal binary runs natively on both Apple Silicon and Intel Macs. The build is unsigned, so the first launch takes one extra step — documented below."
+    breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'macOS' }]}
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="release-banner">
+        <strong>{LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">universal (arm64 + x86_64) · published {LATEST_RELEASE.date}</span>
+        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+      </div>
+
+      <div class="asset-list">
+        {
+          assets.map(({ asset, note }) => (
+            <div class="asset-row">
+              <div class="asset-info">
+                <span class="asset-name">{asset.name}</span>
+                <span class="asset-note">{note}</span>
+              </div>
+              <span class="asset-size">{formatBytes(asset.size)}</span>
+              <a class="asset-dl" href={asset.url}>
+                <Icon name="download" size={15} />
+                Download
+              </a>
+            </div>
+          ))
+        }
+      </div>
+
+      <h2 class="docs-hub-label">Install</h2>
+      <ol class="install-steps">
+        <li>
+          <h3>App bundle</h3>
+          <p>
+            Unzip <code>sarthi-studio_{LATEST_RELEASE.version}_macos-universal.app.zip</code>
+            and drag <strong>Sarthi Studio.app</strong> into <code>/Applications</code>.
+          </p>
+        </li>
+        <li>
+          <h3>First launch (Gatekeeper)</h3>
+          <p>
+            Because the build is unsigned, a double-click is blocked the first
+            time. Instead: <strong>right-click the app → Open → Open</strong>.
+            macOS remembers the choice; later launches work normally.
+          </p>
+        </li>
+        <li>
+          <h3>Tarball alternative</h3>
+          <p>
+            Extract and run <code>./free-ai-studio</code> from a terminal.
+            The same right-click → Open rule applies to the binary, or clear
+            the quarantine attribute with
+            <code>xattr -d com.apple.quarantine ./free-ai-studio</code>.
+          </p>
+        </li>
+      </ol>
+
+      <div class="note-card warning">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>Unsigned, not notarized.</strong> Only download from the
+          official release page, and verify the SHA-256 against
+          <code>SHA256SUMS.txt</code> (<code>shasum -a 256 -c SHA256SUMS.txt</code>)
+          before opening. Signing and notarization are on the roadmap.
+        </div>
+      </div>
+
+      <nav class="platform-nav" aria-label="Other platforms">
+        <a href={withBase('/download/')}>All platforms</a>
+        <a href={withBase('/download/macos/')} aria-current="page">macOS</a>
+        {others.map((p) => <a href={withBase(p.href)}>{p.label}</a>)}
+      </nav>
+    </div>
+  </section>
+</BaseLayout>

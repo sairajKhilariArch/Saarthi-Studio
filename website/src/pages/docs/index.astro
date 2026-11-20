@@ -1,0 +1,65 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Card from '../../components/Card.astro';
+import Icon from '../../components/Icon.astro';
+import { DOCS_NAV } from '../../lib/docs';
+import { SITE } from '../../lib/site';
+import { withBase } from '../../lib/url';
+
+const icons = {
+  'Getting started': 'download',
+  Troubleshooting: 'shield',
+  'Providers & models': 'route',
+  'Agents & runs': 'bot',
+  'Workspace & IDE': 'terminal',
+  'Skills & MCP': 'plug',
+  'Privacy & security': 'shield',
+} as const;
+---
+
+<BaseLayout
+  title="Documentation — Sarthi Studio"
+  description="Sarthi Studio documentation: getting started, providers and models, agents, the workspace IDE, skills and MCP, privacy, and troubleshooting."
+>
+  <PageHero
+    eyebrow="Documentation"
+    title="Learn Sarthi Studio"
+    description="Short, honest documents: what the product does, how to set it up, and where its limits are. Everything here follows the maintained source tree."
+    breadcrumb={[{ label: 'Docs' }]}
+  />
+
+  <section class="section">
+    <div class="container">
+      {
+        DOCS_NAV.map((group) => (
+          <div>
+            <h2 class="docs-hub-label">{group.title}</h2>
+            <div class="docs-hub-grid">
+              {group.items.map((item) => (
+                <Card href={withBase(item.href)} class="docs-hub-card">
+                  <h3>
+                    <Icon name={icons[item.label as keyof typeof icons] ?? 'book'} size={18} />
+                    {item.label}
+                  </h3>
+                  <p>{item.summary}</p>
+                </Card>
+              ))}
+            </div>
+          </div>
+        ))
+      }
+
+      <div class="note-card">
+        <Icon name="book" size={18} />
+        <div>
+          <strong>Deeper references live in the repository:</strong> the
+          <a href={SITE.readme} target="_blank" rel="noopener noreferrer">README</a>,
+          <a href={SITE.architecture} target="_blank" rel="noopener noreferrer">architecture</a>, and
+          <a href={SITE.featureStatus} target="_blank" rel="noopener noreferrer">feature-status report</a>
+          are the source of truth these pages are written from.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

@@ -17,12 +17,11 @@ export const SITE = {
 } as const;
 
 /**
- * Foundation navigation. These are same-page sections until the dedicated
- * feature and documentation routes land in later milestones.
+ * Primary navigation. Downloads and Docs are dedicated multi-page sections;
+ * Features stays an anchor on the home page.
  */
 export const NAV = [
-  { label: 'Capabilities', href: '/#capabilities' },
-  { label: 'How it works', href: '/#how-it-works' },
-  { label: 'Platforms', href: '/#platforms' },
-  { label: 'Source', href: '/#source' },
+  { label: 'Features', href: '/#capabilities' },
+  { label: 'Downloads', href: '/download/' },
+  { label: 'Docs', href: '/docs/' },
 ] as const;

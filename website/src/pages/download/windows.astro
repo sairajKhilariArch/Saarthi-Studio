@@ -1,0 +1,105 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PageHero from '../../components/PageHero.astro';
+import Icon from '../../components/Icon.astro';
+import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { withBase } from '../../lib/url';
+
+const assets = [
+  { asset: ASSETS.windowsMsi, note: 'Per-user MSI installer — no administrator rights needed.' },
+  { asset: ASSETS.windowsZip, note: 'Portable zip — extract anywhere and run free-ai-studio.exe.' },
+];
+
+const others = [
+  { label: 'Linux', href: '/download/linux/' },
+  { label: 'macOS', href: '/download/macos/' },
+  { label: 'Android', href: '/download/android/' },
+  { label: 'VS Code', href: '/download/vscode/' },
+];
+---
+
+<BaseLayout
+  title="Download for Windows — Sarthi Studio"
+  description="Sarthi Studio for Windows 10/11 x86_64: per-user MSI or portable zip, with SmartScreen guidance and checksum verification."
+>
+  <PageHero
+    eyebrow="Downloads · Windows"
+    title="Sarthi Studio for Windows"
+    description="A per-user installer or a portable zip. The window uses WebView2, which ships with Windows 10 and 11 — there is nothing extra to install."
+    breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'Windows' }]}
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="release-banner">
+        <strong>{LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">x86_64 · published {LATEST_RELEASE.date}</span>
+        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+      </div>
+
+      <div class="asset-list">
+        {
+          assets.map(({ asset, note }) => (
+            <div class="asset-row">
+              <div class="asset-info">
+                <span class="asset-name">{asset.name}</span>
+                <span class="asset-note">{note}</span>
+              </div>
+              <span class="asset-size">{formatBytes(asset.size)}</span>
+              <a class="asset-dl" href={asset.url}>
+                <Icon name="download" size={15} />
+                Download
+              </a>
+            </div>
+          ))
+        }
+      </div>
+
+      <h2 class="docs-hub-label">Install</h2>
+      <ol class="install-steps">
+        <li>
+          <h3>MSI installer</h3>
+          <p>
+            Double-click the MSI and follow the prompts. It installs for your
+            user account only, adds a Start-menu entry, and registers
+            <code>free-ai-studio.exe</code> on your PATH.
+          </p>
+        </li>
+        <li>
+          <h3>Portable zip</h3>
+          <p>
+            Extract the zip to a folder you own (for example
+            <code>%LOCALAPPDATA%\SarthiStudio</code>) and run
+            <code>free-ai-studio.exe</code>. No registry changes, no installer.
+          </p>
+        </li>
+        <li>
+          <h3>First launch</h3>
+          <p>
+            The app opens its own window and starts the local service on
+            <code>127.0.0.1:8765</code>. Follow
+            <a href={withBase('/docs/getting-started/')}>Getting started</a>
+            to connect your first model.
+          </p>
+        </li>
+      </ol>
+
+      <div class="note-card warning">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>SmartScreen will warn you.</strong> Releases are not yet
+          code-signed. When Windows shows “Windows protected your PC”, choose
+          <strong>More info → Run anyway</strong> — after verifying the file's
+          SHA-256 against <code>SHA256SUMS.txt</code> with
+          <code>Get-FileHash .\sarthi-studio_{LATEST_RELEASE.version}_windows-x86_64.msi</code>.
+        </div>
+      </div>
+
+      <nav class="platform-nav" aria-label="Other platforms">
+        <a href={withBase('/download/')}>All platforms</a>
+        <a href={withBase('/download/windows/')} aria-current="page">Windows</a>
+        {others.map((p) => <a href={withBase(p.href)}>{p.label}</a>)}
+      </nav>
+    </div>
+  </section>
+</BaseLayout>

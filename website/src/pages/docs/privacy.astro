@@ -1,0 +1,55 @@
+---
+import DocLayout from '../../components/DocLayout.astro';
+---
+
+<DocLayout
+  title="Privacy & security"
+  description="What stays local, what leaves the machine, where data lives, and how the Android Host API is secured."
+>
+  <p>
+    Local-first is an architecture, not a slogan. This page states
+    exactly what stays on your machine and what can leave it.
+  </p>
+
+  <h2>What stays local</h2>
+  <ul>
+    <li><strong>Conversations, runs, steps, usage</strong> — a SQLite database under <code>~/.local/share/free-ai-studio/</code>.</li>
+    <li><strong>Configuration</strong> — <code>~/.config/free-ai-studio/config.json</code>, permission-restricted (<code>0600</code>).</li>
+    <li><strong>Your files</strong> — the workspace API is confined to the folder you open; nothing is uploaded.</li>
+    <li><strong>The router's provider keys</strong> — typed into the router, never stored by Studio.</li>
+  </ul>
+
+  <h2>What leaves the machine</h2>
+  <p>
+    Only the model requests you send, to the endpoint you configured —
+    and, when you enable deep search, the web queries it plans. With a
+    local Ollama model, even those stay on the machine. There is no
+    telemetry, and the service binds to <code>127.0.0.1</code> only.
+  </p>
+
+  <h2>Boundaries</h2>
+  <ul>
+    <li>Workspace routes reject non-loopback hosts and foreign origins.</li>
+    <li>Path canonicalisation refuses <code>..</code>, absolute escapes, and symlinks leaving the opened folder.</li>
+    <li>Agent writes and commands pause for approval; an audit trail records what ran.</li>
+    <li>A global emergency stop halts agent activity.</li>
+  </ul>
+
+  <h2>The Desktop Host API (Android pairing)</h2>
+  <p>
+    The Host API is <strong>disabled by default</strong>. Enabling it
+    requires TLS (cert and key) and a bind address you choose, and the
+    phone pairs with a token you create explicitly
+    (<code>free-ai-studio host-token create</code>). Reach the desktop
+    from another device through an SSH tunnel rather than exposing a
+    port. The security model is documented in the repository's
+    PLATFORM-ARCHITECTURE.md.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Agent commands run with your user privileges; they are not OS-sandboxed.</li>
+    <li>Desktop installers and macOS builds are unsigned today; verify checksums and follow the platform pages' first-launch steps.</li>
+    <li>Keys are protected by file permissions and server-side storage, not by an OS keychain integration.</li>
+  </ul>
+</DocLayout>

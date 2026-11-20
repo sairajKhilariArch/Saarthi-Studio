@@ -1,0 +1,77 @@
+---
+import DocLayout from '../../components/DocLayout.astro';
+import { withBase } from '../../lib/url';
+---
+
+<DocLayout
+  title="Troubleshooting"
+  description="Fix first-launch blocks, router key errors, port conflicts, missing language servers, and database recovery in Sarthi Studio."
+>
+  <h2>The OS blocks the first launch</h2>
+  <ul>
+    <li>
+      <strong>macOS Gatekeeper:</strong> right-click the app → Open → Open.
+      Unsigned builds are blocked on double-click only the first time.
+      See <a href={withBase('/download/macos/')}>macOS downloads</a>.
+    </li>
+    <li>
+      <strong>Windows SmartScreen:</strong> More info → Run anyway, after
+      verifying the SHA-256. See <a href={withBase('/download/windows/')}>Windows downloads</a>.
+    </li>
+    <li>
+      <strong>Android:</strong> allow “install unknown apps” for the app
+      you opened the APK with. See <a href={withBase('/download/android/')}>Android downloads</a>.
+    </li>
+  </ul>
+
+  <h2>“Add your router's unified API key in Settings first”</h2>
+  <p>
+    The connected router has no key configured in Studio. Open Settings →
+    Router, paste the router's unified API key, and run the connection
+    test. With FreeLLMAPI, create or copy the key in the router console
+    first. Provider keys belong in the router, not in Studio.
+  </p>
+
+  <h2>The window is blank or the app will not start (Linux)</h2>
+  <p>
+    The native window needs WebKitGTK 4.1. Install your distribution's
+    package (<code>libwebkit2gtk-4.1-0</code> on Debian/Ubuntu,
+    <code>webkit2gtk4.1</code> on Arch), or run
+    <code>free-ai-studio --browser</code> to use the identical UI in your
+    browser while you sort the dependency out.
+  </p>
+
+  <h2>Port 8765 is already in use</h2>
+  <p>
+    Another Studio instance (or another service) holds the port. Close
+    the other instance, or choose a different port:
+    <code>FREE_AI_STUDIO_PORT=9000 free-ai-studio</code>.
+  </p>
+
+  <h2>No diagnostics in the Problems panel</h2>
+  <p>
+    A language server must be installed and configured for the language.
+    Add one in Settings (for example <code>rust-analyzer</code> for Rust);
+    if the binary is not on PATH, point the server entry at its saved
+    location. The first analysis of a large project can take a few
+    seconds — an empty first publish is normal before real diagnostics
+    arrive.
+  </p>
+
+  <h2>The database will not open</h2>
+  <p>
+    Studio refuses to run on a corrupt database rather than risk your
+    history, and offers recovery. Keep the corrupt file, let the recovery
+    path rebuild what it can, and report what happened with the file
+    attached if you can share it. Never delete the database to “fix” a
+    startup error unless you intend to lose the history.
+  </p>
+
+  <h2>Still stuck?</h2>
+  <p>
+    Open an issue with your platform, the release version, and what you
+    see. The repository's issue tracker is public, and the feature-status
+    report lists known limitations so you can check whether what you hit
+    is a bug or a documented gap.
+  </p>
+</DocLayout>
