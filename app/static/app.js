@@ -8603,6 +8603,32 @@ function bindEvents() {
     if (files && files.length) await uploadMediaFiles(files);
     event.target.value = "";
   });
+  $("transcribeBtn").addEventListener("click", () => $("transcribeAudio").click());
+  $("transcribeAudio").addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = String(reader.result).split(",")[1];
+      const model = $("transcribeModel").value || state.chatModel || "auto";
+      const payload = { model, audio: base64 };
+      try {
+        const result = await api("/api/transcribe", { method: "POST", body: JSON.stringify(payload) });
+        if (result.ok) {
+          const answer = (result.data && result.data.text) || "";
+          if (answer) {
+            sendMessage({ content: answer, role: "user" });
+          }
+        } else {
+          toast(result.data && result.data.error ? result.data.error : "Transcription failed.");
+        }
+      } catch (error) {
+        toast("Transcription error: " + (error && error.message ? error.message : "unknown"));
+      }
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  });
   $("attachContextBtn").addEventListener("click", attachFromComposer);
   $("deepToggle").addEventListener("click", () => setDeepSearch(!state.deepSearch));
   $("skillPickerBtn").addEventListener("click", (event) => {

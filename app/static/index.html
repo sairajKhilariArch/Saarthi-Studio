@@ -316,10 +316,17 @@
                 <svg class="icon"><use href="#i-clip"/></svg>Media
               </button>
               <input id="mediaFileInput" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif,audio/wav,audio/mpeg,audio/ogg,audio/mp4,video/mp4,video/webm">
+              <button id="transcribeBtn" class="btn btn-quiet btn-small" title="Transcribe an audio file to text">
+                <svg class="icon"><use href="#i-microphone"/></svg>Transcribe
+              </button>
+              <input id="transcribeAudio" type="file" hidden accept="audio/wav,audio/mpeg,audio/ogg,audio/mp4,audio/webm">
+              <div class="model-picker-wrap" style="display:none">
+                <select id="transcribeModel" class="btn btn-small" style="padding:2px 6px"></select>
+              </div>
               <button id="deepToggle" class="btn btn-quiet btn-small" title="Deep search: research the question on the web with visible steps and cited sources" aria-pressed="false">
                 <svg class="icon"><use href="#i-search"/></svg>Deep
               </button>
-              <div class="skill-picker-wrap">
+              <div class="skill-picker-wrap" style="display:none">
                 <button id="thinkBtn" class="btn btn-quiet btn-small" title="Thinking: the reasoning level this message asks for" aria-haspopup="listbox" aria-expanded="false" aria-pressed="false">
                   <svg class="icon"><use href="#i-spark"/></svg><span id="thinkLabel">Think: model default</span>
                 </button>
