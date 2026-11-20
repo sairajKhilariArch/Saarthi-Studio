@@ -433,6 +433,39 @@ ul, ol {
   height: 32px;
 }
 
+.logo-mascot {
+  display: block;
+  width: 100%;
+  height: auto;
+  animation: bounce 2.4s ease-in-out infinite;
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* The mascot's body bobs gently while the head bobs at a slightly different pace */
+.logo-mascot .mover {
+  animation: bob 2s ease-in-out infinite;
+}
+
+/* Stagger: head bobs slightly faster than body */
+.logo-mascot .mover:first-of-type {
+  animation-delay: 0.15s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo-mascot,
+  .logo-mascot .mover {
+    animation: none;
+  }
+}
+
 .brand-name {
   white-space: nowrap;
 }
