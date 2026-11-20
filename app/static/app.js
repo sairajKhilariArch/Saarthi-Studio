@@ -85,8 +85,15 @@ function capabilitiesAllow(capabilities, feature) {
 }
 
 function applyCapabilities() {
+  // Capabilities are a hiding-only signal (see capabilitiesAllow): an allowed
+  // feature must NOT be shown here. Pane visibility belongs to the sidebar
+  // mode, and removing `hidden` from every allowed pane stacked the memory
+  // and index panes on top of the active one whenever this answer arrived
+  // after setSidebarMode.
   document.querySelectorAll("[data-feature]").forEach((element) => {
-    element.classList.toggle("hidden", !capabilitiesAllow(state.capabilities, element.dataset.feature));
+    if (!capabilitiesAllow(state.capabilities, element.dataset.feature)) {
+      element.classList.add("hidden");
+    }
   });
   const active = document.querySelector("button[data-settings-section].active");
   if (active && active.dataset.feature && !capabilitiesAllow(state.capabilities, active.dataset.feature)) {
