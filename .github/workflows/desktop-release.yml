@@ -156,7 +156,7 @@ jobs:
       # promised, and verify checksums before anything is handed to
       # upload-artifact or the release API.
       - name: Validate artifact names
-        run: bash scripts/ci/verify-artifacts.sh dist "free-ai-studio_${{ steps.meta.outputs.version }}-1_amd64.deb"
+        run: bash scripts/ci/verify-artifacts.sh dist "free-ai-studio_${{ needs.preflight.outputs.version }}-1_amd64.deb"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
@@ -407,6 +407,7 @@ jobs:
         run: Remove-Item -Recurse -Force "dist/sarthi-studio_${{ steps.meta.outputs.version }}_windows-x86_64"
 
       - name: Validate artifact names
+        shell: bash
         run: |
           bash scripts/ci/verify-artifacts.sh dist \
             "sarthi-studio_${{ steps.meta.outputs.version }}_windows-x86_64.zip" \

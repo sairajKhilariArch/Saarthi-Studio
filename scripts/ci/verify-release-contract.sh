@@ -73,6 +73,7 @@ for line in joined:
         continue
     # The version is a workflow expression in the real file and a literal here.
     expression = match.group(1).replace("${{ steps.meta.outputs.version }}", version)
+    expression = expression.replace("${{ needs.preflight.outputs.version }}", version)
     for quoted, bare in re.findall(r'"([^"]*)"|(\S+)', expression):
         name = (quoted or bare).strip().strip("\\").strip()
         if name:
@@ -80,6 +81,37 @@ for line in joined:
 
 with open(assets_path, encoding="utf-8") as handle:
     contract = {line.strip() for line in handle if line.strip()}
+
+# A job that reads steps.meta.outputs must define the meta step itself. The deb
+# job once referenced it without one, the expression resolved to nothing, and
+# the artifact gate demanded a versionless filename after a successful build.
+jobs_section = text.split("\njobs:", 1)[1]
+for block in re.split(r"\n  (?=[A-Za-z][\w-]*:)", jobs_section):
+    if not block.strip():
+        continue
+    job_name = block.strip().splitlines()[0].rstrip(":")
+    if "steps.meta.outputs" in block and "id: meta" not in block:
+        print(
+            f"ERROR: job '{job_name}' reads steps.meta.outputs but defines no 'id: meta' step",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    # Under a pwsh default shell a backslash is not a line continuation: a
+    # multi-line bash command must declare shell: bash, or the command's own
+    # arguments arrive broken (the Windows gate received a literal backslash
+    # as an expected artifact name and failed after a successful build).
+    if "shell: pwsh" in block:
+        for step in re.split(r"\n      - name:", block):
+            if "run: |" not in step or "shell: bash" in step:
+                continue
+            if any(line.rstrip().endswith("\\") for line in step.splitlines()):
+                step_name = step.strip().splitlines()[0]
+                print(
+                    f"ERROR: job '{job_name}' step '{step_name}' uses bash line "
+                    "continuations under a pwsh default shell without 'shell: bash'",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
 unbuilt = sorted(contract - promised)  # promised by the release, no job makes it
 ungated = sorted(promised - contract)  # a job makes it, the release gate ignores it

@@ -159,5 +159,38 @@ else
   pass "a step that stops using the parser is caught and named"
 fi
 
+# --- a job must define the meta step it reads -------------------------------
+# The deb job read steps.meta.outputs.version without an `id: meta` step; the
+# expression resolved to nothing and the artifact gate demanded a versionless
+# filename after the package had already built (v3.74.1/v3.74.2 release runs).
+contract="$here/verify-release-contract.sh"
+if bash "$contract" "$workflow" >"$tmp/contract.out" 2>&1; then
+  pass "the committed workflow holds the release contract"
+else
+  cat "$tmp/contract.out" >&2
+  die "the committed workflow broke the release contract"
+fi
+
+sed '60,$ s/^        id: meta$/        id: notmeta/' "$workflow" >"$tmp/no-meta.yml"
+if bash "$contract" "$tmp/no-meta.yml" >"$tmp/no-meta.out" 2>&1; then
+  die "the contract check accepted a job without its meta step"
+else
+  grep -q "defines no 'id: meta' step" "$tmp/no-meta.out" ||
+    die "the job without a meta step was not named"
+  pass "a job that reads steps.meta.outputs without defining it is caught"
+fi
+
+# The Windows gate ran bash continuations under the job's pwsh default shell;
+# the backslash reached the gate as an expected artifact name. A step that
+# loses its `shell: bash` again must be caught before a tagged run.
+grep -v '^        shell: bash$' "$workflow" >"$tmp/no-bash-shell.yml"
+if bash "$contract" "$tmp/no-bash-shell.yml" >"$tmp/no-bash.out" 2>&1; then
+  die "the contract check accepted bash continuations under a pwsh default"
+else
+  grep -q "without 'shell: bash'" "$tmp/no-bash.out" ||
+    die "the step missing shell: bash was not named"
+  pass "bash continuations under a pwsh default shell are caught"
+fi
+
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ] || exit 1
