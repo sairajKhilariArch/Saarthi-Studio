@@ -141,6 +141,26 @@ failures (runs #207/#208, 3.50.0/3.50.1) could not be attributed to specific
 tests: raw CI logs need authentication (403 unauthenticated). Current suite
 passes locally; git/filelock tests included.
 
+### B8 — HIGH — FIXED & VERIFIED (3.74.2)
+`app/static/ide.css` — the `@media (max-width: 1100px)` block set
+`.app > .ai-dock { display: none; }` unconditionally. The whole conversation
+(chatView, messages, composer) lives in that dock, so in any window ≤1100px
+wide (tiling setups, split screens) threads could be created and listed but
+never opened, and no message could be sent; `revealChatDock()` could not
+help because the media query's display:none outranked the panel state.
+Reproduced live in a browser at 780px and 900px; the user's last session
+(v3.54.0, which already had the IDE shell) shows two created threads with
+zero messages — consistent with this.
+Fix: the dock becomes a fixed overlay at narrow widths, driven by the same
+right-panel state — opening/creating a thread reveals it, the dock close
+button and panel toggle dismiss it (`body.no-right`). Regression test:
+`app/static/tests/ide-layout.test.js` asserts against the real stylesheet
+that the narrow layout keeps the dock reachable and only hides it through
+the user's toggle. Verified live at 900px: open thread → composer visible,
+close → hidden, thread click → revealed, send → message persisted and the
+router path answered (honest no-key error in the keyless scratch config);
+desktop 1600px layout unchanged. Frontend suite 100/100.
+
 ## Security review (scanned areas)
 
 - SQL: all queries parameterized; the only `format!` SQL interpolates the
