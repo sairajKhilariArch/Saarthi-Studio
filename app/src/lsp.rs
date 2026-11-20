@@ -380,29 +380,48 @@ impl Session {
             "method": method,
             "params": params,
         }))?;
-        loop {
-            match self.next_message(deadline) {
-                Ok(message) => {
-                    if message.get("id").and_then(Value::as_u64) == Some(id) {
-                        if let Some(error) = message.get("error") {
-                            let text = error
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or("the server returned an error");
-                            return Err(format!("{method}: {text}"));
-                        }
-                        return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+        // Every message is examined exactly once: what earlier phases buffered
+        // first, then each new arrival. A non-matching message is set aside,
+        // never re-queued into the loop that reads it — re-queuing would spin
+        // on it forever while the answer waits unread in the channel, and the
+        // deadline would never be consulted. The aside messages return to the
+        // buffer on exit so a later phase still sees them, in arrival order.
+        let mut queue = std::mem::take(&mut self.buffered);
+        let mut aside: VecDeque<Value> = VecDeque::new();
+        let outcome = loop {
+            let message = match queue.pop_front() {
+                Some(message) => message,
+                None => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break Err(format!("{method} did not answer in time."));
                     }
-                    self.buffered.push_back(message);
+                    match self.messages.recv_timeout(remaining) {
+                        Ok(message) => message,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            break Err(format!("{method} did not answer in time."))
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            break Err(format!("The language server stopped during {method}."))
+                        }
+                    }
                 }
-                Err(ReadFailure::Closed) => {
-                    return Err(format!("The language server stopped during {method}."))
+            };
+            if message.get("id").and_then(Value::as_u64) == Some(id) {
+                if let Some(error) = message.get("error") {
+                    let text = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("the server returned an error");
+                    break Err(format!("{method}: {text}"));
                 }
-                Err(ReadFailure::Timeout) => {
-                    return Err(format!("{method} did not answer in time."))
-                }
+                break Ok(message.get("result").cloned().unwrap_or(Value::Null));
             }
-        }
+            aside.push_back(message);
+        };
+        self.buffered = aside;
+        self.buffered.extend(queue);
+        outcome
     }
 }
 
@@ -526,32 +545,44 @@ fn run(
 
     let deadline = Instant::now() + DIAGNOSTIC_TIMEOUT;
     let mut published = None;
+    // The same one-pass rule as `request`: handshake-buffered messages are
+    // examined once, then each new arrival. A publish for another file is set
+    // aside, not re-queued into the loop that reads it, so the wait keeps
+    // reading until the open buffer's own publish arrives or time runs out.
+    let mut queue = std::mem::take(&mut session.buffered);
+    let mut aside: VecDeque<Value> = VecDeque::new();
     loop {
-        match session.next_message(deadline) {
-            Ok(message) => {
-                let method = message.get("method").and_then(Value::as_str).unwrap_or("");
-                if method == "textDocument/publishDiagnostics" {
-                    let params = message.get("params").cloned().unwrap_or(Value::Null);
-                    // Only the file we opened: a workspace-wide publish for
-                    // other files is not an answer to this request.
-                    if params.get("uri").and_then(Value::as_str) == Some(document.as_str()) {
-                        published = Some(
-                            params
-                                .get("diagnostics")
-                                .cloned()
-                                .unwrap_or_else(|| json!([])),
-                        );
-                        break;
-                    }
+        let message = match queue.pop_front() {
+            Some(message) => message,
+            None => match session.next_message(deadline) {
+                Ok(message) => message,
+                Err(ReadFailure::Timeout) => break,
+                Err(ReadFailure::Closed) => {
+                    return Err(
+                        "The language server stopped before publishing diagnostics.".to_string()
+                    )
                 }
-                session.buffered.push_back(message);
-            }
-            Err(ReadFailure::Timeout) => break,
-            Err(ReadFailure::Closed) => {
-                return Err("The language server stopped before publishing diagnostics.".to_string())
+            },
+        };
+        let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        if method == "textDocument/publishDiagnostics" {
+            let params = message.get("params").cloned().unwrap_or(Value::Null);
+            // Only the file we opened: a workspace-wide publish for
+            // other files is not an answer to this request.
+            if params.get("uri").and_then(Value::as_str) == Some(document.as_str()) {
+                published = Some(
+                    params
+                        .get("diagnostics")
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                );
+                break;
             }
         }
+        aside.push_back(message);
     }
+    session.buffered = aside;
+    session.buffered.extend(queue);
 
     // Best effort: a server that does not answer `shutdown` is killed by Drop.
     let _ = session.request("shutdown", Value::Null, Instant::now() + SHUTDOWN_TIMEOUT);
@@ -897,9 +928,20 @@ process.stdin.on("data", (chunk) => {
       if (process.argv.includes("--fail")) {
         send({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "no workspace support" } });
       } else {
+        if (process.argv.includes("--noisy-init")) {
+          send({ jsonrpc: "2.0", method: "window/logMessage", params: { type: 3, message: "indexing workspace" } });
+        }
         send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
       }
     } else if (message.method === "textDocument/didOpen") {
+      if (process.argv.includes("--noisy-publish")) {
+        send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: {
+          uri: message.params.textDocument.uri + ".other",
+          diagnostics: [
+            { range: { start: { line: 0, character: 0 } }, severity: 1, message: "not the open file" }
+          ]
+        } });
+      }
       send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: {
         uri: message.params.textDocument.uri,
         diagnostics: [
@@ -917,13 +959,15 @@ process.stdin.on("data", (chunk) => {
 "#;
 
     fn fake_launch(dir: &Path, fail: bool) -> Launch {
+        fake_launch_with_flags(dir, if fail { &["--fail"] } else { &[] })
+    }
+
+    fn fake_launch_with_flags(dir: &Path, flags: &[&str]) -> Launch {
         let script = dir.join("fake-lsp.mjs");
         std::fs::write(&script, FAKE_SERVER).unwrap();
         let node = crate::find_on_path("node").expect("node is on PATH for the test suite");
         let mut args = vec![script.to_string_lossy().to_string()];
-        if fail {
-            args.push("--fail".to_string());
-        }
+        args.extend(flags.iter().map(|flag| flag.to_string()));
         Launch {
             program: node,
             args,
@@ -955,6 +999,40 @@ process.stdin.on("data", (chunk) => {
         let launch = fake_launch(&dir, true);
         let error = run(&dir, "src/main.rs", spec, "fn main() {}\n", &launch).unwrap_err();
         assert!(error.contains("no workspace support"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Real servers log and report progress before they answer `initialize`.
+    /// The notification must be kept for later, and the answer still read:
+    /// re-examining the notification in a loop would spin forever while the
+    /// answer waits unread in the pipe.
+    #[test]
+    fn a_notification_before_the_initialize_answer_does_not_stall() {
+        let dir = temp_dir("noisy-init");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let spec = spec_for("src/main.rs").unwrap();
+        let launch = fake_launch_with_flags(&dir, &["--noisy-init"]);
+        let outcome = run(&dir, "src/main.rs", spec, "fn main() {}\n", &launch).unwrap();
+        assert!(outcome.published);
+        assert_eq!(outcome.diagnostics.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A workspace-wide server publishes for files we never opened. Those
+    /// rows are not the answer; the wait must keep reading until the open
+    /// buffer's own publish arrives instead of looping on the first one.
+    #[test]
+    fn a_publish_for_another_file_does_not_stall_the_diagnostics_wait() {
+        let dir = temp_dir("noisy-publish");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let spec = spec_for("src/main.rs").unwrap();
+        let launch = fake_launch_with_flags(&dir, &["--noisy-publish"]);
+        let outcome = run(&dir, "src/main.rs", spec, "fn main() {}\n", &launch).unwrap();
+        assert!(outcome.published);
+        assert_eq!(outcome.diagnostics.len(), 2);
+        assert_eq!(outcome.diagnostics[0]["message"], json!("unused variable"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
