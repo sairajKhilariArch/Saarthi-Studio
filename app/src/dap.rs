@@ -69,6 +69,7 @@ const MAX_ARG_CHARS: usize = 500;
 const MAX_PATH_CHARS: usize = 1000;
 
 /// One debugger Sarthi Studio knows how to speak to.
+#[derive(Debug)]
 struct AdapterSpec {
     id: &'static str,
     /// The binaries that provide this adapter, first match wins.
@@ -635,6 +636,14 @@ fn preflight(spec: &AdapterSpec, launch: &LaunchSpec) -> Result<(), (StatusCode,
     }
 }
 
+/// Where an attach session connects: a debug server the program already runs.
+/// Nothing is launched, so no target file or argv is involved.
+#[derive(Debug)]
+struct AttachTarget {
+    host: String,
+    port: u16,
+}
+
 struct SessionOptions {
     launch: LaunchSpec,
     program: String,
@@ -643,6 +652,8 @@ struct SessionOptions {
     args: Vec<String>,
     stop_on_entry: bool,
     breakpoints: Breakpoints,
+    /// Set for an attach session; `None` launches `program_path`.
+    attach: Option<AttachTarget>,
 }
 
 fn abort(session: Session, message: String) -> (StatusCode, String) {
@@ -736,17 +747,32 @@ fn begin(options: SessionOptions) -> Result<Value, (StatusCode, String)> {
     // debugpy answer it only after `configurationDone`, and waiting here for an
     // answer that depends on the next request deadlocks the session. Send it,
     // wait for `initialized`, configure, then read the answer.
-    let launch_seq = match debugger.send(
-        "launch",
-        json!({
-            "program": options.program_path.to_string_lossy(),
-            "cwd": options.root.to_string_lossy(),
-            "args": options.args,
-            "stopOnEntry": options.stop_on_entry,
-            "console": "internalConsole",
-            "justMyCode": true,
-        }),
-    ) {
+    // An attach session names a debug server that is already listening; a
+    // launch session names the program to start. Either way no argv comes from
+    // the request: the adapter's own argv is the table's.
+    let (start_command, start_arguments) = match &options.attach {
+        Some(target) => (
+            "attach",
+            json!({
+                "host": target.host,
+                "port": target.port,
+                "cwd": options.root.to_string_lossy(),
+                "justMyCode": true,
+            }),
+        ),
+        None => (
+            "launch",
+            json!({
+                "program": options.program_path.to_string_lossy(),
+                "cwd": options.root.to_string_lossy(),
+                "args": options.args,
+                "stopOnEntry": options.stop_on_entry,
+                "console": "internalConsole",
+                "justMyCode": true,
+            }),
+        ),
+    };
+    let launch_seq = match debugger.send(start_command, start_arguments) {
         Ok(seq) => seq,
         Err(message) => return Err(abort(debugger, message)),
     };
@@ -775,10 +801,15 @@ fn begin(options: SessionOptions) -> Result<Value, (StatusCode, String)> {
     let _ = debugger.request("configurationDone", json!({}), CONFIGURATION_TIMEOUT);
     // Now the launch's own answer is meaningful. A refusal is reported with the
     // adapter's words, and the process it may have started is killed by `abort`.
-    if let Err(message) = debugger.await_response(launch_seq, "launch", LAUNCH_TIMEOUT) {
+    if let Err(message) = debugger.await_response(launch_seq, start_command, LAUNCH_TIMEOUT) {
+        let what = if options.attach.is_some() {
+            "attach to the program"
+        } else {
+            "launch the target"
+        };
         return Err(abort(
             debugger,
-            format!("The adapter could not launch the target: {message}"),
+            format!("The adapter could not {what}: {message}"),
         ));
     }
     {
@@ -1332,7 +1363,132 @@ fn parse_breakpoint_files(input: &Value) -> Result<Breakpoints, (StatusCode, Str
     Ok(map)
 }
 
+/// An attach request: the adapter, the loopback debug server and the label the
+/// session reports. Split out so every refusal is unit-tested without spawning
+/// anything.
+fn parse_attach(
+    input: &Value,
+) -> Result<(AttachTarget, &'static AdapterSpec, String), (StatusCode, String)> {
+    let port = input
+        .get("port")
+        .and_then(Value::as_u64)
+        .filter(|port| (1..=65535).contains(port))
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "Name the port the program's debug server listens on (1-65535).".to_string(),
+        ))? as u16;
+    let host = input
+        .get("host")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let host = if host.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        host
+    };
+    if !matches!(host.as_str(), "127.0.0.1" | "::1" | "localhost") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Attach only reaches a debug server on this machine (127.0.0.1, ::1 or localhost)."
+                .to_string(),
+        ));
+    }
+    let adapter = input
+        .get("adapter")
+        .and_then(Value::as_str)
+        .map(|id| id.trim().to_ascii_lowercase())
+        .filter(|id| !id.is_empty());
+    let path = input
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+    let label: String;
+    let spec = match (&adapter, path) {
+        (Some(id), _) => {
+            label = id.clone();
+            ADAPTERS.iter().find(|spec| spec.id == *id).ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "No debug adapter is called \"{id}\". Use one of: {}.",
+                        ADAPTERS
+                            .iter()
+                            .map(|spec| spec.id)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?
+        }
+        (None, Some(path)) => {
+            let path = clean_path(path)?;
+            let spec = spec_for(&path).ok_or((
+                StatusCode::BAD_REQUEST,
+                "This build debugs Rust, C, C++, Python and Go. Name one of those files, or an \
+                 adapter id."
+                    .to_string(),
+            ))?;
+            label = path;
+            spec
+        }
+        (None, None) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Name the file whose language picks the debugger, or an adapter id (lldb-dap, \
+                 debugpy, dlv)."
+                    .to_string(),
+            ))
+        }
+    };
+    Ok((AttachTarget { host, port }, spec, label))
+}
+
+/// Attach to a debug server the program already runs: the adapter is started and
+/// asked to attach instead of launch, so no target file is required.
+fn start_attach(state: &AppState, input: &Value) -> Result<Value, (StatusCode, String)> {
+    let root = state
+        .workspace
+        .root()
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.message().to_string()))?;
+    let (target, spec, label) = parse_attach(input)?;
+    let launch = resolve_launch(spec)?;
+    preflight(spec, &launch)?;
+    let breakpoints = match input.get("breakpoints") {
+        Some(value) => parse_breakpoint_files(value)?,
+        None => load_stored(&state.database_path, &root)
+            .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?,
+    };
+    begin(SessionOptions {
+        launch,
+        program: label,
+        program_path: PathBuf::new(),
+        root,
+        args: Vec::new(),
+        stop_on_entry: false,
+        breakpoints,
+        attach: Some(target),
+    })
+}
+
 fn start_session(state: &AppState, input: &Value) -> Result<Value, (StatusCode, String)> {
+    let request = input
+        .get("request")
+        .and_then(Value::as_str)
+        .unwrap_or("launch")
+        .trim()
+        .to_ascii_lowercase();
+    if request == "attach" {
+        return start_attach(state, input);
+    }
+    if request != "launch" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "`request` must be \"launch\" or \"attach\".".to_string(),
+        ));
+    }
     let root = state
         .workspace
         .root()
@@ -1389,6 +1545,7 @@ fn start_session(state: &AppState, input: &Value) -> Result<Value, (StatusCode, 
         args,
         stop_on_entry,
         breakpoints,
+        attach: None,
     })
 }
 
@@ -1625,7 +1782,7 @@ def send(message):
 refuse_initialize = os.environ.get("FAKE_DAP_REFUSE_INIT") == "1"
 # Like debugpy: the launch answer waits for configurationDone, because the
 # target is not configured until the breakpoints are in place.
-pending_launch = None
+pending_start = None
 
 while True:
     message = read_message()
@@ -1647,18 +1804,25 @@ while True:
             answer(success=False, text="this adapter refuses to initialize")
         else:
             answer({"supportsConfigurationDoneRequest": True})
-    elif command == "launch":
-        pending_launch = seq
-        send({"seq": 100 + seq, "type": "event", "event": "initialized"})
+    elif command in ("launch", "attach"):
+        # An attach carries the debug server's address and no program; a launch
+        # carries the program. Both answer only after configurationDone.
+        arguments = message.get("arguments", {})
+        if command == "attach" and not (arguments.get("port") and arguments.get("host")):
+            answer(success=False, text="attach needs a host and a port")
+        else:
+            pending_start = (seq, command)
+            send({"seq": 100 + seq, "type": "event", "event": "initialized"})
     elif command == "setBreakpoints":
         lines = [item.get("line") for item in message.get("arguments", {}).get("breakpoints", [])]
         answer({"breakpoints": [{"verified": True, "line": line} for line in lines]})
     elif command == "configurationDone":
         answer({})
-        if pending_launch is not None:
-            send({"seq": 600 + seq, "type": "response", "request_seq": pending_launch,
-                  "command": "launch", "success": True, "body": {}})
-            pending_launch = None
+        if pending_start is not None:
+            started_seq, started_command = pending_start
+            send({"seq": 600 + seq, "type": "response", "request_seq": started_seq,
+                  "command": started_command, "success": True, "body": {}})
+            pending_start = None
         send({"seq": 700 + seq, "type": "event", "event": "stopped",
               "body": {"reason": "entry", "threadId": 1, "description": "paused at entry"}})
     elif command in ("continue", "next", "stepIn", "stepOut", "pause"):
@@ -1854,6 +2018,82 @@ while True:
         assert!(parse_breakpoints(&json!({"line": 1})).is_err());
     }
 
+    /// An attach names a debug server the program already runs, so it needs a
+    /// loopback port and an adapter rather than a target file. Every refusal
+    /// happens before anything spawns.
+    #[test]
+    fn an_attach_request_is_checked_before_anything_spawns() {
+        let missing_port = parse_attach(&json!({ "path": "main.py" })).unwrap_err();
+        assert_eq!(missing_port.0, StatusCode::BAD_REQUEST);
+        assert!(missing_port.1.contains("port"), "{}", missing_port.1);
+        assert!(parse_attach(&json!({ "port": 0, "path": "main.py" })).is_err());
+        assert!(parse_attach(&json!({ "port": 70000, "path": "main.py" })).is_err());
+        let remote = parse_attach(&json!({ "port": 5678, "host": "10.0.0.5", "path": "main.py" }))
+            .unwrap_err();
+        assert!(remote.1.contains("this machine"), "{}", remote.1);
+        let unknown = parse_attach(&json!({ "port": 5678, "adapter": "gdb" })).unwrap_err();
+        assert!(unknown.1.contains("lldb-dap"), "{}", unknown.1);
+        let unnamed = parse_attach(&json!({ "port": 5678 })).unwrap_err();
+        assert!(unnamed.1.contains("adapter id"), "{}", unnamed.1);
+
+        // The file's language picks the adapter; an adapter id works on its own.
+        let (target, spec, label) =
+            parse_attach(&json!({ "port": 5678, "path": "main.py" })).expect("python attach");
+        assert_eq!(target.port, 5678);
+        assert_eq!(target.host, "127.0.0.1");
+        assert_eq!(spec.id, "debugpy");
+        assert_eq!(label, "main.py");
+        let (target, spec, label) =
+            parse_attach(&json!({ "port": 2345, "adapter": "dlv" })).expect("adapter attach");
+        assert_eq!(target.port, 2345);
+        assert_eq!(spec.id, "dlv");
+        assert_eq!(label, "dlv");
+        // A path outside the folder is refused like every other path.
+        assert!(parse_attach(&json!({ "port": 5678, "path": "../evil.py" })).is_err());
+    }
+
+    /// The session sends `attach` with the address it was given — not `launch`
+    /// with a program — and the fake adapter refuses an attach that lacks them.
+    #[test]
+    fn an_attach_session_asks_the_adapter_to_attach() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(python) = python() else {
+            eprintln!("skipping: python3 is not on PATH");
+            return;
+        };
+        let root = scratch("attach");
+        std::fs::write(root.join("main.py"), "print('hi')\n").expect("target");
+        let adapter = root.join("fake_adapter.py");
+        std::fs::write(&adapter, FAKE_ADAPTER).expect("adapter");
+        let started = begin(SessionOptions {
+            launch: LaunchSpec {
+                id: "fake".to_string(),
+                program: python,
+                args: vec![adapter.to_string_lossy().to_string()],
+            },
+            program: "main.py".to_string(),
+            program_path: root.join("main.py"),
+            root: root.clone(),
+            args: Vec::new(),
+            stop_on_entry: false,
+            breakpoints: Breakpoints::new(),
+            attach: Some(AttachTarget {
+                host: "127.0.0.1".to_string(),
+                port: 5678,
+            }),
+        })
+        .expect("an attach session starts");
+        assert_eq!(started["running"], json!(true));
+        // The fake adapter answers `attach` only when the host and port arrived,
+        // so a refusal here would have failed the session.
+        assert_eq!(started["adapter"], json!("fake"));
+        let stopped = stop_session();
+        assert_eq!(stopped["stopped"], json!(true));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_session_can_start_step_inspect_and_stop() {
         let _guard = TEST_LOCK
@@ -1887,6 +2127,7 @@ while True:
             )]
             .into_iter()
             .collect(),
+            attach: None,
         })
         .expect("a fake session starts");
         assert_eq!(started["running"], json!(true));

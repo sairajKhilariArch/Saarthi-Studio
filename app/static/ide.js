@@ -417,9 +417,12 @@
       '<button type="button" class="btn btn-quiet btn-small" id="debugRemoveBreakpoint">Clear line</button>' +
       '<label class="debug-check"><input type="checkbox" id="debugStopEntry" checked> stop at entry</label>' +
       '<input id="debugProgram" class="debug-program" placeholder="program (default: open file)" aria-label="Program to debug">' +
+      '<span class="debug-sep"></span>' +
+      '<input id="debugAttachPort" class="debug-line" type="number" min="1" max="65535" inputmode="numeric" placeholder="Port" aria-label="Port of a running debug server">' +
+      '<button type="button" class="btn btn-quiet btn-small" id="debugAttach" title="Attach to a debug server the program already runs">Attach</button>' +
       '</div>' +
       '<div class="pane-scroll debug-body" id="debugBody">' +
-      '<p class="debug-status" id="debugStatusLine">No session. Open a Python, Go, Rust, C or C++ file and press Start.</p>' +
+      '<p class="debug-status" id="debugStatusLine">No session. Open a Python, Go, Rust, C or C++ file and press Start, or name the port a running debug server listens on and press Attach.</p>' +
       '<div class="debug-hint hidden" id="debugHint"></div>' +
       '<section class="debug-section"><h4>Breakpoints</h4><div id="debugBreakpoints"></div></section>' +
       '<section class="debug-section"><h4>Call stack</h4><div id="debugFrames"></div></section>' +
@@ -437,6 +440,7 @@
     pane.querySelector("#debugStepOut").addEventListener("click", () => void debugStep("step-out"));
     pane.querySelector("#debugAddBreakpoint").addEventListener("click", () => void toggleBreakpoint(false));
     pane.querySelector("#debugRemoveBreakpoint").addEventListener("click", () => void toggleBreakpoint(true));
+    pane.querySelector("#debugAttach").addEventListener("click", () => void attachDebugger());
     pane.querySelector("#debugEvalRun").addEventListener("click", () => void evaluateDebugExpression());
     pane.querySelector("#debugEval").addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); void evaluateDebugExpression(); }
@@ -551,6 +555,41 @@
     });
     if (!result.ok) {
       const message = result.data.error || "Could not start the debugger.";
+      toast(message);
+      recordProblem("debug", message);
+      renderDebug();
+      return;
+    }
+    debug.stopKey = null;
+    await refreshDebug();
+  }
+
+  /* Attach instead of launch: the program already runs a debug server
+     (`debugpy --listen 5678`, `dlv dap --listen :2345`, `lldb-dap`), and the
+     open file picks the adapter. Only a loopback address is accepted. */
+  async function attachDebugger() {
+    const port = Number($("debugAttachPort") ? $("debugAttachPort").value : 0);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      toast("Type the port the program's debug server listens on.");
+      return;
+    }
+    const file = activeFile();
+    if (!file) {
+      toast("Open a file of the program's language so the adapter can be picked.");
+      return;
+    }
+    const result = await api("/api/debug/start", {
+      method: "POST",
+      body: JSON.stringify({
+        request: "attach",
+        port,
+        host: "127.0.0.1",
+        path: file.path,
+      }),
+      confirmApproval: true,
+    });
+    if (!result.ok) {
+      const message = result.data.error || "Could not attach the debugger.";
       toast(message);
       recordProblem("debug", message);
       renderDebug();
