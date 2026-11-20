@@ -2,11 +2,13 @@
 # Install smoke: prove a packaged Android app can be installed and will start.
 #
 # An APK is a zip whose parts an installer checks: a compiled
-# AndroidManifest.xml, at least one dex, resources, a signature block, the
-# native libraries React Native needs, and the JavaScript bundle it loads at
-# launch. An AAB carries the same parts under `base/`. A release build that
-# packages but ships no bundle or no signature crashes or refuses to install on
-# a device, so this fails here instead.
+# AndroidManifest.xml, at least one dex, resources and a signature block.
+# The app is native Java — there is no React Native runtime, so no
+# JavaScript bundle and no required native libraries; instead the launch
+# activity's class must be carried by the dex, or the app crashes at open.
+# An AAB carries the same parts under `base/`. A release build that
+# packages but ships no code or no signature crashes or refuses to install
+# on a device, so this fails here instead.
 #
 # Usage: scripts/ci/smoke-apk.sh <artifact.apk|.aab> [another artifact...]
 #   SMOKE_KEEP=1   keep the unpacked trees
@@ -36,18 +38,22 @@ else
 fi
 
 # The Android app keeps its own version line; report it beside the artifact so a
-# mismatch is visible even though it is not read from the package.
-project_version="$("$py" - "$root/android/app/build.gradle.kts" <<'PY'
+# mismatch is visible even though it is not read from the package. The namespace
+# names the launch activity the dex must carry.
+project_meta="$("$py" - "$root/android/app/build.gradle.kts" <<'PY'
 import re, sys
 try:
     text = open(sys.argv[1], encoding="utf-8").read()
 except OSError:
     sys.exit()
-match = re.search(r'versionName\s*=\s*"([^"]+)"', text)
-if match:
-    print(match.group(1))
+version = re.search(r'versionName\s*=\s*"([^"]+)"', text)
+namespace = re.search(r'namespace\s*=\s*"([^"]+)"', text)
+print(version.group(1) if version else "")
+print(namespace.group(1) if namespace else "")
 PY
 )"
+project_version="$(printf '%s\n' "$project_meta" | sed -n 1p)"
+project_namespace="$(printf '%s\n' "$project_meta" | sed -n 2p)"
 
 work="$(mktemp -d)"
 cleanup() {
@@ -67,12 +73,12 @@ for artifact in "$@"; do
     continue
   }
   printf '\n== %s ==\n' "$(basename "$artifact")"
-  "$py" - "$artifact" "$work" "$project_version" <<'PY' || status=1
+  "$py" - "$artifact" "$work" "$project_version" "$project_namespace" <<'PY' || status=1
 import re
 import sys
 import zipfile
 
-path, work, project_version = sys.argv[1:4]
+path, work, project_version, project_namespace = sys.argv[1:5]
 label = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
 bundle = label.lower().endswith(".aab")
 passed = 0
@@ -148,35 +154,62 @@ else:
 resources = "base/resources.pb" if bundle else "resources.arsc"
 require(resources, "resources table")
 
-# 4. The React Native JavaScript bundle is loaded at first launch. A release
-# build without it opens to a red screen.
-bundle_name = f"{root_prefix}assets/index.android.bundle"
-require(bundle_name, "JavaScript bundle")
+# 4. The launch activity must be packaged. The manifest names .MainActivity
+# and the runtime resolves it from the dex; a release that minified it away
+# crashes at open. The app is native Java, so there is no JavaScript bundle.
+if project_namespace:
+    descriptor = f"L{project_namespace.replace('.', '/')}/MainActivity;".encode()
+    if any(descriptor in archive.read(name) for name in dex):
+        pass_(f"launch activity {project_namespace}.MainActivity is carried by the dex")
+    else:
+        die(f"no dex carries {project_namespace}.MainActivity, so the app cannot start")
+else:
+    die("cannot read the namespace from android/app/build.gradle.kts")
 
-# 5. Native libraries: at least one ABI, every .so non-empty.
+# 5. Native libraries are optional for a native Java app; any that ship must
+# be non-empty, since an empty .so is a packaging corruption.
 libs = sorted(name for name in names if re.fullmatch(rf"{re.escape(root_prefix)}lib/[^/]+/.+\.so", name))
 abis = sorted({name.split("/")[1 if not bundle else 2] for name in libs})
-if not libs:
-    die("no native libraries (lib/<abi>/*.so), so the app cannot load React Native")
-else:
+if libs:
     empty = [name for name in libs if archive.getinfo(name).file_size == 0]
     if empty:
         die("empty native libraries: " + ", ".join(empty[:5]))
     else:
         pass_(f"{len(libs)} native libraries across {', '.join(abis)}")
+else:
+    pass_("no native libraries shipped (none required by the native Java app)")
 
 # 6. An APK must be signed or `adb install` refuses it. The release job signs
-# with the Android Gradle plugin's debug keystore, which writes a v1 block.
+# with the Android Gradle plugin's debug keystore. At minSdk 26 AGP writes an
+# APK Signature Scheme v2/v3 block and no META-INF v1 entries; older targets
+# still get a v1 JAR signature. Accept either, and name which one.
 if not bundle:
     signatures = [
         name
         for name in names
         if re.fullmatch(r"META-INF/[^/]+\.(RSA|DSA|EC)", name, re.IGNORECASE)
     ]
-    if not signatures:
-        die("no META-INF signature block, so the APK is unsigned and will not install")
+    if signatures:
+        pass_(f"signed (v1: {', '.join(sorted(signatures)[:2])})")
     else:
-        pass_(f"signed ({', '.join(sorted(signatures)[:2])})")
+        raw = open(path, "rb").read()
+        eocd = raw.rfind(b"PK\x05\x06")
+        schemes = []
+        if eocd >= 0:
+            cd = int.from_bytes(raw[eocd + 16:eocd + 20], "little")
+            if raw[cd - 16:cd] == b"APK Sig Block 42":
+                size = int.from_bytes(raw[cd - 24:cd - 16], "little")
+                pos = cd - size
+                while pos < cd - 24:
+                    plen = int.from_bytes(raw[pos:pos + 8], "little")
+                    pid = int.from_bytes(raw[pos + 8:pos + 12], "little")
+                    if pid in (0x7109871A, 0xF05368C0, 0x1B93AD61):
+                        schemes.append({0x7109871A: "v2", 0xF05368C0: "v3", 0x1B93AD61: "v3.1"}[pid])
+                    pos += 8 + plen
+        if schemes:
+            pass_(f"signed (APK Signature Scheme {', '.join(schemes)})")
+        else:
+            die("no META-INF signature block and no v2/v3 signing block, so the APK is unsigned and will not install")
 else:
     require("BundleConfig.pb", "bundle config")
 

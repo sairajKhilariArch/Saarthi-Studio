@@ -60,14 +60,14 @@ jobs:
           test -f android/settings.gradle.kts
           test -f android/app/build.gradle.kts
           test -f android/app/src/main/AndroidManifest.xml
-          test -f android/app/src/main/java/com/sarthi/studio/MainActivity.java
-          test -f android/app/src/main/java/com/sarthi/studio/ChatDatabase.java
-          test -f android/app/src/main/java/com/sarthi/studio/DatabaseMigrations.java
-          test -f android/app/src/test/java/com/sarthi/studio/BackupPolicyTest.java
-          test -f android/app/src/androidTest/java/com/sarthi/studio/DatabaseMigrationInstrumentedTest.java
-          test -f android/app/src/androidTest/java/com/sarthi/studio/ChatHistoryPagingInstrumentedTest.java
-          test -f android/app/src/androidTest/java/com/sarthi/studio/BackupRestoreInstrumentedTest.java
-          test -f android/app/src/androidTest/java/com/sarthi/studio/AppLaunchInstrumentedTest.java
+          test -f android/app/src/main/java/com/saarthi/studio/MainActivity.java
+          test -f android/app/src/main/java/com/saarthi/studio/ChatDatabase.java
+          test -f android/app/src/main/java/com/saarthi/studio/DatabaseMigrations.java
+          test -f android/app/src/test/java/com/saarthi/studio/BackupPolicyTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/DatabaseMigrationInstrumentedTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/ChatHistoryPagingInstrumentedTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/BackupRestoreInstrumentedTest.java
+          test -f android/app/src/androidTest/java/com/saarthi/studio/AppLaunchInstrumentedTest.java
           test -f android/scripts/ci/run-android-instrumentation.sh
           test -f android/scripts/ci/test-run-android-instrumentation.sh
 
