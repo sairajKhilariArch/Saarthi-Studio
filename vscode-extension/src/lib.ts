@@ -1744,6 +1744,10 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
       if (routePath === "/api/config") {
         if (method === "GET") {
+          if (policyDenial("settings", "")) {
+            sendJson(response, 403, { ok: false, error: policyDenial("settings", "") });
+            return;
+          }
           const config = options.getConfig();
           sendJson(response, 200, {
             base_url: config.routerBaseUrl,
@@ -2356,6 +2360,11 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       if (routePath === "/api/models" && method === "GET") {
         const config = options.getConfig();
         const base = normalizeBaseUrl(config.routerBaseUrl);
+        const netDenial = policyDenial("network", base);
+        if (netDenial) {
+          sendJson(response, 403, { ok: false, error: netDenial });
+          return;
+        }
         try {
           const headers: Record<string, string> = {};
           if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
@@ -2399,6 +2408,11 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       /* router / gateway lifecycle ---------------------------------- */
       if (routePath === "/api/router" && method === "GET") {
         let reachable = false;
+        const netDenial = policyDenial("network", routerOrigin() + "/api/ping");
+        if (netDenial) {
+          sendJson(response, 403, { ok: false, error: netDenial });
+          return;
+        }
         try {
           const ping = await fetchImpl(`${routerOrigin()}/api/ping`, { signal: AbortSignal.timeout(1500) });
           reachable = ping.ok;
