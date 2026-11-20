@@ -25,6 +25,8 @@ import { McpError, McpService } from "./mcp";
 import { McpOAuth } from "./mcpoauth";
 import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
 import type { PermitAction } from "./permissions";
+// Re-exported so `node --test` can exercise the permission action set.
+export { PermissionStore, PERMIT_ACTIONS } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
 export { validateArguments } from "./mcpschema";
 
@@ -937,9 +939,15 @@ export function embeddedCapabilities(): CapabilityContract {
       memory: false,
       code_index: false,
       extensions: false,
+      network: true,
+      router_install: true,
+      update: true,
+      uninstall: true,
+      settings: true,
+      extension_tool: true,
+      permissions: true,
       thinking: true,
       openai_platform: false,
-      permissions: false,
       deep_search: false,
       usage_cost: false,
       diagnostics: false,
@@ -1460,7 +1468,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     },
     permission: (action, target, project) => {
       const effective = permissions.check(
-        action as "fs_write" | "command" | "mcp_tool",
+        action as PermitAction,
         target,
         project,
         true,

@@ -1,17 +1,24 @@
 // Saved permission rules for the VS Code extension's built-in server.
 //
-// The desktop owns the full policy engine (app/src/permissions.rs): eleven
-// action kinds, four scopes, an audit trail and an emergency stop. This module
-// stores and resolves the three actions this server can actually enforce, so a
-// saved rule means something here instead of being a checkbox that lies:
+// Stores and resolves the eleven action kinds the desktop enforces
+// (app/src/permissions.rs), plus an in-memory audit trail and a longest-prefix
+// matching resolver. This module carries the entire wire language: every action
+// the platform can make, each ask-by-default, so a saved rule only ever tightens
+// an existing grant and nothing is hidden in a checkbox. Resolution follows the
+// desktop: longest matching target wins, then deny > ask > allow, then the
+// narrower scope.
 //
-//   * fs_read   — a file the agent reads or a folder it lists (allowed by
-//                 default here, as on the desktop, so a deny is the useful
-//                 rule: it keeps a path out of the model's reach);
-//   * fs_write  — a file the agent writes (and the editor's own save route is
-//                 left to the person driving it);
-//   * command   — a command line the agent runs;
-//   * mcp_tool  — one `server.tool` an agent or the MCP panel calls.
+//   * fs_read   — a file the agent reads or a folder it lists
+//   * fs_write  — a file the agent writes (editor save left to the driver)
+//   * command   — a command line the agent runs
+//   * mcp_tool  — one server.tool the agent or MCP panel calls
+//   * network   — an outbound request (for example the console's dashboard)
+//   * git       — stage, commit, revert or branch the workspace
+//   * router_install — install, update or remove a router
+//   * update    — replace installed software
+//   * uninstall — remove Studio, deleting its program folder, settings and data
+//   * settings  — change application settings and keys
+//   * extension_tool — call a tool declared by an installed extension
 //
 // Resolution is the desktop's: the longest matching target wins, then
 // deny > ask > allow, then the narrower scope. A rule can only ever make an
@@ -21,7 +28,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export type PermitAction = "fs_read" | "fs_write" | "command" | "mcp_tool";
+export type PermitAction =
+  | "fs_read"
+  | "fs_write"
+  | "command"
+  | "mcp_tool"
+  | "network"
+  | "git"
+  | "router_install"
+  | "update"
+  | "uninstall"
+  | "settings"
+  | "extension_tool";
 /** The safety release is recorded too, as it is on the desktop. */
 export type PermitAuditAction = PermitAction | "emergency-stop";
 export type PermitDecision = "allow" | "ask" | "deny";
@@ -59,6 +77,13 @@ export const PERMIT_ACTIONS: Array<{ id: PermitAction; description: string; defa
   { id: "fs_write", description: "Have an agent create, change or delete files in the open folder", default: "ask" },
   { id: "command", description: "Have an agent run a shell command in the workspace", default: "ask" },
   { id: "mcp_tool", description: "Call a tool exposed by a registered MCP server", default: "ask" },
+  { id: "network", description: "Make an outbound network request (for example the console's provider dashboard)", default: "ask" },
+  { id: "git", description: "Stage, commit, revert or branch the open workspace", default: "ask" },
+  { id: "router_install", description: "Install, update or remove a router", default: "ask" },
+  { id: "update", description: "Replace installed software", default: "ask" },
+  { id: "uninstall", description: "Remove Studio, deleting its program folder, settings and data", default: "ask" },
+  { id: "settings", description: "Change application settings and keys", default: "ask" },
+  { id: "extension_tool", description: "Call a tool declared by an installed extension", default: "ask" },
 ];
 
 const MAX_RULES = 200;
@@ -66,7 +91,19 @@ const MAX_AUDIT = 200;
 const MAX_TARGET = 1000;
 
 function isAction(value: unknown): value is PermitAction {
-  return value === "fs_read" || value === "fs_write" || value === "command" || value === "mcp_tool";
+  return (
+    value === "fs_read" ||
+    value === "fs_write" ||
+    value === "command" ||
+    value === "mcp_tool" ||
+    value === "network" ||
+    value === "git" ||
+    value === "router_install" ||
+    value === "update" ||
+    value === "uninstall" ||
+    value === "settings" ||
+    value === "extension_tool"
+  );
 }
 
 function isDecision(value: unknown): value is PermitDecision {
