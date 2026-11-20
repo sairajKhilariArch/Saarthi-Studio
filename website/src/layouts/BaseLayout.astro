@@ -2,6 +2,7 @@
 import Seo from '../components/Seo.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import SiteFooter from '../components/SiteFooter.astro';
+import { THEMES, storedAndValid } from '../lib/theme';
 import '../styles/global.css';
 
 interface Props {
@@ -12,10 +13,25 @@ interface Props {
 }
 
 const { title, description, image, noindex } = Astro.props;
+
+// Resolve theme at build time to avoid flash of unstyled content
+const resolvedTheme = (() => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('sarthi-theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+      if (saved && THEMES.some((t) => t.value === saved)) return saved;
+    }
+  } catch {
+    // ignore
+  }
+  return 'hermes';
+})();
+const themeAttr = resolvedTheme === 'dark' ? 'dark' : resolvedTheme;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme={themeAttr}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

@@ -1,0 +1,79 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+  import Icon from '../../../components/Icon.astro';
+  import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Installation"
+  description="Install Sarthi Studio on Linux, Windows, macOS, Android, and VS Code. One page per platform links to the dedicated download pages."
+>
+  <p>
+    Install Sarthi Studio from the <a href={withBase('/download/')}>downloads section</a>.
+    Every release ships a <code>SHA256SUMS.txt</code>; verify the checksum
+    before you install. Each platform has its own dedicated download page
+    with the exact formats and installation steps.
+  </p>
+
+  <h2>Which page should I use?</h2>
+  <div class="platform-grid">
+    <div class="platform-row">
+      <span class="platform-row-icon"><Icon name="terminal" size={18} /></span>
+      <div class="platform-row-body">
+        <strong>Linux</strong>
+        <p>Debian/Ubuntu package, AppImage, or portable tarball.</p>
+        <a href={withBase('/download/linux/')}>Linux download page →</a>
+      </div>
+    </div>
+    <div class="platform-row">
+      <span class="platform-row-icon"><Icon name="monitor" size={18} /></span>
+      <div class="platform-row-body">
+        <strong>Windows</strong>
+        <p>Per-user MSI or portable zip. WebView2 ships with Windows 10/11.</p>
+        <a href={withBase('/download/windows/')}>Windows download page →</a>
+      </div>
+    </div>
+    <div class="platform-row">
+      <span class="platform-row-icon"><Icon name="laptop" size={18} /></span>
+      <div class="platform-row-body">
+        <strong>macOS</strong>
+        <p>Universal Apple Silicon + Intel build. Unsigned — Gatekeeper steps below.</p>
+        <a href={withBase('/download/macos/')}>macOS download page →</a>
+      </div>
+    </div>
+    <div class="platform-row">
+      <span class="platform-row-icon"><Icon name="smartphone" size={18} /></span>
+      <div class="platform-row-body">
+        <strong>Android</strong>
+        <p>Companion client: direct router mode or Desktop Host mode.</p>
+        <a href={withBase('/download/android/')}>Android download page →</a>
+      </div>
+    </div>
+    <div class="platform-row">
+      <span class="platform-row-icon"><Icon name="code" size={18} /></span>
+      <div class="platform-row-body">
+        <strong>VS Code</strong>
+        <p>The workspace inside your editor, with an embedded server.</p>
+        <a href={withBase('/download/vscode/')}>VS Code download page →</a>
+      </div>
+    </div>
+  </div>
+
+  <h2>Installing on several machines</h2>
+  <p>
+    The same release can be installed on every machine you use. Linux users
+    may prefer the Debian package (menu entry plus <code>SAARTHI-STUDIO</code>
+    command); AppImage and tarballs are portable and need nothing else. On
+    Windows, the MSI is per-user; the portable zip needs no installer at all.
+    On macOS, the universal build runs on Apple Silicon and Intel, and first
+    launch needs the right-click → Open step because the build is unsigned.
+  </p>
+
+  <h2>Cross-platform workflow</h2>
+  <p>
+    Once installed, the workflow is the same everywhere: start the local
+    service, connect a model (router or local), open a project, and run an
+    agent. The UI is identical in the native window, a browser tab
+    (<code>SAARTHI-STUDIO --browser</code>), and the VS Code extension.
+  </p>
+</DocLayout>

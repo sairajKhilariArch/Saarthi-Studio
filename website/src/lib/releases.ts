@@ -22,54 +22,54 @@ export interface Asset {
 
 export const ASSETS = {
   linuxDeb: {
-    name: 'free-ai-studio_3.74.4-1_amd64.deb',
+    name: 'SAARTHI-STUDIO_3.74.4-1_amd64.deb',
     size: 4868860,
-    url: `${BASE}/free-ai-studio_3.74.4-1_amd64.deb`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4-1_amd64.deb`,
   },
   linuxAppImage: {
-    name: 'sarthi-studio_3.74.4_x86_64.AppImage',
+    name: 'SAARTHI-STUDIO_3.74.4_x86_64.AppImage',
     size: 8686072,
-    url: `${BASE}/sarthi-studio_3.74.4_x86_64.AppImage`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4_x86_64.AppImage`,
   },
   linuxTar: {
-    name: 'sarthi-studio_3.74.4_linux-x86_64.tar.gz',
+    name: 'SAARTHI-STUDIO_3.74.4_linux-x86_64.tar.gz',
     size: 8431433,
-    url: `${BASE}/sarthi-studio_3.74.4_linux-x86_64.tar.gz`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4_linux-x86_64.tar.gz`,
   },
   windowsMsi: {
-    name: 'sarthi-studio_3.74.4_windows-x86_64.msi',
+    name: 'SAARTHI-STUDIO_3.74.4_windows-x86_64.msi',
     size: 7294976,
-    url: `${BASE}/sarthi-studio_3.74.4_windows-x86_64.msi`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4_windows-x86_64.msi`,
   },
   windowsZip: {
-    name: 'sarthi-studio_3.74.4_windows-x86_64.zip',
+    name: 'SAARTHI-STUDIO_3.74.4_windows-x86_64.zip',
     size: 9047077,
-    url: `${BASE}/sarthi-studio_3.74.4_windows-x86_64.zip`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4_windows-x86_64.zip`,
   },
   macApp: {
-    name: 'sarthi-studio_3.74.4_macos-universal.app.zip',
+    name: 'SAARTHI-STUDIO_3.74.4_macos-universal.app.zip',
     size: 15082405,
-    url: `${BASE}/sarthi-studio_3.74.4_macos-universal.app.zip`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4_macos-universal.app.zip`,
   },
   macTar: {
-    name: 'sarthi-studio_3.74.4_macos-universal.tar.gz',
+    name: 'SAARTHI-STUDIO_3.74.4_macos-universal.tar.gz',
     size: 15077832,
-    url: `${BASE}/sarthi-studio_3.74.4_macos-universal.tar.gz`,
+    url: `${BASE}/SAARTHI-STUDIO_3.74.4_macos-universal.tar.gz`,
   },
   androidApk: {
-    name: 'free-ai-studio-android.apk',
+    name: 'SAARTHI-STUDIO-android.apk',
     size: 72960,
-    url: `${BASE}/free-ai-studio-android.apk`,
+    url: `${BASE}/SAARTHI-STUDIO-android.apk`,
   },
   androidAab: {
-    name: 'free-ai-studio-android.aab',
+    name: 'SAARTHI-STUDIO-android.aab',
     size: 125700,
-    url: `${BASE}/free-ai-studio-android.aab`,
+    url: `${BASE}/SAARTHI-STUDIO-android.aab`,
   },
   vsix: {
-    name: 'free-ai-studio-vscode.vsix',
+    name: 'SAARTHI-STUDIO-vscode.vsix',
     size: 342343,
-    url: `${BASE}/free-ai-studio-vscode.vsix`,
+    url: `${BASE}/SAARTHI-STUDIO-vscode.vsix`,
   },
   sums: {
     name: 'SHA256SUMS.txt',
@@ -83,3 +83,5 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+export const TOTAL_ASSETS = Object.values(ASSETS).filter((a) => a.name).length;

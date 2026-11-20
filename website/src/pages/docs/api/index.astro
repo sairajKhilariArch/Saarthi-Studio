@@ -1,0 +1,58 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="API reference"
+  description="The Sarthi Studio Host API, and what you should know about the local loopback contract."
+>
+  <p>
+    Studio exposes two HTTP surfaces. The first is the <strong>loopback
+    UI/API</strong> at <code>http://127.0.0.1:8765</code> — the UI is served
+    from the same origin, and every route is local-only. The second is the
+    <strong>Host API</strong> at <code>/api/host/v1/*</code>, an opt-in,
+    separate listener with bearer-token authentication and TLS, used by the
+    Android companion in Desktop Host mode.
+  </p>
+
+  <h2>The loopback contract (local only)</h2>
+  <p>
+    Routes under the loopback API are local-only and are not a public remote
+    contract — the origin is the loopback address itself, and workspace
+    routes reject non-loopback hosts and foreign origins. Use them from the
+    UI or from scripts that run on the same machine; do not expose them to
+    the network.
+  </p>
+
+  <h2>The Host API</h2>
+  <p>
+    The Host API is opt-in and authenticated. It carries a bearer token and
+    is served over TLS when the host is paired with a client. It is designed
+    for the Android companion in Desktop Host mode: it gives that client
+    access to the desktop's workspace, history, and services without
+    exposing the loopback API itself.
+  </p>
+
+  <h2>What the Host API offers</h2>
+  <p>
+    The Host API surface is a subset of the desktop routes — enough for the
+    Android client to show the workspace, send messages, and control the
+    router. It deliberately excludes terminals, process supervision, and
+    arbitrary commands: the Android client is a companion surface, not a
+    remote desktop.
+  </p>
+
+  <h2>Authentication and transport</h2>
+  <ul>
+    <li>Host API: bearer token + TLS. Android pairs with the desktop over SSH-assisted pairing, and the Host API is reached over the resulting secured channel.</li>
+    <li>Loopback API: local only; no token, no network exposure.</li>
+  </ul>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>The loopback contract is local-only by design; it must not be bound to a network interface.</li>
+    <li>The Host API is a documented subset of the desktop routes, not the full product.</li>
+    <li>Remote MCP servers are trusted by configuration, not by default.</li>
+  </ul>
+</DocLayout>

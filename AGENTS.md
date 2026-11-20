@@ -39,10 +39,10 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agen
 
 ## Conventions
 
-- Config in `~/.config/free-ai-studio/config.json`; data in
-  `~/.local/share/free-ai-studio/studio.db` (SQLite). Never move these paths.
+- Config in `~/.config/SAARTHI-STUDIO/config.json`; data in
+  `~/.local/share/SAARTHI-STUDIO/studio.db` (SQLite). Never move these paths.
 - User-facing brand string is **Sarthi Studio**; internal identifiers
-  (`free-ai-studio` crate/package/app paths) must stay.
+  (`SAARTHI-STUDIO` crate/package/app paths) must stay.
 - Frontend has no build step or package manager: hand-written ES modules served
   from `app/static/`. Style through CSS custom-property tokens in `styles.css`.
 - Commit subjects put the version number first, then a short description:

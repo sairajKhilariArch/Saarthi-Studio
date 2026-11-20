@@ -15,9 +15,14 @@ export const DOCS_NAV: Array<{ title: string; items: DocEntry[] }> = [
         summary: 'Install, connect a model, open a project, first chat and first agent run.',
       },
       {
+        label: 'Installation',
+        href: '/docs/installation/',
+        summary: 'One page per platform, with install steps and first-launch guidance.',
+      },
+      {
         label: 'Troubleshooting',
         href: '/docs/troubleshooting/',
-        summary: 'Gatekeeper, SmartScreen, router keys, ports, language servers, recovery.',
+        summary: 'Gatekeeper, SmartScreen, router keys, ports, language servers, database recovery.',
       },
     ],
   },
@@ -44,15 +49,30 @@ export const DOCS_NAV: Array<{ title: string; items: DocEntry[] }> = [
         href: '/docs/skills-and-mcp/',
         summary: 'SKILL.md packs, the composer picker, MCP servers and tool permissions.',
       },
-    ],
-  },
-  {
-    title: 'Trust',
-    items: [
       {
         label: 'Privacy & security',
         href: '/docs/privacy/',
-        summary: 'What stays local, what leaves, where data lives, the Host API model.',
+        summary: 'What stays local, what leaves, the Host API model, the trust boundary.',
+      },
+    ],
+  },
+  {
+    title: 'Reference',
+    items: [
+      {
+        label: 'Configuration',
+        href: '/docs/configuration/',
+        summary: 'Config file, environment variables, provider and router settings.',
+      },
+      {
+        label: 'API reference',
+        href: '/docs/api/',
+        summary: 'The Host API and the local loopback contract.',
+      },
+      {
+        label: 'Developer guide',
+        href: '/docs/developer-guide/',
+        summary: 'Repository layout, modules, database, API surface, Android, VS Code, build and test.',
       },
     ],
   },

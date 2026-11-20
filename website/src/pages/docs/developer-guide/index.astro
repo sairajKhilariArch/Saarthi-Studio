@@ -1,0 +1,82 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+  import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Developer guide"
+  description="The repository layout, backend modules, frontend, database, API surface, clients, and how to build and test."
+>
+  <p>
+    This guide describes the repository for people who want to build, extend,
+    or contribute to Sarthi Studio. The desktop app is Rust + SQLite with a
+    hand-written static frontend; the Android client and VS Code extension
+    are separate projects that talk to the desktop over a documented host
+    API.
+  </p>
+
+  <h2>Repository layout</h2>
+  <ul>
+    <li><code>app/</code> — the Rust server and desktop binary (crate/binary <code>SAARTHI-STUDIO</code>).</li>
+    <li><code>app/static/</code> — the app's UI: <code>index.html</code>, <code>app.js</code>, <code>styles.css</code>. No build step.</li>
+    <li><code>docs/</code> — engineering documentation: architecture, feature status, testing, design system.</li>
+    <li><code>android/</code> — React Native companion client and native emitters.</li>
+    <li><code>vscode-extension/</code> — TypeScript extension with an embedded Node server.</li>
+    <li><code>website/</code> — this site: Astro static site with MDX, sitemap, and Pagefind.</li>
+  </ul>
+
+  <h2>The backend modules</h2>
+  <p>
+    The server owns the router client, provider presets, the model catalog,
+    the database, the workspace API, the agent run loop, the permission
+    rules, the audit trail, and the keychain. Language servers provide
+    diagnostics; the Debug Adapter Protocol talks to attach-style debuggers.
+  </p>
+
+  <h2>The frontend</h2>
+  <p>
+    A compact agent-style shell: thread sidebar, file workspace, tabbed
+    editor with syntax highlighting, a real PTY terminal, Git operations,
+    and a router-backed chat. The UI is static HTML/CSS/JS served by the Rust
+    server; there is no build step in the app.
+  </p>
+
+  <h2>The database</h2>
+  <p>
+    SQLite at <code>~/.local/share/SAARTHI-STUDIO/studio.db</code> stores
+    conversations, runs, steps, keys (with permissions), and usage. Studio
+    refuses to run on a corrupt database; the recovery path rebuilds what it
+    can. Back up the file before heavy operations.
+  </p>
+
+  <h2>The API surface</h2>
+  <p>
+    The loopback API is local-only; the opt-in Host API
+    <code>/api/host/v1/*</code> is authenticated (bearer token) and TLS'd for
+    the Android companion. The Host API is a documented subset of the
+    desktop routes — no PTY, no process supervision. See
+    <a href={withBase('/docs/api/')}>API reference</a>.
+  </p>
+
+  <h2>Clients</h2>
+  <ul>
+    <li><strong>Desktop:</strong> native window (Tauri 2) or <code>--browser</code>.</li>
+    <li><strong>Android:</strong> direct router mode or Desktop Host mode.</li>
+    <li><strong>VS Code:</strong> TypeScript extension with an embedded Node server.</li>
+  </ul>
+
+  <h2>Build, test, debug</h2>
+  <p>
+    Standard Rust workflow: <code>cargo build</code>, <code>cargo test</code>,
+    and <code>cargo clippy</code>. The desktop <code>gui</code> feature adds
+    the Tauri window. Frontend checks run with <code>npm run check</code> and
+    the frontend suite inside the app.
+  </p>
+
+  <h2>Contributing</h2>
+  <p>
+    See the repository README, the feature status report, and
+    <code>docs/TESTING-STRATEGY.md</code>. Website work uses the isolated
+    <code>website/</code> toolchain with its own checks and commit lines.
+  </p>
+</DocLayout>

@@ -54,12 +54,12 @@ downloads and the **source version** for docs/status, and must not imply that a
 
 ### 1.2 Runtime and clients (verified in `docs/ARCHITECTURE.md`)
 
-- One Rust binary (`app/`, crate/binary `free-ai-studio`) serves a loopback UI
+- One Rust binary (`app/`, crate/binary `SAARTHI-STUDIO`) serves a loopback UI
   and API at `127.0.0.1:8765`; the `gui` feature adds a Tauri v2 window.
 - The frontend is hand-written static HTML/CSS/JS in `app/static/`; no build
   step and no package manager.
-- SQLite lives at `~/.local/share/free-ai-studio/studio.db`; config at
-  `~/.config/free-ai-studio/config.json`. These paths are fixed.
+- SQLite lives at `~/.local/share/SAARTHI-STUDIO/studio.db`; config at
+  `~/.config/SAARTHI-STUDIO/config.json`. These paths are fixed.
 - An opt-in Host API (`/api/host/v1/*`) is a separate listener with a bearer
   token and TLS. Android is a companion client; its host-mode chat is
   **non-streaming** and advertises `streaming: false` / `attachments: false`.
@@ -130,13 +130,13 @@ Read through the public REST API on 2026-11-11:
 The real `v1.61.0` assets are:
 
 ```text
-free-ai-studio-android.aab                     125,256
-free-ai-studio-android.apk                      72,564
-free-ai-studio-vscode.vsix                     195,614
-free-ai-suite_1.61.0_linux-x86_64.tar.gz     6,907,960
-free-ai-suite_1.61.0_macos-universal.tar.gz  12,508,502
-free-ai-suite_1.61.0_windows-x86_64.zip       7,415,985
-free-ai-suite_1.61.0_x86_64.AppImage          7,416,312
+SAARTHI-STUDIO-android.aab                     125,256
+SAARTHI-STUDIO-android.apk                      72,564
+SAARTHI-STUDIO-vscode.vsix                     195,614
+SAARTHI-STUDIO_1.61.0_linux-x86_64.tar.gz     6,907,960
+SAARTHI-STUDIO_1.61.0_macos-universal.tar.gz  12,508,502
+SAARTHI-STUDIO_1.61.0_windows-x86_64.zip       7,415,985
+SAARTHI-STUDIO_1.61.0_x86_64.AppImage          7,416,312
 SHA256SUMS.txt                                     214
 ```
 
@@ -150,19 +150,19 @@ The current `desktop-release.yml` on `main` produces:
 
 | Artifact | Name produced by the workflow |
 |---|---|
-| Linux portable | `sarthi-studio_<version>_linux-x86_64.tar.gz` |
-| AppImage | `sarthi-studio_<version>_x86_64.AppImage` |
-| Windows zip | `sarthi-studio_<version>_windows-x86_64.zip` |
-| Windows MSI | `sarthi-studio_<version>_windows-x86_64.msi` |
-| macOS universal | `sarthi-studio_<version>_macos-universal.tar.gz` |
-| macOS app bundle | `sarthi-studio_<version>_macos-universal.app.zip` |
-| Debian package | `dist/*.deb` from `cargo deb` (Cargo package is `free-ai-studio`, so the filename is not `sarthi-studio_*`) |
-| VS Code | `free-ai-studio-vscode.vsix` |
-| Android | `free-ai-studio-android.apk`, `free-ai-studio-android.aab` |
+| Linux portable | `SAARTHI-STUDIO_<version>_linux-x86_64.tar.gz` |
+| AppImage | `SAARTHI-STUDIO_<version>_x86_64.AppImage` |
+| Windows zip | `SAARTHI-STUDIO_<version>_windows-x86_64.zip` |
+| Windows MSI | `SAARTHI-STUDIO_<version>_windows-x86_64.msi` |
+| macOS universal | `SAARTHI-STUDIO_<version>_macos-universal.tar.gz` |
+| macOS app bundle | `SAARTHI-STUDIO_<version>_macos-universal.app.zip` |
+| Debian package | `dist/*.deb` from `cargo deb` (Cargo package is `SAARTHI-STUDIO`, so the filename is not `SAARTHI-STUDIO_*`) |
+| VS Code | `SAARTHI-STUDIO-vscode.vsix` |
+| Android | `SAARTHI-STUDIO-android.apk`, `SAARTHI-STUDIO-android.aab` |
 
-But the **actual published** assets from `v1.61.0` use `free-ai-suite_*` for
+But the **actual published** assets from `v1.61.0` use `SAARTHI-STUDIO_*` for
 Linux/macOS/Windows/AppImage. The README on `main` claims
-`sarthi-studio_*` and a `macos-arm64` tarball, while the workflow builds a
+`SAARTHI-STUDIO_*` and a `macos-arm64` tarball, while the workflow builds a
 `macos-universal` tarball. The README also claims a `.deb` in every release; the
 published set has none.
 
@@ -602,8 +602,8 @@ Classify on lowercase filename tokens, never on a single prefix:
   checksum files exist, merge and record a warning on conflicts.
 - Unknown assets remain downloadable under "Other assets". The site never hides
   a published asset.
-- Every rule gets a fixture test using real names (`free-ai-suite_1.61.0_*`,
-  `sarthi-studio_3.3.0_*`, `free-ai-studio-android.apk`, the VSIX) plus
+- Every rule gets a fixture test using real names (`SAARTHI-STUDIO_1.61.0_*`,
+  `SAARTHI-STUDIO_3.3.0_*`, `SAARTHI-STUDIO-android.apk`, the VSIX) plus
   ambiguous names. No test may depend on the live API.
 
 ### 10.3 Failure and fallback behavior
@@ -998,7 +998,7 @@ Pages URL.
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Latest 10 releases have no assets | Download page looks empty; users may think the project is dead | Show the latest stable plus "latest available build" fallback; explain build status; link to Actions/releases |
-| Published names differ from README/workflow (`free-ai-suite_*` vs `sarthi-studio_*`) | Wrong file offered or install command | Classifier by tokens/extension; tests with real names; preserve originals |
+| Published names differ from README/workflow (`SAARTHI-STUDIO_*` vs `SAARTHI-STUDIO_*`) | Wrong file offered or install command | Classifier by tokens/extension; tests with real names; preserve originals |
 | `.deb`, `.msi`, `.app.zip` exist in the workflow but not in any published release | Docs could promise non-existent installers | Render formats from the manifest; mark unpublished formats explicitly |
 | Source 3.3.0 vs latest build 1.61.0 | Feature claims may imply downloads include new features | Show both versions; "verified in source, not in latest published build" notes |
 | Pages source switch replaces the live Jekyll site | Old site disappears | Owner approval; old branch retained; deploy smoke before announcing |

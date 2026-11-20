@@ -1,0 +1,69 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+  import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Configuration"
+  description="The Sarthi Studio config file, environment variables, and saved settings for providers, routers, and the workspace."
+>
+  <p>
+    Studio keeps its configuration in a JSON file at
+    <code>~/.config/SAARTHI-STUDIO/config.json</code> and its databases under
+    <code>~/.local/share/SAARTHI-STUDIO/</code>. Most settings are edited in
+    the Settings UI; the sections below cover what you can configure and
+    where.
+  </p>
+
+  <h2>Providers and routers</h2>
+  <p>
+    Provider presets are twelve OpenAI-compatible endpoints: FreeLLMAPI,
+    OmniRoute, Hugging Face, Groq, Cerebras, Gemini, OpenAI, OpenRouter,
+    Mistral, Cloudflare, Together, and Novita. Pick a preset, paste the
+    endpoint's API key into the router, and test the connection. Studio
+    never stores upstream provider keys — the router owns them.
+  </p>
+  <p>
+    With FreeLLMAPI, Studio can manage the router lifecycle: it starts the
+    router when it is stopped and stops it on exit <em>only if Studio
+    started it</em>. The router console exposes the provider catalog, the
+    routing strategy, analytics, and logs over loopback.
+  </p>
+
+  <h2>Local models</h2>
+  <p>
+    The Local AI panel detects your hardware, lists local models, and pulls
+    new ones with progress. A local model needs no router key. Prefix an
+    embedding model with <code>local:</code> to use a local Ollama model for
+    semantic search.
+  </p>
+
+  <h2>Environment variables</h2>
+  <p>
+    A few settings can be set with environment variables. For example, to
+    run on a different port:
+    <code>SAARTHI_STUDIO_PORT=9000 SAARTHI-STUDIO</code>. See the
+    configuration section in the repository's README and the
+    <a href={withBase('/docs/getting-started/')}>Getting started</a>
+    page for the exact variables.
+  </p>
+
+  <h2>Where settings are stored</h2>
+  <ul>
+    <li>Config file: <code>~/.config/SAARTHI-STUDIO/config.json</code></li>
+    <li>Database: <code>~/.local/share/SAARTHI-STUDIO/studio.db</code></li>
+    <li>Router logs, analytics, and provider catalogs: in the local router console over loopback.</li>
+  </ul>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>
+      Settings are stored as JSON on disk; protect the directory as you
+      would any file with your model keys.
+    </li>
+    <li>
+      Environment variables are a shortcut, not a replacement for the
+      Settings UI — the UI is the supported editing surface.
+    </li>
+  </ul>
+</DocLayout>

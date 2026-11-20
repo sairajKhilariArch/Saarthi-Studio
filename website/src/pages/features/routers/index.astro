@@ -1,0 +1,65 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Routers"
+  description="Providers, presets, fallback, health, and routing strategy in Sarthi Studio."
+>
+  <p>
+    A <strong>router</strong> sits between Studio and the model providers.
+    It owns provider credentials, fallback chains, budgets, and the routing
+    strategy — Studio never stores upstream provider keys.
+  </p>
+
+  <h2>Providers and presets</h2>
+  <p>
+    Settings ships presets for twelve OpenAI-compatible platforms: FreeLLMAPI,
+    OmniRoute, Hugging Face, Groq, Cerebras, Gemini, OpenAI, OpenRouter,
+    Mistral, Cloudflare, Together, and Novita. Pick a preset, paste the
+    endpoint's API key into the router, and test the connection. With
+    FreeLLMAPI, Studio can also manage the router's lifecycle (start and
+    stop it on its own), and the embedded router console exposes providers,
+    the model catalog, routing strategy, analytics, and logs over loopback.
+  </p>
+
+  <h2>Fallback and health</h2>
+  <p>
+    Fallback chains, circuit breaking, and provider health are owned by the
+    router. They depend on available provider quota, so free tiers are not
+    unlimited. Studio surfaces provider health and the usage/error log with
+    latency and token counts when the provider reports them.
+  </p>
+
+  <h2>Routing strategy</h2>
+  <p>
+    The router decides which provider answers each request, in which order,
+    and with what controls (Thinking, temperature, enforcement). Provider
+    health is considered when a provider is degraded, and the fallback
+    chain ensures the run keeps moving even when a provider is unreachable.
+  </p>
+
+  <h2>Local models</h2>
+  <p>
+    A local model served by Ollama needs no router key and no network: chat,
+    context, and history all stay on the machine. Local models also serve
+    embeddings for semantic index search when you prefix the embedding model
+    with <code>local:</code>.
+  </p>
+
+  <h2>Key handling</h2>
+  <p>
+    Provider keys are typed into the router, never stored by Studio. Studio
+    keeps only the router's unified key, server-side, in a
+    permission-restricted configuration file. This keeps the model traffic
+    and your credentials inside your machine.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Free-tier quotas are not unlimited; fallbacks depend on provider health.</li>
+    <li>Price and context-window figures are shown only when a provider publishes them.</li>
+    <li>A router you launch yourself is not stopped by Studio on exit.</li>
+  </ul>
+</DocLayout>

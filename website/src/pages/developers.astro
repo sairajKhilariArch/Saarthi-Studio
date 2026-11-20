@@ -1,0 +1,81 @@
+---
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import Icon from '../components/Icon.astro';
+  import PageHero from '../components/PageHero.astro';
+  import { SITE } from '../lib/site';
+---
+
+<BaseLayout
+  title="Developers — Sarthi Studio"
+  description="Building, extending, and contributing to Sarthi Studio: repository layout, modules, API, and release process."
+>
+  <PageHero
+    eyebrow="Developers"
+    title="For people who want to build on it"
+    description="The repository is structured so the desktop app, the Android client, the VS Code extension, and this website stay in one place and one workflow."
+  />
+
+  <section class="section">
+    <div class="container">
+      <h2>Repository layout</h2>
+      <ul>
+        <li><code>app/</code> — the Rust server plus the desktop binary (crates: <code>SAARTHI-STUDIO</code>, binary <code>SAARTHI-STUDIO</code>).</li>
+        <li><code>static/</code> — the app's hand-written UI: <code>index.html</code>, <code>app.js</code>, <code>styles.css</code>. No build step in the app.</li>
+        <li><code>docs/</code> — engineering documentation: architecture, feature status, testing, and the design system.</li>
+        <li><code>android/</code> — React Native companion client and native emitters; talks to the desktop Host API over SSH.</li>
+        <li><code>vscode-extension/</code> — TypeScript extension with an embedded Node server implementing a subset of the desktop routes.</li>
+        <li><code>website/</code> — this site: Astro static site with MDX, sitemap, and Pagefind.</li>
+      </ul>
+
+      <h2>Building and testing</h2>
+      <p>
+        The desktop app uses the normal Rust toolchain: <code>cargo build</code>,
+        <code>cargo test</code>, <code>cargo clippy</code>, and the Tauri
+        toolchain when the <code>gui</code> feature is enabled. The app's own
+        frontend and API are static files served from the binary; there is no
+        build step for them.
+      </p>
+      <p>
+        This website has its own toolchain and its own checks: <code>npm ci</code>
+        in <code>website/</code>, then <code>npm run check</code> (Astro type and
+        content check), <code>npm run build</code>, and
+        <code>npm run check:build</code> (base-path and metadata validation).
+        See <code>website/README.md</code>.
+      </p>
+
+      <h2>Extending the app</h2>
+      <p>
+        Routes are registered in the app's router lifecycle; providers,
+        skills, MCP servers, and permission rules are contributed through the
+        extension points the code exposes. The VS Code extension is a
+        TypeScript client with an embedded Node server that implements a subset
+        of the desktop routes — it has no PTY terminal and no process
+        supervision.
+      </p>
+
+      <h2>Releasing</h2>
+      <p>
+        Releases are driven by
+        <code>.github/workflows/desktop-release.yml</code>: push a
+        <code>v*</code> tag and the workflow builds every artifact for every
+        platform and attaches them to the release with a
+        <code>SHA256SUMS.txt</code>. The website's download pages derive their
+        data from the real release metadata, refreshed by the sync workflow.
+      </p>
+
+      <div class="note-card">
+        <Icon name="code" size={18} />
+        <div>
+          <strong>Code first.</strong>
+          The repository's
+          <a href={SITE.readme} target="_blank" rel="noopener noreferrer">README</a>,
+          <a href={SITE.architecture} target="_blank" rel="noopener noreferrer">architecture docs</a>,
+          and
+          <a href={SITE.testing} target="_blank" rel="noopener noreferrer">testing strategy</a>
+          are the source of truth for anything here. If you can't see a detail
+          described here, that's a gap worth filing.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

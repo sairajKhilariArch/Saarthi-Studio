@@ -1,0 +1,46 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="MCP"
+  description="Servers over stdio, HTTP, and SSE, with tool discovery and permissions in Sarthi Studio."
+>
+  <p>
+    The <strong>Model Context Protocol (MCP)</strong> lets Studio connect to
+    servers that expose tools the assistant can call. Tools are discovered
+    automatically, validated against their schemas, and gated by permissions
+    before the model can call them.
+  </p>
+
+  <h2>Transports</h2>
+  <p>
+    Studio connects to MCP servers over <strong>stdio</strong>, <strong>HTTP</strong>,
+    and <strong>SSE</strong>. Each transport is a first-class option: stdio
+    for local servers, HTTP and SSE for remote ones. The Connections view
+    shows live status for every server.
+  </p>
+
+  <h2>Tool permissions</h2>
+  <p>
+    Tools are permission-gated before the model can call them. A tool
+    permission rule decides whether a model may invoke a specific tool, and
+    the agent still requires an approval rule to act on the tool's result.
+    The tools that are connected and authorized are listed in the run so you
+    can see exactly what the agent tried to call.
+  </p>
+
+  <h2>Trust boundary</h2>
+  <p>
+    Remote MCP servers are trusted by configuration, not by default. A
+    server you add to a workspace is a server you have reviewed; Studio does
+    not silently connect to arbitrary external servers.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>The agent commands are permission-gated and auditable, but still run with your user privileges.</li>
+    <li>Remote MCP servers are a potential data boundary — every tool result leaves the machine unless the server is local.</li>
+  </ul>
+</DocLayout>

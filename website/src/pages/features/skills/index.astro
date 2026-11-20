@@ -1,0 +1,38 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+  import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Skills"
+  description="SKILL.md packs, discovery, the composer picker, and how skills differ from MCP tools."
+>
+  <p>
+    A <strong>skill</strong> is a <code>SKILL.md</code> pack: prompt text that
+    teaches the assistant a procedure. Skills are discovered from the opened
+    project, your user config directory, <code>~/.agents/skills</code>, and a
+    bundled set. Enable or disable them, inspect their content, and enabled
+    skills are injected into the chat system prompt.
+  </p>
+
+  <h2>Using skills</h2>
+  <p>
+    The composer's <strong>Skill</strong> chip attaches one skill to a single
+    message, and keyword auto-suggest can propose one from your draft. The
+    enabled skills in a message are listed in the reply so you can see exactly
+    what the assistant was given.
+  </p>
+
+  <h2>How skills differ from MCP tools</h2>
+  <ul>
+    <li><strong>Skills</strong> change what the assistant <em>knows how to do</em> — instructions, injected as text.</li>
+    <li><strong>MCP tools</strong> change what it <em>can call</em> — real capabilities, permission-gated.</li>
+    <li><strong>Agents</strong> combine both inside the bounded run loop; see <a href={withBase('/docs/agents/')}>Agents &amp; runs</a>.</li>
+  </ul>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Skills are prompt text, not executed code — a skill cannot run anything by itself.</li>
+    <li>There are no per-skill permissions because a skill cannot run anything on its own.</li>
+  </ul>
+</DocLayout>

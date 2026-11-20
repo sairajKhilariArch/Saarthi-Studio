@@ -1,0 +1,66 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+  import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Agents"
+  description="Bounded run loops, approvals, checkpoints, worktrees, and the task queue in Sarthi Studio."
+>
+  <p>
+    An agent in Sarthi Studio is a <strong>bounded run loop</strong>, not an
+    autonomous process you lose control of. Every step is visible, privileged
+    actions stop for approval, and you keep the final decision.
+  </p>
+
+  <h2>Build and Plan</h2>
+  <ul>
+    <li>
+      <strong>Build</strong> — the agent answers and makes changes: edits
+      files and runs commands, pausing for approval on each privileged step.
+    </li>
+    <li>
+      <strong>Plan</strong> — the agent replies with an implementation plan
+      and makes no changes. Useful for scoping before you commit.
+    </li>
+  </ul>
+
+  <h2>Approvals and permissions</h2>
+  <p>
+    Writes and commands are gated by permission rules. When a step needs
+    approval, the run waits; you inspect the proposed action and allow or
+    deny it. Agent commands run with your user privileges — they are not
+    OS-sandboxed — so the approval gate is the boundary, and the audit trail
+    records what ran.
+  </p>
+
+  <h2>Checkpoints, diffs, worktrees</h2>
+  <p>
+    Runs keep checkpoints you can restore, and every file change is
+    reviewable as a diff. Writing runs can work in an isolated Git worktree:
+    your main checkout stays untouched until you commit, merge, or apply the
+    run's result yourself.
+  </p>
+
+  <h2>The task queue</h2>
+  <p>
+    Queue tasks with dependencies and retries. The Runs view shows each run's
+    step log, token usage, and outcome. A run interrupted mid-step is
+    recorded as interrupted, never silently completed.
+  </p>
+
+  <h2>Stopping</h2>
+  <p>
+    Every streaming reply has a working Stop button (the partial answer is
+    saved), and a global emergency stop halts agent activity. Closing the
+    window shuts down the local server and stops the router only if this run
+    started it.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Commands are not OS-sandboxed; approvals and permission rules are the control surface.</li>
+    <li>The agent works inside the folder you opened — paths outside it are refused.</li>
+    <li>Run quality depends on the model you connect; see <a href={withBase('/docs/providers/')}>Providers &amp; models</a>.</li>
+  </ul>
+</DocLayout>

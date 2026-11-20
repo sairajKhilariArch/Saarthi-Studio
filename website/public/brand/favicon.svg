@@ -1,4 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="64" height="64" role="img" aria-label="Sarthi Studio">
-  <rect width="512" height="512" rx="116" fill="#0b1d1c"/>
-  <g transform="translate(96 110) scale(13.3333)"><path d="M12 2.4Q13.3 7.9 18.8 9.2Q13.3 10.5 12 16Q10.7 10.5 5.2 9.2Q10.7 7.9 12 2.4Z" fill="#ffe6cb"/><path d="M4.2 19.6Q12 14.4 19.8 19.6Q12 18.0 4.2 19.6Z" fill="#d97757"/></g>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 512 512"
+  role="img"
+  aria-label="Sarthi Studio"
+>
+  <title>Sarthi Studio</title>
+  <desc>Sarthi Studio mascot — a friendly little tardigrade</desc>
+  <rect width="512" height="512" rx="108" fill="#0b1d1c" />
+  <rect width="512" height="512" rx="108" fill="#061111" opacity="0.55" />
+  <!-- Head -->
+  <ellipse cx="256" cy="218" rx="158" ry="150" fill="#d97757" />
+  <ellipse cx="256" cy="218" rx="158" ry="150" fill="none" stroke="#b4633f" stroke-width="2" stroke-opacity="0.35" />
+  <!-- Eyes -->
+  <ellipse cx="210" cy="200" rx="34" ry="42" fill="#f7f3ea" />
+  <ellipse cx="302" cy="200" rx="34" ry="42" fill="#f7f3ea" />
+  <ellipse cx="210" cy="208" rx="17" ry="25" fill="#2b1e16" />
+  <ellipse cx="302" cy="208" rx="17" ry="25" fill="#2b1e16" />
+  <ellipse cx="198" cy="182" rx="11" ry="16" fill="#ffffff" opacity="0.9" />
+  <ellipse cx="314" cy="182" rx="11" ry="16" fill="#ffffff" opacity="0.9" />
+  <!-- Snout / muzzle -->
+  <ellipse cx="256" cy="246" rx="66" ry="33" fill="#f2e4d2" />
+  <ellipse cx="256" cy="246" rx="66" ry="33" fill="none" stroke="#d97757" stroke-width="6" stroke-opacity="0.35" />
+  <!-- Smile -->
+  <path d="M216 270 Q256 252 296 270" fill="none" stroke="#2b1e16" stroke-width="8" stroke-linecap="round" />
+  <!-- Antennae -->
+  <path d="M256 152 C230 152 224 138 222 134" fill="none" stroke="#d97757" stroke-width="12" stroke-linecap="round" />
+  <path d="M256 152 C282 152 288 138 290 134" fill="none" stroke="#d97757" stroke-width="12" stroke-linecap="round" />
+  <circle cx="222" cy="132" r="14" fill="#d97757" />
+  <circle cx="290" cy="132" r="14" fill="#d97757" />
 </svg>

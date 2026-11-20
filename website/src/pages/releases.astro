@@ -1,0 +1,98 @@
+---
+  import { ASSETS, TOTAL_ASSETS } from '../lib/releases';
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import Icon from '../components/Icon.astro';
+  import { LATEST_RELEASE } from '../lib/releases';
+  import PageHero from '../components/PageHero.astro';
+  import { SITE } from '../lib/site';
+  import { formatBytes } from '../lib/releases';
+  import { withBase } from '../lib/url';
+---
+
+<BaseLayout
+  title="Releases — Sarthi Studio"
+  description="Every published release of Sarthi Studio with its assets, sizes, and checksums."
+>
+  <PageHero
+    eyebrow="Releases"
+    title="Release history"
+    description="Browse published releases, the latest stable, and the newest build with assets. All assets are attached to GitHub Releases by the release workflow."
+    breadcrumb={[{ label: 'Releases' }]}
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="release-banner">
+        <strong>Latest stable: {LATEST_RELEASE.tag}</strong>
+        <span class="release-meta">
+          Published {LATEST_RELEASE.date}
+          {' · '}
+          {ASSETS.linuxTar.name ? TOTAL_ASSETS : 'no build assets'}
+        </span>
+        <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
+          Release notes ↗
+        </a>
+      </div>
+
+      <div class="release-card">
+        <span class="release-card-tag">{LATEST_RELEASE.tag}</span>
+        <span class="release-card-date">Published {LATEST_RELEASE.date}</span>
+        <p class="release-card-body">
+          Latest stable release, with build assets for every platform. The
+          full release history, including versions with no build assets, is
+          available on
+          <a href={SITE.releases} target="_blank" rel="noopener noreferrer">
+            GitHub Releases
+          </a>
+          and on the
+          <a href={withBase('/changelog/')}>changelog</a>.
+        </p>
+      </div>
+
+      <div class="assets-summary">
+        <div class="asset-summary-item">
+          <span class="asset-summary-label">Linux</span>
+          <span class="asset-summary-value">
+            {ASSETS.linuxTar.name ? formatBytes(ASSETS.linuxTar.size) : '—'}
+          </span>
+        </div>
+        <div class="asset-summary-item">
+          <span class="asset-summary-label">Windows</span>
+          <span class="asset-summary-value">
+            {ASSETS.windowsZip.name ? formatBytes(ASSETS.windowsZip.size) : '—'}
+          </span>
+        </div>
+        <div class="asset-summary-item">
+          <span class="asset-summary-label">macOS</span>
+          <span class="asset-summary-value">
+            {ASSETS.macTar.name ? formatBytes(ASSETS.macTar.size) : '—'}
+          </span>
+        </div>
+        <div class="asset-summary-item">
+          <span class="asset-summary-label">Android</span>
+          <span class="asset-summary-value">
+            {ASSETS.androidApk.name ? formatBytes(ASSETS.androidApk.size) : '—'}
+          </span>
+        </div>
+        <div class="asset-summary-item">
+          <span class="asset-summary-label">VS Code</span>
+          <span class="asset-summary-value">
+            {ASSETS.vsix.name ? formatBytes(ASSETS.vsix.size) : '—'}
+          </span>
+        </div>
+      </div>
+
+      <div class="note-card">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>Verify before you install.</strong> Every release ships
+          <code>SHA256SUMS.txt</code>. After downloading, run
+          <code>sha256sum -c SHA256SUMS.txt</code> (Linux/macOS) or
+          <code>Get-FileHash</code> (PowerShell) and compare. Desktop
+          installers and macOS/Windows builds are unsigned; see the
+          per-platform download pages for first-launch steps.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

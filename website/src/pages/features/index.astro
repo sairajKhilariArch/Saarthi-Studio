@@ -1,0 +1,132 @@
+---
+  import BaseLayout from '../../layouts/BaseLayout.astro';
+  import Card from '../../components/Card.astro';
+  import Icon from '../../components/Icon.astro';
+  import PageHero from '../../components/PageHero.astro';
+  import { SITE } from '../../lib/site';
+  import { withBase } from '../../lib/url';
+  const categories = [
+  { icon: 'sparkles', name: 'AI & models', href: '/features/ai-and-models/', description: 'Studio is model-agnostic. It speaks the OpenAI-compatible API, so any endpoint that speaks it can power chat and agents — local models through Ollama, or any hosted router.' },
+  { icon: 'bot', name: 'Agents', href: '/features/agents/', description: 'A bounded run loop you can stop and review.' },
+  { icon: 'route', name: 'Routers', href: '/features/routers/', description: 'Providers, presets, fallback, health, and routing strategy.' },
+  { icon: 'code', name: 'Skills', href: '/features/skills/', description: "Skills are prompt text, not executed code — there are no per-skill permissions." },
+  { icon: 'plug', name: 'MCP', href: '/features/mcp/', description: "Tool permissions apply to the model's calls; the agent still requires an approval rule to act." },
+  { icon: 'database', name: 'Memory', href: '/features/memory/', description: 'Semantic search stays off until an embedding model is set; symbols are a line scan, not a parser.' },
+  { icon: 'cpu', name: 'Developer environment', href: '/features/developer-environment/', description: "Attach-style debugging depends on the adapter's protocol and is still being hardened." },
+  { icon: 'shield', name: 'Permissions & safety', href: '/features/permissions-and-safety/', description: 'Installers and macOS builds are unsigned; verify checksums before installing.' },
+] as const;
+  const statusNotes = {
+  'AI & models': 'Price and context-window figures are shown only when a provider publishes them.',
+  Agents: 'Writing runs can work in isolated Git worktrees; the agent itself stays inside the folder you opened.',
+  Routers: 'Free-tier quotas are not unlimited; fallback chains depend on provider health.',
+  Skills: 'Skills are prompt text, not executed code — there are no per-skill permissions.',
+  MCP: "Tool permissions apply to the model's calls; the agent still requires an approval rule to act.",
+  Memory: 'Semantic search stays off until an embedding model is set; symbols are a line scan, not a parser.',
+  'Developer environment': "Attach-style debugging depends on the adapter's protocol and is still being hardened.",
+  'Permissions & safety': 'Installers and macOS builds are unsigned; verify checksums before installing.',
+} as const;
+  const installationSteps = [
+  { n: '1', title: 'Pick your platform', body: 'Open the downloads section and choose your platform — Linux, Windows, macOS, Android, or VS Code. Each platform has its own dedicated page with the exact formats and install steps.' },
+  { n: '2', title: 'Install or extract', body: 'Most platforms offer more than one format: a Debian package, an AppImage or portable tarball on Linux; an MSI or portable zip on Windows; a universal tarball and a .app bundle on macOS; an APK or AAB on Android. Verify the SHA-256 against SHA256SUMS.txt.' },
+  { n: '3', title: 'Start the service', body: 'The app opens a window and starts the local service at http://127.0.0.1:8765. Run --browser to open the identical UI in a tab, or --no-gui to serve it headless.' },
+  { n: '4', title: 'Connect a model', body: 'Point Studio at a router (FreeLLMAPI or any OpenAI-compatible endpoint) or run a local model through Ollama. Use the connection test before your first message.' },
+  { n: '5', title: 'Open a project and run', body: 'Open the folder you want to work in, then chat or run an agent. Everything workspace-related stays inside that folder.' },
+] as const;
+  const platforms = [
+  { icon: 'terminal', name: 'Linux', body: 'Debian package, AppImage, and portable tarball (x86_64). The native window uses WebKitGTK 4.1.', href: '/download/linux/' },
+  { icon: 'monitor', name: 'Windows', body: 'Per-user MSI installer or portable zip. WebView2 ships with Windows 10/11.', href: '/download/windows/' },
+  { icon: 'laptop', name: 'macOS', body: 'Universal Apple Silicon and Intel builds (.app bundle and tarball).', href: '/download/macos/' },
+  { icon: 'smartphone', name: 'Android', body: 'APK and AAB for Android devices. Install via the Android app or your own ADB workflow.', href: '/download/android/' },
+  { icon: 'code', name: 'VS Code', body: 'Official VS Code extension for VS Code Desktop. Install from the marketplace or the VSIX.', href: '/download/vscode/' },
+] as const;
+---
+    eyebrow="Features"
+    title="One workspace for the whole loop"
+    description="From a question to a reviewed change — chat, agents, local models, routers, skills, MCP, memory, and a real developer environment in one local-first app."
+    breadcrumb={[{ label: 'Features' }]}
+  />
+
+  <section class="section">
+    <div class="container">
+      <p class="lead">
+        Eight capability areas, one local service. The pages below are the
+        canonical documentation for each feature; every public status here is
+        stated in the
+        <a href={SITE.featureStatus} target="_blank" rel="noopener noreferrer">
+          feature status report
+        </a>
+        with its evidence path.
+      </p>
+
+      <div class="category-grid">
+        {categories.map((category) => (
+          <Card href={withBase(category.href)} class="category-card">
+            <span class="category-icon">
+              <Icon name={category.icon} size={20} />
+            </span>
+            <h3>{category.name}</h3>
+            <p>{category.description}</p>
+            <span class="text-link">
+              Read the feature
+              <Icon name="arrow-right" size={15} />
+            </span>
+          </Card>
+        ))}
+      </div>
+
+      <div class="note-card">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>How to read these pages</strong>
+          {categories.map((category) => (
+            <p >
+              <strong>{category.name}:</strong> {statusNotes[category.name]}
+            </p>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-soft">
+    <div class="container">
+      <header class="section-head">
+        <p class="eyebrow">Get started</p>
+        <h2>The path, in five steps</h2>
+      </header>
+      <ol class="steps">
+        {installationSteps.map((step) => (
+          <li class="step">
+            <span class="step-number">{step.n}</span>
+            <h3>{step.title}</h3>
+            <p>{step.body}</p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="platforms">
+    <div class="container">
+      <header class="section-head">
+        <p class="eyebrow">Platforms</p>
+        <h2>Where you can use it</h2>
+      </header>
+      <div class="platform-grid">
+        {platforms.map((platform) => (
+          <Card href={withBase(platform.href)} class="platform-card">
+            <span class="platform-icon">
+              <Icon name={platform.icon} size={20} />
+            </span>
+            <h3>{platform.name}</h3>
+            <p>{platform.body}</p>
+            <span class="text-link">
+              Downloads
+              <Icon name="arrow-right" size={15} />
+            </span>
+          </Card>
+        ))}
+      </div>
+    </div>
+  </section>
+/>

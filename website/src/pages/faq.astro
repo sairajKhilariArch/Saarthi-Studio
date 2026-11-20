@@ -1,0 +1,62 @@
+---
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import PageHero from '../components/PageHero.astro';
+---
+
+<BaseLayout
+  title="FAQ — Sarthi Studio"
+  description="Frequently asked questions about Sarthi Studio: privacy, features, installs, and limits."
+>
+  <PageHero
+    eyebrow="FAQ"
+    title="Questions, quick answers"
+    description="Short answers to the questions people ask most. If something is not covered here, check the documentation or open an issue."
+  />
+
+  <section class="section">
+    <div class="container">
+      <div class="faq-list">
+        <h3>
+          <span class="faq-q">Is Sarthi Studio free?</span>
+          <span class="faq-a">It is MIT-licensed and open source. Download, use, and modify it without cost.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Where does my data live?</span>
+          <span class="faq-a">Everywhere you told it to: SQLite under <code>~/.local/share/SAARTHI-STUDIO/</code>, your projects inside the folder you opened. Model requests go only to your routers or local models.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Does it send my code to the cloud?</span>
+          <span class="faq-a">No. The service binds to 127.0.0.1, the workspace is path-confined, and model traffic goes only where you point it. There is no telemetry or phone-home.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Can I use my own router?</span>
+          <span class="faq-a">Yes. Any OpenAI-compatible endpoint — FreeLLMAPI, OpenRouter, GPT-4-compatible servers, Ollama, and more. Point Settings at it and run the connection test.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Is the native window required?</span>
+          <span class="faq-a">No. Run <code>SAARTHI-STUDIO --browser</code> to use the identical UI in any modern browser, or <code>--no-gui</code> for a headless server.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Is the Android app a separate product?</span>
+          <span class="faq-a">It's a companion client: direct router mode (independent) or Desktop Host mode (paired with your computer). Host-mode chat is non-streaming by design; agents and terminals stay on the desktop.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Why does Windows SmartScreen warn me?</span>
+          <span class="faq-a">Releases are not yet code-signed. Use the platform download page's steps: verify the SHA-256 against SHA256SUMS.txt, then More info → Run anyway.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Why does macOS ask me to right-click Open?</span>
+          <span class="faq-a">Builds are unsigned and not notarized. Double-click is blocked on first launch; right-click the app, then Open, once, and macOS remembers. See the macOS download page.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">Do skills run code?</span>
+          <span class="faq-a">No — skills are prompt text that teaches the assistant a procedure. Only MCP tools can call capabilities, and those are permission-gated.</span>
+        </h3>
+        <h3>
+          <span class="faq-q">How do I update or uninstall?</span>
+          <span class="faq-a">Platform download pages cover updating and uninstalling. Uninstalling the app never touches your history; deleting <code>~/.local/share/SAARTHI-STUDIO/</code> and <code>~/.config/SAARTHI-STUDIO/</code> does.</span>
+        </h3>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

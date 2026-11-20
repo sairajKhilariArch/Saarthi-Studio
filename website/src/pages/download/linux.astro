@@ -6,7 +6,7 @@ import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
 import { withBase } from '../../lib/url';
 
 const assets = [
-  { asset: ASSETS.linuxDeb, note: 'Debian/Ubuntu package — installs a menu entry and the free-ai-studio command.' },
+  { asset: ASSETS.linuxDeb, note: 'Debian/Ubuntu package — installs a menu entry and the SAARTHI-STUDIO command.' },
   { asset: ASSETS.linuxAppImage, note: 'Single-file portable app. No installation, no root.' },
   { asset: ASSETS.linuxTar, note: 'Portable tarball — extract and run the binary directly.' },
 ];
@@ -61,22 +61,22 @@ const others = [
         <li>
           <h3>Debian / Ubuntu (.deb)</h3>
           <p>
-            <code>sudo dpkg -i free-ai-studio_{LATEST_RELEASE.version}-1_amd64.deb</code>,
+            <code>sudo dpkg -i SAARTHI-STUDIO_{LATEST_RELEASE.version}-1_amd64.deb</code>,
             then launch <strong>Sarthi Studio</strong> from your applications menu or run
-            <code>free-ai-studio</code>.
+            <code>SAARTHI-STUDIO</code>.
           </p>
         </li>
         <li>
           <h3>AppImage</h3>
           <p>
-            <code>chmod +x sarthi-studio_{LATEST_RELEASE.version}_x86_64.AppImage</code>
+            <code>chmod +x SAARTHI-STUDIO_{LATEST_RELEASE.version}_x86_64.AppImage</code>
             and run it. Nothing else is installed; delete the file to remove the app.
           </p>
         </li>
         <li>
           <h3>Portable tarball</h3>
           <p>
-            Extract, verify the checksum, and run <code>./free-ai-studio</code>.
+            Extract, verify the checksum, and run <code>./SAARTHI-STUDIO</code>.
             Add <code>--browser</code> to open the UI in your default browser, or
             <code>--no-gui</code> to serve it headless.
           </p>
@@ -97,8 +97,8 @@ const others = [
         <Icon name="database" size={18} />
         <div>
           <strong>Where your data lives.</strong> Configuration in
-          <code>~/.config/free-ai-studio/</code>, conversations and runs in a SQLite
-          database under <code>~/.local/share/free-ai-studio/</code>. Uninstalling
+          <code>~/.config/SAARTHI-STUDIO/</code>, conversations and runs in a SQLite
+          database under <code>~/.local/share/SAARTHI-STUDIO/</code>. Uninstalling
           the app never touches these unless you delete them yourself.
         </div>
       </div>

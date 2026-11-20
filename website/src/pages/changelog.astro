@@ -1,0 +1,49 @@
+---
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import Icon from '../components/Icon.astro';
+  import { LATEST_RELEASE } from '../lib/releases';
+  import PageHero from '../components/PageHero.astro';
+---
+
+<BaseLayout
+  title="Changelog — Sarthi Studio"
+  description="What changed in each Sarthi Studio release, from the release notes published on GitHub."
+>
+  <PageHero
+    eyebrow="Changelog"
+    title="What's new"
+    description="Release notes are published with every GitHub release. This page renders the notes that were published; older releases may not have notes yet."
+  />
+
+  <section class="section">
+    <div class="container container-narrow">
+      <div class="changelog">
+        <article class="changelog-entry">
+          <h2 class="changelog-version">
+            <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
+              {LATEST_RELEASE.tag}
+            </a>
+          </h2>
+          <p class="changelog-date">Published {LATEST_RELEASE.date}</p>
+          <div class="changelog-body">
+            {LATEST_RELEASE.tag === 'v3.74.4' ? (
+              <p class="changelog-note">No release notes were published for this version yet. See the <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">GitHub release page</a>.</p>
+            ) : (
+              <p class="changelog-note">No release notes were published for this version yet. See the <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">GitHub release page</a>.</p>
+            )}
+          </div>
+        </article>
+      </div>
+
+      <div class="note-card">
+        <Icon name="download" size={18} />
+        <div>
+          <strong>Notes are rendered as published.</strong> Only sections and
+          entries that appear in the release notes are shown — nothing is
+          invented. If a release has no notes, this page says so and links to
+          the release on GitHub.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

@@ -1,0 +1,92 @@
+---
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import Icon from '../components/Icon.astro';
+  import PageHero from '../components/PageHero.astro';
+  import { SITE } from '../lib/site';
+---
+
+<BaseLayout
+  title="Security & privacy — Sarthi Studio"
+  description="What stays local, what leaves, and the limits of the trust model in Sarthi Studio."
+>
+  <PageHero
+    eyebrow="Privacy & security"
+    title="Local-first, by default"
+    description="Your keys, files, and history stay with you. The product is designed around a small, visible trust boundary."
+    breadcrumb={[{ label: 'Privacy & security' }]}
+  />
+
+  <section class="section">
+    <div class="container">
+      <h2>What stays local</h2>
+      <ul>
+        <li>Your conversations, run history, steps, and usage — stored in SQLite under <code>~/.local/share/SAARTHI-STUDIO/</code>.</li>
+        <li>Your projects, files, and terminal history — confined to the folder you open.</li>
+        <li>Provider credentials — stored only in the router (or in a permission-restricted config file), never by Studio.</li>
+        <li>Model traffic — every request goes to your chosen router or local model. Nothing is sent anywhere else.</li>
+      </ul>
+
+      <h2>What leaves the machine</h2>
+      <p>
+        Only the request you choose to send: a message to a router, a file
+        you attach, a tool result from a server you configured. There is no
+        telemetry, no phone-home, and no default cloud path.
+      </p>
+
+      <h2>The trust boundary</h2>
+      <ul>
+        <li>
+          <strong>Loopback-only service</strong> — the local UI and API bind
+          to <code>127.0.0.1</code>; workspace routes reject non-loopback
+          hosts.
+        </li>
+        <li>
+          <strong>Approvals and permission rules</strong> — agent writes and
+          commands pause for your approval.
+        </li>
+        <li>
+          <strong>Path confinement</strong> — <code>..</code> escapes,
+          absolute paths, and symlinks leaving the folder are refused.
+        </li>
+        <li>
+          <strong>Audit trail</strong> — agent actions, approvals, and
+          outcomes are recorded.
+        </li>
+        <li>
+          <strong>Emergency stop</strong> — a global stop for agent activity.
+        </li>
+      </ul>
+
+      <h2>Known limits, stated plainly</h2>
+      <ul>
+        <li>
+          <strong>Installers and macOS builds are unsigned.</strong> macOS
+          Gatekeeper and Windows SmartScreen will warn on first launch; see
+          the <a href={SITE.releases} target="_blank" rel="noopener noreferrer">releases</a>
+          and the per-platform download pages for the exact steps.
+        </li>
+        <li>
+          <strong>No OS sandbox for agent commands.</strong> They run with
+          your user privileges; the approval gate is the control surface.
+        </li>
+        <li>
+          <strong>Remote MCP servers are trusted by configuration,</strong>
+          not by default.
+        </li>
+        <li>
+          <strong>Android host-mode chat is non-streaming</strong> and has no
+          agent or terminal. It is a companion surface, not a replica.
+        </li>
+      </ul>
+
+      <div class="note-card">
+        <Icon name="shield" size={18} />
+        <div>
+          <strong>Verify your download.</strong> Every release ships a
+          <code>SHA256SUMS.txt</code>. Compare before you install;
+          the per-platform download pages show the exact commands.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

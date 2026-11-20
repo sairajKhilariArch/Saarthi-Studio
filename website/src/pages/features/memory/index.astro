@@ -1,0 +1,53 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Memory"
+  description="Project memory and the bounded codebase index in Sarthi Studio."
+>
+  <p>
+    Memory in Sarthi Studio is two things: <strong>project memory</strong>
+    (decisions, preferences, tasks, and facts you record) and a
+    <strong>codebase index</strong> (a bounded symbol search over the opened
+    folder).
+  </p>
+
+  <h2>Project memory</h2>
+  <p>
+    Record decisions, preferences, tasks, and facts. They are retrieved into
+    chat and agent runs when they share words with the message — and the
+    reply says which records it was given. Memory stays in local storage and
+    never leaves your machine.
+  </p>
+
+  <h2>Codebase index and deep search</h2>
+  <ul>
+    <li>
+      <strong>Codebase index.</strong> A bounded index of the open folder
+      with symbol search. Search by words always works; search by meaning
+      needs an embedding model (router or <code>local:</code>).
+    </li>
+    <li>
+      <strong>Deep search.</strong> A composer toggle that researches the
+      question with planned web queries (Exa/Tavily) or a provider's
+      built-in web tools, streams each step, and replies with cited sources.
+    </li>
+  </ul>
+
+  <h2>Embeddings</h2>
+  <p>
+    Semantic search over the codebase index is optional and stays off until
+    you set an embedding model — either a router model or a
+    <code>local:</code> Ollama model. Word search always works without one.
+    Symbols are embedded once and cached.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Semantic search stays off until an embedding model is set.</li>
+    <li>Symbols are line scans, not a parser — results are fast but not fully accurate.</li>
+    <li>Thought records are stored locally; no memory is exchanged with the model.</li>
+  </ul>
+</DocLayout>

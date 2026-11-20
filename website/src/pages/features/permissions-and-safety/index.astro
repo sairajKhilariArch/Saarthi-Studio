@@ -1,0 +1,61 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="Permissions & safety"
+  description="Loopback by default, approval gates, path confinement, and the audit trail."
+>
+  <p>
+    Sarthi Studio is <strong>local-first by default</strong>. The local
+    service binds to <code>127.0.0.1</code>, the workspace is path-confined,
+    and privileged actions stop for approval. Nothing is uploaded anywhere
+    except the request you send to your router.
+  </p>
+
+  <h2>The control surface</h2>
+  <ul>
+    <li>
+      <strong>Loopback only.</strong> The service binds to 127.0.0.1; every
+      UI and API path is served by the local process. Workspace routes reject
+      non-loopback hosts and foreign origins.
+    </li>
+    <li>
+      <strong>Approvals and permission rules.</strong> Writes and commands in
+      agent runs are gated by permission rules. When a step needs approval,
+      the run waits; you inspect the proposed action and allow or deny it.
+    </li>
+    <li>
+      <strong>Path confinement.</strong> Workspace paths are canonicalised;
+      <code>..</code> escapes, absolute paths outside the folder, and
+      symlinks leaving it are rejected. Binary files and files over 1 MB are
+      refused by the editor API.
+    </li>
+    <li>
+      <strong>Audit trail.</strong> Agent actions, approvals, and outcomes
+      are recorded so you can review and restore what happened.
+    </li>
+    <li>
+      <strong>Emergency stop.</strong> A global emergency stop halts agent
+      activity at any time.
+    </li>
+  </ul>
+
+  <h2>Security model, plainly</h2>
+  <p>
+    The trust boundary is the folder you open and the approval rules you set.
+    Agent commands run with your user privileges — they are not OS-sandboxed
+    — so the approval gate is the boundary. Installers and macOS builds are
+    unsigned; verify checksums before installing, and expect Gatekeeper or
+    SmartScreen warnings on first launch.
+  </p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Installers and macOS builds are unsigned; verify SHA-256 checksums before installing.</li>
+    <li>Agent commands run with your user privileges, not in an OS sandbox.</li>
+    <li>Remote MCP servers are trusted by configuration, not by default.</li>
+    <li>Provider keys are stored in the router, not in Studio.</li>
+  </ul>
+</DocLayout>

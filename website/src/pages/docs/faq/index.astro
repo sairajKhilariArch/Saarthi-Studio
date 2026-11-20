@@ -1,0 +1,78 @@
+---
+  import DocLayout from '../../../components/DocLayout.astro';
+import { withBase } from '../../../lib/url';
+---
+
+<DocLayout
+  title="FAQ"
+  description="Frequently asked questions about Sarthi Studio: installation, privacy, features, and limits."
+>
+  <p>
+    Short answers to the questions people ask most. If something is not
+    covered here, check the broader documentation or open an issue on GitHub.
+  </p>
+
+  <h2>Installation</h2>
+  <h3>Is Sarthi Studio free?</h3>
+  <p>
+    Yes. It is MIT-licensed and open source. You can download, use, and
+    modify it without cost.
+  </p>
+  <h3>Do I need the native window?</h3>
+  <p>
+    No. Run <code>SAARTHI-STUDIO --browser</code> to use the identical UI in
+    any modern browser, or <code>--no-gui</code> for a headless server.
+  </p>
+  <h3>How do I verify a download?</h3>
+  <p>
+    Every release ships <code>SHA256SUMS.txt</code>. Compare with
+    <code>sha256sum -c SHA256SUMS.txt</code> (Linux/macOS) or
+    <code>Get-FileHash</code> (PowerShell). The per-platform download pages
+    show the exact commands.
+  </p>
+
+  <h2>Privacy and security</h2>
+  <h3>Where does my data live?</h3>
+  <p>
+    Conversations, runs, steps, and usage are in SQLite under
+    <code>~/.local/share/SAARTHI-STUDIO/</code>; your projects live in the
+    folder you opened. Provider credentials live in the router, not in
+    Studio.
+  </p>
+  <h3>What leaves the machine?</h3>
+  <p>
+    Only the request you choose to send: a message to a router, a file you
+    attach, or a tool result from a configured server. There is no telemetry
+    and no phone-home.
+  </p>
+  <h3>Why does SmartScreen warn me?</h3>
+  <p>
+    Releases are not yet code-signed. Verify the SHA-256 against
+    <code>SHA256SUMS.txt</code>, then More info → Run anyway.
+  </p>
+  <h3>Why does macOS ask me to right-click Open?</h3>
+  <p>
+    Builds are unsigned and not notarized. Double-click is blocked on first
+    launch; right-click the app, then Open, once, and macOS remembers.
+  </p>
+
+  <h2>Features</h2>
+  <h3>How is a skill different from an MCP tool?</h3>
+  <p>
+    A skill is <code>SKILL.md</code> text injected into the system prompt;
+    it cannot run anything. MCP tools are capabilities that the model can
+    call, with permission rules and an approval gate.
+  </p>
+  <h3>Can agents run commands?</h3>
+  <p>
+    Yes, but only with your approval and within the folder you opened. They
+    run with your user privileges — there is no OS sandbox.
+  </p>
+
+  <h2>Still stuck?</h2>
+  <p>
+    Open an issue on GitHub with your platform, the release version, and what
+    you see. The feature-status report lists known limitations so you can
+    check whether what you hit is a bug or a documented gap.
+  </p>
+</DocLayout>

@@ -4,13 +4,43 @@ import ThemeToggle from './ThemeToggle.astro';
 import { NAV, SITE } from '../lib/site';
 import { withBase } from '../lib/url';
 
+const THEMES = [
+  { value: 'hermes', label: 'Hermes', color: '#38bdf8' },
+  { value: 'deepseek', label: 'DeepSeek', color: '#7c8aff' },
+  { value: 'solar', label: 'Solar', color: '#c084fc' },
+  { value: 'forest', label: 'Forest', color: '#34d399' },
+  { value: 'ocean', label: 'Ocean', color: '#38bdf8' },
+  { value: 'midnight', label: 'Midnight', color: '#818cf8' },
+  { value: 'indigo', label: 'Indigo', color: '#818cf8' },
+  { value: 'sunset', label: 'Sunset', color: '#fbbf24' },
+] as const;
+
+type ThemeValue = (typeof THEMES)[number]['value'];
+
+const storedAndValid = (value: string | null): value is ThemeValue =>
+  typeof value === 'string' && THEMES.some((t) => t.value === value);
+
 const path = Astro.url.pathname;
+const currentTheme = (() => {
+  const read = () => {
+    try {
+      return localStorage.getItem('sarthi-theme');
+    } catch {
+      return null;
+    }
+  };
+  const saved = read();
+  if (saved === 'light' || saved === 'dark') return saved; // legacy
+  if (storedAndValid(saved)) return saved;
+  return 'hermes';
+})();
+
+const currentThemeLabel = THEMES.find((t) => t.value === currentTheme)?.label ?? 'Hermes';
 const isActive = (href: string) =>
   href.startsWith('/#')
     ? path === withBase('/')
     : path.startsWith(withBase(href));
 ---
-
 <header class="site-header">
   <div class="container header-inner">
     <a class="brand" href={withBase('/')} aria-label="Sarthi Studio home">
@@ -55,16 +85,38 @@ const isActive = (href: string) =>
       </a>
       <ThemeToggle />
       <button
-        class="icon-button menu-button"
+        class="icon-button theme-switch"
         type="button"
-        aria-expanded="false"
-        aria-controls="mobile-nav"
-        data-menu-button
+        aria-label="Switch color theme"
+        title="Theme switcher"
       >
-        <Icon name="menu" size={20} class="menu-icon menu-icon-open" />
-        <Icon name="x" size={20} class="menu-icon menu-icon-close" />
-        <span class="sr-only" data-menu-label>Open menu</span>
+        <span class="theme-swatch" id="theme-swatch" style="background: var(--accent);"></span>
+        <span class="theme-label" id="theme-label">{currentThemeLabel}</span>
       </button>
+      <div class="theme-picker" id="theme-picker" hidden>
+        <div class="theme-picker-inner">
+          <div class="theme-picker-head">
+            <span class="theme-picker-title">Theme</span>
+            <button class="icon-button theme-picker-close" type="button" data-theme-picker-close aria-label="Close">
+              <Icon name="x" size={16} />
+            </button>
+          </div>
+          <div class="theme-picker-list">
+            {THEMES.map((t) => (
+              <button
+                class={`theme-picker-option${t.value === currentTheme ? ' is-active' : ''}`}
+                type="button"
+                data-theme-option
+                style={`--swatch: ${t.color}`}
+                aria-label={`Apply ${t.label} theme`}
+              >
+                <span class="theme-picker-swatch" style="background: var(--swatch);"></span>
+                <span class="theme-picker-name">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -84,35 +136,69 @@ const isActive = (href: string) =>
 </header>
 
 <script>
-  const button = document.querySelector<HTMLButtonElement>('[data-menu-button]');
+  const menuButton = document.querySelector<HTMLButtonElement>('[data-menu-button]');
   const panel = document.querySelector<HTMLElement>('[data-mobile-nav]');
+  const picker = document.querySelector<HTMLElement>('#theme-picker');
+  const pickerClose = document.querySelector<HTMLElement>('[data-theme-picker-close]');
+  const themeOptions = document.querySelectorAll<HTMLElement>('[data-theme-option]');
+  const themeSwatch = document.querySelector<HTMLElement>('#theme-swatch');
+  const themeLabel = document.querySelector<HTMLElement>('#theme-label');
 
-  if (button && panel) {
-    const setOpen = (open: boolean) => {
-      panel.hidden = !open;
-      button.setAttribute('aria-expanded', String(open));
-      const label = button.querySelector<HTMLElement>('[data-menu-label]');
-      if (label) label.textContent = open ? 'Close menu' : 'Open menu';
-    };
+  const setOpen = (open: boolean) => {
+    panel!.hidden = !open;
+    menuButton!.setAttribute('aria-expanded', String(open));
+    const label = menuButton!.querySelector<HTMLElement>('[data-menu-label]');
+    if (label) label.textContent = open ? 'Close menu' : 'Open menu';
+  };
 
-    button.addEventListener('click', () => setOpen(panel.hasAttribute('hidden')));
+  menuButton!.addEventListener('click', () => setOpen(panel!.hasAttribute('hidden')));
 
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !panel.hasAttribute('hidden')) {
-        setOpen(false);
-        button.focus();
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !panel!.hasAttribute('hidden')) {
+      setOpen(false);
+      menuButton!.focus();
+    }
+  });
+
+  panel!.addEventListener('click', (event) => {
+    if (event.target instanceof Element && event.target.closest('a')) {
+      setOpen(false);
+    }
+  });
+
+  const desktop = window.matchMedia('(min-width: 901px)');
+  desktop.addEventListener('change', (event) => {
+    if (event.matches) setOpen(false);
+  });
+
+  // Theme picker
+  menuButton!.addEventListener('click', (event) => {
+    // Only open picker for theme button clicks, not menu button
+    if ((event.target as HTMLElement).closest('.theme-switch')) {
+      picker!.hidden = !picker!.hidden;
+      themeSwatch!.focus();
+    }
+  });
+
+  pickerClose!.addEventListener('click', () => {
+    picker!.hidden = true;
+    menuButton!.focus();
+  });
+
+  themeOptions.forEach((option) => {
+    option.addEventListener('click', () => {
+      const value = option.dataset.themeOption;
+      if (!value) return;
+      localStorage.setItem('sarthi-theme', value);
+      document.documentElement.dataset.theme = value;
+      // Update swatch and label
+      const theme = THEMES.find((t: (typeof THEMES)[number]) => t.value === value);
+      if (theme) {
+        themeSwatch!.style.background = theme.color;
+        themeLabel!.textContent = theme.label;
       }
+      picker!.hidden = true;
+      themeSwatch!.focus();
     });
-
-    panel.addEventListener('click', (event) => {
-      if (event.target instanceof Element && event.target.closest('a')) {
-        setOpen(false);
-      }
-    });
-
-    const desktop = window.matchMedia('(min-width: 901px)');
-    desktop.addEventListener('change', (event) => {
-      if (event.matches) setOpen(false);
-    });
-  }
+  });
 </script>

@@ -997,7 +997,7 @@ typed in, or written by hand into the user skills folder.
 - The installed `SKILL.md` is rewritten to name its new folder, as Install does.
   Discovery keys ids on the manifest name, so an imported skill now keeps the id
   the route returns instead of appearing under its display name.
-- Skills follow `FREE_AI_STUDIO_HOME`: both the user and `~/.agents` roots are
+- Skills follow `SAARTHI_STUDIO_HOME`: both the user and `~/.agents` roots are
   resolved under the override, so a sandboxed or test run no longer reads or
   writes the real user's skills. Settings → Skills gains an "Import from Git…"
   form.
@@ -1144,7 +1144,7 @@ now fails instead of publishing an empty or partial artifact set.
   them. An expected name is held to the same filename rules before it is used to
   build a path. Called without arguments the old behaviour is unchanged.
 - **Every release job declares what it owes.** The deb job requires
-  `free-ai-studio_<version>-1_amd64.deb`; the Linux package job the tarball, the
+  `SAARTHI-STUDIO_<version>-1_amd64.deb`; the Linux package job the tarball, the
   AppImage and `SHA256SUMS.txt`; Windows the zip and MSI; macOS the tarball and
   `.app.zip`; the extension job the VSIX; the Android job the APK and AAB. The
   release-asset gate (`verify-release.sh`) still checks the whole published set.
@@ -2066,9 +2066,9 @@ longer treated as shipped until every artifact is actually attached.
   loopback fixture: a complete release passes, and a missing VSIX is refused
   and named.
 - **The AppImage smoke no longer rejects a valid package.** The package installs
-  its UI at `usr/share/sarthi-studio/static`, but `smoke-package.sh` only looked
+  its UI at `usr/share/SAARTHI-STUDIO/static`, but `smoke-package.sh` only looked
   beside the binary or in a macOS `Contents/Resources/static`. It now also
-  accepts the installed and legacy `share/free-ai-suite` layouts, matching
+  accepts the installed and legacy `share/SAARTHI-STUDIO` layouts, matching
   `static_dir_candidates`. This is the check that failed the AppImage step in
   run `42908396329`.
 - **Still red: the deb job's headless tests.** That same run's
@@ -2278,17 +2278,17 @@ everywhere: sidebar, welcome state, favicon, Windows icon and MSI, Linux
   inventory and the three-platform mapping.
 - Raster assets are generated from the canonical `app-icon.svg`, not drawn
   twice: `app/icons/icon.png` (512), `app/icons/icon.ico` (16–256, seven sizes)
-  and `app/packaging/icons/sarthi-studio-256.png`.
+  and `app/packaging/icons/SAARTHI-STUDIO-256.png`.
 - The UI uses an inline `#i-tardigrade` symbol with fixed brand colours for the
   sidebar brand tile and the chat welcome state; feature icons are unchanged.
   The old spark glyph and the old favicon are gone.
 - Android ships the same face as a `VectorDrawable` inside the 66 dp safe zone,
   over a `#111111` background, and reuses it for the monochrome (themed) layer.
 - Packaging now points at the canonical SVG: the duplicate
-  `app/packaging/icons/sarthi-studio.svg` is deleted and `Cargo.toml` plus both
+  `app/packaging/icons/SAARTHI-STUDIO.svg` is deleted and `Cargo.toml` plus both
   desktop workflows reference `app/static/brand/app-icon.svg`.
-- Also fixed: the About card claimed the data lived in `~/.local/share/sarthi-studio`
-  and `~/.config/sarthi-studio`; the real paths are `free-ai-studio`, as the
+- Also fixed: the About card claimed the data lived in `~/.local/share/SAARTHI-STUDIO`
+  and `~/.config/SAARTHI-STUDIO`; the real paths are `SAARTHI-STUDIO`, as the
   rest of the app uses.
 - Verified: 512 px render inspected, sizes 16/24/32/48/64/128/512 checked, the
   icon seen in the running shell in dark and light, `cargo test --locked` 547
@@ -2304,24 +2304,24 @@ docs.
 
 - Renamed 346 brand occurrences across 98 files: `Saarthi Studio` → `Sarthi
   Studio`, `Free AI Studio` → `Sarthi Studio`, and the identifier shapes
-  (`SaarthiStudio`/`saarthi-studio`/`SAARTHI` → `SarthiStudio`/`sarthi-studio`/
+  (`SaarthiStudio`/`saarthi-studio`/`SAARTHI` → `SarthiStudio`/`SAARTHI-STUDIO`/
   `SARTHI`). The audit that preceded it found 391 `saarthi*` tokens in 113 files
   and 31 `Free AI Studio`; `docs/BRANDING-AUDIT.md` records the result.
 - Product metadata: `productName` is `Sarthi Studio`, the crate description names
   it, and the Windows installer's product/shortcut/uninstaller names, the
   AppStream `<name>`, the Android `android:label` and the VS Code `displayName`
-  all read Sarthi Studio. Artifacts are `sarthi-studio_<version>_<platform>`.
+  all read Sarthi Studio. Artifacts are `SAARTHI-STUDIO_<version>_<platform>`.
 - Packaging files renamed: `io.github.sairajkhilariarch.SarthiStudio.{desktop,
-  appdata.xml}` and `icons/sarthi-studio{,-256}.{svg,png}`. The `.desktop` rename
+  appdata.xml}` and `icons/SAARTHI-STUDIO{,-256}.{svg,png}`. The `.desktop` rename
   also fixed a real mismatch — `Cargo.toml` and both desktop workflows already
   referenced the new filename.
-- The Linux UI tree now installs under `usr/share/sarthi-studio/static`. The
-  runtime still resolves `usr/share/free-ai-suite/static` last, so a package
+- The Linux UI tree now installs under `usr/share/SAARTHI-STUDIO/static`. The
+  runtime still resolves `usr/share/SAARTHI-STUDIO/static` last, so a package
   installed before 2.51 keeps starting; a unit test asserts that order.
 - Deliberately unchanged, because changing them breaks installs or stored data:
-  the `free-ai-studio` crate/binary and `FREE_AI_STUDIO_*` variables, the config
-  path `~/.config/free-ai-studio/`, the data directory
-  `~/.local/share/free-ai-studio/`, the Tauri identifier
+  the `SAARTHI-STUDIO` crate/binary and `SAARTHI_STUDIO_*` variables, the config
+  path `~/.config/SAARTHI-STUDIO/`, the data directory
+  `~/.local/share/SAARTHI-STUDIO/`, the Tauri identifier
   `com.saarthi.freeaistudio`, the Android package `com.saarthi.studio`, the
   `[[SAARTHI_IMAGE:…]]` marker stored in conversations, the `freeAiStudio.*`
   VS Code command/setting ids, and the GitHub repository slug. Each has its
@@ -2575,9 +2575,9 @@ Start Menu entry and an uninstall.
   that harvests the staged release tree (binary, the whole `static` tree, readme,
   license), adds a Start Menu shortcut and registers a major upgrade, so a newer
   version replaces the installed one instead of sitting beside it.
-- `scripts/ci/build-windows-msi.sh` validates the stage (a `free-ai-studio.exe`,
+- `scripts/ci/build-windows-msi.sh` validates the stage (a `SAARTHI-STUDIO.exe`,
   `static/index.html`, a usable version), builds
-  `free-ai-suite_<version>_windows-x86_64.msi` against a stable UpgradeCode, and
+  `SAARTHI-STUDIO_<version>_windows-x86_64.msi` against a stable UpgradeCode, and
   proves the payload with an administrative install before anyone runs it.
 - WiX 7 refuses to build without accepting a paid maintenance-fee EULA, so the
   toolchain is pinned to WiX 5 (MIT) from NuGet; the packager finds it under
@@ -2617,7 +2617,7 @@ macOS ships as a real application bundle, and the binary finds its UI inside it.
   `Contents/Resources/static`, an `Info.plist` carrying the staged version, the
   bundle id `com.saarthi.freeaistudio`, `CFBundleExecutable`, the product name and
   `APPL` as the package type, plus `PkgInfo`. It is archived as
-  `free-ai-suite_<version>_macos-universal.app.zip` with forward-slash paths, so
+  `SAARTHI-STUDIO_<version>_macos-universal.app.zip` with forward-slash paths, so
   the archive unpacks the same way everywhere.
 - The packager checks what it assembled before zipping — the executable bit, the
   UI, and that the plist carries the version and the executable's name — and
@@ -2769,7 +2769,7 @@ where the new binary is — while the running build stays untouched.
   cannot be a folder name, and a file whose bytes changed. It then unpacks into
   `updates/prepared/<version>/` and records `prepared.json`: version, asset,
   sha256, root, the binary's relative path, the file count and the time.
-- An archive that unpacks without a `free-ai-studio`/`sarthi` binary is removed
+- An archive that unpacks without a `SAARTHI-STUDIO`/`sarthi` binary is removed
   and refused, because a tree that cannot start is not a prepared update. The
   search is bounded (depth 6, 5,000 entries) so a hostile archive cannot make the
   app walk forever.
@@ -2981,7 +2981,7 @@ build.
 - The release workflow runs it on every packaged artifact: the `.deb`, the Linux
   tarball and AppImage, the Windows zip, and the macOS universal tarball (which
   previously smoke-tested only the staged binary before packing it).
-- On Windows the script passes a native `FREE_AI_STUDIO_HOME` path (`cygpath -m`),
+- On Windows the script passes a native `SAARTHI_STUDIO_HOME` path (`cygpath -m`),
   because a Git Bash `/tmp` path is not an absolute path to the native binary —
   the same trap the end-to-end harness hit with the workspace call.
 
@@ -3633,7 +3633,7 @@ the actual binary, a real config file, a real SQLite database and a restart.
 
 - `scripts/ci/test-e2e.sh` — builds (or reuses) the debug binary, picks two free
   ports, starts `scripts/mock-router.py` as the provider and launches the studio
-  headless with `FREE_AI_STUDIO_HOME` pointed at a scratch directory, so the run
+  headless with `SAARTHI_STUDIO_HOME` pointed at a scratch directory, so the run
   can never read or write the developer's own settings. 11 checks: the mock
   answers; the studio reports ready on the port it was given; the readiness
   payload is well formed; a conversation is created; a chat turn is answered by
@@ -4356,7 +4356,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   Clippy `-D warnings` clean, `rustfmt --check` reports no diff in the two
   touched Rust files (five untouched modules keep their pre-existing
   formatting), `node --check` clean.
-- Live on a headless build at `:8951` with a sandboxed `FREE_AI_STUDIO_HOME`: a
+- Live on a headless build at `:8951` with a sandboxed `SAARTHI_STUDIO_HOME`: a
   chat against an unreachable router wrote a provider row, a granted rule wrote a
   permission row, and a real agent run wrote agent rows. The timeline reported
   areas `provider,permission,agent`, the summary read `1/1 requests failed ·
@@ -5531,7 +5531,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   services are derived from the config directory's hash — parallel fixtures no
   longer share credentials. `.cargo/config.toml` selects the mock store for
   `cargo test`/`cargo run`, so no test or dev run touches a real vault;
-  installed binaries get the platform store. `FREE_AI_STUDIO_KEYCHAIN=off` is
+  installed binaries get the platform store. `SAARTHI_STUDIO_KEYCHAIN=off` is
   the escape hatch (secrets stay in `config.json`).
 - New dependency, documented in `app/Cargo.toml`: `keyring` (one crate, three
   platform stores; no existing equivalent in the tree).
@@ -5539,7 +5539,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   secret round-trip through the store, per-location isolation, unstored name).
   Clippy `-D warnings` clean; `node --check app/static/app.js` clean.
 - Live smoke on :8878 against the real Windows Credential Manager (temp home
-  plus `FREE_AI_STUDIO_KEYCHAIN_SERVICE=…smoke`, so the production service and
+  plus `SAARTHI_STUDIO_KEYCHAIN_SERVICE=…smoke`, so the production service and
   the real config were untouched): a seeded plaintext key migrated on startup
   (`config.json` field `''`), `cmdkey /list` showed the entry under
   `api_key.<service>`, a fresh process with an empty file still reported
@@ -5943,7 +5943,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   with whatever capabilities the platform published beside them.
 - Two launch defects found while smoke-testing the headless binary: a build
   without the `gui` feature no longer treats itself as windowed (it sent the
-  shutdown signal immediately, so `./free-ai-studio` served nothing at all),
+  shutdown signal immediately, so `./SAARTHI-STUDIO` served nothing at all),
   and a process without a console no longer stops because `ctrl_c()` failed —
   only a real Ctrl+C stops the server.
 - Verified against a live instance: `/api/thinking/levels` returns the four
@@ -6162,7 +6162,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
 
 - Phase 2 slice 5: per-router launch preferences, and a startup sweep that
   honours them. `POST /api/routers/:id/auto-start` stores the choice in
-  `~/.config/free-ai-studio/router-prefs.json` (written atomically, owner-only),
+  `~/.config/SAARTHI-STUDIO/router-prefs.json` (written atomically, owner-only),
   and `/api/routers` now reports `auto_start` per router, shown as a
   "Start with Studio" checkbox in the Router view.
 - The sweep replaces the unconditional FreeLLMAPI start at boot. It starts a
@@ -6334,7 +6334,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
   and spaces in artifact names and verifies `SHA256SUMS.txt` before each upload;
   `scripts/ci/test-version.sh` runs those regressions in Desktop CI on every push.
 - Release runs are serialised per ref, and the AppImage now ships AppStream
-  metadata (`app/packaging/free-ai-suite.appdata.xml`).
+  metadata (`app/packaging/SAARTHI-STUDIO.appdata.xml`).
 - Added the audit and engineering docs: `docs/ARCHITECTURE.md`,
   `docs/FEATURE-STATUS.md`, `docs/IMPLEMENTATION-SPECIFICATION.md`,
   `docs/MASTER-ROADMAP.md`, `docs/TESTING-STRATEGY.md`, `docs/KNOWN-ISSUES.md`,
@@ -6351,7 +6351,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
 
 - Fix the release pipeline: version reads now strip a trailing carriage
   return, and the tracked manifests are back to LF, so artifacts are named
-  `free-ai-suite_1.26.2_*` instead of carrying an embedded `
+  `SAARTHI-STUDIO_1.26.2_*` instead of carrying an embedded `
 ` that made
   `upload-artifact` reject them (v1.26.0 and v1.26.1 built and tested fine
   but never attached a single asset).
@@ -6490,7 +6490,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
 
 - Every user-facing string says **Sarthi Studio** (window title, page title,
   folder pickers, VS Code display name and command titles, README). Internal
-  identifiers (`free-ai-studio`, `free-ai-suite`) stay unchanged so existing
+  identifiers (`SAARTHI-STUDIO`, `SAARTHI-STUDIO`) stay unchanged so existing
   installs and data keep working.
 
 ## 1.21.1
@@ -6508,7 +6508,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
 
 - Release APK/AAB are signed with the auto-generated debug keystore instead of
   shipping unsigned (Android refuses unsigned APKs). Assets renamed
-  `free-ai-studio-android.apk` / `.aab`.
+  `SAARTHI-STUDIO-android.apk` / `.aab`.
 
 ### Docs: hosted website
 
@@ -6578,7 +6578,7 @@ back, which is what makes parallel runs a usable loop rather than a dead end.
 - **Artifacts** — a depth- and count-bounded flat file listing of the open
   folder, grouped by extension (`/api/workspace/files`).
 - **Automation** — saved prompt recipes with an optional skill, persisted in
-  `~/.config/free-ai-studio/workflows.json`; running one loads the prompt and
+  `~/.config/SAARTHI-STUDIO/workflows.json`; running one loads the prompt and
   skill into a fresh chat round.
 
 ### Honest router pill
@@ -6625,7 +6625,7 @@ not been pushed.**
 - Studio starts FreeLLMAPI only when its port is not answering, records who
   started it in `router-owned.json`, and runs `docker compose down` on exit
   only when it was the one that started it.
-- `free-ai-studio router status|start|stop` exposes the same logic, and the
+- `SAARTHI-STUDIO router status|start|stop` exposes the same logic, and the
   console has Start/Stop/Refresh.
 
 ### Router console — FreeLLMAPI dashboard features inside the app
@@ -6641,7 +6641,7 @@ not been pushed.**
 
 ### Windows + releases
 
-- Portable `free-ai-studio.exe` build on `windows-latest`, Windows/macOS folder
+- Portable `SAARTHI-STUDIO.exe` build on `windows-latest`, Windows/macOS folder
   pickers, and cargo linker flags scoped to Linux so one config works both
   places.
 - `Desktop Release` builds and attaches all four platforms to one GitHub
@@ -6719,6 +6719,6 @@ Documents the release and the follow-up commits above.
 - Router lifecycle: compose up on boot, `docker compose down` on SIGINT, and a
   router started by the user stays running after exit.
 - Extension: `npm test` (13/13), `tsc --noEmit`, `vsce package` → `dist/
-  free-ai-studio-vscode.vsix` (56 KB).
+  SAARTHI-STUDIO-vscode.vsix` (56 KB).
 - Android: `gradle assembleRelease bundleRelease` succeeds; `aapt dump
   badging` on the release APK reports `versionCode='16' versionName='1.19.0'`.

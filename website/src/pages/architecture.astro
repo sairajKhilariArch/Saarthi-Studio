@@ -1,0 +1,74 @@
+---
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import Icon from '../components/Icon.astro';
+  import PageHero from '../components/PageHero.astro';
+  import { SITE } from '../lib/site';
+---
+
+<BaseLayout
+  title="Architecture — Sarthi Studio"
+  description="How Sarthi Studio is put together: the local service, the UI shell, the agent loop, and the platform clients."
+>
+  <PageHero
+    eyebrow="Architecture"
+    title="One local service, several surfaces"
+    description="A single Rust service owns your conversations, files, agents, and model traffic. The UI is the same whether it runs in the native window or a browser."
+  />
+
+  <section class="section">
+    <div class="container">
+      <h2>The runtime</h2>
+      <p>
+        One Rust binary (crate and binary <code>SAARTHI-STUDIO</code>) serves the
+        loopback UI and API at <code>127.0.0.1:8765</code>. The
+        <code>gui</code> feature adds a native window over Tauri 2. The
+        frontend is hand-written static HTML/CSS/JS served from the Rust
+        server, with no build step and no package manager in the app.
+      </p>
+      <p>
+        SQLite persists conversations, runs, steps, keys, and usage at
+        <code>~/.local/share/SAARTHI-STUDIO/studio.db</code>; configuration
+        lives at <code>~/.config/SAARTHI-STUDIO/config.json</code>. These paths
+        are fixed by design.
+      </p>
+
+      <h2>The agent loop</h2>
+      <p>
+        Agents are bounded run loops: a run owns steps, each step owns
+        approvals, diffs, and checkpoints. The Runs view shows every step
+        log, token usage, and outcome, and running agents can hand their
+        worktree back to you for the final commit.
+      </p>
+
+      <h2>The platform clients</h2>
+      <ul>
+        <li><strong>Desktop.</strong> Native window (Tauri 2) or <code>--browser</code>; the same UI either way.</li>
+        <li><strong>Android.</strong> A native companion client: direct router mode, or Desktop Host mode paired over a secured Host API (TLS + pairing token). Host-mode chat is non-streaming and therefore stays off the phone.</li>
+        <li><strong>VS Code.</strong> A TypeScript extension with an embedded Node server implementing a subset of the desktop routes — no terminal panel, no router supervision, no PTY.</li>
+      </ul>
+
+      <h2>The HTTP surface</h2>
+      <p>
+        The main listeners are the loopback UI/API and the opt-in
+        <code>/api/host/v1/*</code> Host API, which is a separate listener
+        with a bearer token and TLS. The loopback contract is local-only; the
+        Host API is a documented remote contract. API routes are documented
+        in the
+        <a href={SITE.readme} target="_blank" rel="noopener noreferrer">README</a>
+        and in the engineering docs.
+      </p>
+
+      <div class="note-card">
+        <Icon name="database" size={18} />
+        <div>
+          <strong>Source of truth.</strong>
+          The diagrams and contracts on this page summarize
+          <a href={SITE.architecture} target="_blank" rel="noopener noreferrer">docs/ARCHITECTURE.md</a>
+          and
+          <a href={SITE.readme} target="_blank" rel="noopener noreferrer">README.md</a>.
+          Code is the final word.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

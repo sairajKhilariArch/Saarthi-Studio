@@ -1,0 +1,67 @@
+---
+  import BaseLayout from '../layouts/BaseLayout.astro';
+  import Icon from '../components/Icon.astro';
+  import PageHero from '../components/PageHero.astro';
+  import { SITE } from '../lib/site';
+---
+
+<BaseLayout
+  title="About — Sarthi Studio"
+  description="About Sarthi Studio: what it is, who makes it, and how to reach the project."
+>
+  <PageHero
+    eyebrow="About"
+    title="A local-first AI development workspace"
+    description="Sarthi Studio brings chat, agents, local models, routers, skills, MCP, memory, and a real developer workspace into one desktop app. It is open source and built in the open."
+  />
+
+  <section class="section">
+    <div class="container">
+      <h2>What it is</h2>
+      <p>
+        Sarthi Studio is a local-first AI development workspace. One Rust
+        service owns your conversations, files, terminals, agents, and model
+        traffic; the UI is the same whether it runs in the native window or a
+        browser. It is designed for people who want AI to act on their code
+        with their supervision, not instead of them.
+      </p>
+
+      <h2>How it is built</h2>
+      <p>
+        The backend is Rust (axum, reqwest, rusqlite) serving a static,
+        hand-written frontend. The native window uses Tauri 2; a browser UI
+        is available with <code>--browser</code>. Android is a React Native
+        companion client; VS Code is an extension with an embedded Node
+        server. Everything is MIT-licensed.
+      </p>
+
+      <h2>The product, in one line</h2>
+      <p>
+        The same local service owns conversations, runs, files, terminals,
+        permissions, and the model traffic — a single workspace for the whole
+        loop, from a question to a reviewed change.
+      </p>
+
+      <h2>Project and community</h2>
+      <ul>
+        <li>GitHub: <a href={SITE.repo} target="_blank" rel="noopener noreferrer">sairajKhilariArch/Saarthi-Studio</a></li>
+        <li>Releases: <a href={SITE.releases} target="_blank" rel="noopener noreferrer">GitHub Releases</a></li>
+        <li>Issues: <a href={SITE.issues} target="_blank" rel="noopener noreferrer">GitHub Issues</a></li>
+        <li>License: MIT — read the code in <a href={SITE.license} target="_blank" rel="noopener noreferrer">LICENSE</a></li>
+        <li>Architecture: <a href={SITE.architecture} target="_blank" rel="noopener noreferrer">docs/ARCHITECTURE.md</a></li>
+      </ul>
+
+      <div class="note-card">
+        <Icon name="git-branch" size={18} />
+        <div>
+          <strong>Contribution.</strong>
+          Read
+          <a href={SITE.readme} target="_blank" rel="noopener noreferrer">README.md</a>,
+          the feature-status report, and the testing strategy. The website is
+          built in the open at
+          <a href={SITE.repo} target="_blank" rel="noopener noreferrer">website/</a>.
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
