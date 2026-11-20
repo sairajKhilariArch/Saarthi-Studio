@@ -570,13 +570,20 @@ fn run(
             // Only the file we opened: a workspace-wide publish for
             // other files is not an answer to this request.
             if params.get("uri").and_then(Value::as_str) == Some(document.as_str()) {
-                published = Some(
-                    params
-                        .get("diagnostics")
-                        .cloned()
-                        .unwrap_or_else(|| json!([])),
-                );
-                break;
+                let items = params
+                    .get("diagnostics")
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                let empty = items.as_array().map_or(true, |rows| rows.is_empty());
+                published = Some(items);
+                if !empty {
+                    break;
+                }
+                // An empty publish is the server's opening state, not its
+                // answer: rust-analyzer clears first and sends the real rows
+                // once the crate graph loads. Keep the empty list as the
+                // answer so far and keep reading; a non-empty publish wins,
+                // and if the deadline arrives first the empty list stands.
             }
         }
         aside.push_back(message);
@@ -942,13 +949,21 @@ process.stdin.on("data", (chunk) => {
           ]
         } });
       }
-      send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: {
-        uri: message.params.textDocument.uri,
-        diagnostics: [
-          { range: { start: { line: 2, character: 4 } }, severity: 1, source: "fake", message: "unused variable" },
-          { range: { start: { line: 0, character: 0 } }, severity: 2, message: "line too long" }
-        ]
+      const rows = [
+        { range: { start: { line: 2, character: 4 } }, severity: 1, source: "fake", message: "unused variable" },
+        { range: { start: { line: 0, character: 0 } }, severity: 2, message: "line too long" }
+      ];
+      const publish = (diagnostics) => send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: {
+        uri: message.params.textDocument.uri, diagnostics
       } });
+      if (process.argv.includes("--late-publish")) {
+        publish([]);
+        setTimeout(() => publish(rows), 150);
+      } else if (process.argv.includes("--empty-only")) {
+        publish([]);
+      } else {
+        publish(rows);
+      }
     } else if (message.method === "shutdown") {
       send({ jsonrpc: "2.0", id: message.id, result: null });
     } else if (message.method === "exit") {
@@ -1033,6 +1048,41 @@ process.stdin.on("data", (chunk) => {
         assert!(outcome.published);
         assert_eq!(outcome.diagnostics.len(), 2);
         assert_eq!(outcome.diagnostics[0]["message"], json!("unused variable"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// rust-analyzer clears diagnostics first and publishes the real rows
+    /// once the crate graph loads (observed live: empty at ~0.6s, E0425 at
+    /// ~2.2s). The first empty publish is not the answer: taking it would
+    /// report "no problems" for a file that does not compile.
+    #[test]
+    fn an_empty_first_publish_is_not_the_final_answer() {
+        let dir = temp_dir("late-publish");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let spec = spec_for("src/main.rs").unwrap();
+        let launch = fake_launch_with_flags(&dir, &["--late-publish"]);
+        let outcome = run(&dir, "src/main.rs", spec, "fn main() {}\n", &launch).unwrap();
+        assert!(outcome.published);
+        assert_eq!(outcome.diagnostics.len(), 2);
+        assert_eq!(outcome.diagnostics[0]["message"], json!("unused variable"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file the server really finds nothing in still reports a publish:
+    /// the empty answer stands once the server had its full window to add
+    /// rows, and `published` stays true so the pane shows "no problems"
+    /// rather than "the server said nothing".
+    #[test]
+    fn an_empty_publish_that_stays_empty_is_still_reported() {
+        let dir = temp_dir("empty-only");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let spec = spec_for("src/main.rs").unwrap();
+        let launch = fake_launch_with_flags(&dir, &["--empty-only"]);
+        let outcome = run(&dir, "src/main.rs", spec, "fn main() {}\n", &launch).unwrap();
+        assert!(outcome.published);
+        assert_eq!(outcome.diagnostics.len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
