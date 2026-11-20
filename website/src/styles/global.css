@@ -1,34 +1,36 @@
 :root {
   color-scheme: dark;
 
-  --bg: #0b0b0d;
-  --bg-soft: #0f0f12;
-  --surface: #141417;
-  --surface-2: #1a1a1f;
-  --surface-3: #202026;
-  --border: rgba(255, 255, 255, 0.085);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --text: #f4f1eb;
-  --text-soft: #d8d3ca;
-  --muted: #a8a29a;
-  --muted-2: #817b72;
+  /* Sarthi One (docs/DESIGN-SYSTEM.md): Hermes teal canvas, cream text,
+     DeepSeek interaction blue, Claude warmth in the light theme below. */
+  --bg: #061111;
+  --bg-soft: #081514;
+  --surface: #0c1b1a;
+  --surface-2: #102120;
+  --surface-3: #152827;
+  --border: rgba(178, 224, 214, 0.10);
+  --border-strong: rgba(178, 224, 214, 0.20);
+  --text: #efede4;
+  --text-soft: #d9d6c9;
+  --muted: #9aa79f;
+  --muted-2: #7e8a84;
 
-  --accent: #ff7a1a;
-  --accent-strong: #ff8a38;
-  --accent-text: #ff9a52;
-  --accent-soft: rgba(255, 122, 26, 0.1);
-  --accent-border: rgba(255, 122, 26, 0.3);
-  --success: #74e0a3;
+  --accent: #6b7fff;
+  --accent-strong: #8291ff;
+  --accent-text: #93a1ff;
+  --accent-soft: rgba(107, 127, 255, 0.12);
+  --accent-border: rgba(107, 127, 255, 0.32);
+  --success: #34d399;
   --warning: #f2c45c;
-  --danger: #ff7b7b;
+  --danger: #ff7b72;
 
-  --grid-line: rgba(255, 255, 255, 0.035);
-  --header-bg: rgba(11, 11, 13, 0.8);
-  --code-bg: #0d0d10;
-  --code-text: #f4f1eb;
+  --grid-line: rgba(178, 224, 214, 0.045);
+  --header-bg: rgba(6, 17, 17, 0.8);
+  --code-bg: #081413;
+  --code-text: #e5e3d8;
 
-  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.45);
-  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --shadow-lg: 0 30px 80px rgba(1, 6, 6, 0.5);
+  --shadow-sm: 0 8px 24px rgba(1, 6, 6, 0.22);
 
   --radius-sm: 8px;
   --radius: 14px;
@@ -45,32 +47,33 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --bg: #f6f3ec;
-  --bg-soft: #efebe2;
+  /* Claude ivory paper, same semantic names. */
+  --bg: #f4f0e8;
+  --bg-soft: #faf7f0;
   --surface: #fffdf8;
-  --surface-2: #f3efe6;
-  --surface-3: #e8e2d7;
-  --border: rgba(17, 17, 17, 0.1);
-  --border-strong: rgba(17, 17, 17, 0.18);
-  --text: #171512;
-  --text-soft: #34302a;
-  --muted: #625c53;
-  --muted-2: #7d766b;
+  --surface-2: #f1ece2;
+  --surface-3: #e7e0d2;
+  --border: rgba(60, 50, 30, 0.12);
+  --border-strong: rgba(60, 50, 30, 0.20);
+  --text: #211d18;
+  --text-soft: #4e483e;
+  --muted: #6e675a;
+  --muted-2: #7a7264;
 
-  --accent-text: #b33b05;
-  --accent-soft: rgba(255, 122, 26, 0.12);
-  --accent-border: rgba(179, 59, 5, 0.28);
-  --success: #157347;
-  --warning: #8a5a00;
-  --danger: #b42318;
+  --accent-text: #3d56d9;
+  --accent-soft: rgba(61, 86, 217, 0.10);
+  --accent-border: rgba(61, 86, 217, 0.28);
+  --success: #0f7a52;
+  --warning: #92510a;
+  --danger: #c02626;
 
-  --grid-line: rgba(17, 17, 17, 0.05);
-  --header-bg: rgba(246, 243, 236, 0.86);
-  --code-bg: #171512;
-  --code-text: #f7f3ec;
+  --grid-line: rgba(60, 50, 30, 0.06);
+  --header-bg: rgba(244, 240, 232, 0.86);
+  --code-bg: #0c1b1a;
+  --code-text: #e5e3d8;
 
-  --shadow-lg: 0 28px 70px rgba(40, 28, 12, 0.14);
-  --shadow-sm: 0 8px 22px rgba(40, 28, 12, 0.08);
+  --shadow-lg: 0 28px 70px rgba(40, 30, 16, 0.14);
+  --shadow-sm: 0 8px 22px rgba(40, 30, 16, 0.08);
 }
 
 *,

@@ -1,58 +1,57 @@
-/* Hallmark · shape: app screen · genre: modern-minimal · theme: custom · redesign: full
- * nav: sidebar rail (sessions, files, skills) over a tab bar · signature: the live context meter beside the composer · states: loading, empty, error, success, focus, disabled
- * axes: #08080a cool near-black paper / Inter body / #ff8a3d orange accent · posture: restrained · contrast: pass · material: mono carries code, paths and metrics only · v2.0.0 */
-/* Hallmark · pre-emit critique: P4 H5 E5 S4 R5 V4 · weakest: S, the orange accent could belong to any dev tool; kept because it is this product's existing signal and spent only on state and one action */
-
-/* Sarthi Studio — one accent, thin borders, compact type, monospace for code.
-   Every colour and face below is a token; the light theme overrides them in the
-   [data-theme="light"] block, so no component carries a literal. */
+/* Sarthi One — the unified design system (docs/DESIGN-SYSTEM.md).
+ * Hermes teal canvas × Claude ivory warmth × DeepSeek interaction blue ×
+ * Freebuff workbench posture. One accent for actions, terracotta for the
+ * brand mark, serif display for brand moments, monospace for code only.
+ * Every colour and face below is a token; the light theme overrides them in
+ * the [data-theme="light"] block, so no component carries a literal. */
 
 :root {
-  --bg: #08080a;
-  --bg-soft: #0b0b0e;
-  --panel: #0a0a0d;
-  --surface: #121216;
-  --surface-2: #17171c;
-  --surface-3: #1d1d24;
-  --line: #232329;
-  --line-soft: #1a1a20;
-  --line-strong: #2f2f38;
-  --text: #ededf2;
-  --text-strong: #dedee6;
-  --dim: #a3a3ae;
-  --mute: #7d7d88;
-  --faint: #8a8a95;
-  --placeholder: #86868f;
-  --accent: #ff8a3d;
-  --accent-hover: #ffa25f;
-  --accent-soft: rgba(255, 138, 61, 0.12);
-  --accent-ink: #1b0d03;
-  --accent-border: rgba(255, 138, 61, 0.25);
-  --accent-ring: rgba(255, 138, 61, 0.10);
-  --accent-shadow: rgba(255, 138, 61, 0.18);
-  --brand-grad: #f2701f;
-  --ok: #4bd6a0;
-  --ok-soft: rgba(75, 214, 160, 0.08);
-  --ok-border: rgba(75, 214, 160, 0.28);
+  --bg: #061111;
+  --bg-soft: #081514;
+  --panel: #071312;
+  --surface: #0c1b1a;
+  --surface-2: #102120;
+  --surface-3: #152827;
+  --line: #1d3230;
+  --line-soft: #142624;
+  --line-strong: #2a4441;
+  --text: #efede4;
+  --text-strong: #f7f4ea;
+  --dim: #b4bdb6;
+  --mute: #7e8a84;
+  --faint: #8a948e;
+  --placeholder: #7e8a84;
+  --accent: #6b7fff;
+  --accent-hover: #8291ff;
+  --accent-soft: rgba(107, 127, 255, 0.14);
+  --accent-ink: #0a0c1e;
+  --accent-border: rgba(107, 127, 255, 0.32);
+  --accent-ring: rgba(107, 127, 255, 0.12);
+  --accent-shadow: rgba(107, 127, 255, 0.20);
+  --brand-grad: #d97757;
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.10);
+  --ok-border: rgba(52, 211, 153, 0.30);
   --ok-ink: #a7f0d4;
-  --ok-ring: rgba(75, 214, 160, 0.12);
-  --danger: #ff6b6b;
-  --danger-soft: rgba(255, 107, 107, 0.12);
-  --danger-border: rgba(255, 107, 107, 0.32);
-  --danger-ink: #ffc0c0;
-  --danger-ring: rgba(255, 107, 107, 0.12);
-  --warn: #ffc46b;
+  --ok-ring: rgba(52, 211, 153, 0.12);
+  --danger: #ff7b72;
+  --danger-soft: rgba(255, 123, 114, 0.12);
+  --danger-border: rgba(255, 123, 114, 0.32);
+  --danger-ink: #ffc9c4;
+  --danger-ring: rgba(255, 123, 114, 0.12);
+  --warn: #f2c45c;
   --info: #8fb8ff;
-  --code-bg: #0a0a0e;
-  --code-ink: #d5d5df;
-  --gutter-ink: #7d7d88;
-  --dir-ink: #d7a26a;
-  --dot-idle: #6b6b75;
-  --scrim: rgba(0, 0, 0, 0.55);
-  --shadow-1: 0 12px 40px rgba(0, 0, 0, 0.35);
-  --shadow-2: 0 30px 80px rgba(0, 0, 0, 0.55);
-  --radius: 10px;
-  --mono: "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  --code-bg: #081413;
+  --code-ink: #e5e3d8;
+  --gutter-ink: #7e8a84;
+  --dir-ink: #e0a87e;
+  --dot-idle: #5f6f69;
+  --scrim: rgba(2, 8, 8, 0.60);
+  --shadow-1: 0 12px 40px rgba(1, 6, 6, 0.40);
+  --shadow-2: 0 30px 80px rgba(1, 6, 6, 0.60);
+  --radius: 12px;
+  --display: "Tiempos Headline", Georgia, "Times New Roman", serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", Consolas, "Liberation Mono", monospace;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --sidebar-w: 286px;
   --tabbar-h: 44px;
@@ -65,33 +64,34 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* Light theme: same semantic names, re-valued. Applied by the theme switcher
-   (data-theme on <html>), defaulting to the system preference. */
+/* Light theme: Claude ivory paper, same semantic names, re-valued. Applied
+   by the theme switcher (data-theme on <html>), defaulting to the system
+   preference. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f2f2f6;
-  --bg-soft: #fafafd;
-  --panel: #f9f9fc;
-  --surface: #fdfdfd;
-  --surface-2: #eeeef3;
-  --surface-3: #e4e4ea;
-  --line: #e0e0e7;
-  --line-soft: #ebebf1;
-  --line-strong: #c7c7d1;
-  --text: #16161b;
-  --text-strong: #26262e;
-  --dim: #4b4b57;
-  --mute: #6a6a77;
-  --faint: #6b6b75;
-  --placeholder: #75757f;
-  --accent: #c2410c;
-  --accent-hover: #a33608;
-  --accent-soft: rgba(194, 65, 12, 0.09);
+  --bg: #f4f0e8;
+  --bg-soft: #faf7f0;
+  --panel: #f8f5ee;
+  --surface: #fffdf8;
+  --surface-2: #f1ece2;
+  --surface-3: #e7e0d2;
+  --line: #e0d8c8;
+  --line-soft: #eae4d6;
+  --line-strong: #c9bfa9;
+  --text: #211d18;
+  --text-strong: #171310;
+  --dim: #4e483e;
+  --mute: #6e675a;
+  --faint: #756e60;
+  --placeholder: #7a7264;
+  --accent: #3d56d9;
+  --accent-hover: #3248c4;
+  --accent-soft: rgba(61, 86, 217, 0.09);
   --accent-ink: #ffffff;
-  --accent-border: rgba(194, 65, 12, 0.30);
-  --accent-ring: rgba(194, 65, 12, 0.14);
-  --accent-shadow: rgba(194, 65, 12, 0.16);
-  --brand-grad: #a33608;
+  --accent-border: rgba(61, 86, 217, 0.30);
+  --accent-ring: rgba(61, 86, 217, 0.14);
+  --accent-shadow: rgba(61, 86, 217, 0.16);
+  --brand-grad: #c25e3e;
   --ok: #0f7a52;
   --ok-soft: rgba(15, 122, 82, 0.08);
   --ok-border: rgba(15, 122, 82, 0.30);
@@ -104,14 +104,14 @@
   --danger-ring: rgba(192, 38, 38, 0.14);
   --warn: #92510a;
   --info: #1d4ed8;
-  --code-bg: #fafafd;
-  --code-ink: #26262e;
-  --gutter-ink: #6a6a77;
+  --code-bg: #fbf8f1;
+  --code-ink: #26221b;
+  --gutter-ink: #6e675a;
   --dir-ink: #9a5b12;
-  --dot-idle: #85858f;
-  --scrim: rgba(20, 18, 25, 0.45);
-  --shadow-1: 0 12px 40px rgba(27, 13, 3, 0.10);
-  --shadow-2: 0 30px 80px rgba(27, 13, 3, 0.16);
+  --dot-idle: #8a8272;
+  --scrim: rgba(28, 24, 18, 0.45);
+  --shadow-1: 0 12px 40px rgba(40, 30, 16, 0.10);
+  --shadow-2: 0 30px 80px rgba(40, 30, 16, 0.16);
 }
 
 * { box-sizing: border-box; }
@@ -304,7 +304,7 @@ body.no-bottom { --bottom-h: 0px; }
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 6px 20px var(--accent-shadow);
 }
 .brand-mark .icon { width: 19px; height: 19px; }
-.brand-text strong { display: block; font-size: 14px; letter-spacing: -.01em; }
+.brand-text strong { display: block; font-family: var(--display); font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .brand-text span { display: block; font-size: 11px; color: var(--mute); margin-top: 2px; }
 
 .segmented {
@@ -589,7 +589,7 @@ tr:last-child td { border-bottom: 0; }
   border: 1px solid #111; color: #fff;
 }
 .welcome-mark .icon { width: 24px; height: 24px; }
-.welcome h1 { font-size: 25px; letter-spacing: -.035em; margin: 0 0 10px; font-weight: 650; }
+.welcome h1 { font-family: var(--display); font-size: 27px; letter-spacing: -.02em; margin: 0 0 10px; font-weight: 600; }
 .welcome p { font-size: 13px; color: var(--dim); line-height: 1.7; max-width: 520px; margin: 0 auto 26px; }
 .suggestions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; text-align: left; }
 .suggestion {

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="Sarthi Studio">
+  <rect width="1200" height="630" fill="#061111"/>
+  <g transform="translate(120 175) scale(11.6667)"><path d="M12 2.4Q13.3 7.9 18.8 9.2Q13.3 10.5 12 16Q10.7 10.5 5.2 9.2Q10.7 7.9 12 2.4Z" fill="#ffe6cb"/><path d="M4.2 19.6Q12 14.4 19.8 19.6Q12 18.0 4.2 19.6Z" fill="#d97757"/></g>
+  <text x="460" y="300" font-family="Georgia, 'Times New Roman', serif" font-size="84" fill="#f7f4ea" letter-spacing="-1">Sarthi Studio</text>
+  <text x="462" y="360" font-family="Inter, system-ui, sans-serif" font-size="30" fill="#9aa79f">The local-first AI coding workspace</text>
+</svg>

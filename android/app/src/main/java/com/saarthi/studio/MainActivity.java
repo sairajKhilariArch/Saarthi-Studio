@@ -75,16 +75,16 @@ import android.security.keystore.KeyProperties;
 import android.util.Base64;
 
 public class MainActivity extends Activity {
-    private static final int BG = Color.rgb(8, 8, 10);
-    private static final int PANEL = Color.rgb(17, 17, 21);
-    private static final int PANEL_ALT = Color.rgb(24, 24, 30);
-    private static final int TEXT = Color.rgb(237, 237, 242);
-    private static final int MUTED = Color.rgb(154, 154, 166);
-    private static final int GREEN = Color.rgb(75, 214, 160);
-    private static final int ACCENT = Color.rgb(255, 138, 61);
-    private static final int LINE = Color.rgb(35, 35, 41);
-    private static final int DANGER = Color.rgb(255, 107, 107);
-    private static final int USER_BUBBLE = Color.rgb(32, 26, 20);
+    private static final int BG = Color.rgb(6, 17, 17);
+    private static final int PANEL = Color.rgb(7, 19, 18);
+    private static final int PANEL_ALT = Color.rgb(12, 27, 26);
+    private static final int TEXT = Color.rgb(239, 237, 228);
+    private static final int MUTED = Color.rgb(126, 138, 132);
+    private static final int GREEN = Color.rgb(52, 211, 153);
+    private static final int ACCENT = Color.rgb(107, 127, 255);
+    private static final int LINE = Color.rgb(29, 50, 48);
+    private static final int DANGER = Color.rgb(255, 123, 114);
+    private static final int USER_BUBBLE = Color.rgb(16, 33, 32);
     private static final String SYSTEM_PROMPT = "You are a concise, helpful coding assistant. Be accurate and safe; never claim to run code unless you did.";
     private static final String KEY_ALIAS = "SarthiStudioSettingsKeyV1";
 
