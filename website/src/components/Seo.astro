@@ -18,7 +18,7 @@ const {
   noindex = false,
 } = Astro.props;
 
-const site = Astro.site ?? new URL('http://localhost:4321');
+const site = Astro.site ?? new URL('https://sairajkhilariarch.github.io/Saarthi-Studio');
 const canonical = new URL(Astro.url.pathname, site);
 const imageUrl = new URL(withBase(image), site);
 const pageTitle = title.includes('Sarthi Studio')
