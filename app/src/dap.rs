@@ -770,7 +770,7 @@ fn begin(options: SessionOptions) -> Result<Value, (StatusCode, String)> {
             json!({
                 "program": options.program_path.to_string_lossy(),
                 "cwd": options.root.to_string_lossy(),
-                "args": options.args,
+                "args": options.launch_args,
                 "stopOnEntry": options.stop_on_entry,
                 "console": "internalConsole",
                 "justMyCode": true,
@@ -1540,7 +1540,8 @@ fn start_session(state: &AppState, input: &Value) -> Result<Value, (StatusCode, 
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| crate::workspace::resolve_inside(&root, value))
-        .transpose()?;
+        .transpose()
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.message().to_string()))?;
     let stop_on_entry = input
         .get("stopOnEntry")
         .and_then(Value::as_bool)
