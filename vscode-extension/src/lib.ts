@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
 import type { PermitAction } from "./permissions";
 import type { GitContext, GitExecution } from "./git";
-import { status, commit, log, branches, reflog, undo, merge, mergeAbort, rebase, push, fetch, pull, remotes } from "./git";
+import { status, commit, log, branches, reflog, undo, merge, mergeAbort, rebase, push, fetch as gitFetch, pull, remotes } from "./git";
 // Re-exported so `node --test` can exercise the permission action set.
 export { PermissionStore, PERMIT_ACTIONS } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
@@ -2864,7 +2864,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
 
       if (routePath === "/api/workspace/git/fetch" && method === "GET") {
         const remote = url.searchParams.get("remote") || "origin";
-        const result = await fetch(gitCtx, remote);
+        const result = await gitFetch(gitCtx, remote);
         if (!result.ok) {
           const status = result.error.startsWith("saved permission rule denies git")
             ? 403

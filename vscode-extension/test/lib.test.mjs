@@ -301,10 +301,12 @@ test("built-in server chats through the router and serves the workspace", async 
   assert.equal(capabilities.features.chat, true);
   assert.equal(capabilities.features.mcp, true);
   assert.equal(supportsCapability(capabilities, "chat"), true);
-  // 3.48.0 made MCP a real stdio client here, so the embedded server advertises
-  // it; the negative case names a capability it still refuses.
+  // 3.48.0 made MCP a real stdio client here and 3.75.8 added the git action,
+  // so the embedded server advertises both; the negative case names a git
+  // feature it still refuses.
   assert.equal(supportsCapability(capabilities, "mcp"), true);
-  assert.equal(supportsCapability(capabilities, "git"), false);
+  assert.equal(supportsCapability(capabilities, "git"), true);
+  assert.equal(supportsCapability(capabilities, "git_reflog_undo"), false);
   assert.match(capabilitySummary(capabilities), /contract 1/);
 
   const created = await post("/api/conversations", { title: "Smoke test" });
@@ -1876,7 +1878,7 @@ test("saved permission rules block, allow and outlive the built-in server", asyn
   assert.equal(saved.status, 200);
 
   const listed = await (await fetch(`${embedded.url}/api/permissions`)).json();
-  assert.deepEqual(listed.actions.map((entry) => entry.id), ["fs_read", "fs_write", "command", "mcp_tool"]);
+  assert.deepEqual(listed.actions.map((entry) => entry.id), ["fs_read", "fs_write", "command", "mcp_tool", "network", "git", "router_install", "update", "uninstall", "settings", "extension_tool"]);
   assert.deepEqual(listed.rules, []);
 
   // A foreign page cannot write policy.

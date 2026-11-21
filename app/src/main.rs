@@ -4538,96 +4538,6 @@ async fn chat_stream(
         };
     }
 
-    // --- transcribe ---------------------------------------------------------
-    /// `POST /api/transcribe`. Forwards audio to the router's
-    /// `/v1/audio/transcriptions` endpoint. The audio is a base64 blob; the
-    /// router's door is the OpenAI-compatible `openai_base_url`.
-    async fn transcribe(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
-        let model = input
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let audio = input
-            .get("audio")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if audio.is_empty() {
-            return json_error(StatusCode::BAD_REQUEST, "Missing audio.");
-        }
-        if model.is_empty() {
-            return json_error(StatusCode::BAD_REQUEST, "Missing model.");
-        }
-        let cfg = crate::load_config(&state);
-        if cfg.base_url.trim().is_empty() {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "The AI router is not configured.",
-            );
-        }
-        let url = crate::router_url(&cfg, "audio/transcriptions");
-        let mut body = serde_json::json!({ "model": model, "file": audio });
-        if let Some(language) = input.get("language").and_then(Value::as_str) {
-            if !language.trim().is_empty() {
-                body["language"] = json!(language.trim());
-            }
-        }
-        if let Some(prompt) = input.get("prompt").and_then(Value::as_str) {
-            if !prompt.trim().is_empty() {
-                body["prompt"] = json!(prompt.trim());
-            }
-        }
-        if let Some(response_format) =
-            input.get("response_format").and_then(Value::as_str)
-        {
-            if !response_format.trim().is_empty() {
-                body["response_format"] = json!(response_format.trim());
-            }
-        }
-        if let Some(temperature) = input.get("temperature").and_then(Value::as_f64) {
-            body["temperature"] = json!(temperature);
-        }
-        let response = match state
-            .client
-            .post(&url)
-            .bearer_auth(&cfg.api_key)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                return json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("The AI router could not be reached: {error}"),
-                )
-            }
-        };
-        if !response.status().is_success() {
-            let parsed: Value = match response.json().await {
-                Ok(value) => value,
-                Err(_) => json!({}),
-            };
-            let message = parsed
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .unwrap_or("The router rejected the transcription request.");
-            return json_error(StatusCode::BAD_GATEWAY, message);
-        }
-        let parsed: Value = match response.json().await {
-            Ok(value) => value,
-            Err(_) => json!({}),
-        };
-        let text = parsed
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        Json(json!({ "ok": true, "text": text })).into_response()
-    }
-
     // The same precedence as chat: task, then project, then global. Each
     // configured fallback is tried only while nothing has been streamed yet, so
     // a half-read answer is never replayed on another model.
@@ -4737,6 +4647,91 @@ async fn chat_stream(
         recorder,
         finished: false,
     })
+}
+
+// --- transcribe ---------------------------------------------------------
+/// `POST /api/transcribe`. Forwards audio to the router's
+/// `/v1/audio/transcriptions` endpoint. The audio is a base64 blob; the
+/// router's door is the OpenAI-compatible `openai_base_url`.
+async fn transcribe(State(state): State<AppState>, Json(input): Json<Value>) -> Response<Body> {
+    let model = input
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let audio = input
+        .get("audio")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if audio.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Missing audio.");
+    }
+    if model.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Missing model.");
+    }
+    let cfg = crate::load_config(&state);
+    if cfg.base_url.trim().is_empty() {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The AI router is not configured.",
+        );
+    }
+    let url = crate::router_url(&cfg, "audio/transcriptions");
+    let mut body = serde_json::json!({ "model": model, "file": audio });
+    if let Some(language) = input.get("language").and_then(Value::as_str) {
+        if !language.trim().is_empty() {
+            body["language"] = json!(language.trim());
+        }
+    }
+    if let Some(prompt) = input.get("prompt").and_then(Value::as_str) {
+        if !prompt.trim().is_empty() {
+            body["prompt"] = json!(prompt.trim());
+        }
+    }
+    if let Some(response_format) = input.get("response_format").and_then(Value::as_str) {
+        if !response_format.trim().is_empty() {
+            body["response_format"] = json!(response_format.trim());
+        }
+    }
+    if let Some(temperature) = input.get("temperature").and_then(Value::as_f64) {
+        body["temperature"] = json!(temperature);
+    }
+    let response = match state
+        .client
+        .post(&url)
+        .bearer_auth(&cfg.api_key)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("The AI router could not be reached: {error}"),
+            )
+        }
+    };
+    if !response.status().is_success() {
+        let parsed: Value = match response.json().await {
+            Ok(value) => value,
+            Err(_) => json!({}),
+        };
+        let message = parsed
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("The router rejected the transcription request.");
+        return json_error(StatusCode::BAD_GATEWAY, message);
+    }
+    let parsed: Value = match response.json().await {
+        Ok(value) => value,
+        Err(_) => json!({}),
+    };
+    let text = parsed.get("text").and_then(Value::as_str).unwrap_or("");
+    Json(json!({ "ok": true, "text": text })).into_response()
 }
 
 struct Boot {

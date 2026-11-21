@@ -678,7 +678,7 @@ fn begin(options: SessionOptions) -> Result<Value, (StatusCode, String)> {
     }
     let mut command = Command::new(&options.launch.program);
     command
-        .args(&options.launch_args)
+        .args(&options.launch.args)
         .current_dir(options.launch_cwd.as_deref().unwrap_or(&options.root))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2256,7 +2256,7 @@ while True:
         let started = begin(SessionOptions {
             launch: LaunchSpec {
                 id: "fake".to_string(),
-                program: python.to_string_lossy().to_string(),
+                program: python,
                 args: vec![adapter.to_string_lossy().to_string()],
             },
             program: "main.py".to_string(),
@@ -2267,7 +2267,8 @@ while True:
             stop_on_entry: false,
             breakpoints: Breakpoints::new(),
             attach: None,
-        }).expect("session starts");
+        })
+        .expect("session starts");
         assert_eq!(started["running"], json!(true));
         assert_eq!(started["adapter"], json!("fake"));
         let stopped = stop_session();
