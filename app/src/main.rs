@@ -5476,7 +5476,10 @@ mod tests {
             );
         }
         // First step, work, and repair all go strong.
-        assert_eq!(choose_tier(&cfg, "", false, "coding").as_deref(), Some("strong-x"));
+        assert_eq!(
+            choose_tier(&cfg, "", false, "coding").as_deref(),
+            Some("strong-x")
+        );
         assert_eq!(
             choose_tier(&cfg, "write", false, "coding").as_deref(),
             Some("strong-x")
@@ -5485,7 +5488,10 @@ mod tests {
             choose_tier(&cfg, "command", false, "coding").as_deref(),
             Some("strong-x")
         );
-        assert_eq!(choose_tier(&cfg, "read", true, "coding").as_deref(), Some("strong-x"));
+        assert_eq!(
+            choose_tier(&cfg, "read", true, "coding").as_deref(),
+            Some("strong-x")
+        );
         // Every off-switch returns None: model_override absent = old behavior.
         cfg.adaptive_routing = false;
         assert_eq!(choose_tier(&cfg, "read", false, "coding"), None);

@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.76.0
+
+### Patch
+
+The four release blockers from the code audit are closed, so `Desktop CI` and
+`Desktop Release` can run their real gates again instead of failing early.
+
+- **AppStream metadata.** `app/packaging/io.github.sairajkhilariarch.SarthiStudio.appdata.xml`
+  advertised 3.75.2 as its newest `<release>` while the crate was 3.75.9, so
+  `scripts/ci/verify-linux-metadata.sh` refused both Linux jobs and the asset
+  verification job cascaded. The file now names 3.76.0 (and keeps 3.75.9 and
+  3.75.2 in the history).
+- **Rust formatting.** `cargo fmt` was applied; `cargo fmt --check` is clean
+  again (`agent.rs` `record_model` call, two `choose_tier` assertions in
+  `main.rs`).
+- **VS Code typecheck.** `npx tsc --noEmit` had ten errors in
+  `vscode-extension/src/lib.ts`: the git `log` import was shadowed by the
+  server's local logger (now imported as `gitLog`), `requireRoot` accepts an
+  absent options object, the git runner's own options no longer shadow the
+  server's, and the crew-template routes type their roster and answer 400/404
+  instead of reading a `status` field the runtime never returns.
+- **Approval refusal status.** `POST /api/runs/:id/approve` flattened every
+  refusal to 409; it now keeps the status the runtime chose, so a deny rule
+  saved while a run waited answers 403 with the rule named. The failing test
+  was also what hung the suite (it threw before closing the embedded server),
+  and the suite now exits cleanly.
+
+Verified: `cargo fmt --check` clean; `cargo test --no-default-features` 665
+passed, 0 failed, 1 ignored; `cargo clippy --all-targets -D warnings` clean;
+`npx tsc --noEmit` clean; extension `node --test` 45/45; frontend 103/103;
+`test-version.sh` 26/26; `test-artifacts.sh` 12/12; `test-linux-metadata.sh`
+9/9.
+
 ## 3.75.8
 
 ### Patch
