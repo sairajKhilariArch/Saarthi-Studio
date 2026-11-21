@@ -787,17 +787,17 @@ async fn execute(state: &AppState, run_id: &str, nodes: &[ValidNode]) {
                 set_run(state, run_id, "succeeded", "");
             } else {
                 set_run(state, run_id, "failed", &detail);
+                // The run may have been started from a schedule or another tab;
+                // a failure is worth a notice wherever the person is looking.
+                crate::events::notice(&state.events, "workflow", "Workflow run failed", &detail);
             }
             return;
         }
         // Nothing is ready and nothing is settled: validation rules out a cycle,
         // so this is a defect worth reporting rather than waiting on.
-        set_run(
-            state,
-            run_id,
-            "failed",
-            "The graph could not be scheduled; check its dependencies.",
-        );
+        let detail = "The graph could not be scheduled; check its dependencies.";
+        set_run(state, run_id, "failed", detail);
+        crate::events::notice(&state.events, "workflow", "Workflow run failed", detail);
         return;
     }
 }
@@ -1504,6 +1504,12 @@ async fn tick(state: &AppState) {
                     "workflow",
                     "schedule-failed",
                     format!("{} could not start: {error}", workflow.name),
+                );
+                crate::events::notice(
+                    &state.events,
+                    "workflow",
+                    &format!("Scheduled workflow {} did not start", workflow.name),
+                    &error,
                 );
             }
         }

@@ -69,9 +69,48 @@ pub(crate) fn notify(hub: &Hub, conversation_id: &str, reason: &str) {
     }));
 }
 
+/// A one-off notice for the UI: not a refresh hint, but a sentence worth
+/// showing. Workflow runs publish one when they fail, so a person who is in
+/// another view (or another tab) still learns about it. Delivered over the same
+/// SSE bus; the browser shows it as the existing toast.
+pub(crate) fn notice(hub: &Hub, kind: &str, title: &str, detail: &str) {
+    hub.publish(json!({
+        "type": "notice",
+        "kind": kind,
+        "title": title,
+        "detail": detail.chars().take(400).collect::<String>(),
+        "at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0),
+    }));
+}
+
 /// SSE endpoint. Heartbeats keep proxies from closing idle connections.
 pub(crate) async fn events(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, std::convert::Infallible>>> {
     Sse::new(state.events.subscribe()).keep_alive(KeepAlive::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_notice_is_a_typed_event_with_a_bounded_detail() {
+        let hub = Hub::new();
+        let mut receiver = hub.sender.subscribe();
+        notice(&hub, "workflow", "Workflow run failed", &"x".repeat(900));
+        let raw = receiver.try_recv().expect("published");
+        let payload: Value = serde_json::from_str(&raw).expect("json");
+        assert_eq!(payload["type"], "notice");
+        assert_eq!(payload["kind"], "workflow");
+        assert_eq!(payload["title"], "Workflow run failed");
+        assert_eq!(
+            payload["detail"].as_str().unwrap().chars().count(),
+            400,
+            "a notice cannot grow into a document"
+        );
+    }
 }

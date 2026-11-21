@@ -2145,6 +2145,13 @@ function setupMirroring() {
     } catch {
       return;
     }
+    if (data && data.type === "notice") {
+      // A failure somewhere the person is not looking (a scheduled workflow,
+      // another view). The existing toast is the notification channel.
+      const line = [data.title, data.detail].filter(Boolean).join(": ");
+      if (line) toast(line);
+      return;
+    }
     if (data && data.type === "agent-run-changed") {
       // `state.view` is the left rail (explorer/search/...), never "runs", so a
       // gate on it meant the panel only ever changed on a manual Refresh - and an

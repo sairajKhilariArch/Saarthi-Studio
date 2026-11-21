@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.82.0
+
+### Added
+
+Workflow failure notices, so a run that fails while you are elsewhere is not
+silent.
+
+- When a workflow run ends failed, or a scheduled workflow cannot start, the
+  server publishes a typed `notice` on the existing SSE bus (kind, title, a
+  detail capped at 400 characters). The open UI shows it through the existing
+  toast, whichever tab or view is in front.
+- No new process or OS dependency: the notice rides the bus the app already
+  keeps open for live thread mirroring. A closed app has no notifier — failures
+  are still in the run history, the timeline and the process log.
+
+Verified: 694 passed, 0 failed, 1 ignored (1 new: the notice payload's type,
+kind and bounded detail); clippy clean; `cargo fmt --check` clean; frontend
+103/103.
+
 ## 3.81.1
 
 ### Fixed
