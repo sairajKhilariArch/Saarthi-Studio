@@ -1623,7 +1623,30 @@ async fn dispatch_step(state: &AppState, root: &FsPath, action: &Action) -> Resu
             }
             Err(failure) => Err(failure.message().to_string()),
         },
-        other => dispatch_action(root, other).await,
+        other => {
+            let outcome = dispatch_action(root, other).await;
+            // An agent's write is a workspace change like any other: retrieval
+            // must return the bytes it just wrote, not the previous revision.
+            if outcome.is_ok() {
+                if let Action::Write { path, .. } = other {
+                    let cfg = crate::load_config(state);
+                    if let Err(error) = crate::index::refresh_path(
+                        &state.database_path,
+                        root,
+                        path,
+                        &cfg.privacy_exclusions,
+                    ) {
+                        crate::oplog::record(
+                            "warn",
+                            "index",
+                            "refresh-failed",
+                            format!("{path}: {error}"),
+                        );
+                    }
+                }
+            }
+            outcome
+        }
     }
 }
 

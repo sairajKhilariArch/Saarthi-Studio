@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.77.0
+
+### Minor
+
+The code index now follows the files a person and an agent actually change.
+`index::refresh_path` brings one path in line with the disk without walking the
+folder: a saved file replaces its own symbols and rows, a new file is added, a
+rename drops the old name and indexes the new one, and a deleted file or folder
+takes every row of its subtree with it. A file that becomes secret-shaped,
+privacy-excluded, oversize or binary loses the rows it used to have, so an
+exclusion is a promise the index keeps instead of a filter applied only at the
+next full walk.
+
+The editor's save, create, rename and delete routes call it (`workspace.rs`), and
+so does an agent's write action (`agent.rs`), which is how retrieval stopped
+quoting the previous revision of a file an agent had just edited. The walk and
+the single-path refresh share the same indexing function, so both apply the same
+skip rules; a failed refresh is recorded in the operation log and never fails
+the save itself.
+
+Three focused tests cover a save (its own rows change, another file's do not),
+a file and a folder delete, and a newly added privacy exclusion dropping rows.
+
+Verified: `cargo fmt --check` clean; `cargo test --no-default-features` 668
+passed, 0 failed, 1 ignored; `cargo clippy --all-targets -D warnings` clean;
+frontend 103/103; linux metadata 9/9.
+
 ## 3.76.0
 
 ### Patch

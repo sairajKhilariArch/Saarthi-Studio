@@ -1046,6 +1046,7 @@ async fn write_file(State(state): State<AppState>, Json(input): Json<Value>) -> 
                 &payload.path,
                 &payload.content,
             );
+            refresh_index_path(&state, &root, &payload.path);
             Json(payload).into_response()
         }
         Err(error) => error.into_response(),
@@ -1079,7 +1080,12 @@ async fn create(State(state): State<AppState>, Json(input): Json<Value>) -> Resp
         return response;
     }
     match create_entry(&root, path, dir) {
-        Ok(value) => Json(value).into_response(),
+        Ok(value) => {
+            if !dir {
+                refresh_index_path(&state, &root, path);
+            }
+            Json(value).into_response()
+        }
         Err(error) => error.into_response(),
     }
 }
@@ -1113,7 +1119,13 @@ async fn rename(State(state): State<AppState>, Json(input): Json<Value>) -> Resp
         return response;
     }
     match rename_entry(&root, from, to) {
-        Ok(value) => Json(value).into_response(),
+        Ok(value) => {
+            // The old name is gone and the new one may be source: one call
+            // drops the stale rows, the other indexes the bytes now there.
+            refresh_index_path(&state, &root, from);
+            refresh_index_path(&state, &root, to);
+            Json(value).into_response()
+        }
         Err(error) => error.into_response(),
     }
 }
@@ -1144,8 +1156,38 @@ async fn remove(State(state): State<AppState>, Json(input): Json<Value>) -> Resp
         return response;
     }
     match delete_entry(&root, path) {
-        Ok(value) => Json(value).into_response(),
+        Ok(value) => {
+            // A deleted file, or a deleted folder and everything under it.
+            refresh_index_path(&state, &root, path);
+            Json(value).into_response()
+        }
         Err(error) => error.into_response(),
+    }
+}
+
+/// Keep the code index in step with one path a person just changed.
+///
+/// The index is what retrieval quotes to an agent, so a save that waits for the
+/// next manual full walk would keep answering with the previous lines. A failure
+/// here never fails the save: the file is already written, the next full refresh
+/// repairs the index, and the failure is recorded instead of hidden.
+fn refresh_index_path(state: &AppState, root: &FsPath, relative: &str) {
+    if relative.trim().is_empty() {
+        return;
+    }
+    let cfg = crate::load_config(state);
+    if let Err(error) = crate::index::refresh_path(
+        &state.database_path,
+        root,
+        relative,
+        &cfg.privacy_exclusions,
+    ) {
+        crate::oplog::record(
+            "warn",
+            "index",
+            "refresh-failed",
+            format!("{relative}: {error}"),
+        );
     }
 }
 

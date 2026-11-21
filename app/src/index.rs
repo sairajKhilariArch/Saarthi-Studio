@@ -22,7 +22,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -304,72 +304,101 @@ fn walk(
         if !file_type.is_file() {
             continue;
         }
-        if secret_shaped(&name) {
-            report.skipped_secret += 1;
-            continue;
-        }
-        if excluded(&relative, exclusions) {
-            report.skipped_excluded += 1;
-            continue;
-        }
-        let size = item.metadata().map(|meta| meta.len()).unwrap_or(0);
-        if size > MAX_FILE_BYTES {
-            report.skipped_oversize += 1;
-            continue;
-        }
-        let bytes = match fs::read(dir.join(&name)) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
-        if bytes.contains(&0) {
-            report.skipped_binary += 1;
-            continue;
-        }
-        let text = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => {
-                report.skipped_binary += 1;
-                continue;
-            }
-        };
-        let language = crate::workspace::language_for(FsPath::new(&name));
-        let content_digest = digest(&text);
-        report.files += 1;
-        seen.insert(relative.clone());
-        match known.get(&relative) {
-            Some(previous) if previous == &content_digest => {
-                report.unchanged += 1;
-                continue;
-            }
-            Some(_) => report.updated += 1,
-            None => report.added += 1,
-        }
-        let now = crate::now_seconds();
-        conn.execute(
-            "INSERT INTO code_index_files(path,language,bytes,lines,digest,indexed_at)
-             VALUES(?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(path) DO UPDATE SET language=?2, bytes=?3, lines=?4, digest=?5, indexed_at=?6",
-            params![
-                relative,
-                language,
-                text.len() as i64,
-                text.lines().count() as i64,
-                content_digest,
-                now
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM code_index_symbols WHERE path=?1", [&relative])
-            .map_err(|e| e.to_string())?;
-        for symbol in symbols_in(&language, &text) {
-            conn.execute(
-                "INSERT OR IGNORE INTO code_index_symbols(path,line,kind,name) VALUES(?1,?2,?3,?4)",
-                params![relative, symbol.line as i64, symbol.kind, symbol.name],
-            )
-            .map_err(|e| e.to_string())?;
-        }
+        index_file(
+            conn,
+            &dir.join(&name),
+            &name,
+            &relative,
+            exclusions,
+            known,
+            seen,
+            report,
+        )?;
     }
     Ok(())
+}
+
+/// One file's rows, brought in line with the bytes on disk. The folder walk and
+/// the single-file refresh a save uses share this, so both apply the same skip
+/// rules. Answering `false` means the file is deliberately not indexed (secret,
+/// excluded, oversize or binary), which lets a single-file refresh drop rows it
+/// used to have.
+#[allow(clippy::too_many_arguments)]
+fn index_file(
+    conn: &Connection,
+    absolute: &FsPath,
+    name: &str,
+    relative: &str,
+    exclusions: &[String],
+    known: &HashMap<String, String>,
+    seen: &mut HashSet<String>,
+    report: &mut Report,
+) -> Result<bool, String> {
+    if secret_shaped(name) {
+        report.skipped_secret += 1;
+        return Ok(false);
+    }
+    if excluded(relative, exclusions) {
+        report.skipped_excluded += 1;
+        return Ok(false);
+    }
+    let size = fs::metadata(absolute).map(|meta| meta.len()).unwrap_or(0);
+    if size > MAX_FILE_BYTES {
+        report.skipped_oversize += 1;
+        return Ok(false);
+    }
+    let bytes = match fs::read(absolute) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(false),
+    };
+    if bytes.contains(&0) {
+        report.skipped_binary += 1;
+        return Ok(false);
+    }
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            report.skipped_binary += 1;
+            return Ok(false);
+        }
+    };
+    let language = crate::workspace::language_for(FsPath::new(name));
+    let content_digest = digest(&text);
+    report.files += 1;
+    seen.insert(relative.to_string());
+    match known.get(relative) {
+        Some(previous) if previous == &content_digest => {
+            report.unchanged += 1;
+            return Ok(true);
+        }
+        Some(_) => report.updated += 1,
+        None => report.added += 1,
+    }
+    let now = crate::now_seconds();
+    conn.execute(
+        "INSERT INTO code_index_files(path,language,bytes,lines,digest,indexed_at)
+         VALUES(?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(path) DO UPDATE SET language=?2, bytes=?3, lines=?4, digest=?5, indexed_at=?6",
+        params![
+            relative,
+            language,
+            text.len() as i64,
+            text.lines().count() as i64,
+            content_digest,
+            now
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM code_index_symbols WHERE path=?1", [relative])
+        .map_err(|e| e.to_string())?;
+    for symbol in symbols_in(&language, &text) {
+        conn.execute(
+            "INSERT OR IGNORE INTO code_index_symbols(path,line,kind,name) VALUES(?1,?2,?3,?4)",
+            params![relative, symbol.line as i64, symbol.kind, symbol.name],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(true)
 }
 
 /// Bring the index in line with the folder. Unchanged files are left alone; a
@@ -423,6 +452,80 @@ pub(crate) fn refresh(db: &FsPath, root: &FsPath, exclusions: &[String]) -> Resu
         })
         .unwrap_or(0) as usize;
     Ok(report)
+}
+
+/// Bring one file's rows in line with the disk, without walking the folder.
+///
+/// The index is what an agent retrieves from, so a file the person just saved
+/// (or the agent just wrote) must stop answering with its previous lines, and a
+/// file that disappeared must stop answering at all. A path that is gone drops
+/// its own rows plus, when it was a folder, every row beneath it; a file that is
+/// now secret-shaped, excluded, oversize or binary drops its old rows instead of
+/// keeping them.
+pub(crate) fn refresh_path(
+    db: &FsPath,
+    root: &FsPath,
+    relative: &str,
+    exclusions: &[String],
+) -> Result<(), String> {
+    let relative = relative.trim_matches('/').replace('\\', "/");
+    if relative.is_empty() {
+        return Ok(());
+    }
+    let conn = open_db(db).map_err(|e| e.to_string())?;
+    let absolute = root.join(&relative);
+    let drop_rows = |like: bool| -> Result<(), String> {
+        let pattern = format!("{relative}/%");
+        for table in ["code_index_files", "code_index_symbols"] {
+            let sql = if like {
+                format!("DELETE FROM {table} WHERE path=?1 OR path LIKE ?2")
+            } else {
+                format!("DELETE FROM {table} WHERE path=?1")
+            };
+            if like {
+                conn.execute(&sql, params![relative, pattern])
+                    .map_err(|e| e.to_string())?;
+            } else {
+                conn.execute(&sql, params![relative])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    };
+    if !absolute.is_file() {
+        // A deleted file, a deleted folder, or the old name of a rename.
+        return drop_rows(true);
+    }
+    let name = absolute
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let known: HashMap<String, String> = conn
+        .query_row(
+            "SELECT digest FROM code_index_files WHERE path=?1",
+            params![relative],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .map(|digest| HashMap::from([(relative.clone(), digest)]))
+        .unwrap_or_default();
+    let mut report = Report::default();
+    let mut seen = HashSet::new();
+    let indexed = index_file(
+        &conn,
+        &absolute,
+        &name,
+        &relative,
+        exclusions,
+        &known,
+        &mut seen,
+        &mut report,
+    )?;
+    if !indexed {
+        return drop_rows(false);
+    }
+    Ok(())
 }
 
 fn report_json(report: &Report) -> Value {
@@ -1698,6 +1801,71 @@ mod tests {
         assert!(scan.items.is_empty());
         assert!(scan.truncated);
         assert_eq!(scan.files, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Symbol names the index holds for one file, in a stable order.
+    fn names_for(db: &FsPath, path: &str) -> Vec<String> {
+        let conn = open_db(db).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM code_index_symbols WHERE path=?1 ORDER BY name")
+            .unwrap();
+        let rows = stmt
+            .query_map([path], |row| row.get::<_, String>(0))
+            .unwrap();
+        rows.flatten().collect()
+    }
+
+    #[test]
+    fn a_saved_file_replaces_its_rows_without_touching_another_file() {
+        let dir = scratch("refresh-path-save");
+        let db = database(&dir);
+        write(&dir, "src/a.rs", "pub fn before() {}\n");
+        write(&dir, "src/b.rs", "pub fn untouched() {}\n");
+        refresh(&db, &dir, &[]).unwrap();
+        assert_eq!(names_for(&db, "src/a.rs"), vec!["before"]);
+
+        write(&dir, "src/a.rs", "pub fn after() {}\n");
+        refresh_path(&db, &dir, "src/a.rs", &[]).unwrap();
+
+        // The changed file answers with its new declaration, never both.
+        assert_eq!(names_for(&db, "src/a.rs"), vec!["after"]);
+        assert_eq!(names_for(&db, "src/b.rs"), vec!["untouched"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_deleted_file_and_its_folder_leave_the_index() {
+        let dir = scratch("refresh-path-delete");
+        let db = database(&dir);
+        write(&dir, "src/keep.rs", "pub fn keep() {}\n");
+        write(&dir, "src/gone/one.rs", "pub fn one() {}\n");
+        write(&dir, "src/gone/two.rs", "pub fn two() {}\n");
+        refresh(&db, &dir, &[]).unwrap();
+
+        fs::remove_file(dir.join("src/keep.rs")).unwrap();
+        refresh_path(&db, &dir, "src/keep.rs", &[]).unwrap();
+        assert!(names_for(&db, "src/keep.rs").is_empty());
+
+        fs::remove_dir_all(dir.join("src/gone")).unwrap();
+        refresh_path(&db, &dir, "src/gone", &[]).unwrap();
+        assert!(names_for(&db, "src/gone/one.rs").is_empty());
+        assert!(names_for(&db, "src/gone/two.rs").is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_privacy_exclusion_drops_rows_a_file_already_had() {
+        let dir = scratch("refresh-path-excluded");
+        let db = database(&dir);
+        write(&dir, "config/keys.rs", "pub fn secret() {}\n");
+        refresh(&db, &dir, &[]).unwrap();
+        assert_eq!(names_for(&db, "config/keys.rs"), vec!["secret"]);
+
+        refresh_path(&db, &dir, "config/keys.rs", &["config".to_string()]).unwrap();
+
+        // An exclusion is a promise the index stops quoting the file.
+        assert!(names_for(&db, "config/keys.rs").is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 }
