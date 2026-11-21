@@ -55,6 +55,7 @@ if (withTests) {
       join(here, "src", "lib.ts"),
       join(here, "src", "agent.ts"),
       join(here, "src", "mcpoauth.ts"),
+      join(here, "src", "git.ts"),
     ],
     outdir: join(here, "dist"),
     outExtension: { ".js": ".mjs" },

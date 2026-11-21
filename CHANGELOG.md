@@ -6,6 +6,8 @@
 
 The built-in VS Code server now enforces the missing `git` desktop action: a new `vscode-extension/src/git.ts` module serves `status`, `log`, `commit` and `branches` behind the shared permission store (`git` -> `git` action), and the extension host adds four route pairs with the same deny/ask/allow resolution the desktop uses: `GET /api/workspace/git/status`, `GET /api/workspace/git/log?n=`, `POST /api/workspace/git/commit` (with a `saved permission rule denies git` -> 403, otherwise 200) and `GET /api/workspace/git/branches`. `cargo fmt --check` clean; `node build.mjs --with-tests` green; `node --test test/lib.test.mjs` green.
 
+The git action is extended to the full desktop surface: `reflog`, `undo`, `merge`, `merge/abort`, `rebase` (continue/skip/abort), `push`, `fetch`, `pull` and `remotes` routes, each permission-gated on the `git` action and covered by focused unit tests (`test/git.test.mjs`). The embedded server capability contract now advertises `git: true`, `git_worktrees` and `git_reflog_undo` remain false (not served here). `cargo fmt --check` clean; `node build.mjs --with-tests` green; `node --test test/git.test.mjs` green (2 new passing tests).
+
 ## 3.75.7
 
 The Debug pane now accepts program **Arguments** and a **Working

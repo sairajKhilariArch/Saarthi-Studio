@@ -128,8 +128,174 @@ export async function branches(ctx: GitContext): Promise<{ ok: true; branches: s
     if (result.code !== 0) {
       return { ok: false, error: result.stderr.trim() || `git branch exited ${result.code}` };
     }
-    const branches = result.stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    const branches = result.stdout.split(/\\r?\\n/).filter((line) => line.trim().length > 0);
     return { ok: true, branches };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git reflog -g --format=%h%x09%gd%x09%gs%x09%aI -n <limit>` for the open
+ *  folder: newest-first reflog entries (hash, selector, action, date). */
+export async function reflog(ctx: GitContext, limit: number): Promise<{
+  ok: true;
+  entries: string[];
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "reflog");
+    const result = await run(ctx, [
+      "log",
+      "-g",
+      `--format=%h%x09%gd%x09%gs%x09%aI`,
+      `--max-count=` + limit,
+    ]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git reflog exited ${result.code}` };
+    }
+    const entries = result.stdout
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0);
+    return { ok: true, entries };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git reset --hard <selector>` (undo the newest commits). */
+export async function undo(ctx: GitContext, selector: string): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "undo");
+    const result = await run(ctx, ["reset", "--hard", selector]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git reset exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git merge --no-edit <branch>` in the open folder. */
+export async function merge(ctx: GitContext, branch: string): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "merge");
+    const result = await run(ctx, ["merge", "--no-edit", branch]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git merge exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git merge --abort` while a merge is in progress. */
+export async function mergeAbort(ctx: GitContext): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "mergeAbort");
+    const result = await run(ctx, ["merge", "--abort"]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git merge --abort exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git rebase` driver. `continue`, `skip` or `abort` a work-in-progress rebase. */
+export async function rebase(ctx: GitContext, action: string): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "rebase");
+    const flag = action === "skip" ? "--skip" : action === "abort" ? "--abort" : "--continue";
+    const result = await run(ctx, ["rebase", flag]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git rebase ${flag} exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git push <remote> <ref>` in the open folder. */
+export async function push(ctx: GitContext, remote = "origin", ref = "HEAD"): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "push");
+    const result = await run(ctx, ["push", remote, ref]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git push exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git fetch <remote>` in the open folder. */
+export async function fetch(ctx: GitContext, remote = "origin"): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "fetch");
+    const result = await run(ctx, ["fetch", remote]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git fetch exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git pull <remote> <ref>` in the open folder. */
+export async function pull(ctx: GitContext, remote = "origin", ref = "HEAD"): Promise<{
+  ok: true;
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "pull");
+    const result = await run(ctx, ["pull", remote, ref]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git pull exited ${result.code}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    const gitError = error as GitError;
+    return { ok: false, error: gitError.message };
+  }
+}
+
+/** `git remote get-url --all` — the configured remotes of the open folder. */
+export async function remotes(ctx: GitContext): Promise<{
+  ok: true;
+  remotes: string[];
+} | { ok: false; error: string }> {
+  try {
+    gate(ctx, "remotes");
+    const result = await run(ctx, ["remote", "get-url", "--all"]);
+    if (result.code !== 0) {
+      return { ok: false, error: result.stderr.trim() || `git remote exited ${result.code}` };
+    }
+    const remotes = result.stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    return { ok: true, remotes };
   } catch (error) {
     const gitError = error as GitError;
     return { ok: false, error: gitError.message };

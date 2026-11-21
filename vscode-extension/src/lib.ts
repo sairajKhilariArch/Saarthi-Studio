@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
 import type { PermitAction } from "./permissions";
 import type { GitContext, GitExecution } from "./git";
-import { status, commit, log, branches } from "./git";
+import { status, commit, log, branches, reflog, undo, merge, mergeAbort, rebase, push, fetch, pull, remotes } from "./git";
 // Re-exported so `node --test` can exercise the permission action set.
 export { PermissionStore, PERMIT_ACTIONS } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
@@ -928,7 +928,7 @@ export function embeddedCapabilities(): CapabilityContract {
       events: true,
       agent_queue: false,
       router_management: false,
-      git: false,
+      git: true,
       git_worktrees: false,
       git_reflog_undo: false,
       editor_format: false,
@@ -2757,6 +2757,150 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           return;
         }
         sendJson(response, 200, { ok: true, branches: result.branches });
+        return;
+      }
+
+      /* git actions (desktop parity, permission-gated) — continuation ------ */
+
+      if (routePath === "/api/workspace/git/reflog" && method === "GET") {
+        const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("n")) || 20));
+        const result = await reflog(gitCtx, limit);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true, entries: result.entries });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/undo" && method === "POST") {
+        const body = await readBody(request);
+        const selector = String(body.selector || "");
+        if (!selector) {
+          sendJson(response, 400, { ok: false, error: "Selector required (e.g. HEAD~2)." });
+          return;
+        }
+        const result = await undo(gitCtx, selector);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/merge" && method === "POST") {
+        const body = await readBody(request);
+        const branch = String(body.branch || "");
+        if (!branch) {
+          sendJson(response, 400, { ok: false, error: "Branch required." });
+          return;
+        }
+        const result = await merge(gitCtx, branch);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/merge/abort" && method === "POST") {
+        const result = await mergeAbort(gitCtx);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/rebase" && method === "POST") {
+        const body = await readBody(request);
+        const action = String(body.action || "continue");
+        if (!["continue", "skip", "abort"].includes(action)) {
+          sendJson(response, 400, { ok: false, error: "Action must be continue, skip or abort." });
+          return;
+        }
+        const result = await rebase(gitCtx, action);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/push" && method === "POST") {
+        const body = await readBody(request);
+        const remote = String(body.remote || "origin");
+        const ref = String(body.ref || "HEAD");
+        const result = await push(gitCtx, remote, ref);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/fetch" && method === "GET") {
+        const remote = url.searchParams.get("remote") || "origin";
+        const result = await fetch(gitCtx, remote);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/pull" && method === "GET") {
+        const remote = url.searchParams.get("remote") || "origin";
+        const ref = url.searchParams.get("ref") || "HEAD";
+        const result = await pull(gitCtx, remote, ref);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/remotes" && method === "GET") {
+        const result = await remotes(gitCtx);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true, remotes: result.remotes });
         return;
       }
 
