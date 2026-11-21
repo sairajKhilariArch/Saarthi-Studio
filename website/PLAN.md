@@ -249,9 +249,9 @@ copying stale prose.
 
 Verified brand rules (`docs/BRAND-ASSETS.md`):
 
-- Mascot: tardigrade face, exactly three colours: orange `#FF7A1A`, black
-  `#111111`, white `#FFFFFF`. No gradients in the mascot; the tile behind it is
-  solid black.
+- Mascot: a happy, waving tardigrade face, exactly three colours: orange
+  `#FF7A1A`, black `#111111`, white `#FFFFFF`. No gradients in the mascot; the
+  tile behind it is solid black. Website art lives in `website/public/brand/`.
 - Canonical SVGs in `app/static/brand/`: `tardigrade.svg`,
   `tardigrade-mono-white.svg`, `tardigrade-mono-black.svg`,
   `tardigrade-mark.svg`, `app-icon.svg`, `favicon.svg`, `splash.svg`.

@@ -74,7 +74,7 @@ const isActive = (href: string) =>
         Download
       </a>
       <a
-        class="icon-button"
+        class="icon-button header-github"
         href={SITE.repo}
         target="_blank"
         rel="noopener noreferrer"
@@ -87,6 +87,7 @@ const isActive = (href: string) =>
       <button
         class="icon-button theme-switch"
         type="button"
+        data-theme-switch
         aria-label="Switch color theme"
         title="Theme switcher"
       >
@@ -106,7 +107,7 @@ const isActive = (href: string) =>
               <button
                 class={`theme-picker-option${t.value === currentTheme ? ' is-active' : ''}`}
                 type="button"
-                data-theme-option
+                data-theme-option={t.value}
                 style={`--swatch: ${t.color}`}
                 aria-label={`Apply ${t.label} theme`}
               >
@@ -117,6 +118,17 @@ const isActive = (href: string) =>
           </div>
         </div>
       </div>
+      <button
+        class="icon-button menu-button"
+        type="button"
+        data-menu-button
+        aria-expanded="false"
+        aria-controls="mobile-nav"
+        aria-label="Open menu"
+      >
+        <Icon name="menu" size={20} class="menu-icon-open" />
+        <Icon name="x" size={20} class="menu-icon-close" />
+      </button>
     </div>
   </div>
 
@@ -139,67 +151,103 @@ const isActive = (href: string) =>
   import { THEMES } from '../lib/theme';
   const menuButton = document.querySelector<HTMLButtonElement>('[data-menu-button]');
   const panel = document.querySelector<HTMLElement>('[data-mobile-nav]');
+  const themeSwitch = document.querySelector<HTMLButtonElement>('[data-theme-switch]');
   const picker = document.querySelector<HTMLElement>('#theme-picker');
   const pickerClose = document.querySelector<HTMLElement>('[data-theme-picker-close]');
   const themeOptions = document.querySelectorAll<HTMLElement>('[data-theme-option]');
   const themeSwatch = document.querySelector<HTMLElement>('#theme-swatch');
   const themeLabel = document.querySelector<HTMLElement>('#theme-label');
 
-  const setOpen = (open: boolean) => {
-    panel!.hidden = !open;
-    menuButton!.setAttribute('aria-expanded', String(open));
-    const label = menuButton!.querySelector<HTMLElement>('[data-menu-label]');
-    if (label) label.textContent = open ? 'Close menu' : 'Open menu';
+  const legacyThemes = [
+    { value: 'light', label: 'Light', color: '#f8fafc' },
+    { value: 'dark', label: 'Dark', color: '#111111' },
+  ];
+  const describeTheme = (value: string) =>
+    [...THEMES, ...legacyThemes].find((theme) => theme.value === value) ?? THEMES[0];
+
+  const syncThemeUi = (value: string) => {
+    const theme = describeTheme(value);
+    if (themeSwatch) themeSwatch.style.background = theme.color;
+    if (themeLabel) themeLabel.textContent = theme.label;
+    themeOptions.forEach((option) => {
+      const active = option.dataset.themeOption === value;
+      option.classList.toggle('is-active', active);
+      option.setAttribute('aria-pressed', String(active));
+    });
   };
 
-  menuButton!.addEventListener('click', () => setOpen(panel!.hasAttribute('hidden')));
+  const setOpen = (open: boolean) => {
+    if (!panel || !menuButton) return;
+    panel.hidden = !open;
+    menuButton.setAttribute('aria-expanded', String(open));
+    menuButton.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  };
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !panel!.hasAttribute('hidden')) {
-      setOpen(false);
-      menuButton!.focus();
-    }
-  });
+  if (menuButton && panel) {
+    menuButton.addEventListener('click', () => setOpen(panel.hasAttribute('hidden')));
 
-  panel!.addEventListener('click', (event) => {
-    if (event.target instanceof Element && event.target.closest('a')) {
-      setOpen(false);
-    }
-  });
-
-  const desktop = window.matchMedia('(min-width: 901px)');
-  desktop.addEventListener('change', (event) => {
-    if (event.matches) setOpen(false);
-  });
-
-  // Theme picker
-  menuButton!.addEventListener('click', (event) => {
-    // Only open picker for theme button clicks, not menu button
-    if ((event.target as HTMLElement).closest('.theme-switch')) {
-      picker!.hidden = !picker!.hidden;
-      themeSwatch!.focus();
-    }
-  });
-
-  pickerClose!.addEventListener('click', () => {
-    picker!.hidden = true;
-    menuButton!.focus();
-  });
-
-  themeOptions.forEach((option) => {
-    option.addEventListener('click', () => {
-      const value = option.dataset.themeOption;
-      if (!value) return;
-      localStorage.setItem('sarthi-theme', value);
-      document.documentElement.dataset.theme = value;
-      // Update swatch and label
-      const theme = THEMES.find((t: (typeof THEMES)[number]) => t.value === value);
-      if (theme) {
-        themeSwatch!.style.background = theme.color;
-        themeLabel!.textContent = theme.label;
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !panel.hidden) {
+        setOpen(false);
+        menuButton.focus();
       }
-      picker!.hidden = true;
-      themeSwatch!.focus();
     });
+
+    panel.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('a')) {
+        setOpen(false);
+      }
+    });
+
+    window.matchMedia('(min-width: 901px)').addEventListener('change', (event) => {
+      if (event.matches) setOpen(false);
+    });
+  }
+
+  if (themeSwitch && picker) {
+    const closePicker = () => {
+      picker.hidden = true;
+      themeSwitch.focus();
+    };
+
+    themeSwitch.addEventListener('click', () => {
+      picker.hidden = !picker.hidden;
+    });
+
+    pickerClose?.addEventListener('click', closePicker);
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !picker.hidden) closePicker();
+    });
+
+    document.addEventListener('click', (event) => {
+      if (picker.hidden) return;
+      if (event.target instanceof Element && event.target.closest('.theme-picker, .theme-switch')) {
+        return;
+      }
+      picker.hidden = true;
+    });
+
+    themeOptions.forEach((option) => {
+      option.addEventListener('click', () => {
+        const value = option.dataset.themeOption;
+        if (!value) return;
+        try {
+          localStorage.setItem('sarthi-theme', value);
+        } catch {
+          // The theme still applies for this page when storage is unavailable.
+        }
+        document.documentElement.dataset.theme = value;
+        syncThemeUi(value);
+        closePicker();
+      });
+    });
+  }
+
+  document.addEventListener('sarthi-theme-change', (event) => {
+    const value = (event as CustomEvent<{ theme?: string }>).detail?.theme;
+    if (value) syncThemeUi(value);
   });
+
+  syncThemeUi(document.documentElement.dataset.theme || 'hermes');
 </script>

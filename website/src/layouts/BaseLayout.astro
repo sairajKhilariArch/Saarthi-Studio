@@ -31,7 +31,7 @@ const themeAttr = resolvedTheme === 'dark' ? 'dark' : resolvedTheme;
 ---
 
 <!doctype html>
-<html lang="en" data-theme={themeAttr}>
+<html lang="en" data-theme={themeAttr} data-themes={THEMES.map((theme) => theme.value).join(' ')}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -39,7 +39,8 @@ const themeAttr = resolvedTheme === 'dark' ? 'dark' : resolvedTheme;
       (() => {
         try {
           const saved = localStorage.getItem('sarthi-theme');
-          if (saved === 'light' || saved === 'dark') {
+          const allowed = (document.documentElement.dataset.themes ?? '').split(' ');
+          if (saved === 'light' || saved === 'dark' || allowed.includes(saved)) {
             document.documentElement.dataset.theme = saved;
           }
         } catch {

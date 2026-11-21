@@ -435,8 +435,6 @@ ul, ol {
 
 .logo-mascot {
   display: block;
-  width: 100%;
-  height: auto;
   animation: bounce 2.4s ease-in-out infinite;
 }
 
@@ -510,6 +508,28 @@ ul, ol {
   display: flex;
   align-items: center;
   gap: 0.3rem;
+}
+
+.header-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #111111;
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+
+.header-cta:hover {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
 }
 
 .icon-button {
@@ -2013,6 +2033,26 @@ ul, ol {
   }
   .trust-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .header-github {
+    display: none;
+  }
+  .theme-label {
+    display: none;
+  }
+  .theme-switch {
+    justify-content: center;
+    width: 38px;
+    padding: 0;
+  }
+}
+
+@media (max-width: 460px) {
+  .header-cta {
+    display: none;
   }
 }
 

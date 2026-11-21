@@ -2,89 +2,90 @@
   xmlns="http://www.w3.org/2000/svg"
   viewBox="0 0 240 240"
   role="img"
-  aria-label="Sarthi Studio mascot — a friendly little tardigrade"
+  aria-label="Sarthi Studio mascot — a happy tardigrade waving"
   class="logo-mascot"
 >
   <title>Sarthi Studio mascot</title>
-  <desc>A friendly professional tardigrade mascot with two big eyes, a small smile, four stubby legs, and two antennae. Used as the app's logo and loading mascot.</desc>
+  <desc>A cheerful orange tardigrade with big bright eyes, a wide open smile, and one arm waving hello.</desc>
 
-  <defs>
-    <linearGradient id="bodyGrad" x1="0.3" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#e8947a" />
-      <stop offset="1" stop-color="#d97757" />
-    </linearGradient>
-    <filter id="softShadow" x="-10%" y="-8%" width="120%" height="118%">
-      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#061111" flood-opacity="0.28" />
-    </filter>
-  </defs>
+  <ellipse cx="120" cy="225" rx="74" ry="9" fill="#111111" opacity="0.12" />
 
-  <!-- ================= HEAD ================= -->
   <g class="mover">
-    <!-- Head (rounded blob that carries the face) -->
-    <ellipse cx="120" cy="86" rx="46" ry="44" fill="#d97757" />
-    <ellipse cx="120" cy="86" rx="46" ry="44" fill="none" stroke="#b4633f" stroke-width="1.5" stroke-opacity="0.25" />
-
-    <!-- Eyes (white eye, dark pupil, little highlight) -->
-    <ellipse cx="96" cy="88" rx="16" ry="21" fill="#f7f3ea" />
-    <ellipse cx="144" cy="88" rx="16" ry="21" fill="#f7f3ea" />
-    <ellipse cx="96" cy="93" rx="7.5" ry="13" fill="#2b1e16" />
-    <ellipse cx="144" cy="93" rx="7.5" ry="13" fill="#2b1e16" />
-    <ellipse cx="102" cy="80" rx="4.2" ry="6.2" fill="#ffffff" opacity="0.9" />
-    <ellipse cx="150" cy="80" rx="4.2" ry="6.2" fill="#ffffff" opacity="0.9" />
-
-    <!-- Snout / muzzle (cream, sitting between the eyes and mouth) -->
-    <ellipse cx="120" cy="114" rx="27" ry="14" fill="#f2e4d2" />
-    <ellipse cx="120" cy="114" rx="27" ry="14" fill="none" stroke="#d97757" stroke-width="2.5" stroke-opacity="0.35" />
-
-    <!-- Smile -->
-    <path d="M107 124 Q120 115 133 124" fill="none" stroke="#2b1e16" stroke-width="3.2" stroke-linecap="round" />
-
-    <!-- Tiny raised eyebrow -->
-    <path d="M100 72 Q108 68 116 72" fill="none" stroke="#b4633f" stroke-width="2.2" stroke-linecap="round" opacity="0.7" />
-  </g>
-
-  <!-- ================= BODY (torso barrel) ================= -->
-  <g class="mover">
-    <!-- Body: rounded barrel (tardigrade torso) -->
-    <rect
-      x="66" y="136" width="108" height="92" rx="34"
-      fill="url(#bodyGrad)"
-      stroke="#b4633f" stroke-width="1.5" stroke-opacity="0.35"
-    />
-
-    <!-- Body segment seams (subtle, gives the tardigrade its "segmented" shape) -->
-    <line x1="66" y1="172" x2="174" y2="172" stroke="#b4633f" stroke-width="2" stroke-opacity="0.30" stroke-dasharray="0 4 6 4" />
-    <line x1="66" y1="202" x2="174" y2="202" stroke="#b4633f" stroke-width="2" stroke-opacity="0.30" stroke-dasharray="0 4 6 4" />
-
-    <!-- Four stubby legs + tiny claws -->
-    <g>
-      <!-- front-left -->
-      <ellipse cx="92" cy="230" rx="14" ry="14" fill="#c4633f" />
-      <ellipse cx="92" cy="240" rx="5.5" ry="4.5" fill="#8a4a28" />
-      <!-- front-right -->
-      <ellipse cx="148" cy="230" rx="14" ry="14" fill="#c4633f" />
-      <ellipse cx="148" cy="240" rx="5.5" ry="4.5" fill="#8a4a28" />
-      <!-- hind-left -->
-      <ellipse cx="114" cy="234" rx="11.5" ry="11" fill="#c4633f" />
-      <ellipse cx="114" cy="242" rx="4.8" ry="4" fill="#8a4a28" />
-      <!-- hind-right -->
-      <ellipse cx="130" cy="234" rx="11.5" ry="11" fill="#c4633f" />
-      <ellipse cx="130" cy="242" rx="4.8" ry="4" fill="#8a4a28" />
+    <!-- Four stubby feet, with claws -->
+    <g fill="#FF7A1A" stroke="#111111" stroke-width="3">
+      <ellipse cx="86" cy="214" rx="17" ry="14" />
+      <ellipse cx="154" cy="214" rx="17" ry="14" />
+      <ellipse cx="110" cy="219" rx="13" ry="11" />
+      <ellipse cx="130" cy="219" rx="13" ry="11" />
+    </g>
+    <g fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round">
+      <path d="M78 224v5M86 226v5M94 224v5" />
+      <path d="M146 224v5M154 226v5M162 224v5" />
     </g>
 
-    <!-- Subtle body shadow -->
-    <rect
-      x="68" y="138" width="104" height="88" rx="34"
-      fill="#061111" opacity="0.12"
-      filter="url(#softShadow)"
-    />
+    <!-- Torso -->
+    <rect x="58" y="124" width="124" height="98" rx="40" fill="#FF7A1A" stroke="#111111" stroke-width="3" />
+
+    <!-- Belly patch -->
+    <rect x="88" y="158" width="64" height="46" rx="23" fill="#FFFFFF" stroke="#111111" stroke-width="2.5" />
+
+    <!-- Segment seams -->
+    <g fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round" opacity="0.4">
+      <path d="M62 160h16M162 160h16" />
+      <path d="M62 188h16M162 188h16" />
+    </g>
+
+    <!-- Resting arm -->
+    <path d="M70 158q-18 8-20 24" fill="none" stroke="#111111" stroke-width="17" stroke-linecap="round" />
+    <path d="M70 158q-18 8-20 24" fill="none" stroke="#FF7A1A" stroke-width="12" stroke-linecap="round" />
+
+    <!-- Waving arm -->
+    <path d="M170 154q22-4 30-28" fill="none" stroke="#111111" stroke-width="17" stroke-linecap="round" />
+    <path d="M170 154q22-4 30-28" fill="none" stroke="#FF7A1A" stroke-width="12" stroke-linecap="round" />
+    <circle cx="202" cy="116" r="13" fill="#FF7A1A" stroke="#111111" stroke-width="3" />
+    <g fill="none" stroke="#111111" stroke-width="2.5" stroke-linecap="round">
+      <path d="M194 106l-3-6M202 103v-7M210 106l3-6" />
+    </g>
   </g>
 
-  <!-- ================= ANTENNAE (two curved feelers with little balls) ================= -->
   <g class="mover">
-    <path d="M120 42 C90 35 84 24 84 21" fill="none" stroke="#d97757" stroke-width="5.5" stroke-linecap="round" />
-    <path d="M120 42 C150 35 156 24 156 21" fill="none" stroke="#d97757" stroke-width="5.5" stroke-linecap="round" />
-    <circle cx="84" cy="20" r="5.5" fill="#d97757" />
-    <circle cx="156" cy="20" r="5.5" fill="#d97757" />
+    <!-- Antennae -->
+    <path d="M102 54Q84 40 76 30" fill="none" stroke="#111111" stroke-width="8" stroke-linecap="round" />
+    <path d="M102 54Q84 40 76 30" fill="none" stroke="#FF7A1A" stroke-width="4" stroke-linecap="round" />
+    <circle cx="72" cy="25" r="7" fill="#FF7A1A" stroke="#111111" stroke-width="2.5" />
+    <path d="M138 54Q156 40 164 30" fill="none" stroke="#111111" stroke-width="8" stroke-linecap="round" />
+    <path d="M138 54Q156 40 164 30" fill="none" stroke="#FF7A1A" stroke-width="4" stroke-linecap="round" />
+    <circle cx="168" cy="25" r="7" fill="#FF7A1A" stroke="#111111" stroke-width="2.5" />
+  </g>
+
+  <g class="mover">
+    <!-- Head -->
+    <ellipse cx="120" cy="90" rx="52" ry="46" fill="#FF7A1A" stroke="#111111" stroke-width="3" />
+
+    <!-- Happy eyebrows -->
+    <path d="M82 62q14-11 28-3" fill="none" stroke="#111111" stroke-width="4.5" stroke-linecap="round" />
+    <path d="M158 62q-14-11-28-3" fill="none" stroke="#111111" stroke-width="4.5" stroke-linecap="round" />
+
+    <!-- Eyes -->
+    <ellipse cx="98" cy="88" rx="17" ry="21" fill="#FFFFFF" stroke="#111111" stroke-width="2.5" />
+    <ellipse cx="142" cy="88" rx="17" ry="21" fill="#FFFFFF" stroke="#111111" stroke-width="2.5" />
+    <ellipse cx="98" cy="92" rx="8" ry="12" fill="#111111" />
+    <ellipse cx="142" cy="92" rx="8" ry="12" fill="#111111" />
+    <circle cx="102" cy="85" r="3.2" fill="#FFFFFF" />
+    <circle cx="146" cy="85" r="3.2" fill="#FFFFFF" />
+
+    <!-- Muzzle -->
+    <ellipse cx="120" cy="117" rx="30" ry="19" fill="#FFFFFF" stroke="#111111" stroke-width="2.5" />
+
+    <!-- Wide happy smile, teeth and tongue -->
+    <path d="M104 112Q120 138 136 112Z" fill="#111111" />
+    <path d="M107 113q13 8 26 0q-13 4-26 0Z" fill="#FFFFFF" />
+    <ellipse cx="120" cy="127" rx="8" ry="4.5" fill="#FF7A1A" />
+  </g>
+
+  <!-- Sparkles -->
+  <g fill="#FF7A1A" stroke="#111111" stroke-width="2.5" stroke-linejoin="round">
+    <path d="M46 66l4 10 10 4-10 4-4 10-4-10-10-4 10-4z" />
+    <path d="M198 44l3 8 8 3-8 3-3 8-3-8-8-3 8-3z" />
   </g>
 </svg>

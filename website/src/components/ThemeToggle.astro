@@ -36,6 +36,9 @@ import Icon from './Icon.astro';
       // The theme still applies for this page when storage is unavailable.
     }
     syncLabel();
+    root.dispatchEvent(
+      new CustomEvent('sarthi-theme-change', { detail: { theme: next } }),
+    );
   });
 
   syncLabel();
