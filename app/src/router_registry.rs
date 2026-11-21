@@ -24,10 +24,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub(crate) enum InstallMethod {
     /// `docker compose up -d` in the documented project directory.
     DockerCompose,
-    /// A native executable from the project's release page or package manager.
+    /// A native executable from the project's release page. The verified
+    /// archive is the only install the planner performs; a distribution
+    /// package manager needs elevated rights and is left to the person.
     NativeBinary,
-    /// Installed by the distribution's package manager.
-    PackageManager,
     /// Runs elsewhere; Studio only talks to its endpoint.
     Remote,
 }
@@ -37,7 +37,6 @@ impl InstallMethod {
         match self {
             InstallMethod::DockerCompose => "docker-compose",
             InstallMethod::NativeBinary => "native-binary",
-            InstallMethod::PackageManager => "package-manager",
             InstallMethod::Remote => "remote",
         }
     }
@@ -102,11 +101,7 @@ const ROUTERS: &[RouterSpec] = &[
         description: "Local model runtime used when no router is configured.",
         os: &["linux", "macos", "windows"],
         arches: &["x86_64", "arm64"],
-        methods: &[
-            InstallMethod::NativeBinary,
-            InstallMethod::PackageManager,
-            InstallMethod::Remote,
-        ],
+        methods: &[InstallMethod::NativeBinary, InstallMethod::Remote],
         auto_start_default: false,
         config: ".config/free-ai-studio/local.json",
         health: "GET /api/tags",
@@ -1627,7 +1622,7 @@ fn ollama_plan(spec: &'static RouterSpec, facts: &Facts) -> InstallPlan {
             downloads: Vec::new(),
             steps: Vec::new(),
             blocked: Some(format!(
-                "Studio installs Ollama from its official release asset and checks it against that release's published sha256, but neither could be resolved, so it would have nothing to verify. Download it from https://ollama.com/download, or try again when GitHub is reachable. {error}"
+                "Studio installs Ollama from its official release asset and checks it against that release's published sha256, but neither could be resolved, so it would have nothing to verify. Download it from https://ollama.com/download, or install it with your platform's package manager (apt, dnf, brew) and recheck status — Studio never runs an installer that needs elevated rights. {error}"
             )),
             digest: String::new(),
         },
@@ -2270,8 +2265,29 @@ mod tests {
         let spec = find("ollama").unwrap();
         let cap = capability(spec, "macos", "arm64");
         assert!(cap.installable_here);
-        assert!(cap.methods.contains(&"native-binary"));
-        assert!(cap.methods.contains(&"package-manager"));
+        assert_eq!(cap.methods, vec!["native-binary", "remote"]);
+    }
+
+    /// The registry is a promise the UI repeats: every method it advertises must
+    /// be one the planner can actually carry out. A distribution package
+    /// manager needs elevated rights, so it is guidance in the plan's steps —
+    /// never an advertised one-click install.
+    #[test]
+    fn every_advertised_install_method_has_a_plan() {
+        for spec in registry() {
+            for method in spec.methods {
+                let planned = match method {
+                    InstallMethod::DockerCompose => spec.id != "ollama",
+                    InstallMethod::NativeBinary => spec.id == "ollama",
+                    InstallMethod::Remote => true,
+                };
+                assert!(
+                    planned,
+                    "{} advertises {method:?} but the planner cannot produce it",
+                    spec.id
+                );
+            }
+        }
     }
 
     #[test]

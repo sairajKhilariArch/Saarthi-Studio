@@ -162,7 +162,7 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - **Desktop + Windows host:** `app/` — Rust service, application window and web UI. Do not move or replace these files as part of Android work.
 - **VS Code extension:** `vscode-extension/` — TypeScript extension, built-in server, and tests.
 - **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI. It shares the desktop UI's dark, accent-led visual language.
-- **Build toolchain:** `.cargo/config.toml` + `rust-toolchain.toml` pin nightly with the cranelift backend and mold linking for fast development builds; both are required (see the file comments). Android requires JDK 17 — newer JDKs can break Gradle 8.9's embedded Kotlin.
+- **Build toolchain:** `.cargo/config.toml` + `rust-toolchain.toml` pin nightly (the config uses `-Z threads`) and link with mold for fast development builds, so `mold` must be installed (`apt install mold`) or the link step fails with `cannot find 'ld'`. The cranelift backend is deliberately disabled — it aborts on the Tauri/GTK window code. Android requires JDK 17 — newer JDKs can break Gradle 8.9's embedded Kotlin.
 - **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
 - **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease bundleRelease` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
 

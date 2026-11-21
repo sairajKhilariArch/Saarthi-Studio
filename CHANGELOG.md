@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.77.1
+
+### Patch
+
+The router registry advertised `package-manager` as an Ollama install method,
+but `build_plan` only ever produces a compose plan or a verified release-archive
+plan — the button had nothing behind it. The method is gone from the registry
+and from `InstallMethod`, the plan's blocked message now names the package
+manager as guidance the person runs themselves (Studio never runs an installer
+that needs elevated rights), and a new test asserts every advertised method is
+one the planner can actually carry out, so the registry cannot drift from the
+planner again.
+
+`README.md` build notes said the pinned config enables the cranelift backend;
+it does not (cranelift aborts on the Tauri/GTK window code). The notes now say
+what the config does — nightly for `-Z threads` and mold for linking — and that
+mold must be installed or the link step fails.
+
+Verified: `cargo fmt --check` clean; `cargo test --no-default-features` 669
+passed, 0 failed, 1 ignored; `cargo clippy --all-targets -D warnings` clean;
+frontend 103/103; linux metadata 9/9.
+
 ## 3.77.0
 
 ### Minor
