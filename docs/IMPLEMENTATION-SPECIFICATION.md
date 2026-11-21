@@ -127,7 +127,7 @@ macOS and stay buildable under `--no-default-features`, (4) why is it needed,
 4. Errors handled with actionable messages.
 5. Permissions enforced at the route.
 6. Tests added and passing.
-7. Docs updated (`FEATURE-STATUS.md`, `PROGRESS.md`, changelog).
+7. Docs updated (`FEATURE-STATUS.md`, `CHANGELOG.md`).
 8. Platform impact assessed (Linux/Windows/macOS/Android/VS Code).
 9. End-to-end behaviour demonstrated (recorded command or run).
 10. No working feature removed without a documented replacement.

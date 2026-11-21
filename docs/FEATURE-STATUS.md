@@ -9,13 +9,13 @@ implementation), **Broken** (exists and fails).
 
 | Check | Command | Result |
 |---|---|---|
-| Rust suite | `cd app && cargo test --locked` | see the count recorded in `PROGRESS.md` for this version (test functions in tree: 504) |
+| Rust suite | `cd app && cargo test --locked` | see the count recorded in `CHANGELOG.md` for that release (test functions in tree: 504 at 2.1.0) |
 | Route registrations | `grep -c '\.route(' app/src/{main,agent,host_api,git}.rs` | 44 / 15 / 8 / 28 |
 | Test functions in tree | `grep -rc '#\[tokio::test\]\|#\[test\]' app/src` | 504 |
 | Last green release | run `41884439627` (`v1.26.6`) | all six jobs success, 9 assets |
 | Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
-These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `PROGRESS.md`.
+These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
 
 **Revision 3.71.0 (2026-11-19):** Phase 15's last missing row closes: a manifest
 declares `providers` (≤8), validated at parse time (https off-machine, http only
@@ -802,10 +802,10 @@ otherwise stand as written at 2.1.0.
 Closed since the 1.28.0 pass: Phase 2 configuration editor and dependency
 probing (1.43.0), Phase 3 circuit breaker and provider health (1.50.0), Phase 10
 credential store (1.42.0) and global emergency stop (1.41.0), Phase 17 timeline
-and bundle (1.72.0). This file is the per-requirement verdict; `PROGRESS.md` is
-the shipped-version checklist, `MASTER-ROADMAP.md` the ordering and
+and bundle (1.72.0). This file is the per-requirement verdict; `CHANGELOG.md` is
+the shipped-version record, `MASTER-ROADMAP.md` the ordering and
 `KNOWN-ISSUES.md` the defect list. When they disagree, this file and
-`PROGRESS.md` are corrected together.
+`CHANGELOG.md` are corrected together.
 
 ## Verdict in one paragraph
 
@@ -1107,7 +1107,7 @@ it needs, and both are enforced rather than displayed.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 483 passed, 1 ignored at the 2.24.0 run; the count for each release is recorded in `PROGRESS.md` |
+| Rust unit/integration | Working | 483 passed, 1 ignored at the 2.24.0 run; the count for each release is recorded in `CHANGELOG.md` |
 | VS Code extension | Working | `node --test` suites |
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
@@ -1183,4 +1183,4 @@ portable uninstall.
 | Display name | Working (2.51.0) | `Sarthi Studio` in the window/tab title, About, settings, empty states, toasts and docs; no `Free AI Studio` or `Saarthi Studio` remains in tracked text |
 | Package and installer metadata | Working (2.51.0) | `productName`, crate description, MSI product/shortcut/uninstaller names, AppStream name and desktop entry, Android `android:label`, VS Code `displayName`, artifacts `sarthi-studio_<version>_<platform>`; AppStream validation is still outstanding (KNOWN-ISSUES 33) |
 | Mascot and icons | Working (2.52.0) | Tardigrade face, flat orange/black/white, from one geometry (`scripts/brand/build-brand-assets.py`); sidebar, welcome, favicon, Windows `.ico`, Linux desktop/AppImage/.deb, macOS bundle and Android adaptive launcher. Rasters rendered from the canonical SVG; the MSI/macOS/Android icons are unverified on their platforms (KNOWN-ISSUES 35) |
-| Technical identity | Deliberately retained (2.51.0) | crate/binary, env vars, config/data paths, bundle and Android ids, conversation image marker, VS Code ids and repo slug keep old names so installs and stored data survive; reasons and migrations in `docs/BRANDING-AUDIT.md` |
+| Technical identity | Deliberately retained (2.51.0) | crate/binary, env vars, config/data paths, bundle and Android ids, conversation image marker, VS Code ids and repo slug keep old names so installs and stored data survive; reasons and migrations in `docs/KNOWN-ISSUES.md` #32 |

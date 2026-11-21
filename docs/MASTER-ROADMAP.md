@@ -2,8 +2,8 @@
 
 Source of truth for ordering. Every phase ships only when its acceptance
 criteria in `docs/IMPLEMENTATION-SPECIFICATION.md` are demonstrated end to end.
-Current status of each area is in `docs/FEATURE-STATUS.md`; the running
-checklist is `docs/PROGRESS.md`.
+Current status of each area is in `docs/FEATURE-STATUS.md`; the per-version
+record of what shipped is `CHANGELOG.md`.
 
 ## Dependency order
 
@@ -1141,7 +1141,7 @@ The portable uninstall shipped in 2.44.0.
 
 ## Identity (2.51.0)
 
-The product name is **Sarthi Studio** across the UI, documentation, installers and artifacts. The repository-wide audit, the full old→new map, and every identifier that was deliberately kept (with its migration path) are in `docs/BRANDING-AUDIT.md`. The GitHub repository keeps its own name; the two are not the same thing.
+The product name is **Sarthi Studio** across the UI, documentation, installers and artifacts. Every identifier that was deliberately kept, with its migration path, is ledger entry #32 in `docs/KNOWN-ISSUES.md`. The GitHub repository keeps its own name; the two are not the same thing.
 
 ## Mascot (2.52.0)
 

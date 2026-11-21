@@ -14,9 +14,9 @@ for Milestones 2–7. It deliberately contains no frontend implementation.
 ## 0. How this audit was performed
 
 - Read the root `README.md`, `PLATFORM-ARCHITECTURE.md`, and the current
-  engineering docs: `ARCHITECTURE.md`, `FEATURE-STATUS.md`, `PROGRESS.md`,
+  engineering docs: `ARCHITECTURE.md`, `FEATURE-STATUS.md`,
   `MASTER-ROADMAP.md`, `IMPLEMENTATION-SPECIFICATION.md`, `KNOWN-ISSUES.md`,
-  `TESTING-STRATEGY.md`, `BRAND-ASSETS.md`, `BRANDING-AUDIT.md`.
+  `TESTING-STRATEGY.md`, `BRAND-ASSETS.md`.
 - Inspected every workflow under `.github/workflows/` and the release scripts
   under `scripts/ci/`.
 - Inspected the real GitHub repository and release metadata through the public
@@ -231,14 +231,12 @@ Root docs on `main`:
 | `PLATFORM-ARCHITECTURE.md` | Desktop-host vs Android companion model, security requirements, release boundaries |
 | `docs/ARCHITECTURE.md` | Verified runtime shape, modules, HTTP surface, persistence, delivery — the primary source for the architecture/API centre |
 | `docs/FEATURE-STATUS.md` | Per-requirement status + evidence; the source for `features.json` |
-| `docs/PROGRESS.md` | Shipped-version checklist and per-commit evidence; useful for "introduced in" only when explicit |
 | `docs/MASTER-ROADMAP.md` | Phase ordering and remaining work; planned features only |
 | `docs/IMPLEMENTATION-SPECIFICATION.md` | Engineering contracts and definition of done |
 | `docs/KNOWN-ISSUES.md` | Public limitations, signing status, website branch, platform gaps |
 | `docs/TESTING-STRATEGY.md` | Build/test/contribution instructions |
 | `docs/BRAND-ASSETS.md` | Canonical mascot geometry, exactly three colours, screenshot inventory |
-| `docs/BRANDING-AUDIT.md` | Retained internal identifiers and migration constraints |
-| `docs/adr/`, `docs/agents/`, `docs/android/`, `docs/roadmap/`, `docs/security/` | Architecture decisions and host-API security material |
+| `docs/adr/`, `docs/agents/`, `docs/android/`, `docs/dev/`, `docs/security/` | Architecture decisions and host-API security material |
 
 There is **no** existing public docs site, search index, API reference site, or
 feature registry JSON. The engineering docs are detailed but written for
@@ -756,7 +754,7 @@ Validation at build:
 - Every `evidence` path exists in the repo (for code/docs paths); external
   evidence is a full URL.
 - `introduced` is null unless a specific version is recorded in
-  `FEATURE-STATUS.md`/`PROGRESS.md`; otherwise the UI says "version not
+  `FEATURE-STATUS.md`; otherwise the UI says "version not
   recorded", never a guess.
 - `last_reviewed` is an ISO date.
 - No percentage fields.

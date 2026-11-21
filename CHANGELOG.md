@@ -1,5 +1,41 @@
 # Changelog
 
+## 3.78.1
+
+### Chore
+
+Stale and duplicated documentation is gone; `docs/` drops from ~754 KB to
+~356 KB.
+
+- `docs/PROGRESS.md` (361 KB) — a per-commit checklist that duplicated
+  `CHANGELOG.md`, which is the record that is actually maintained.
+- `docs/BRANDING-AUDIT.md` — a one-off rename audit; the durable outcome is the
+  retained-identifier entry (#32) in `docs/KNOWN-ISSUES.md` and the identity
+  section of `docs/MASTER-ROADMAP.md`.
+- `docs/roadmap/step-0{2..5}-*.md` — working notes for the Host API security
+  work, superseded by the four durable documents in `docs/security/`.
+- `.scratch/app-audit/`, `.scratch/full-project-repair/`,
+  `.scratch/saarthi-studio-v1.22/` and `.scratch/resume-tests.txt` — transient
+  audit artifacts from earlier passes. The issue-tracker convention in
+  `AGENTS.md` is unchanged; new issues still live under `.scratch/<slug>/`.
+
+Every reference to a removed file now points at `CHANGELOG.md`,
+`docs/KNOWN-ISSUES.md` #32 or the matching `docs/security/` document:
+`FEATURE-STATUS.md`, `MASTER-ROADMAP.md`, `KNOWN-ISSUES.md`,
+`TESTING-STRATEGY.md`, `IMPLEMENTATION-SPECIFICATION.md` and `website/PLAN.md`
+were updated. Historical mentions inside `CHANGELOG.md` itself are left alone:
+they describe what shipped at the time.
+
+Kept on purpose: `ARCHITECTURE.md` (the verified runtime shape),
+`FEATURE-STATUS.md` (linked from the website's docs page and cited by
+`extensions.rs`/`mcp.rs`), `MASTER-ROADMAP.md`, `KNOWN-ISSUES.md`,
+`TESTING-STRATEGY.md` (also linked from the site), `DESIGN-SYSTEM.md`,
+`BRAND-ASSETS.md`, `docs/adr/`, `docs/agents/`, `docs/android/`, `docs/dev/` and
+`docs/security/`.
+
+Verified: `bash scripts/ci/test-linux-metadata.sh` 9/9; `test-version.sh` 26/26;
+`test-frontend.sh` 103/103 (docs-only change, no source touched).
+
 ## 3.78.0
 
 ### Minor
