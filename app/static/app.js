@@ -627,6 +627,50 @@ async function runIndexSearch(semantic) {
   });
 }
 
+async function semanticSearch() {
+  const query = $("prompt").value.trim();
+  if (!query) { $("prompt").focus(); return; }
+  const results = $("semanticResults");
+  results.classList.remove("hidden");
+  results.innerHTML = '<p class="empty-note">Searching the codebase by meaning…</p>';
+  try {
+    const result = await api(`/api/index/semantic?q=${encodeURIComponent(query)}`);
+    if (!result.ok) {
+      results.innerHTML = '<p class="empty-note muted">' + escapeHtml(result.data.error || "The search failed.") + "</p>";
+      return;
+    }
+    const hits = Array.isArray(result.data.hits) ? result.data.hits : [];
+    if (!hits.length) {
+      results.innerHTML = '<p class="empty-note">Nothing matched that meaning. A large index may still be embedding — search again in a moment.</p>';
+      return;
+    }
+    // A semantic pass that has not embedded everything says so, so a partial
+    // ranking is never mistaken for a complete one.
+    const pending = result.data.pending
+      ? " · " + result.data.embedded + " embedded, " + result.data.pending + " still to embed"
+      : "";
+    results.innerHTML = '<p class="muted"><em>' + hits.length + "</em> match" + (hits.length > 1 ? "es" : "") + escapeHtml(pending) + "</p>";
+    results.innerHTML += '<ul class="skill-list">';
+    for (const hit of hits) {
+      const label = (hit.path && hit.line) ? hit.path + ":" + hit.line : hit.path || "unnamed";
+      results.innerHTML += '<li><a href="#" class="semantic-hit" data-path="' + escapeHtml(hit.path || "") + '" data-line="' + (hit.line || "0") + '">' + escapeHtml(label) + "</a></li>";
+    }
+    results.innerHTML += "</ul>";
+    results.querySelectorAll("a.semantic-hit").forEach(link => {
+      link.addEventListener("click", async (event) => {
+        event.preventDefault();
+        await openFile(link.dataset.path);
+        const file = activeFile();
+        // The file did not open (openFile has already said why): nothing to place.
+        if (!file || file.path !== link.dataset.path) return;
+        placeCaret(Number(link.dataset.line) || 1, 1);
+      });
+    });
+  } catch (error) {
+    results.innerHTML = '<p class="empty-note muted">Search error: ' + escapeHtml(error.message) + "</p>";
+  }
+}
+
 async function refreshIndex() {
   const button = $("indexRefreshBtn");
   button.disabled = true;
@@ -8629,6 +8673,7 @@ function bindEvents() {
     reader.readAsDataURL(file);
     event.target.value = "";
   });
+  $("semanticBtn").addEventListener("click", () => semanticSearch());
   $("attachContextBtn").addEventListener("click", attachFromComposer);
   $("deepToggle").addEventListener("click", () => setDeepSearch(!state.deepSearch));
   $("skillPickerBtn").addEventListener("click", (event) => {

@@ -319,6 +319,9 @@
               <button id="transcribeBtn" class="btn btn-quiet btn-small" title="Transcribe an audio file to text">
                 <svg class="icon"><use href="#i-microphone"/></svg>Transcribe
               </button>
+              <button id="semanticBtn" class="btn btn-quiet btn-small" title="Search the codebase by meaning (embeddings)">
+                <svg class="icon"><use href="#i-search"/></svg>Meaning
+              </button>
               <input id="transcribeAudio" type="file" hidden accept="audio/wav,audio/mpeg,audio/ogg,audio/mp4,audio/webm">
               <div class="model-picker-wrap" style="display:none">
                 <select id="transcribeModel" class="btn btn-small" style="padding:2px 6px"></select>
@@ -365,6 +368,7 @@
               </button>
             </div>
           </div>
+          <div id="semanticResults" class="hidden"></div>
         </div>
       </div>
     </section>

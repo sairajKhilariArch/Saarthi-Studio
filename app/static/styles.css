@@ -1376,6 +1376,19 @@ kbd {
 .project-menu-new:hover { background: var(--surface); color: var(--accent); }
 .project-menu-new .icon { width: 14px; height: 14px; }
 
+/* Semantic search results in the composer */
+#semanticResults { margin-top: 8px; }
+#semanticResults .empty-note { margin: 0; }
+#semanticResults .muted { font-size: 12px; }
+#semanticResults .skill-list { margin-top: 6px; }
+#semanticResults a.semantic-hit {
+  display: block; width: 100%; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid var(--line-soft); text-align: left; color: var(--text);
+  font-size: 12.5px; cursor: pointer;
+}
+#semanticResults a.semantic-hit:hover { background: var(--surface-2); border-color: var(--line); }
+#semanticResults a.semantic-hit::before { content: "→ "; color: var(--accent); }
+
 /* sidebar skills pane */
 .skill-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
 .skill-card {
