@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.81.1
+
+### Fixed
+
+Two watcher lifecycle gaps from 3.81.0.
+
+- **A folder restored at startup is watched.** `WorkspaceStore::load` already
+  restores the last open folder from `workspace.json`, but the watcher only
+  started when a folder was opened through the UI. `bootstrap` now starts it
+  for the restored folder too, so changes made before the first paint are
+  indexed.
+- **Continuous events can no longer postpone a flush forever.** The batch had
+  a quiet timer but no ceiling: a build writing for minutes kept resetting it.
+  A batch now also flushes at 2 s from its first event. Separately, access-only
+  events (a reader opening files, another process polling) no longer skip the
+  timer checks, so a polling reader cannot pin a pending batch either.
+
+Also includes the removal of `docs/dev/` (the development-environment note),
+at the project owner's request; `README.md` covers running the app and
+`docs/agents/` the working conventions.
+
+Verified: 693 passed, 0 failed, 1 ignored (3 new: the 2 s ceiling, access
+filter retry, and an end-to-end watcher test that writes a file after the
+watcher starts and finds it in the index); clippy clean; `cargo fmt --check`
+clean.
+
 ## 3.81.0
 
 ### Added

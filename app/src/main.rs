@@ -5021,6 +5021,11 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     let upgrade = ensure_setup(&state)?;
+    // A folder restored from the last session is watched from boot, so changes
+    // made before the first paint are indexed too. No folder means no watcher.
+    if let Some(root) = state.workspace.current_root() {
+        filewatch::start(&state, &root);
+    }
     // Scheduled workflows wake on a timer; the first tick is one interval after
     // boot, so starting the app never runs a schedule early.
     workflow::start_scheduler(state.clone());

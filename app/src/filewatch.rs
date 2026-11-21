@@ -9,7 +9,9 @@
 //! Shape:
 //! - `notify` reports raw events on a channel; a dedicated thread coalesces
 //!   them for [`DEBOUNCE`], so a checkout or a save burst becomes one batch
-//!   instead of hundreds of database writes.
+//!   instead of hundreds of database writes. A stream that never goes quiet
+//!   (`npm install` writing for minutes) still flushes at [`MAX_WAIT`] from the
+//!   first event, so indexing cannot be postponed forever.
 //! - `index::watch_relative` filters the batch: build and dependency folders
 //!   (`target`, `node_modules`, `.git`, …) and secret-shaped files never reach
 //!   the indexer, so a build cannot cause an indexing storm.
@@ -28,12 +30,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{index, AppState};
 
 /// How long the event stream must be quiet before a batch is flushed.
 const DEBOUNCE: Duration = Duration::from_millis(400);
+/// The hard ceiling from the first event in a batch: continuous events can
+/// delay a flush, never skip it.
+const MAX_WAIT: Duration = Duration::from_secs(2);
 
 struct Active {
     watcher: notify::RecommendedWatcher,
@@ -81,26 +86,31 @@ pub(crate) fn start(state: &AppState, root: &Path) {
     let spawned = thread::Builder::new()
         .name("studio-index-watch".to_string())
         .spawn(move || {
-            let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
+            let mut batch = Batch::default();
             loop {
                 if !thread_alive.load(Ordering::Relaxed) {
                     break;
                 }
                 match rx.recv_timeout(DEBOUNCE) {
                     Ok(Ok(event)) => {
-                        // Reads open and close files constantly; reacting to
-                        // them would reindex whatever is merely being viewed.
-                        if matches!(event.kind, EventKind::Access(_)) {
-                            continue;
+                        let now = Instant::now();
+                        // Reads open and close files constantly; they never
+                        // join a batch, but they must not postpone one either —
+                        // a polling reader would otherwise keep the loop out of
+                        // its timeout branch forever.
+                        if !matches!(event.kind, EventKind::Access(_)) {
+                            batch.add(event.paths, now);
                         }
-                        pending.extend(event.paths);
+                        if batch.due(now) || batch.quiet(now) {
+                            flush(&worker_state, &watched, &batch.take());
+                        }
                     }
                     Ok(Err(_)) => {}
                     Err(RecvTimeoutError::Timeout) => {
-                        if pending.is_empty() {
+                        if batch.is_empty() {
                             continue;
                         }
-                        flush(&worker_state, &watched, &mut pending);
+                        flush(&worker_state, &watched, &batch.take());
                     }
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
@@ -111,11 +121,56 @@ pub(crate) fn start(state: &AppState, root: &Path) {
     }
 }
 
-/// Refresh one quiet period's worth of paths. The batch is cleared before the
-/// work starts, so a file that changes during the flush belongs to the next
-/// window instead of being silently dropped.
-fn flush(state: &AppState, root: &Path, pending: &mut BTreeSet<PathBuf>) {
-    let paths: Vec<PathBuf> = std::mem::take(pending).into_iter().collect();
+/// One debounce window: quiet for [`DEBOUNCE`] flushes it, but the first event
+/// starts a clock that forces a flush at [`MAX_WAIT`]. Without the ceiling a
+/// build that writes continuously would keep resetting the quiet timer and the
+/// index would never catch up.
+#[derive(Default)]
+struct Batch {
+    paths: BTreeSet<PathBuf>,
+    first: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Batch {
+    /// Add a burst and answer whether it must be flushed now.
+    fn add(&mut self, paths: impl IntoIterator<Item = PathBuf>, now: Instant) -> bool {
+        if self.first.is_none() {
+            self.first = Some(now);
+        }
+        self.last = Some(now);
+        self.paths.extend(paths);
+        self.due(now)
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        self.first
+            .is_some_and(|first| now.saturating_duration_since(first) >= MAX_WAIT)
+    }
+
+    /// True when the last change is already [`DEBOUNCE`] old. Checked on every
+    /// event because access-only traffic never reaches the timeout branch.
+    fn quiet(&self, now: Instant) -> bool {
+        self.last
+            .is_some_and(|last| now.saturating_duration_since(last) >= DEBOUNCE)
+    }
+
+    /// Take the batch and reset its clock. Taken before the work starts, so a
+    /// path that changes during the flush belongs to the next window.
+    fn take(&mut self) -> Vec<PathBuf> {
+        self.first = None;
+        self.last = None;
+        std::mem::take(&mut self.paths).into_iter().collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+}
+
+/// Refresh one batch of paths for the folder that was watched when they were
+/// collected.
+fn flush(state: &AppState, root: &Path, paths: &[PathBuf]) {
     // A late batch for a folder that is no longer open must not write rows.
     let still_open = state
         .workspace
@@ -179,11 +234,8 @@ mod tests {
         std::fs::write(root.join("target/debug/noise.rs"), "pub fn noise() {}\n").unwrap();
         state.workspace.open(root.to_str().unwrap()).expect("open");
 
-        let mut pending: BTreeSet<PathBuf> =
-            [root.join("src/main.rs"), root.join("target/debug/noise.rs")]
-                .into_iter()
-                .collect();
-        flush(&state, &root, &mut pending);
+        let pending = vec![root.join("src/main.rs"), root.join("target/debug/noise.rs")];
+        flush(&state, &root, &pending);
 
         let conn = crate::open_db(&state.database_path).expect("db");
         let indexed: i64 = conn
@@ -216,8 +268,8 @@ mod tests {
             .open(open_root.to_str().unwrap())
             .expect("open");
 
-        let mut pending: BTreeSet<PathBuf> = [other.join("hidden.rs")].into_iter().collect();
-        flush(&state, &other, &mut pending);
+        let pending = [other.join("hidden.rs")];
+        flush(&state, &other, &pending);
 
         let conn = crate::open_db(&state.database_path).expect("db");
         let rows: i64 = conn
@@ -226,6 +278,42 @@ mod tests {
             })
             .expect("count");
         assert_eq!(rows, 0, "a late batch for a closed folder writes nothing");
+    }
+
+    #[test]
+    fn a_started_watcher_indexes_a_file_written_after_open() {
+        let state = fixture("live");
+        let root = std::path::PathBuf::from(state.database_path.parent().unwrap());
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        state.workspace.open(root.to_str().unwrap()).expect("open");
+        start(&state, &root);
+        // Give the platform watcher time to register before the write, so the
+        // test is about indexing rather than about setup latency.
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::write(root.join("src/fresh.rs"), "pub fn fresh() -> u8 { 1 }\n").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let conn = crate::open_db(&state.database_path).expect("db");
+            let indexed: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM code_index_files WHERE path='src/fresh.rs'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("count");
+            if indexed == 1 {
+                stop();
+                return;
+            }
+            let give_up = Instant::now() >= deadline;
+            drop(conn);
+            if give_up {
+                stop();
+                panic!("the watcher did not index a new file within 10s");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     #[test]
@@ -260,5 +348,42 @@ mod tests {
         // person is still looking at the result.
         assert!(DEBOUNCE >= Duration::from_millis(200));
         assert!(DEBOUNCE <= Duration::from_secs(1));
+        // The ceiling is above one quiet period, so ordinary saves still take
+        // the quiet path rather than the forced one.
+        assert!(MAX_WAIT > DEBOUNCE);
+        assert!(MAX_WAIT <= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_stream_that_never_quiets_still_flushes_at_the_ceiling() {
+        let start = Instant::now();
+        let mut batch = Batch::default();
+        assert!(!batch.add([PathBuf::from("a")], start));
+        assert!(
+            !batch.add(
+                [PathBuf::from("b")],
+                start + MAX_WAIT - Duration::from_millis(1)
+            ),
+            "events below the ceiling keep collecting"
+        );
+        assert!(
+            batch.add([PathBuf::from("c")], start + MAX_WAIT),
+            "the first event's clock forces the flush"
+        );
+        assert_eq!(batch.take().len(), 3);
+        assert!(batch.is_empty(), "taking the batch resets it");
+        assert!(!batch.due(start + MAX_WAIT), "and its clock");
+    }
+
+    #[test]
+    fn access_events_do_not_postpone_a_pending_batch() {
+        let start = Instant::now();
+        let mut batch = Batch::default();
+        batch.add([PathBuf::from("src/lib.rs")], start);
+        // A reader polling the folder produces only access events; the batch's
+        // own quiet clock must still expire.
+        assert!(!batch.quiet(start + DEBOUNCE - Duration::from_millis(1)));
+        assert!(batch.quiet(start + DEBOUNCE));
+        assert!(batch.due(start + MAX_WAIT), "and so must the ceiling");
     }
 }
