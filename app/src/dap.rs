@@ -649,7 +649,12 @@ struct SessionOptions {
     program: String,
     program_path: PathBuf,
     root: PathBuf,
-    args: Vec<String>,
+    /// Program arguments passed to the adapter at launch. Adapter-specific
+    /// launch settings the person configured in the debug pane.
+    launch_args: Vec<String>,
+    /// Working directory for the launch, relative to the open folder
+    /// (default: the open folder).
+    launch_cwd: Option<PathBuf>,
     stop_on_entry: bool,
     breakpoints: Breakpoints,
     /// Set for an attach session; `None` launches `program_path`.
@@ -673,8 +678,8 @@ fn begin(options: SessionOptions) -> Result<Value, (StatusCode, String)> {
     }
     let mut command = Command::new(&options.launch.program);
     command
-        .args(&options.launch.args)
-        .current_dir(&options.root)
+        .args(&options.launch_args)
+        .current_dir(options.launch_cwd.as_deref().unwrap_or(&options.root))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1466,7 +1471,8 @@ fn start_attach(state: &AppState, input: &Value) -> Result<Value, (StatusCode, S
         program: label,
         program_path: PathBuf::new(),
         root,
-        args: Vec::new(),
+        launch_args: Vec::new(),
+        launch_cwd: None,
         stop_on_entry: false,
         breakpoints,
         attach: Some(target),
@@ -1527,7 +1533,14 @@ fn start_session(state: &AppState, input: &Value) -> Result<Value, (StatusCode, 
     ))?;
     let launch = resolve_launch(spec)?;
     preflight(spec, &launch)?;
-    let args = parse_args(input.get("args"))?;
+    let launch_args = parse_args(input.get("args"))?;
+    let launch_cwd = input
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| crate::workspace::resolve_inside(&root, value))
+        .transpose()?;
     let stop_on_entry = input
         .get("stopOnEntry")
         .and_then(Value::as_bool)
@@ -1542,7 +1555,8 @@ fn start_session(state: &AppState, input: &Value) -> Result<Value, (StatusCode, 
         program: program.clone(),
         program_path,
         root,
-        args,
+        launch_args,
+        launch_cwd,
         stop_on_entry,
         breakpoints,
         attach: None,
@@ -2076,7 +2090,8 @@ while True:
             program: "main.py".to_string(),
             program_path: root.join("main.py"),
             root: root.clone(),
-            args: Vec::new(),
+            launch_args: Vec::new(),
+            launch_cwd: None,
             stop_on_entry: false,
             breakpoints: Breakpoints::new(),
             attach: Some(AttachTarget {
@@ -2116,7 +2131,8 @@ while True:
             program: "main.py".to_string(),
             program_path: root.join("main.py"),
             root: root.clone(),
-            args: Vec::new(),
+            launch_args: Vec::new(),
+            launch_cwd: None,
             stop_on_entry: true,
             breakpoints: [(
                 "main.py".to_string(),
@@ -2220,6 +2236,41 @@ while True:
             error.1
         );
         assert_eq!(state_json()["running"], json!(false));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_session_starts_with_adapter_args_and_cwd() {
+        let _guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(python) = python() else {
+            eprintln!("skipping: python3 is not on PATH");
+            return;
+        };
+        let root = scratch("args-cwd");
+        std::fs::write(root.join("main.py"), "print('hi')\n").expect("target");
+        let adapter = root.join("fake_adapter.py");
+        std::fs::write(&adapter, FAKE_ADAPTER).expect("adapter");
+        let started = begin(SessionOptions {
+            launch: LaunchSpec {
+                id: "fake".to_string(),
+                program: python.to_string_lossy().to_string(),
+                args: vec![adapter.to_string_lossy().to_string()],
+            },
+            program: "main.py".to_string(),
+            program_path: root.join("main.py"),
+            root: root.clone(),
+            launch_args: vec!["--flag".to_string(), "x".to_string()],
+            launch_cwd: Some(root.clone()),
+            stop_on_entry: false,
+            breakpoints: Breakpoints::new(),
+            attach: None,
+        }).expect("session starts");
+        assert_eq!(started["running"], json!(true));
+        assert_eq!(started["adapter"], json!("fake"));
+        let stopped = stop_session();
+        assert_eq!(stopped["stopped"], json!(true));
         let _ = std::fs::remove_dir_all(&root);
     }
 

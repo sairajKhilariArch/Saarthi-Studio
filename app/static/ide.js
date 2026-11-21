@@ -418,6 +418,8 @@
       '<label class="debug-check"><input type="checkbox" id="debugStopEntry" checked> stop at entry</label>' +
       '<input id="debugProgram" class="debug-program" placeholder="program (default: open file)" aria-label="Program to debug">' +
       '<span class="debug-sep"></span>' +
+      '<input id="debugArgs" class="debug-line" placeholder="arguments passed to the program" aria-label="Program arguments">' +
+      '<input id="debugCwd" class="debug-line" placeholder="working directory (default: open folder)" aria-label="Working directory">' +
       '<input id="debugAttachPort" class="debug-line" type="number" min="1" max="65535" inputmode="numeric" placeholder="Port" aria-label="Port of a running debug server">' +
       '<button type="button" class="btn btn-quiet btn-small" id="debugAttach" title="Attach to a debug server the program already runs">Attach</button>' +
       '</div>' +
@@ -544,12 +546,19 @@
     const source = file ? file.path : "";
     const program = override || source;
     if (!program) { toast("Open the program's source file first."); return; }
+    const argsInput = $("#debugArgs");
+    const args = argsInput.value
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((arg) => arg.replace(/^"(.*)"$/, "$1"));
     const result = await api("/api/debug/start", {
       method: "POST",
       body: JSON.stringify({
         path: source || program,
         program,
-        stopOnEntry: $("debugStopEntry") ? $("debugStopEntry").checked : true,
+        args,
+        cwd: $("#debugCwd").value.trim(),
+        stopOnEntry: $("#debugStopEntry").checked,
       }),
       confirmApproval: true,
     });

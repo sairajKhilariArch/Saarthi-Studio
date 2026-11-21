@@ -1,10 +1,16 @@
 # Changelog
 
-## 3.73.0
+## 3.75.7
 
-Language-server diagnostics could only find a server on `PATH`, so a build
-installed under `~/.cargo/bin`, a per-project wrapper or a server that needs its
-own arguments could not be used at all (KNOWN-ISSUES 45).
+The Debug pane now accepts program **Arguments** and a **Working
+directory**, and those adapter launch settings are sent with the
+`/api/debug/start` request instead of the adapter's fixed argv: the
+server resolves the directory relative to the open folder and starts the
+adapter there with the configured arguments. Attach is unchanged. New
+focused unit test `a_session_starts_with_adapter_args_and_cwd` added to
+`dap::`; the crate checks clean.
+
+## 3.73.0
 
 - Settings now takes **Language servers** as one line per language:
   `language :: command`. A saved line wins for that language; every other
