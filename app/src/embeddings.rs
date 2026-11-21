@@ -198,7 +198,7 @@ fn documents(db: &FsPath) -> Result<Vec<Doc>, String> {
 /// One embeddings request. The provider's answer must line up with the inputs:
 /// a short or empty `data` array is an error, never a silently shorter list.
 async fn embed(state: &AppState, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-    let cfg = crate::load_config(state);
+    let cfg = crate::router_config(state);
     if let Some(name) = local_model(model) {
         let base = crate::local::effective_base_url(&cfg.local_base_url);
         return crate::local::embed_texts(&base, &name, texts).await;

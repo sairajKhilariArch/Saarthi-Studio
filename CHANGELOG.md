@@ -1,5 +1,46 @@
 # Changelog
 
+## 3.79.0
+
+### Added
+
+Named providers (spec Phase 4): more than one OpenAI-compatible endpoint,
+each with its own key, default model and cached model list.
+
+- **Add, edit, remove, test, switch.** Settings → Connection lists the
+  providers, marks the active one, and offers Use / Test / Edit / Delete per
+  row. Adding one takes a name, a base URL, an optional key and an optional
+  default model. A test calls the endpoint's `/models` and reports the latency
+  and model count, and the same call caches those ids so the model picker can
+  list them while the provider is offline.
+- **Wire-through.** One switch moves chat, streamed chat, agent runs and every
+  step in a workflow, the `/api/models` catalogue, embeddings, transcription,
+  deep search and the Host API's `/models`. They all resolve through
+  `providers::active_config`, so no request path had to learn that providers
+  exist.
+- **The legacy endpoint is the migrated default.** It appears as the built-in
+  `Router` row, and the existing `base_url` / `api_key` / `model` fields keep
+  editing it in place, so an install that upgrades behaves exactly as before
+  and nothing is rewritten on disk. Deleting the built-in row is refused, and
+  an active id that names nothing falls back to it: a broken selection never
+  leaves the app unable to reach a model.
+- **Keys stay keys.** A provider key follows the config's existing rule: the
+  save moves it into the OS credential store under `provider:<id>` and blanks
+  it from `config.json`; a store that refuses the write leaves it in the
+  permission-restricted file (or drops it when the keychain is off), exactly
+  like `api_key`. The browser only ever learns `has_key`.
+- **Endpoints are validated.** https, or http only on loopback, no query or
+  fragment, no credentials in the URL, and a gateway path such as
+  `/openai/v1` is kept (unlike the remote-router host setting).
+- Every mutation is a `Settings` action on `config.provider`, so a saved rule
+  can deny provider changes or require approval like any other setting.
+
+Verified: `cargo test --no-default-features` 682 passed, 0 failed, 1 ignored
+(10 new provider tests: selection and legacy fallback, create/update/delete,
+key retention and explicit removal, endpoint validation, no key in any row);
+`cargo clippy --all-targets -- -D warnings` clean; `cargo fmt --check` clean;
+frontend 103/103.
+
 ## 3.78.1
 
 ### Chore

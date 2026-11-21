@@ -4511,6 +4511,183 @@ function applyBackendPreset(id) {
   if (id === "omniroute") offerOmnirouteStart();
 }
 
+/* ---- providers: named endpoints, each with its own key and models ---- */
+
+let PROVIDER_ROWS = [];
+/* The row being edited, or "" while the form creates a new one. */
+let PROVIDER_EDIT = "";
+
+function providerButton(label, className, onClick, title) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  if (title) button.title = title;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderProviders() {
+  const host = $("providerList");
+  if (!host) return;
+  host.replaceChildren();
+  PROVIDER_ROWS.forEach((row) => {
+    const item = document.createElement("div");
+    item.className = "provider-row" + (row.active ? " is-active" : "");
+    item.setAttribute("role", "listitem");
+    const main = document.createElement("div");
+    main.className = "provider-main";
+    const name = document.createElement("strong");
+    name.textContent = row.name || row.id;
+    main.appendChild(name);
+    const facts = [row.base_url || "no endpoint", row.model || "no default model"];
+    facts.push(row.legacy ? "built-in" : `${row.model_count || 0} cached model(s)`);
+    facts.push(row.has_key ? "key saved" : "no key");
+    const detail = document.createElement("small");
+    detail.textContent = facts.join(" \u00b7 ");
+    main.appendChild(detail);
+    item.appendChild(main);
+    const actions = document.createElement("div");
+    actions.className = "provider-actions";
+    if (row.active) {
+      const badge = document.createElement("span");
+      badge.className = "preset-chip active";
+      badge.textContent = "Active";
+      actions.appendChild(badge);
+    } else {
+      actions.appendChild(
+        providerButton("Use", "btn btn-quiet btn-small", () => activateProvider(row.id)),
+      );
+    }
+    actions.appendChild(
+      providerButton("Test", "btn btn-quiet btn-small", () => testProvider(row.id)),
+    );
+    if (!row.legacy) {
+      actions.appendChild(
+        providerButton("Edit", "btn btn-quiet btn-small", () => editProvider(row.id)),
+      );
+      actions.appendChild(
+        providerButton(
+          "Delete",
+          "btn btn-quiet btn-small danger",
+          () => deleteProvider(row.id),
+          "Remove this provider and its saved key",
+        ),
+      );
+    }
+    item.appendChild(actions);
+    host.appendChild(item);
+  });
+}
+
+async function loadProviders() {
+  const result = await api("/api/providers");
+  if (!result.ok) return;
+  PROVIDER_ROWS = Array.isArray(result.data.providers) ? result.data.providers : [];
+  renderProviders();
+}
+
+function resetProviderForm() {
+  PROVIDER_EDIT = "";
+  if ($("providerName")) $("providerName").value = "";
+  if ($("providerBaseUrl")) $("providerBaseUrl").value = "";
+  if ($("providerKey")) $("providerKey").value = "";
+  if ($("providerModel")) $("providerModel").value = "";
+  if ($("providerSave")) $("providerSave").textContent = "Add provider";
+  if ($("providerCancel")) $("providerCancel").classList.add("hidden");
+}
+
+function editProvider(id) {
+  const row = PROVIDER_ROWS.find((entry) => entry.id === id);
+  if (!row) return;
+  PROVIDER_EDIT = id;
+  $("providerName").value = row.name || "";
+  $("providerBaseUrl").value = row.base_url || "";
+  $("providerKey").value = "";
+  $("providerKey").placeholder = row.has_key
+    ? "Saved key (leave blank to keep it)"
+    : "Key for this provider";
+  $("providerModel").value = row.model || "";
+  $("providerSave").textContent = "Save provider";
+  $("providerCancel").classList.remove("hidden");
+  $("providerName").focus();
+}
+
+async function saveProvider() {
+  const body = {
+    name: $("providerName").value.trim(),
+    base_url: $("providerBaseUrl").value.trim(),
+    api_key: $("providerKey").value.trim(),
+    model: $("providerModel").value.trim(),
+  };
+  const path = PROVIDER_EDIT ? `/api/providers/${encodeURIComponent(PROVIDER_EDIT)}` : "/api/providers";
+  const result = await api(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not save the provider.");
+    return;
+  }
+  toast(PROVIDER_EDIT ? "Provider saved." : "Provider added.");
+  resetProviderForm();
+  await loadProviders();
+}
+
+async function activateProvider(id) {
+  const result = await api(`/api/providers/${encodeURIComponent(id)}/activate`, {
+    method: "POST",
+    body: "{}",
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not switch provider.");
+    return;
+  }
+  toast("Provider switched. Chat, runs and the model list now use it.");
+  await loadProviders();
+  await loadModels();
+}
+
+async function testProvider(id) {
+  const result = await api(`/api/providers/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+    body: "{}",
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The provider did not answer.");
+    return;
+  }
+  toast(result.data.message || "Provider reachable.");
+  await loadProviders();
+  if (PROVIDER_ROWS.some((row) => row.id === id && row.active)) await loadModels();
+}
+
+async function deleteProvider(id) {
+  const row = PROVIDER_ROWS.find((entry) => entry.id === id);
+  if (!confirm(`Remove ${row ? row.name : "this provider"} and its saved key?`)) return;
+  const result = await api(`/api/providers/${encodeURIComponent(id)}/delete`, {
+    method: "POST",
+    body: "{}",
+    confirmApproval: true,
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not remove the provider.");
+    return;
+  }
+  if (PROVIDER_EDIT === id) resetProviderForm();
+  toast("Provider removed. The built-in Router stays available.");
+  await loadProviders();
+  await loadModels();
+}
+
+function wireProviders() {
+  if ($("providerSave")) $("providerSave").addEventListener("click", saveProvider);
+  if ($("providerCancel")) $("providerCancel").addEventListener("click", resetProviderForm);
+}
+
 /* Picking OmniRoute changes the router URL to localhost:20128, so if its
    gateway is not up, chats would all fail. Offer the one-click start. */
 async function offerOmnirouteStart() {
@@ -5178,6 +5355,7 @@ async function loadSettings() {
   $("contextBudget").value = state.contextBudget;
   renderModelChipLabel();
   loadModels();
+  loadProviders();
   $("historyMessages").value = Number(result.data.history_messages) || 6;
   $("sendOutline").checked = result.data.send_workspace_outline !== false;
   $("searchProvider").value = result.data.search_provider || "";
@@ -9019,6 +9197,7 @@ function bindEvents() {
   $("forgetOpenaiKey").addEventListener("click", () => forgetSavedKey("openai_api_key", $("forgetOpenaiKey"), $("openaiKeyStatus")));
   $("forgetSearchKey").addEventListener("click", () => forgetSavedKey("search_api_key", $("forgetSearchKey"), $("searchKeyStatus")));
   $("testConnection").addEventListener("click", testConnection);
+  wireProviders();
   $("openProviderDashboardSettings").addEventListener("click", openProviderDashboard);
   $("adaptiveRouting").addEventListener("change", () => {
     $("adaptiveTiersRow").classList.toggle("hidden", !$("adaptiveRouting").checked);

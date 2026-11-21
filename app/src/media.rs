@@ -328,7 +328,7 @@ async fn embeddings(State(state): State<AppState>, Json(input): Json<Value>) -> 
             "Embedding text must be 1–8,000 characters.",
         );
     }
-    let cfg = crate::load_config(&state);
+    let cfg = crate::router_config(&state);
     if cfg.api_key.trim().is_empty() {
         return crate::json_error(
             StatusCode::BAD_REQUEST,

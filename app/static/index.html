@@ -750,6 +750,31 @@
             <button type="button" id="testConnection" class="btn btn-quiet">Test connection</button>
             <button type="button" id="openProviderDashboardSettings" class="btn btn-link">Open router dashboard ↗</button>
           </div>
+          <h3 class="form-group-title">Providers</h3>
+          <p class="field-note">Named endpoints, each with its own key and models. Chat, agent runs and the model list use the active one; the Router fields above stay as the built-in default, so switching never loses either setting. A test also caches the endpoint's model list.</p>
+          <div id="providerList" class="provider-list" role="list" aria-label="Providers"></div>
+          <div class="provider-form">
+            <label class="field">
+              <span>Name</span>
+              <input id="providerName" type="text" placeholder="Groq" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Base URL</span>
+              <input id="providerBaseUrl" type="url" placeholder="https://api.groq.com/openai/v1" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>API key</span>
+              <input id="providerKey" type="password" placeholder="Key for this provider" autocomplete="new-password">
+            </label>
+            <label class="field">
+              <span>Default model</span>
+              <input id="providerModel" type="text" placeholder="auto" autocomplete="off">
+            </label>
+            <div class="form-actions">
+              <button type="button" id="providerSave" class="btn btn-small btn-accent">Add provider</button>
+              <button type="button" id="providerCancel" class="btn btn-quiet btn-small hidden">Cancel edit</button>
+            </div>
+          </div>
           </section>
 
           <section id="settings-openai" class="settings-section card form-card-inner hidden" data-feature="openai_platform">

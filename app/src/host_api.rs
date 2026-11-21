@@ -4,7 +4,7 @@
 //! router and is not mounted on a network listener until the transport guardrails
 //! in the next implementation step are in place.
 
-use super::{chat, chat_stream, create_conversation, load_config, open_db, router_url, AppState};
+use super::{chat, chat_stream, create_conversation, open_db, router_url, AppState};
 use crate::host_auth::HostTokenStore;
 use axum::{
     body::{to_bytes, Body},
@@ -244,7 +244,7 @@ async fn host_capabilities() -> Json<Value> {
 }
 
 async fn host_models(State(state): State<AppState>) -> Response<Body> {
-    let cfg = load_config(&state);
+    let cfg = crate::router_config(&state);
     if cfg.api_key.trim().is_empty() {
         return host_error(
             StatusCode::SERVICE_UNAVAILABLE,

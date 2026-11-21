@@ -65,6 +65,7 @@ mod openai;
 mod oplog;
 mod permissions;
 mod privacy;
+mod providers;
 mod router;
 mod router_console;
 mod router_env;
@@ -110,6 +111,15 @@ struct Config {
     model: String,
     #[serde(default)]
     api_key: String,
+    /// Named OpenAI-compatible endpoints. The `base_url`/`api_key` pair above
+    /// is the built-in provider `default`, so an install that never adds one
+    /// behaves exactly as before this list existed.
+    #[serde(default)]
+    providers: Vec<providers::ProviderEntry>,
+    /// Provider chat, runs and the model list use. Empty or `default` is the
+    /// built-in endpoint above; an id naming nothing falls back to it too.
+    #[serde(default)]
+    active_provider: String,
     /// Model used to embed code-index symbols for semantic search. Empty means
     /// the word search is the only one, which is what every install has today.
     #[serde(default)]
@@ -255,12 +265,14 @@ fn default_outline_enabled() -> bool {
 }
 
 impl Config {
-    fn defaults() -> Self {
+    pub(crate) fn defaults() -> Self {
         Self {
             base_url: env::var("FREE_AI_STUDIO_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3001/v1".to_string()),
             model: "auto".to_string(),
             api_key: String::new(),
+            providers: Vec::new(),
+            active_provider: String::new(),
             embedding_model: String::new(),
             context_budget_tokens: default_context_budget_tokens(),
             history_messages: default_history_messages(),
@@ -895,6 +907,14 @@ pub(crate) fn load_config(state: &AppState) -> Config {
     cfg
 }
 
+/// The config every provider call resolves through: the active named
+/// provider's endpoint, key and default model when one is selected, the legacy
+/// pair otherwise. Keeping this on the load side means no request path has to
+/// know providers exist.
+pub(crate) fn router_config(state: &AppState) -> Config {
+    providers::active_config(state)
+}
+
 /// The keychain location identity for this app instance: the directory the
 /// config lives in. Mock-mode tests hash it into the service name so parallel
 /// fixtures never share credentials; production lands on the stable default
@@ -925,6 +945,20 @@ fn split_keychain_secrets(path: &FsPath, cfg: &mut Config) {
             secret.clear();
         }
     }
+    for provider in &mut cfg.providers {
+        if provider.api_key.is_empty() {
+            continue;
+        }
+        if keychain::write_secret(
+            &location,
+            &providers::secret_name(&provider.id),
+            &provider.api_key,
+        )
+        .is_ok()
+        {
+            provider.api_key.clear();
+        }
+    }
 }
 
 /// Stored credentials win over the file, because the file is the legacy
@@ -943,6 +977,16 @@ fn merge_keychain_secrets(state: &AppState, cfg: &mut Config) {
             "openai_api_key" => cfg.openai_api_key = stored,
             _ => {}
         }
+    }
+    // Provider keys live under `provider:<id>`, one entry each. A read error or
+    // a disabled store leaves the file's copy (permission-restricted) in place.
+    for provider in &mut cfg.providers {
+        let Ok(Some(stored)) =
+            keychain::read_secret(&location, &providers::secret_name(&provider.id))
+        else {
+            continue;
+        };
+        provider.api_key = stored;
     }
 }
 
@@ -1391,7 +1435,7 @@ fn choose_tier(cfg: &Config, last_action: &str, had_error: bool, profile: &str) 
 /// the same precedence chat uses — task, agent, project, global — so the record
 /// says which scope produced it instead of just repeating one setting.
 pub(crate) fn run_record_snapshot(state: &AppState, task_model: Option<&str>) -> (String, String) {
-    let cfg = load_config(state);
+    let cfg = router_config(state);
     let project = project_model(state, &cfg.active_project);
     let resolved = model_scope::resolve(
         task_model,
@@ -1510,7 +1554,7 @@ pub(crate) async fn call_router(
     let model = match model_override {
         Some(model) => model.to_string(),
         None => {
-            let cfg = load_config(state);
+            let cfg = router_config(state);
             let project = project_model(state, &cfg.active_project);
             model_scope::resolve(
                 None,
@@ -1537,7 +1581,7 @@ pub(crate) async fn call_router_with(
     level: Option<thinking::ThinkingLevel>,
     options: StepOptions,
 ) -> Result<(String, Value), String> {
-    let cfg = load_config(state);
+    let cfg = router_config(state);
     // Checked once, before the chain: a spent budget must not be circumvented by
     // trying the next model.
     if let Some(refusal) = budget_gate(state, &cfg) {
@@ -1596,7 +1640,7 @@ async fn attempt_router_once(
     level: Option<thinking::ThinkingLevel>,
     options: StepOptions,
 ) -> Result<(String, Value), String> {
-    let cfg = load_config(state);
+    let cfg = router_config(state);
     let chosen = chosen.trim().to_string();
 
     if let Some(platform_model) = openai::platform_model(&chosen) {
@@ -2679,7 +2723,7 @@ async fn models(
     State(state): State<AppState>,
     AxumQuery(params): AxumQuery<HashMap<String, String>>,
 ) -> Response<Body> {
-    let cfg = load_config(&state);
+    let cfg = router_config(&state);
     let cache_key = format!(
         "{}|{}",
         cfg.base_url.trim_end_matches('/'),
@@ -2720,7 +2764,7 @@ async fn models(
 
 /// One walk of the router's /models. `data[]` is the OpenAI shape; context
 /// limits ride under whichever key the router uses.
-async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, String> {
+pub(crate) async fn fetch_models(state: &AppState, cfg: &Config) -> Result<Vec<Value>, String> {
     let url = router_url(cfg, "models");
     let mut request = state.client.get(&url);
     if !cfg.api_key.trim().is_empty() {
@@ -3473,7 +3517,7 @@ fn embed_framing_allowed() -> bool {
 }
 
 async fn test_router(State(state): State<AppState>) -> Response<Body> {
-    let cfg = load_config(&state);
+    let cfg = router_config(&state);
     if cfg.api_key.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -3632,7 +3676,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     // picked skill's instructions ride with this message only.
     let workspace_root = state.workspace.current_root();
     let available = skills::discover(&skills::roots(&state.static_dir, workspace_root.as_deref()));
-    let cfg = load_config(state);
+    let cfg = router_config(state);
     if let Some(skill_id) = input.get("skill").and_then(Value::as_str) {
         if let Some(skill) = skills::instructions_for(skill_id, &available) {
             if skill.error.is_none() {
@@ -3904,7 +3948,7 @@ async fn deepsearch_phase(
     if question.is_empty() {
         return Ok((None, Vec::new()));
     }
-    let cfg = load_config(state);
+    let cfg = router_config(state);
     let outcome = deepsearch::run(
         &state.client,
         &deepsearch::Config {
@@ -4780,7 +4824,7 @@ async fn transcribe(State(state): State<AppState>, Json(input): Json<Value>) -> 
     if model.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "Missing model.");
     }
-    let cfg = crate::load_config(&state);
+    let cfg = crate::router_config(&state);
     if cfg.base_url.trim().is_empty() {
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -5066,6 +5110,12 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
         )))
+        .merge(
+            providers::router().route_layer(middleware::from_fn_with_state(
+                workspace::LocalOriginGuard::new(port),
+                workspace::guard_local_origin,
+            )),
+        )
         .merge(index::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
