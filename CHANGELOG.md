@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.75.8
+
+### Patch
+
+The built-in VS Code server now enforces the missing `git` desktop action: a new `vscode-extension/src/git.ts` module serves `status`, `log`, `commit` and `branches` behind the shared permission store (`git` -> `git` action), and the extension host adds four route pairs with the same deny/ask/allow resolution the desktop uses: `GET /api/workspace/git/status`, `GET /api/workspace/git/log?n=`, `POST /api/workspace/git/commit` (with a `saved permission rule denies git` -> 403, otherwise 200) and `GET /api/workspace/git/branches`. `cargo fmt --check` clean; `node build.mjs --with-tests` green; `node --test test/lib.test.mjs` green.
+
 ## 3.75.7
 
 The Debug pane now accepts program **Arguments** and a **Working
@@ -9,6 +15,16 @@ server resolves the directory relative to the open folder and starts the
 adapter there with the configured arguments. Attach is unchanged. New
 focused unit test `a_session_starts_with_adapter_args_and_cwd` added to
 `dap::`; the crate checks clean.
+
+### Patch
+
+The debug start payload is now carried in the adapter's named launch
+fields (`launch_args`, `launch_cwd`) through `start_session`; the old
+`SessionOptions.args` name is no longer serialized, so a launch request
+can no longer fail on a missing field, and a non-empty `cwd` is now a
+400 carrying the adapter message instead of a crate boundary
+conversion. Only the pre-existing audio-transcription route error in
+`main.rs` (unrelated to this change) appears in crate checks here.
 
 ## 3.73.0
 

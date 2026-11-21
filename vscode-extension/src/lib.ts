@@ -23,8 +23,12 @@ import {
 import type { AgentStep } from "./agent";
 import { McpError, McpService } from "./mcp";
 import { McpOAuth } from "./mcpoauth";
+import { execFile as nodeExecFile } from "node:child_process";
+import { promisify } from "node:util";
 import { PERMIT_ACTIONS, PermissionStore } from "./permissions";
 import type { PermitAction } from "./permissions";
+import type { GitContext, GitExecution } from "./git";
+import { status, commit, log, branches } from "./git";
 // Re-exported so `node --test` can exercise the permission action set.
 export { PermissionStore, PERMIT_ACTIONS } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
@@ -1704,14 +1708,25 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       return false;
     };
     /** A saved deny blocks a route a person clicks too; the `ask` scope does
-       not, because the click on that route is itself the approval. */
+       not, because the click on that route is the approval. */
     const policyDenial = (action: PermitAction, target: string, audit = true): string | null =>
       permissions.deniedForUser(action, target, activeProject() || "", audit);
     const mcpFailed = (error: unknown): void => {
       const status = error instanceof McpError ? error.status : 502;
       sendJson(response, status, { ok: false, error: (error as Error).message });
     };
-
+    /** Node child-process runner used by the permission-gated git context. */
+    const execFileAsync = promisify(nodeExecFile);
+    /** Permission-gated git operations (desktop parity). */
+    const gitRunner = (args: readonly string[], options?: { cwd?: string; timeoutMs?: number }) => {
+      const root = options?.cwd ?? requireRoot(options);
+      return execFileAsync("git", args, { cwd: root, timeoutMs: options?.timeoutMs, maxBuffer: 5 * 1024 * 1024 } as any) as any as Promise<GitExecution>;
+    };
+    const gitCtx: GitContext = {
+      root: requireRoot(options),
+      git: gitRunner,
+      policyDenial,
+    };
     try {
       if (!isLoopbackUrl(`http://${request.headers.host || "127.0.0.1"}`) && !(request.headers.host || "").startsWith("127.0.0.1")) {
         const host = (request.headers.host || "").split(":")[0];
@@ -2681,6 +2696,67 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           return;
         }
         sendJson(response, 200, renameEntry(root, from, to));
+        return;
+      }
+
+      /* ---- git actions (desktop parity, permission-gated) ------------ */
+
+      if (routePath === "/api/workspace/git/status" && method === "GET") {
+        const result = await status(gitCtx);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true, status: result.status });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/log" && method === "GET") {
+        const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("n")) || 20));
+        const result = await log(gitCtx, limit);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true, lines: result.lines });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/commit" && method === "POST") {
+        const body = await readBody(request);
+        const message = String(body.message || "");
+        if (!message) {
+          sendJson(response, 400, { ok: false, error: "Commit message required." });
+          return;
+        }
+        const result = await commit(gitCtx, message);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (routePath === "/api/workspace/git/branches" && method === "GET") {
+        const result = await branches(gitCtx);
+        if (!result.ok) {
+          const status = result.error.startsWith("saved permission rule denies git")
+            ? 403
+            : 500;
+          sendJson(response, status, { ok: false, error: result.error });
+          return;
+        }
+        sendJson(response, 200, { ok: true, branches: result.branches });
         return;
       }
 
