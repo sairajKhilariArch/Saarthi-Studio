@@ -342,13 +342,15 @@ body.no-bottom { --bottom-h: 0px; }
 }
 .thread-item .thread-icon { color: var(--mute); }
 .thread-item.active .thread-icon { color: var(--accent); }
-.thread-delete {
+.thread-delete, .thread-budget {
   opacity: 0; display: grid; place-items: center; width: 22px; height: 22px;
   border-radius: 5px; color: var(--mute);
 }
-.thread-item:hover .thread-delete, .thread-item.active .thread-delete { opacity: 1; }
+.thread-item:hover .thread-delete, .thread-item.active .thread-delete,
+.thread-item:hover .thread-budget, .thread-item.active .thread-budget { opacity: 1; }
 .thread-delete:hover { background: var(--surface-3); color: var(--danger); }
-.thread-delete .icon { width: 13px; height: 13px; }
+.thread-budget:hover { background: var(--surface-3); color: var(--accent); }
+.thread-delete .icon, .thread-budget .icon { width: 13px; height: 13px; }
 
 /* Thread pane head: names the project (or "all projects") and flips scope. */
 .pane-head { display: flex; align-items: center; gap: 8px; }

@@ -593,6 +593,11 @@
             <span>Goal for the open workspace</span>
             <textarea id="runGoal" rows="3" placeholder="Create hello.txt containing Hi, then verify it exists by listing the folder." required></textarea>
           </label>
+          <label class="field">
+            <span>Token budget (optional)</span>
+            <input id="runTokenBudget" type="number" min="0" step="1000" placeholder="Blank uses the agent setting">
+            <small>The run stops between steps once its own model calls reach this total. 0 means no limit.</small>
+          </label>
           <div class="field">
             <span>Agent profile</span>
             <select id="runProfile" class="run-profile-select">
@@ -1090,6 +1095,11 @@
               <small>Only the newest messages compete for the budget.</small>
             </label>
           </div>
+          <label class="field">
+            <span>Agent run token budget</span>
+            <input id="agentRunTokenBudget" type="number" min="0" step="1000" value="0">
+            <small>Default ceiling for one agent run; 0 means no limit. A run started from the Agent page can set its own.</small>
+          </label>
           <label class="field checkbox-field">
             <input id="sendOutline" type="checkbox" checked>
             <span>Send the open folder's file names with each request</span>

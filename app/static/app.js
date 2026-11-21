@@ -429,6 +429,30 @@ async function setProjectTokenBudget(project) {
   await updateProject(project, { token_budget: budget });
 }
 
+/* One thread's own 24-hour token ceiling, above the project's. Blank or 0
+   removes it; the server refuses a turn once the reported total reaches it. */
+async function setThreadTokenBudget(conversation) {
+  const answer = await askName({
+    title: "Thread token budget",
+    label: "Tokens per 24 hours for this thread (blank for no limit)",
+    value: conversation.token_budget ? String(conversation.token_budget) : "",
+    placeholder: "0",
+    submitLabel: "Save",
+  });
+  if (answer == null) return;
+  const budget = Math.max(0, Math.floor(Number(String(answer).replace(/[^0-9]/g, "")) || 0));
+  const result = await api(`/api/conversations/${encodeURIComponent(conversation.id)}/update`, {
+    method: "POST",
+    body: JSON.stringify({ token_budget: budget }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not update that thread's budget.");
+    return;
+  }
+  toast(budget ? `This thread may use ${budget} tokens per 24 hours.` : "Thread budget removed.");
+  await loadConversations();
+}
+
 async function updateProject(project, patch) {
   const result = await api(`/api/projects/${encodeURIComponent(project.id)}/update`, {
     method: "POST",
@@ -2064,6 +2088,7 @@ function renderConversations() {
       (state.threadScope === "all"
         ? `<span class="thread-project" title="This thread belongs to this project"></span>`
         : "") +
+      `<button class="thread-budget" title="Token budget for this thread" aria-label="Token budget for this thread">${icon("chart")}</button>` +
       `<button class="thread-delete" title="Delete thread" aria-label="Delete thread">${icon("close")}</button>` +
       `<span class="thread-time"></span>` +
       (isOpen ? `<span class="thread-open" title="This thread is open in the chat view">open</span>` : "");
@@ -2073,8 +2098,12 @@ function renderConversations() {
     item.querySelector(".thread-time").textContent = relativeTime(conversation.updated_at);
     item.title = `${conversation.title} — ${relativeTime(conversation.updated_at)}`;
     item.addEventListener("click", (event) => {
-      if (event.target.closest(".thread-delete")) return;
+      if (event.target.closest(".thread-delete, .thread-budget")) return;
       openConversation(conversation.id);
+    });
+    item.querySelector(".thread-budget").addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await setThreadTokenBudget(conversation);
     });
     item.querySelector(".thread-delete").addEventListener("click", async (event) => {
       event.stopPropagation();
@@ -5353,6 +5382,7 @@ async function loadSettings() {
   state.model = result.data.model || "auto";
   state.contextBudget = Number(result.data.context_budget_tokens) || 6000;
   $("contextBudget").value = state.contextBudget;
+  $("agentRunTokenBudget").value = Number(result.data.run_token_budget) || 0;
   renderModelChipLabel();
   loadModels();
   loadProviders();
@@ -6294,6 +6324,7 @@ async function saveSettings(event) {
     base_url: $("baseUrl").value.trim(),
     model: $("model").value.trim() || "auto",
     context_budget_tokens: Number($("contextBudget").value) || state.contextBudget || 6000,
+    run_token_budget: Number($("agentRunTokenBudget").value) || 0,
     history_messages: Number($("historyMessages").value) || 6,
     send_workspace_outline: $("sendOutline").checked,
     search_provider: $("searchProvider").value,
@@ -10165,6 +10196,9 @@ async function submitRun(event) {
     allowMcp: $("runAllowMcp").checked,
     autoApprove: $("runAutoApprove").checked,
   };
+  // A run-level token ceiling; blank keeps the configured default, and 0 is an
+  // explicit "no limit" for this run.
+  if ($("runTokenBudget").value !== "") payload.tokenBudget = Math.max(0, Number($("runTokenBudget").value) || 0);
   // A run-level Thinking choice; blank keeps the agent level from Settings.
   if ($("runThinking").value) payload.thinking = $("runThinking").value;
   const priority = Number($("runPriority").value);

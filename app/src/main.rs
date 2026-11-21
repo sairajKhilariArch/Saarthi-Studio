@@ -194,6 +194,11 @@ struct Config {
     /// which is the default: a fresh install must never block its first turn.
     #[serde(default)]
     daily_budget_usd: f64,
+    /// Default token ceiling for one agent run. Zero means no limit; a run can
+    /// still name its own value, and a run already started keeps the number it
+    /// was created with.
+    #[serde(default)]
+    run_token_budget: i64,
     /// How many agent runs may execute at the same time. One by default: runs
     /// share the open workspace, and there is no per-file locking yet, so two
     /// agents editing the same folder is a conflict waiting to happen. Queued
@@ -296,6 +301,7 @@ impl Config {
             agent_model: String::new(),
             fallback_models: Vec::new(),
             daily_budget_usd: 0.0,
+            run_token_budget: 0,
             max_concurrent_runs: default_max_concurrent_runs(),
             command_presets: Vec::new(),
             language_servers: Vec::new(),
@@ -541,6 +547,8 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     migrate_project_thinking(conn).map_err(|error| format!("project thinking: {error}"))?;
     migrate_project_model(conn).map_err(|error| format!("project model: {error}"))?;
     migrate_project_budget(conn).map_err(|error| format!("project token budget: {error}"))?;
+    migrate_conversation_budget(conn)
+        .map_err(|error| format!("conversation token budget: {error}"))?;
     migrate_request_log_costs(conn).map_err(|error| format!("request log costs: {error}"))?;
     migrate_conversation_model(conn).map_err(|error| format!("conversation model: {error}"))?;
     permissions::initialize(conn).map_err(|error| format!("permissions: {error}"))?;
@@ -717,6 +725,24 @@ fn migrate_project_budget(conn: &Connection) -> rusqlite::Result<()> {
     if !has_column {
         conn.execute_batch(
             "ALTER TABLE projects ADD COLUMN token_budget INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    Ok(())
+}
+
+/// A thread's own 24-hour token budget, above the project's. `0` means no
+/// limit, so every existing thread keeps answering after the upgrade.
+fn migrate_conversation_budget(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(conversations)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "token_budget")
+    };
+    if !has_column {
+        conn.execute_batch(
+            "ALTER TABLE conversations ADD COLUMN token_budget INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
     Ok(())
@@ -1129,6 +1155,7 @@ fn validate_config(mut cfg: Config) -> Result<Config, String> {
     cfg.fallback_models = model_scope::normalised(&cfg.fallback_models);
     // A negative budget is meaningless; zero stays "no limit".
     cfg.daily_budget_usd = cfg.daily_budget_usd.max(0.0);
+    cfg.run_token_budget = cfg.run_token_budget.max(0);
     // Concurrency is a range, not a wish: zero active runs would stall the
     // queue forever, and past four the runs compete for one workspace anyway.
     cfg.max_concurrent_runs = cfg.max_concurrent_runs.clamp(1, MAX_CONCURRENT_RUNS);
@@ -1302,6 +1329,11 @@ const PROJECT_CHAT_TOKENS_SQL: &str = "SELECT COALESCE(SUM(l.total_tokens),0) FR
      WHERE c.project_id=?1 AND l.created_at>=?2";
 const PROJECT_RUN_TOKENS_SQL: &str =
     "SELECT COALESCE(SUM(tokens),0) FROM agent_runs WHERE project_id=?1 AND created_at>=?2";
+/// Tokens one thread's own turns spent in the same window. `request_log` rows
+/// carry both the conversation and the provider-reported total, so no estimate
+/// is involved.
+const CONVERSATION_TOKENS_SQL: &str = "SELECT COALESCE(SUM(total_tokens),0) FROM request_log \
+     WHERE conversation_id=?1 AND created_at>=?2";
 
 /// The pure half of the project budget: a refusal message only when a limit is
 /// set and the window's spend has reached it. Kept separate so the arithmetic
@@ -1348,6 +1380,43 @@ pub(crate) fn project_budget_gate(state: &AppState, project_id: &str) -> Option<
         })
         .unwrap_or(0);
     project_budget_refusal(budget, chat + runs)
+}
+
+/// The pure half of a thread's budget, independent of the project's.
+fn conversation_budget_refusal(budget: i64, spent: i64) -> Option<String> {
+    if budget <= 0 || spent < budget {
+        return None;
+    }
+    Some(format!(
+        "This thread has used {spent} of its {budget} tokens in the last 24 hours. Raise the thread budget, or start a new thread."
+    ))
+}
+
+/// Refuse a turn when the thread's own 24-hour budget is spent. A missing row,
+/// a zero budget or a database that cannot be read all mean "no limit".
+fn conversation_budget_gate(state: &AppState, conversation_id: &str) -> Option<String> {
+    if conversation_id.trim().is_empty() {
+        return None;
+    }
+    let conn = open_db(&state.database_path).ok()?;
+    let budget: i64 = conn
+        .query_row(
+            "SELECT COALESCE(token_budget,0) FROM conversations WHERE id=?1",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if budget <= 0 {
+        return None;
+    }
+    let spent: i64 = conn
+        .query_row(
+            CONVERSATION_TOKENS_SQL,
+            params![conversation_id, now_seconds() - BUDGET_WINDOW_SECONDS],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    conversation_budget_refusal(budget, spent)
 }
 
 /// The thinking block a chat response reports: the level in force, where it
@@ -1925,6 +1994,7 @@ async fn get_config(State(state): State<AppState>) -> Json<Value> {
         "agent_model": cfg.agent_model,
         "fallback_models": cfg.fallback_models,
         "daily_budget_usd": cfg.daily_budget_usd,
+        "run_token_budget": cfg.run_token_budget,
         "max_concurrent_runs": cfg.max_concurrent_runs,
         "command_presets": cfg.command_presets,
     }))
@@ -2593,6 +2663,9 @@ async fn post_config(State(state): State<AppState>, Json(input): Json<Value>) ->
     if let Some(budget) = input.get("daily_budget_usd").and_then(Value::as_f64) {
         cfg.daily_budget_usd = budget;
     }
+    if let Some(budget) = input.get("run_token_budget").and_then(Value::as_i64) {
+        cfg.run_token_budget = budget.max(0);
+    }
     if let Some(limit) = input.get("max_concurrent_runs").and_then(Value::as_i64) {
         cfg.max_concurrent_runs = limit;
     }
@@ -3140,13 +3213,14 @@ async fn list_conversations(
         let sql = if all_scope {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
-             COALESCE(p.name, 'No project') AS project
+             COALESCE(p.name, 'No project') AS project, COALESCE(v.token_budget,0)
              FROM conversations v LEFT JOIN projects p ON p.id=v.project_id
              ORDER BY v.updated_at DESC LIMIT 100"
         } else {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
-             (SELECT COALESCE(name, 'No project') FROM projects p WHERE p.id=v.project_id) AS project
+             (SELECT COALESCE(name, 'No project') FROM projects p WHERE p.id=v.project_id) AS project,
+             COALESCE(v.token_budget,0)
              FROM conversations v WHERE v.project_id=?1 ORDER BY v.updated_at DESC"
         };
         let mut stmt = conn.prepare(sql)?;
@@ -3156,7 +3230,8 @@ async fn list_conversations(
                     "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                     "last_message": row.get::<_, Option<String>>(4)?,
-                    "project": row.get::<_, String>(5)?
+                    "project": row.get::<_, String>(5)?,
+                    "token_budget": row.get::<_, i64>(6)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -3166,7 +3241,8 @@ async fn list_conversations(
                 Ok(json!({
                     "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
-                    "last_message": row.get::<_, Option<String>>(4)?
+                    "last_message": row.get::<_, Option<String>>(4)?,
+                    "token_budget": row.get::<_, i64>(5)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -3234,6 +3310,32 @@ async fn create_conversation(
             events::notify(&state.events, &id, "created");
             (StatusCode::CREATED, Json(json!({"id": id, "title": title}))).into_response()
         }
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// A thread's own token budget. Only `token_budget` is accepted; a request
+/// without it is refused rather than silently doing nothing.
+async fn update_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> Response<Body> {
+    let Some(budget) = input.get("token_budget").and_then(Value::as_i64) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "Name a token_budget (0 means no limit).",
+        );
+    };
+    let budget = budget.max(0);
+    match open_db(&state.database_path).and_then(|conn| {
+        conn.execute(
+            "UPDATE conversations SET token_budget=?1 WHERE id=?2",
+            params![budget, id],
+        )
+    }) {
+        Ok(0) => json_error(StatusCode::NOT_FOUND, "Conversation not found."),
+        Ok(_) => Json(json!({"ok": true, "id": id, "token_budget": budget})).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -3835,6 +3937,9 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     // itself halfway through.
     let active_project = active_project_id(state);
     if let Some(refusal) = project_budget_gate(state, &active_project) {
+        return Err(Box::new(json_error(StatusCode::TOO_MANY_REQUESTS, refusal)));
+    }
+    if let Some(refusal) = conversation_budget_gate(state, &cid) {
         return Err(Box::new(json_error(StatusCode::TOO_MANY_REQUESTS, refusal)));
     }
     let outline = if cfg.send_workspace_outline {
@@ -5038,6 +5143,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             get(list_conversations).post(create_conversation),
         )
         .route("/api/conversations/:id/messages", get(get_messages))
+        .route("/api/conversations/:id/update", post(update_conversation))
         .route("/api/conversations/:id/delete", post(delete_conversation))
         .route("/api/usage", get(usage))
         .route("/api/open", post(open_url))
@@ -5344,6 +5450,38 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn a_thread_budget_refuses_only_when_its_window_is_spent() {
+        assert!(
+            conversation_budget_refusal(0, 10_000).is_none(),
+            "0 is no limit"
+        );
+        assert!(conversation_budget_refusal(100, 99).is_none());
+        let refusal = conversation_budget_refusal(100, 100).expect("spent");
+        assert!(refusal.contains("100 of its 100 tokens"), "{refusal}");
+    }
+
+    #[test]
+    fn thread_spend_sql_counts_only_that_conversation_inside_the_window() {
+        let conn = Connection::open_in_memory().expect("memory database");
+        conn.execute_batch(
+            "CREATE TABLE request_log (
+                conversation_id TEXT, total_tokens INTEGER, created_at REAL
+            );
+            INSERT INTO request_log VALUES ('c1', 40, 100.0);
+            INSERT INTO request_log VALUES ('c1', 10, 100.0);
+            INSERT INTO request_log VALUES ('c2', 99, 100.0);
+            INSERT INTO request_log VALUES ('c1', 1000, 1.0);",
+        )
+        .expect("fixture");
+        let spent: i64 = conn
+            .query_row(CONVERSATION_TOKENS_SQL, params!["c1", 50.0], |row| {
+                row.get(0)
+            })
+            .expect("thread spend");
+        assert_eq!(spent, 50, "only c1, and only inside the 24-hour window");
     }
 
     #[test]

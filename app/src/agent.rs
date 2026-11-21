@@ -508,6 +508,9 @@ pub(crate) fn initialize(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE agent_runs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0",
         // This run's own Thinking level ("" = the agent scope in config).
         "ALTER TABLE agent_runs ADD COLUMN thinking TEXT NOT NULL DEFAULT ''",
+        // This run's own token ceiling, fixed when it was created. 0 = no limit,
+        // which is what every run that predates the column gets.
+        "ALTER TABLE agent_runs ADD COLUMN token_budget INTEGER NOT NULL DEFAULT 0",
         // Queue ordering (higher first, creation time breaks ties) and the runs
         // that must succeed before this one may start (JSON array of ids).
         "ALTER TABLE agent_runs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
@@ -617,6 +620,33 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<RunRow> {
         context: row.get(26)?,
         thinking: row.get(27)?,
     })
+}
+
+/// The pure half of a run's token ceiling: a refusal only when a limit was set
+/// and the run has reached it. Kept separate so the arithmetic is testable
+/// without a run in flight.
+pub(crate) fn run_budget_refusal(budget: i64, spent: i64) -> Option<String> {
+    if budget <= 0 || spent < budget {
+        return None;
+    }
+    Some(format!(
+        "This run has used {spent} of its {budget} tokens. Start a new run with a higher budget if the work must continue."
+    ))
+}
+
+/// This run's ceiling and usage, read together so a step boundary cannot see a
+/// budget from one row and a total from another. Any read failure means "no
+/// limit": a broken budget must not stall a working agent.
+fn run_budget_gate(state: &AppState, run_id: &str) -> Option<String> {
+    let (budget, spent): (i64, i64) = db(state)
+        .ok()?
+        .query_row(
+            "SELECT COALESCE(token_budget,0), COALESCE(tokens,0) FROM agent_runs WHERE id=?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()?;
+    run_budget_refusal(budget, spent)
 }
 
 /// Add the tokens a run's own model call reported to its running total. Fire and
@@ -3377,6 +3407,16 @@ async fn run_loop(state: AppState, run_id: String, control: Arc<RunControl>) {
                 break;
             }
         };
+        // This run's own token budget, fixed when it was created. Checked here,
+        // between steps, so a call already in flight finishes and its usage is
+        // counted before the next one is refused.
+        if let Some(refusal) = run_budget_gate(&state, &run_id) {
+            let _ = add_step(&state, &run_id, "budget", "Token budget reached.", &refusal);
+            let _ = finish(&state, &run_id, FAILED, &refusal);
+            notify(&state, Some(&run_id));
+            hit_ceiling = false;
+            break;
+        }
         // The pause safe point: between steps, before anything new is planned or
         // executed. A pause requested while a step was in flight lands here, so
         // no action is ever cut in half. The flag is read from this loop's own
@@ -3882,6 +3922,14 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         Ok(level) => level,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
     };
+    // A run's own token ceiling: the request's value, else the configured
+    // default, never below zero. Fixed now so a later settings change cannot
+    // move the finish line under a running agent.
+    let run_token_budget = input
+        .get("tokenBudget")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| crate::load_config(&state).run_token_budget)
+        .max(0);
     let stamp = now();
     // Reproducible-run record: freeze the routing config as it was when the
     // run started, so the run shows which model setup produced it. A run may
@@ -3895,13 +3943,13 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
     if let Err(error) = db(&state).and_then(|conn|
         conn.execute(
-            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on,thinking) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
+            "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on,thinking,token_budget) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
             params![
                 id, project_id, goal, QUEUED,
                 allow_writes, allow_commands, auto_approve, max_steps, stamp,
                 snapshot, base_model, profile, mode, crew_json, stage_policy, stage_max_steps,
-                allow_mcp, priority, depends_json, thinking
+                allow_mcp, priority, depends_json, thinking, run_token_budget
             ],
         ).map_err(|e| e.to_string())
     ) {
@@ -5181,6 +5229,14 @@ fn cap_chars(text: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_budget_refuses_only_once_it_is_spent() {
+        assert!(run_budget_refusal(0, 10_000).is_none(), "0 is no limit");
+        assert!(run_budget_refusal(100, 99).is_none());
+        let refusal = run_budget_refusal(100, 100).expect("spent");
+        assert!(refusal.contains("100 of its 100 tokens"), "{refusal}");
+    }
 
     #[test]
     fn the_monitor_payload_carries_tokens_and_timing() {

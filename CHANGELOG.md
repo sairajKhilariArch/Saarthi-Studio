@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.80.0
+
+### Added
+
+Token budgets at the two scopes that were still unbounded: one thread and one
+agent run.
+
+- **Per-thread budget.** A thread's own 24-hour ceiling, above the project's,
+  set from the new budget button on each thread row (blank or 0 removes it).
+  A turn is refused before it is sent once the thread's provider-reported
+  total reaches the limit, so the refusal costs nothing. `request_log` already
+  carries the conversation id and the reported total, so nothing is estimated.
+- **Per-run budget.** A run's ceiling is fixed when it is created — the Agent
+  page's new optional field, else the new Settings default, else no limit —
+  so a settings change cannot move the finish line under a running agent. The
+  run is checked between steps (an in-flight call finishes and its usage is
+  counted), then fails with a `budget` step and an explanation. Resuming does
+  not reset the total.
+- Both budgets are additive columns defaulting to `0` (no limit), so every
+  existing thread and run behaves exactly as before after the upgrade.
+
+Verified: `cargo test --no-default-features` 685 passed, 0 failed, 1 ignored
+(3 new: thread refusal arithmetic, thread spend SQL scoping, run refusal
+arithmetic); clippy clean; `cargo fmt --check` clean; frontend 103/103.
+
 ## 3.79.1
 
 ### Fixed
