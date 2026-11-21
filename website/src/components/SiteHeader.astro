@@ -4,38 +4,7 @@ import ThemeToggle from './ThemeToggle.astro';
 import { NAV, SITE } from '../lib/site';
 import { withBase } from '../lib/url';
 
-const THEMES = [
-  { value: 'hermes', label: 'Hermes', color: '#38bdf8' },
-  { value: 'deepseek', label: 'DeepSeek', color: '#7c8aff' },
-  { value: 'solar', label: 'Solar', color: '#c084fc' },
-  { value: 'forest', label: 'Forest', color: '#34d399' },
-  { value: 'ocean', label: 'Ocean', color: '#38bdf8' },
-  { value: 'midnight', label: 'Midnight', color: '#818cf8' },
-  { value: 'indigo', label: 'Indigo', color: '#818cf8' },
-  { value: 'sunset', label: 'Sunset', color: '#fbbf24' },
-] as const;
-
-type ThemeValue = (typeof THEMES)[number]['value'];
-
-const storedAndValid = (value: string | null): value is ThemeValue =>
-  typeof value === 'string' && THEMES.some((t) => t.value === value);
-
 const path = Astro.url.pathname;
-const currentTheme = (() => {
-  const read = () => {
-    try {
-      return localStorage.getItem('sarthi-theme');
-    } catch {
-      return null;
-    }
-  };
-  const saved = read();
-  if (saved === 'light' || saved === 'dark') return saved; // legacy
-  if (storedAndValid(saved)) return saved;
-  return 'hermes';
-})();
-
-const currentThemeLabel = THEMES.find((t) => t.value === currentTheme)?.label ?? 'Hermes';
 const isActive = (href: string) =>
   href.startsWith('/#')
     ? path === withBase('/')
@@ -45,8 +14,8 @@ const isActive = (href: string) =>
   <div class="container header-inner">
     <a class="brand" href={withBase('/')} aria-label="Sarthi Studio home">
       <img
-        class="brand-mark logo-mascot"
-        src={withBase('/brand/tardigrade-mascot.svg')}
+        class="brand-mark"
+        src={withBase('/brand/logo.svg')}
         width="32"
         height="32"
         alt=""
@@ -85,40 +54,6 @@ const isActive = (href: string) =>
       </a>
       <ThemeToggle />
       <button
-        class="icon-button theme-switch"
-        type="button"
-        data-theme-switch
-        aria-label="Switch color theme"
-        title="Theme switcher"
-      >
-        <span class="theme-swatch" id="theme-swatch" style="background: var(--accent);"></span>
-        <span class="theme-label" id="theme-label">{currentThemeLabel}</span>
-      </button>
-      <div class="theme-picker" id="theme-picker" hidden>
-        <div class="theme-picker-inner">
-          <div class="theme-picker-head">
-            <span class="theme-picker-title">Theme</span>
-            <button class="icon-button theme-picker-close" type="button" data-theme-picker-close aria-label="Close">
-              <Icon name="x" size={16} />
-            </button>
-          </div>
-          <div class="theme-picker-list">
-            {THEMES.map((t) => (
-              <button
-                class={`theme-picker-option${t.value === currentTheme ? ' is-active' : ''}`}
-                type="button"
-                data-theme-option={t.value}
-                style={`--swatch: ${t.color}`}
-                aria-label={`Apply ${t.label} theme`}
-              >
-                <span class="theme-picker-swatch" style="background: var(--swatch);"></span>
-                <span class="theme-picker-name">{t.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      <button
         class="icon-button menu-button"
         type="button"
         data-menu-button
@@ -148,33 +83,8 @@ const isActive = (href: string) =>
 </header>
 
 <script>
-  import { THEMES } from '../lib/theme';
   const menuButton = document.querySelector<HTMLButtonElement>('[data-menu-button]');
   const panel = document.querySelector<HTMLElement>('[data-mobile-nav]');
-  const themeSwitch = document.querySelector<HTMLButtonElement>('[data-theme-switch]');
-  const picker = document.querySelector<HTMLElement>('#theme-picker');
-  const pickerClose = document.querySelector<HTMLElement>('[data-theme-picker-close]');
-  const themeOptions = document.querySelectorAll<HTMLElement>('[data-theme-option]');
-  const themeSwatch = document.querySelector<HTMLElement>('#theme-swatch');
-  const themeLabel = document.querySelector<HTMLElement>('#theme-label');
-
-  const legacyThemes = [
-    { value: 'light', label: 'Light', color: '#f8fafc' },
-    { value: 'dark', label: 'Dark', color: '#111111' },
-  ];
-  const describeTheme = (value: string) =>
-    [...THEMES, ...legacyThemes].find((theme) => theme.value === value) ?? THEMES[0];
-
-  const syncThemeUi = (value: string) => {
-    const theme = describeTheme(value);
-    if (themeSwatch) themeSwatch.style.background = theme.color;
-    if (themeLabel) themeLabel.textContent = theme.label;
-    themeOptions.forEach((option) => {
-      const active = option.dataset.themeOption === value;
-      option.classList.toggle('is-active', active);
-      option.setAttribute('aria-pressed', String(active));
-    });
-  };
 
   const setOpen = (open: boolean) => {
     if (!panel || !menuButton) return;
@@ -203,51 +113,4 @@ const isActive = (href: string) =>
       if (event.matches) setOpen(false);
     });
   }
-
-  if (themeSwitch && picker) {
-    const closePicker = () => {
-      picker.hidden = true;
-      themeSwitch.focus();
-    };
-
-    themeSwitch.addEventListener('click', () => {
-      picker.hidden = !picker.hidden;
-    });
-
-    pickerClose?.addEventListener('click', closePicker);
-
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !picker.hidden) closePicker();
-    });
-
-    document.addEventListener('click', (event) => {
-      if (picker.hidden) return;
-      if (event.target instanceof Element && event.target.closest('.theme-picker, .theme-switch')) {
-        return;
-      }
-      picker.hidden = true;
-    });
-
-    themeOptions.forEach((option) => {
-      option.addEventListener('click', () => {
-        const value = option.dataset.themeOption;
-        if (!value) return;
-        try {
-          localStorage.setItem('sarthi-theme', value);
-        } catch {
-          // The theme still applies for this page when storage is unavailable.
-        }
-        document.documentElement.dataset.theme = value;
-        syncThemeUi(value);
-        closePicker();
-      });
-    });
-  }
-
-  document.addEventListener('sarthi-theme-change', (event) => {
-    const value = (event as CustomEvent<{ theme?: string }>).detail?.theme;
-    if (value) syncThemeUi(value);
-  });
-
-  syncThemeUi(document.documentElement.dataset.theme || 'hermes');
 </script>

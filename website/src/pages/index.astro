@@ -132,17 +132,6 @@ const docsTeaser = [
             <Icon name="arrow-right" size={18} />
           </Button>
         </div>
-        <div class="hero-logo">
-          <img
-            class="hero-logo-img logo-mascot"
-            src={withBase('/brand/tardigrade-mascot.svg')}
-            alt="Sarthi Studio mascot, smiling and waving"
-            width="120"
-            height="120"
-            decoding="async"
-          />
-          <span class="hero-logo-name">Sarthi Studio</span>
-        </div>
         <div class="hero-meta">
           <span><Icon name="cpu" size={15} /> Rust + SQLite</span>
           <span><Icon name="monitor" size={15} /> Linux · Windows · macOS</span>
@@ -397,6 +386,14 @@ const docsTeaser = [
   <section class="section cta-section">
     <div class="container">
       <div class="cta-panel">
+        <img
+          class="cta-mascot"
+          src={withBase('/brand/tardigrade-mascot.svg')}
+          alt=""
+          width="96"
+          height="96"
+          loading="lazy"
+        />
         <div class="cta-copy">
           <p class="eyebrow">Open source</p>
           <h2>Local-first. Built in the open.</h2>

@@ -235,7 +235,7 @@ Root docs on `main`:
 | `docs/IMPLEMENTATION-SPECIFICATION.md` | Engineering contracts and definition of done |
 | `docs/KNOWN-ISSUES.md` | Public limitations, signing status, website branch, platform gaps |
 | `docs/TESTING-STRATEGY.md` | Build/test/contribution instructions |
-| `docs/BRAND-ASSETS.md` | Canonical mascot geometry, exactly three colours, screenshot inventory |
+| `docs/BRAND-ASSETS.md` | Logo and mascot geometry, exactly three colours, screenshot inventory |
 | `docs/adr/`, `docs/agents/`, `docs/android/`, `docs/dev/`, `docs/security/` | Architecture decisions and host-API security material |
 
 There is **no** existing public docs site, search index, API reference site, or
@@ -249,12 +249,14 @@ copying stale prose.
 
 Verified brand rules (`docs/BRAND-ASSETS.md`):
 
-- Mascot: a happy, waving tardigrade face, exactly three colours: orange
-  `#FF7A1A`, black `#111111`, white `#FFFFFF`. No gradients in the mascot; the
-  tile behind it is solid black. Website art lives in `website/public/brand/`.
-- Canonical SVGs in `app/static/brand/`: `tardigrade.svg`,
-  `tardigrade-mono-white.svg`, `tardigrade-mono-black.svg`,
-  `tardigrade-mark.svg`, `app-icon.svg`, `favicon.svg`, `splash.svg`.
+- Logo: the guide-path **S**, orange `#FF7A1A` on a black `#111111` tile with a
+  white start node. Exactly three colours and no gradients. Website copies live
+  in `website/public/brand/`.
+- Mascot: a happy, waving tardigrade face, used as personality (website CTA,
+  assistant avatar), never as the header or installer mark.
+- Canonical SVGs in `app/static/brand/`: `logo.svg` and its mono variants,
+  `tardigrade.svg` and its variants, `app-icon.svg`, `favicon.svg`,
+  `splash.svg`.
 - The master prompt mentions an "orange and purple" identity, but there is **no
   purple in the canonical brand assets**. Use orange as the single accent over
   near-black/white neutrals. Do not invent a second brand colour.
@@ -485,9 +487,9 @@ capability documented and addressable. Category anchors are stable
 - Tokens in `styles/tokens.css`: background, surface, raised surface, border,
   text, muted, accent orange, accent-soft, success/warning/danger states;
   spacing, radii, shadows, type scale, content widths, z-index.
-- Dark theme default; light theme via `data-theme`; system preference respected;
-  a tiny inline head script prevents a theme flash; toggle persists in
-  `localStorage`.
+- Dark theme default; light theme via `data-theme`; a tiny inline head script
+  prevents a theme flash; the single toggle persists in `localStorage`. Eight
+  unrelated colour themes were removed so orange is the only accent.
 - Typography: system UI stack and `ui-monospace` (no remote font requests, no
   font dependency). Display sizes with tight tracking; body at comfortable
   1.65 line-height.
@@ -497,8 +499,8 @@ capability documented and addressable. Category anchors are stable
   `PrevNext`, `SearchDialog`, `ThemeToggle`, `MobileNav`, `Footer`.
 - Motion: CSS transitions only; `prefers-reduced-motion` disables non-essential
   motion; no scroll-jacking, no glow-heavy hero.
-- Icons: inline accessible SVG with consistent stroke; the tardigrade is the
-  only mascot and keeps its three colours.
+- Icons: inline accessible SVG with consistent stroke; the guide-path **S** is
+  the logo, the tardigrade is the mascot, and both keep the three brand colours.
 - Every component has a server-rendered fallback; JavaScript enhances, never
   gates content.
 
@@ -776,8 +778,8 @@ the registry's `introduced` version against `latest_build`, not a guess.
 
 ### 13.1 Home
 
-1. Hero: mascot, one-line positioning, primary download CTA (driven by the
-   manifest), "Explore the docs", release/version indicator, platform chips.
+1. Hero: one-line positioning, primary download CTA (driven by the manifest),
+   "Explore the docs", release/version indicator, platform chips.
 2. Product preview: real shell/local-AI captures in a browser frame with
    captions; no fake agent screen.
 3. Capabilities: six cards (AI/models, agents, routers, skills/MCP, memory/index,
