@@ -528,6 +528,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     migrate_projects(conn).map_err(|error| format!("conversation projects: {error}"))?;
     migrate_project_thinking(conn).map_err(|error| format!("project thinking: {error}"))?;
     migrate_project_model(conn).map_err(|error| format!("project model: {error}"))?;
+    migrate_project_budget(conn).map_err(|error| format!("project token budget: {error}"))?;
     migrate_request_log_costs(conn).map_err(|error| format!("request log costs: {error}"))?;
     migrate_conversation_model(conn).map_err(|error| format!("conversation model: {error}"))?;
     permissions::initialize(conn).map_err(|error| format!("permissions: {error}"))?;
@@ -687,6 +688,24 @@ fn migrate_project_model(conn: &Connection) -> rusqlite::Result<()> {
     };
     if !has_column {
         conn.execute_batch("ALTER TABLE projects ADD COLUMN model TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+/// A project's 24-hour token budget. `0` means no limit, which is what every
+/// existing row gets: an upgrade must never start refusing turns.
+fn migrate_project_budget(conn: &Connection) -> rusqlite::Result<()> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(projects)")?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names.iter().any(|name| name == "token_budget")
+    };
+    if !has_column {
+        conn.execute_batch(
+            "ALTER TABLE projects ADD COLUMN token_budget INTEGER NOT NULL DEFAULT 0;",
+        )?;
     }
     Ok(())
 }
@@ -1229,6 +1248,62 @@ fn budget_gate(state: &AppState, cfg: &Config) -> Option<String> {
     }
     let spend = spend_window(state, BUDGET_WINDOW_SECONDS);
     cost::budget_refusal(cfg.daily_budget_usd, &spend)
+}
+
+/// Tokens a project spent in the budget window: chat through its conversations,
+/// plus the runs it owns. Only provider-reported totals count — a provider that
+/// reports nothing contributes nothing rather than an invented estimate.
+const PROJECT_CHAT_TOKENS_SQL: &str = "SELECT COALESCE(SUM(l.total_tokens),0) FROM request_log l \
+     JOIN conversations c ON c.id=l.conversation_id \
+     WHERE c.project_id=?1 AND l.created_at>=?2";
+const PROJECT_RUN_TOKENS_SQL: &str =
+    "SELECT COALESCE(SUM(tokens),0) FROM agent_runs WHERE project_id=?1 AND created_at>=?2";
+
+/// The pure half of the project budget: a refusal message only when a limit is
+/// set and the window's spend has reached it. Kept separate so the arithmetic
+/// is testable without a database.
+fn project_budget_refusal(budget: i64, spent: i64) -> Option<String> {
+    if budget <= 0 || spent < budget {
+        return None;
+    }
+    Some(format!(
+        "This project has used {spent} of its {budget} tokens in the last 24 hours. Raise the budget in the project menu, or wait for the window to roll over."
+    ))
+}
+
+/// Refuse a turn or a run when the active project's 24-hour token budget is
+/// spent. A missing project, a row without a budget, or a database that cannot
+/// be read all mean "no limit": a broken budget must not stop the app.
+pub(crate) fn project_budget_gate(state: &AppState, project_id: &str) -> Option<String> {
+    if project_id.trim().is_empty() {
+        return None;
+    }
+    let conn = open_db(&state.database_path).ok()?;
+    let budget = conn
+        .query_row(
+            "SELECT COALESCE(token_budget,0) FROM projects WHERE id=?1",
+            [project_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    if budget <= 0 {
+        return None;
+    }
+    let since = now_seconds() - BUDGET_WINDOW_SECONDS;
+    let chat = conn
+        .query_row(PROJECT_CHAT_TOKENS_SQL, params![project_id, since], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0);
+    let runs = conn
+        .query_row(PROJECT_RUN_TOKENS_SQL, params![project_id, since], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0);
+    project_budget_refusal(budget, chat + runs)
 }
 
 /// The thinking block a chat response reports: the level in force, where it
@@ -2788,7 +2863,7 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
     let result = (|| -> rusqlite::Result<Vec<Value>> {
         let conn = open_db(&state.database_path)?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, folder_path, created_at, updated_at, archived_at, thinking, model FROM projects
+            "SELECT id, name, folder_path, created_at, updated_at, archived_at, thinking, model, token_budget FROM projects
              ORDER BY (archived_at IS NOT NULL), created_at",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -2801,6 +2876,7 @@ async fn list_projects(State(state): State<AppState>) -> Response<Body> {
                 "archived": row.get::<_, Option<f64>>(5)?.is_some(),
                 "thinking": row.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 "model": row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                "token_budget": row.get::<_, i64>(8)?,
             }))
         })?;
         rows.collect()
@@ -2893,6 +2969,22 @@ async fn update_project(
         if let Err(e) = conn.execute(
             "UPDATE projects SET model=?1, updated_at=?2 WHERE id=?3",
             params![model, now_seconds(), id],
+        ) {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+    if input.get("token_budget").is_some() {
+        // `0` clears the limit; anything else is a positive token count. A
+        // negative or absurd value is clamped rather than refused, because the
+        // field is a budget, not a security boundary.
+        let budget = input
+            .get("token_budget")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .clamp(0, 100_000_000);
+        if let Err(e) = conn.execute(
+            "UPDATE projects SET token_budget=?1, updated_at=?2 WHERE id=?3",
+            params![budget, now_seconds(), id],
         ) {
             return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
         }
@@ -3698,6 +3790,9 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
     // default and the Thinking default, so a stale pointer cannot disagree with
     // itself halfway through.
     let active_project = active_project_id(state);
+    if let Some(refusal) = project_budget_gate(state, &active_project) {
+        return Err(Box::new(json_error(StatusCode::TOO_MANY_REQUESTS, refusal)));
+    }
     let outline = if cfg.send_workspace_outline {
         state.workspace.outline()
     } else {
@@ -5199,6 +5294,62 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn a_project_budget_refuses_only_when_the_window_is_spent() {
+        assert!(project_budget_refusal(0, 10_000).is_none(), "0 is no limit");
+        assert!(project_budget_refusal(100, 99).is_none());
+        let refusal = project_budget_refusal(100, 100).expect("spent");
+        assert!(refusal.contains("100 of its 100 tokens"), "{refusal}");
+    }
+
+    #[test]
+    fn project_spend_sql_counts_the_project_chat_and_its_runs() {
+        let conn = Connection::open_in_memory().expect("memory database");
+        conn.execute_batch(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, project_id TEXT);
+             CREATE TABLE request_log (created_at REAL NOT NULL, conversation_id TEXT, total_tokens INTEGER);
+             CREATE TABLE agent_runs (project_id TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+             INSERT INTO conversations VALUES ('c1','p1'),('c2','p2');
+             INSERT INTO request_log VALUES (100.0,'c1',120),(100.0,'c1',80),(100.0,'c2',999),(10.0,'c1',5);
+             INSERT INTO agent_runs VALUES ('p1',40,100.0),('p2',7,100.0);",
+        )
+        .expect("schema");
+        let chat: i64 = conn
+            .query_row(PROJECT_CHAT_TOKENS_SQL, params!["p1", 50.0], |row| {
+                row.get(0)
+            })
+            .expect("chat spend");
+        let runs: i64 = conn
+            .query_row(PROJECT_RUN_TOKENS_SQL, params!["p1", 50.0], |row| {
+                row.get(0)
+            })
+            .expect("run spend");
+        // Two in-window requests for p1, the older one outside it, another
+        // project's request and run excluded from both totals.
+        assert_eq!(chat, 200);
+        assert_eq!(runs, 40);
+    }
+
+    #[test]
+    fn a_project_row_gains_a_zero_budget_on_upgrade() {
+        let conn = Connection::open_in_memory().expect("memory database");
+        conn.execute_batch("CREATE TABLE projects (id TEXT PRIMARY KEY);")
+            .expect("schema");
+        conn.execute("INSERT INTO projects VALUES ('p1')", [])
+            .expect("row");
+        migrate_project_budget(&conn).expect("migration");
+        let budget: i64 = conn
+            .query_row(
+                "SELECT token_budget FROM projects WHERE id='p1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("budget");
+        assert_eq!(budget, 0, "an upgrade must never start refusing turns");
+        // A second boot finds the column and changes nothing.
+        migrate_project_budget(&conn).expect("idempotent");
     }
 
     #[test]

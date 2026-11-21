@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.78.0
+
+### Minor
+
+Projects can carry a 24-hour token budget, the last scope the budget list in the
+specification was missing (per request, per conversation and per day already
+existed). `projects.token_budget` is added by `migrate_project_budget` with a
+`0` default, so an upgrade never starts refusing turns; `0` still means no
+limit. The project menu gains a **Budget** button (blank/0 clears it) and shows
+`N tokens/day` under the folder.
+
+The gate counts only provider-reported totals in the window: chat through the
+project's conversations (`PROJECT_CHAT_TOKENS_SQL`) plus the runs it owns
+(`PROJECT_RUN_TOKENS_SQL`). A spent budget refuses the next chat turn and the
+next agent run with 429 and a message naming the spend and the budget, so a
+refusal is actionable rather than mysterious; an unreadable database or a
+project without a limit means "no limit" instead of blocking the app.
+
+Three tests cover the arithmetic (`project_budget_refusal`), the two spend
+queries (in-window rows only, other projects excluded) and the migration
+(`0` default, idempotent).
+
+Verified: `cargo fmt --check` clean; `cargo test --no-default-features` 672
+passed, 0 failed, 1 ignored; `cargo clippy --all-targets -D warnings` clean;
+frontend 103/103; linux metadata 9/9.
+
 ## 3.77.1
 
 ### Patch

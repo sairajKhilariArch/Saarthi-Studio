@@ -414,6 +414,21 @@ async function setProjectModel(project) {
   await updateProject(project, { model: model.trim() });
 }
 
+/* A project's 24-hour token budget; blank or 0 clears the limit. The server
+   clamps the value, so the field only has to be a number. */
+async function setProjectTokenBudget(project) {
+  const answer = await askName({
+    title: "Project token budget",
+    label: "Tokens per 24 hours (leave blank for no limit)",
+    value: project.token_budget ? String(project.token_budget) : "",
+    placeholder: "0",
+    submitLabel: "Save",
+  });
+  if (answer == null) return;
+  const budget = Math.max(0, Math.floor(Number(String(answer).replace(/[^0-9]/g, "")) || 0));
+  await updateProject(project, { token_budget: budget });
+}
+
 async function updateProject(project, patch) {
   const result = await api(`/api/projects/${encodeURIComponent(project.id)}/update`, {
     method: "POST",
@@ -6257,13 +6272,15 @@ async function renderWorkspaces() {
     strong.textContent = project.name + (project.archived ? " (archived)" : "");
     main.appendChild(strong);
     const small = document.createElement("small");
-    small.textContent = project.folder || "no folder";
+    small.textContent = (project.folder || "no folder") +
+      (project.token_budget > 0 ? ` · ${formatCount(project.token_budget)} tokens/day` : "");
     main.appendChild(small);
     row.appendChild(main);
     const actions = document.createElement("span");
     actions.className = "project-menu-actions-row";
     if (!project.archived) actions.appendChild(rowButton("Switch", () => switchProject(project.id)));
     actions.appendChild(rowButton("Rename", () => renameProject(project)));
+    actions.appendChild(rowButton("Budget", () => setProjectTokenBudget(project)));
     actions.appendChild(rowButton(project.archived ? "Unarchive" : "Archive", () => updateProject(project, { archived: !project.archived })));
     actions.appendChild(rowButton("Delete", () => deleteProject(project), "danger"));
     row.appendChild(actions);

@@ -3858,6 +3858,11 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         );
     }
     let project_id = crate::active_project_id(&state);
+    // A project's token budget covers the work it delegates too, not only its
+    // chat turns: a run that would blow the window is refused before it queues.
+    if let Some(refusal) = crate::project_budget_gate(&state, &project_id) {
+        return error_response(StatusCode::TOO_MANY_REQUESTS, refusal);
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let priority = parse_priority(&input);
     // Dependencies are validated before the row exists: an unknown id, a self
