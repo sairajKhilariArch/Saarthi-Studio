@@ -761,6 +761,7 @@ async fn open_workspace(State(state): State<AppState>, Json(input): Json<Value>)
             // The folder that is open belongs to the active project, so a
             // project switch restores it later.
             crate::record_project_folder(&state, &entry.root.display().to_string());
+            crate::filewatch::start(&state, &entry.root);
             Json(json!({
                 "ok": true,
                 "workspace": {
@@ -778,6 +779,7 @@ async fn open_workspace(State(state): State<AppState>, Json(input): Json<Value>)
 
 async fn close_workspace(State(state): State<AppState>) -> Json<Value> {
     crate::watch::stop_active();
+    crate::filewatch::stop();
     state.workspace.close();
     crate::record_project_folder(&state, "");
     Json(json!({ "ok": true }))
@@ -843,6 +845,7 @@ async fn pick_folder(State(state): State<AppState>) -> Response<Body> {
             match state.workspace.open(&path) {
                 Ok(entry) => {
                     crate::record_project_folder(&state, &entry.root.display().to_string());
+                    crate::filewatch::start(&state, &entry.root);
                     Json(json!({
                         "ok": true,
                         "picked": true,

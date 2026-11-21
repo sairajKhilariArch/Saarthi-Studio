@@ -42,6 +42,7 @@ mod events;
 mod extension_run;
 mod extensions;
 mod filelock;
+mod filewatch;
 mod format;
 mod git;
 #[cfg(feature = "gui")]
@@ -3184,16 +3185,20 @@ async fn activate_project(State(state): State<AppState>, Path(id): Path<String>)
     // The active folder is about to change, so a watcher rooted in the old one
     // must stop before anything runs there again.
     crate::watch::stop_active();
+    crate::filewatch::stop();
     let workspace = if folder.trim().is_empty() {
         state.workspace.close();
         json!({ "open": false })
     } else {
         match state.workspace.open(&folder) {
-            Ok(opened) => json!({
-                "open": true,
-                "name": opened.name,
-                "path": crate::workspace::display_path(&opened.root),
-            }),
+            Ok(opened) => {
+                crate::filewatch::start(&state, &opened.root);
+                json!({
+                    "open": true,
+                    "name": opened.name,
+                    "path": crate::workspace::display_path(&opened.root),
+                })
+            }
             Err(error) => json!({ "open": false, "message": error.message() }),
         }
     };

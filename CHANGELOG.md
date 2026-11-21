@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.81.0
+
+### Added
+
+The code index now follows the folder on disk, not only the app's own writes.
+
+- **Watcher.** `src/filewatch.rs` watches the open folder with `notify` and
+  refreshes the changed paths, so a `git checkout`, a formatter run from a
+  terminal or another editor no longer leave search and symbols quoting stale
+  bytes until a manual refresh.
+- **Debounce.** Events are coalesced for 400 ms of quiet before a batch is
+  flushed, so a save burst or a checkout is one update instead of hundreds.
+- **Ignored build folders.** The same rules the indexer already uses are
+  applied to events before any database work: `.git`, `node_modules`, `target`,
+  `build`, `dist`, `out`, `.gradle`, virtualenvs, `__pycache__`, `.next`,
+  `vendor`, `coverage`, `.idea`, `.terraform`, `Pods` — plus secret-shaped
+  files (`.env*`, `*.pem`, `*.key`) and the person's privacy exclusions. A
+  `cargo build` cannot cause an indexing storm.
+- **Bulk batches.** More than 40 changed paths is answered with one full
+  `index::refresh` walk, which is cheaper and more consistent than hundreds of
+  per-file upserts; a single save still takes the per-file path.
+- **Lifecycle.** One watcher per process, owned by the open folder: opening,
+  picking or switching a folder stops the previous one, closing the folder
+  stops it too, and a flush re-checks that the folder is still open so a late
+  batch can never write rows for a folder the person has left. A platform
+  without a usable watcher falls back to the manual refresh path unchanged.
+
+Verified: `cargo test --no-default-features` 690 passed, 0 failed, 1 ignored
+(4 new: a real OS write event, a flush that indexes a source file and never a
+`target/` file, a stale-folder batch writing nothing, and the debounce window);
+clippy clean; `cargo fmt --check` clean.
+
 ## 3.80.0
 
 ### Added

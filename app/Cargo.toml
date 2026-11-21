@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "3.80.0"
+version = "3.81.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Sarthi Studio — local-first AI chat and coding workspace for FreeLLMAPI"
@@ -19,6 +19,9 @@ rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.138"
 sha2 = "=0.10.9"
+# Filesystem events keep the code index fresh when the folder changes outside
+# the app (git checkout, another editor, a formatter).
+notify = "8"
 subtle = "=2.6.1"
 # Verified native installs: unpack exactly the archive the checksum covers.
 # gzip is needed for this app's own Linux/macOS release tarballs; the pure-Rust

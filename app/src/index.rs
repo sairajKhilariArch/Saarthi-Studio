@@ -57,6 +57,9 @@ const SKIP_DIRS: [&str; 20] = [
 ];
 /// A generated file above this size is data, not source.
 const MAX_FILE_BYTES: u64 = 1 << 20;
+/// Above this many changed paths, one full walk beats per-file upserts. A
+/// checkout or a formatter run lands here; an editor save does not.
+const BULK_REFRESH_PATHS: usize = 40;
 /// The walk stops here and says so, rather than indexing a drive for minutes.
 const MAX_FILES: usize = 5000;
 /// A single file more than this many symbols is minified or generated.
@@ -723,6 +726,56 @@ const EXCERPT_LINES: usize = 6;
 
 /// Code the index matched to a message, one snippet per file, best score first.
 /// Every excerpt is read from disk now — an index is a pointer, not a copy.
+/// The workspace-relative path a watcher event should refresh, or `None` when
+/// the event is outside the folder, names the folder itself, or falls inside a
+/// build/dependency folder or a secret-shaped file. Filtering here keeps a
+/// `cargo build` or an `npm install` from producing an indexing storm.
+pub(crate) fn watch_relative(root: &FsPath, path: &FsPath) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut parts: Vec<String> = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return None;
+        };
+        let name = name.to_string_lossy();
+        if skip_dir(&name) || secret_shaped(&name) {
+            return None;
+        }
+        parts.push(name.to_string());
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    // A directory event is followed by events for the files in it; refreshing
+    // the directory itself would try to index the folder as a file.
+    if path.is_dir() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// Refresh one debounced batch of changed paths. A large batch is a checkout or
+/// a formatter touching half the tree, where one walk is cheaper and more
+/// consistent than hundreds of per-file upserts.
+pub(crate) fn refresh_many(
+    db: &FsPath,
+    root: &FsPath,
+    relative_paths: &[String],
+    exclusions: &[String],
+) -> Result<(), String> {
+    if relative_paths.len() > BULK_REFRESH_PATHS {
+        refresh(db, root, exclusions)?;
+        return Ok(());
+    }
+    for relative in relative_paths {
+        if excluded(relative, exclusions) {
+            continue;
+        }
+        refresh_path(db, root, relative, exclusions)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn retrieve(root: &FsPath, db: &FsPath, message: &str) -> Vec<Snippet> {
     let hits = match search(db, message) {
         Ok(hits) => hits,
@@ -1357,6 +1410,28 @@ pub(crate) fn router() -> Router<AppState> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn the_watcher_skips_build_folders_and_secret_files() {
+        let root = std::env::temp_dir().join("studio-watch-root");
+        let relative = |path: &str| watch_relative(&root, &root.join(path)).unwrap_or_default();
+        assert_eq!(
+            watch_relative(&root, &root.join("src/main.rs")).as_deref(),
+            Some("src/main.rs")
+        );
+        assert_eq!(relative("target/debug/app.rs"), "");
+        assert_eq!(relative("node_modules/pkg/index.js"), "");
+        assert_eq!(relative(".git/HEAD"), "");
+        assert_eq!(relative("apps/web/dist/bundle.js"), "");
+        assert_eq!(relative("config/.env.local"), "");
+        assert_eq!(relative("server.pem"), "");
+        assert_eq!(watch_relative(&root, &root), None, "the folder itself");
+        assert_eq!(
+            watch_relative(&root, FsPath::new("/elsewhere/file.rs")),
+            None,
+            "an event outside the watched folder"
+        );
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
