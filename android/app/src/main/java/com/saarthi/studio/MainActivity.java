@@ -35,6 +35,7 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ScrollView;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.speech.RecognizerIntent;
@@ -218,8 +219,9 @@ public class MainActivity extends Activity {
 
         LinearLayout header = row();
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView logo = label("✦", 21, ACCENT, true);
-        logo.setGravity(Gravity.CENTER);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.ic_logo);
+        logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         logo.setBackground(rounded(PANEL_ALT, 12, LINE));
         header.addView(logo, new LinearLayout.LayoutParams(dp(40), dp(40)));
         LinearLayout brand = new LinearLayout(this);

@@ -1,6 +1,6 @@
 # Sarthi Studio — desktop, Windows, macOS, Android and VS Code
 
-<img src="app/static/brand/tardigrade.svg" width="88" height="88" alt="Sarthi Studio tardigrade mascot">
+<img src="app/static/brand/logo.svg" width="88" height="88" alt="Sarthi Studio logo">
 
 A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The interface uses HTML, CSS, and JavaScript, served locally by the Rust app and shown in the application window: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 

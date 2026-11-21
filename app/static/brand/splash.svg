@@ -1,5 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360" role="img" aria-label="Sarthi Studio">
-  <rect width="640" height="360" fill="#061111"/>
-  <g transform="translate(96 100) scale(6.6667)"><path d="M12 2.4Q13.3 7.9 18.8 9.2Q13.3 10.5 12 16Q10.7 10.5 5.2 9.2Q10.7 7.9 12 2.4Z" fill="#ffe6cb"/><path d="M4.2 19.6Q12 14.4 19.8 19.6Q12 18.0 4.2 19.6Z" fill="#d97757"/></g>
-  <text x="292" y="196" font-family="Georgia, 'Times New Roman', serif" font-size="46" fill="#f7f4ea" letter-spacing="-0.5">Sarthi Studio</text>
+  <g transform="translate(72 116)">
+    <rect width="128" height="128" rx="28" fill="#111111"/>
+    <g transform="translate(64 64) translate(-64 -74)"><path d="M92 38C60 38 40 46 40 64s48 18 48 36-14 16-30 14" fill="none" stroke="#FF7A1A" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/><circle cx="92" cy="38" r="6" fill="#FFFFFF"/></g>
+  </g>
+  <text x="224" y="180" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="58"
+        font-weight="700" letter-spacing="-1.5" fill="#FFFFFF">Sarthi Studio</text>
+  <text x="228" y="216" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="18"
+        letter-spacing="4.2" fill="#FF7A1A">LOCAL CODING AGENT</text>
 </svg>

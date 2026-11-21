@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.83.0
+
+### Changed
+
+One product mark, carried through every surface.
+
+- The logo is now the guide-path **S**: a rounded orange route on a black tile
+  with a white start node. It replaces the mascot face in the app sidebar, the
+  welcome state, the browser tab, the window and installer icons, the Linux
+  packaging icon and the Android adaptive launcher. The tardigrade stays as the
+  assistant avatar and the website mascot, so the product keeps its personality
+  without using an illustration as the header mark.
+- `scripts/brand/build-brand-assets.py` generates the logo and the mascot from
+  one source and copies the logo set to the website and the extension webview.
+  The raster icons are re-rendered from `app-icon.svg` at 512 px RGBA, with the
+  256 px packaging PNG and a 16–256 px ICO.
+- Android's adaptive background moves from the old teal `#0B1D1C` to the brand
+  black `#111111`; the foreground is the orange S inside the 66 dp safe zone.
+- README, the brand inventory and the feature/testing docs describe the logo
+  and mascot separately instead of calling both "the mark".
+
+Verified: Android vector and colour XML parse; brand SVGs rendered and
+inspected at 16, 24, 32, 64, 128 and 512 px; website build and link checks;
+frontend, metadata and version scripts.
+
 ## 3.82.0
 
 ### Added
