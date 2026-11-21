@@ -1920,6 +1920,34 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       const runSegments = routePath.startsWith("/api/runs/")
         ? routePath.slice("/api/runs/".length).split("/").filter(Boolean)
         : null;
+      if (!runSegments) {
+        if (routePath === "/api/crew-templates" && method === "GET") {
+          sendJson(response, 200, { ok: true, templates: agentRuntime.listCrewTemplates() });
+          return;
+        }
+        if (routePath === "/api/crew-templates" && method === "POST") {
+          const body = await readBody(request);
+          const result = agentRuntime.saveCrewTemplate(
+            body.crew ?? body.roles ?? [],
+          );
+          if (!result.ok) {
+            sendJson(response, result.status || 400, { ok: false, error: result.error });
+            return;
+          }
+          sendJson(response, 200, { ok: true, name: result.name });
+          return;
+        }
+        const templateSegments = routePath.match(/^\/api\/crew-templates\/([^/]+)$/);
+        if (templateSegments && method === "DELETE") {
+          const result = agentRuntime.deleteCrewTemplate(templateSegments[1]);
+          sendJson(
+            response,
+            result.ok ? 200 : (result.status || 404),
+            result.ok ? { ok: true } : { ok: false, error: result.error },
+          );
+          return;
+        }
+      }
       if (runSegments && runSegments.length === 1 && method === "GET") {
         sendRunDetail(response, decodeURIComponent(runSegments[0]));
         return;
@@ -1935,7 +1963,16 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           const result = await agentRuntime.approve(id, body.approve);
           sendJson(
             response,
-            result.ok ? 200 : result.code || 400,
+            result.ok ? 200 : 409,
+            result.ok ? { ok: true, status: result.status } : { ok: false, error: result.error },
+          );
+          return;
+        }
+        if (runSegments[1] === "resume") {
+          const result = await agentRuntime.resumeRun(id);
+          sendJson(
+            response,
+            result.ok ? 200 : 409,
             result.ok ? { ok: true, status: result.status } : { ok: false, error: result.error },
           );
           return;

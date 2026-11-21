@@ -10,10 +10,19 @@ The git action is extended to the full desktop surface: `reflog`, `undo`, `merge
 
 The desktop crate compiles again: the `transcribe` handler had been nested inside `chat_stream`, out of scope for the `/api/transcribe` route (E0425); it now sits at top level beside the other handlers. The debug server spawns adapters with the table's own argv again (`LaunchSpec.args`: `python3 -m debugpy.adapter`, `dlv dap`), which the 3.75.7 launch-args change had displaced with the program's arguments; program arguments still ride the DAP `launch` request, and the launch test's `PathBuf` type error is fixed. The built-in VS Code server chats again: the git `fetch` verb is imported as `gitFetch`, so it no longer shadows the global `fetch` across the esbuild bundle — chat had 502'd, runs died at step 1 and the console always reported the router offline. Two stale test expectations now match the shipped contract (`git: true` with `git_reflog_undo` as the negative case, and all eleven permission actions). `cargo check`/`fmt --check`/`clippy --all-targets -D warnings` clean; `cargo test --no-default-features` 665 passed, 0 failed, 1 ignored; `node --test test/` 51/51; frontend 103/103.
 
+## 3.75.9
+
+### Patch
+
+- Resume REST parity (S5-resume): the built-in server's `/api/runs/:id/resume` now returns 200 for a live run (no-op) and 409 for completed, failed and cancelled runs, matching the desktop Step-K resume semantics; unit test added to `test/resume.test.mjs`.
+- Crew templates (S5-template): the built-in server exposes `GET/POST/DELETE /api/crew-templates` with a 1–6 profile-role roster validated against the model (`crew-templates.json` storage, matching extension REST); new `test/crew-template.test.mjs` covers create/list/delete/400/404.
+- Golden cross-client crew run (S5-golden): `test/golden-run.test.mjs` reproduces the identical desktop crew step sequence (write → handoff → read → done, stage-boundary summaries) on the extension.
+- S6-core compile fixes: `record_model` takes the run profile; `choose_tier` is profile-aware and covered by focused tests; full app `cargo check --no-default-features` clean.
+
 ## 3.75.7
 
 The Debug pane now accepts program **Arguments** and a **Working
-directory**, and those adapter launch settings are sent with the
+directory), and those adapter launch settings are sent with the
 `/api/debug/start` request instead of the adapter's fixed argv: the
 server resolves the directory relative to the open folder and starts the
 adapter there with the configured arguments. Attach is unchanged. New

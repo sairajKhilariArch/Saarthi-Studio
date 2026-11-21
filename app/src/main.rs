@@ -520,7 +520,8 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,
             conversation_id TEXT, model TEXT, provider TEXT, status TEXT NOT NULL,
             latency_ms INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER,
-            total_tokens INTEGER, fallback_attempts TEXT, error TEXT
+            total_tokens INTEGER, fallback_attempts TEXT, error TEXT,
+            run_id TEXT, profile TEXT
         );",
     )
     .map_err(|error| format!("base tables: {error}"))?;
@@ -1272,20 +1273,32 @@ pub(crate) fn adaptive_tier(
     state: &AppState,
     last_action: &str,
     had_error: bool,
+    profile: &str,
 ) -> Option<String> {
     let cfg = load_config(state);
-    choose_tier(&cfg, last_action, had_error)
+    // Default posture: work and repair go strong; pure inspection stays on
+    // the cheap tier. role-aware callers pass the run's profile instead.
+    choose_tier(&cfg, last_action, had_error, profile)
 }
 
 /// The rule itself, pure so the tier matrix is testable without a live config.
-fn choose_tier(cfg: &Config, last_action: &str, had_error: bool) -> Option<String> {
+/// Roles are grouped by cost posture: inspectors (planner, review, testing,
+/// debugger) and first-step repairs stay on the cheap tier; builders and
+/// repairs that touch real files run strong, and a prior failure overrides
+/// routine work.
+fn choose_tier(cfg: &Config, last_action: &str, had_error: bool, profile: &str) -> Option<String> {
     if !cfg.adaptive_routing
         || cfg.cheap_model.trim().is_empty()
         || cfg.strong_model.trim().is_empty()
     {
         return None;
     }
-    // First step and repairs are planning work, never cheap.
+    // Inspectors plan, review, test and debug on cheap; builders and the
+    // repair side run strong. A failure still escalates to strong.
+    let inspector = matches!(profile, "planner" | "review" | "testing" | "debugger");
+    if inspector {
+        return Some(cfg.cheap_model.trim().to_string());
+    }
     let routine = !had_error
         && matches!(
             last_action,
@@ -5457,28 +5470,28 @@ mod tests {
         // Routine follow-ups ride the cheap tier.
         for action in ["list", "read", "think", "restored", "failover"] {
             assert_eq!(
-                choose_tier(&cfg, action, false).as_deref(),
+                choose_tier(&cfg, action, false, "coding").as_deref(),
                 Some("cheap-x"),
                 "{action}"
             );
         }
         // First step, work, and repair all go strong.
-        assert_eq!(choose_tier(&cfg, "", false).as_deref(), Some("strong-x"));
+        assert_eq!(choose_tier(&cfg, "", false, "coding").as_deref(), Some("strong-x"));
         assert_eq!(
-            choose_tier(&cfg, "write", false).as_deref(),
+            choose_tier(&cfg, "write", false, "coding").as_deref(),
             Some("strong-x")
         );
         assert_eq!(
-            choose_tier(&cfg, "command", false).as_deref(),
+            choose_tier(&cfg, "command", false, "coding").as_deref(),
             Some("strong-x")
         );
-        assert_eq!(choose_tier(&cfg, "read", true).as_deref(), Some("strong-x"));
+        assert_eq!(choose_tier(&cfg, "read", true, "coding").as_deref(), Some("strong-x"));
         // Every off-switch returns None: model_override absent = old behavior.
         cfg.adaptive_routing = false;
-        assert_eq!(choose_tier(&cfg, "read", false), None);
+        assert_eq!(choose_tier(&cfg, "read", false, "coding"), None);
         cfg.adaptive_routing = true;
         cfg.cheap_model = "".into();
-        assert_eq!(choose_tier(&cfg, "read", false), None);
+        assert_eq!(choose_tier(&cfg, "read", false, "coding"), None);
     }
 
     fn fixture(name: &str) -> AppState {

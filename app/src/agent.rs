@@ -2568,12 +2568,12 @@ fn last_step_kind(state: &AppState, run_id: &str) -> Result<(String, bool), Stri
 
 /// Reproducible-run record: keep which model actually answered a step. Empty
 /// stays empty (adaptive routing off), so untouched runs look like before.
-fn record_model(state: &AppState, run_id: &str, model: Option<&str>) {
+fn record_model(state: &AppState, run_id: &str, model: Option<&str>, profile: Option<&str>) {
     if let Some(model) = model.filter(|m| !m.is_empty()) {
         let _ = db(state).and_then(|conn| {
             conn.execute(
-                "UPDATE agent_runs SET model=?1 WHERE id=?2 AND model<>?1",
-                params![model, run_id],
+                "UPDATE agent_runs SET model=?1, profile=?2 WHERE id=?3 AND model<>?1",
+                params![model, profile.unwrap_or(""), run_id],
             )
             .map_err(|e| e.to_string())
         });
@@ -2726,9 +2726,10 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         }
     } else {
         // Adaptive routing (off unless configured): routine inspection steps
-        // go to the cheap tier; planning, edits and repair go strong.
+        // go to the cheap tier; planning, edits and repair go strong. The
+        // acting profile pushes inspectors to cheap even on their first step.
         let (last_action, had_error) = last_step_kind(state, &run.id)?;
-        let tier = crate::adaptive_tier(state, &last_action, had_error);
+        let tier = crate::adaptive_tier(state, &last_action, had_error, &run.profile);
         // call_model routes to the local runtime in Local AI mode and to the
         // remote router otherwise; a local miss never silently goes remote.
         // A platform pick is asked for one JSON action; every other model gets
@@ -2759,7 +2760,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             Err(error) => return Err(error),
         }
     };
-    record_model(state, &run.id, model_used.as_deref());
+    record_model(state, &run.id, model_used.as_deref(), run.profile.as_deref());
     // A cancel can land while the model is thinking: a stopped run must not
     // act on the reply that arrives afterwards.
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {

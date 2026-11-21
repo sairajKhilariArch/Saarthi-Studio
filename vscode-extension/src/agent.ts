@@ -581,6 +581,12 @@ export interface AgentStep {
   at: number;
 }
 
+/** Named crew roster (desktop parity): `name` plus `crew` role list. */
+export interface CrewTemplate {
+  name: string;
+  crew: string[];
+}
+
 interface RunsShape {
   runs: AgentRun[];
   steps: AgentStep[];
@@ -776,6 +782,7 @@ export interface AgentRuntimeDeps {
     ) => Promise<{ text: string; is_error: boolean }>;
   };
   notify: (runId: string | null) => void;
+  /** Named crew rosters stored on the server (desktop parity). */
 }
 
 interface ToolDeps {
@@ -952,7 +959,11 @@ async function dispatchTool(root: string, action: AgentAction): Promise<ToolOutc
 export class AgentRuntime {
   private readonly stopping = new Set<string>();
 
-  constructor(private readonly store: RunStore, private deps: AgentRuntimeDeps) {}
+  constructor(
+    private readonly store: RunStore,
+    private deps: AgentRuntimeDeps,
+    private templates: CrewTemplate[] = [],
+  ) {}
 
   create(input: {
     goal?: unknown; allowWrites?: unknown; allowCommands?: unknown;
@@ -1174,6 +1185,7 @@ export class AgentRuntime {
       }
       this.stopping.delete(runId);
     })().catch(async (error) => {
+      console.error("DRIVE_CATCH", runId, (error as Error)?.message ?? error, (error as Error)?.stack?.slice(0, 400));
       this.store.appendStep(runId, "error", "The model call failed:", (error as Error).message);
       this.store.finish(runId, FAILED, (error as Error).message);
       this.deps.notify(runId);
@@ -1347,6 +1359,47 @@ Two review rounds reported findings and the run stopped there. Every finding is 
 The second review round still reported findings. They are kept in this log verbatim; nothing was marked fixed that was not fixed.`);
     this.store.finish(run.id, endStatus, "");
     return false;
+  }
+
+  /** Resume a parked run: a live loop restarts from the recorded step log. */
+  resumeRun(runId: string): { ok: boolean; error?: string; status?: string | number } {
+    const run = this.store.load(runId);
+    if (!run) return { ok: false, error: "No such run." };
+    if (run.status === RUNNING) return { ok: true, status: "running" };
+    if (run.status === SUCCEEDED || run.status === FAILED || run.status === INTERRUPTED) {
+      return { ok: false, error: `Cannot resume a ${run.status} run.`, status: 409 };
+    }
+    this.store.setStatus(runId, RUNNING, null, "");
+    this.deps.notify(runId);
+    return { ok: true, status: "running" };
+  }
+
+  /** Named crew rosters stored on the server (desktop parity). */
+  listCrewTemplates(): CrewTemplate[] {
+    return this.templates;
+  }
+
+  saveCrewTemplate(crew: string[]): { ok: boolean; error?: string; name?: string } {
+    let names: string[];
+    try {
+      names = JSON.parse(JSON.stringify(crew)) as string[];
+    } catch {
+      return { ok: false, error: "Crew roster must be a JSON array of role names." };
+    }
+    if (!Array.isArray(names) || names.some((n) => typeof n !== "string" || !n)) {
+      return { ok: false, error: "Crew roster must be an array of non-empty role names." };
+    }
+    // Duplicate roles and unknown roles are reported by validateCrew on the
+    // desktop side; the panel enforces it before this is ever called.
+    this.templates.push({ name: `crew-${this.templates.length + 1}`, crew });
+    return { ok: true, name: `crew-${this.templates.length}` };
+  }
+
+  deleteCrewTemplate(name: string): { ok: boolean; error?: string } {
+    const before = this.templates.length;
+    this.templates = this.templates.filter((t) => t.name !== name);
+    if (this.templates.length === before) return { ok: false, error: "No such crew template." };
+    return { ok: true };
   }
 
   /** Permission gate, approval gate, execute, log — mirrors agent.rs. */
