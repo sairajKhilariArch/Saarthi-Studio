@@ -2760,7 +2760,7 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
             Err(error) => return Err(error),
         }
     };
-    record_model(state, &run.id, model_used.as_deref(), run.profile.as_deref());
+    record_model(state, &run.id, model_used.as_deref(), Some(run.profile.as_str()));
     // A cancel can land while the model is thinking: a stopped run must not
     // act on the reply that arrives afterwards.
     if run_status(state, &run.id)?.as_deref() != Some(RUNNING) {
