@@ -30,7 +30,7 @@ import type { PermitAction } from "./permissions";
 import type { GitContext, GitExecution } from "./git";
 import { status, commit, log as gitLog, branches, reflog, undo, merge, mergeAbort, rebase, push, fetch as gitFetch, pull, remotes } from "./git";
 // Re-exported so `node --test` can exercise the permission action set.
-export { PermissionStore, PERMIT_ACTIONS } from "./permissions";
+export { ENFORCED_ACTIONS, PermissionStore, PERMIT_ACTIONS } from "./permissions";
 // Re-exported so `node --test` can exercise the MCP argument check directly.
 export { validateArguments } from "./mcpschema";
 

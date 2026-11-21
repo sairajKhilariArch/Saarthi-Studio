@@ -14,11 +14,19 @@
 //   * mcp_tool  — one server.tool the agent or MCP panel calls
 //   * network   — an outbound request (for example the console's dashboard)
 //   * git       — stage, commit, revert or branch the workspace
-//   * router_install — install, update or remove a router
-//   * update    — replace installed software
+//   * router_install — install, update or remove a router (desktop only)
+//   * update    — replace installed software (desktop only)
 //   * uninstall — remove Studio, deleting its program folder, settings and data
+//                 (desktop only)
 //   * settings  — change application settings and keys
 //   * extension_tool — call a tool declared by an installed extension
+//
+// The four "desktop only" actions are part of the shared wire language and of
+// stored rules — an older permissions.json keeps loading — but this server has
+// no route that performs them, so a rule for one could never fire here. They
+// are advertised with `enforced: false` and a new one is refused, instead of
+// accepting a rule that silently does nothing. The desktop app enforces all
+// eleven (app/src/update.rs, app/src/uninstall.rs, app/src/main.rs).
 //
 // Resolution is the desktop's: the longest matching target wins, then
 // deny > ask > allow, then the narrower scope. A rule can only ever make an
@@ -72,19 +80,30 @@ export interface PermitEffective {
 }
 
 /** What the shared Permissions panel is told this server enforces. */
-export const PERMIT_ACTIONS: Array<{ id: PermitAction; description: string; default: PermitDecision }> = [
-  { id: "fs_read", description: "Have an agent read a file or list a folder in the open folder", default: "allow" },
-  { id: "fs_write", description: "Have an agent create, change or delete files in the open folder", default: "ask" },
-  { id: "command", description: "Have an agent run a shell command in the workspace", default: "ask" },
-  { id: "mcp_tool", description: "Call a tool exposed by a registered MCP server", default: "ask" },
-  { id: "network", description: "Make an outbound network request (for example the console's provider dashboard)", default: "ask" },
-  { id: "git", description: "Stage, commit, revert or branch the open workspace", default: "ask" },
-  { id: "router_install", description: "Install, update or remove a router", default: "ask" },
-  { id: "update", description: "Replace installed software", default: "ask" },
-  { id: "uninstall", description: "Remove Studio, deleting its program folder, settings and data", default: "ask" },
-  { id: "settings", description: "Change application settings and keys", default: "ask" },
-  { id: "extension_tool", description: "Call a tool declared by an installed extension", default: "ask" },
+export const PERMIT_ACTIONS: Array<{
+  id: PermitAction;
+  description: string;
+  default: PermitDecision;
+  /** False when this server has no route for the action; only the desktop can. */
+  enforced: boolean;
+}> = [
+  { id: "fs_read", description: "Have an agent read a file or list a folder in the open folder", default: "allow", enforced: true },
+  { id: "fs_write", description: "Have an agent create, change or delete files in the open folder", default: "ask", enforced: true },
+  { id: "command", description: "Have an agent run a shell command in the workspace", default: "ask", enforced: true },
+  { id: "mcp_tool", description: "Call a tool exposed by a registered MCP server", default: "ask", enforced: true },
+  { id: "network", description: "Make an outbound network request (for example the console's provider dashboard)", default: "ask", enforced: true },
+  { id: "git", description: "Stage, commit, revert or branch the open workspace", default: "ask", enforced: true },
+  { id: "router_install", description: "Desktop app only — install, update or remove a router", default: "ask", enforced: false },
+  { id: "update", description: "Desktop app only — replace installed software", default: "ask", enforced: false },
+  { id: "uninstall", description: "Desktop app only — remove Studio, deleting its program folder, settings and data", default: "ask", enforced: false },
+  { id: "settings", description: "Change application settings and keys", default: "ask", enforced: true },
+  { id: "extension_tool", description: "Desktop app only — call a tool declared by an installed extension", default: "ask", enforced: false },
 ];
+
+/** The actions this server actually checks on a route. */
+export const ENFORCED_ACTIONS: PermitAction[] = PERMIT_ACTIONS.filter((entry) => entry.enforced).map(
+  (entry) => entry.id,
+);
 
 const MAX_RULES = 200;
 const MAX_AUDIT = 200;
@@ -241,6 +260,13 @@ export class PermissionStore {
   grant(input: Record<string, unknown>, project: string): PermitRule {
     if (!isAction(input.action)) {
       throw new Error(`Name one of these actions: ${PERMIT_ACTIONS.map((entry) => entry.id).join(", ")}.`);
+    }
+    // A rule for a route this server does not have would look like protection
+    // and never run. Refusing it keeps the panel honest.
+    if (!ENFORCED_ACTIONS.includes(input.action)) {
+      throw new Error(
+        `${input.action} is enforced by the Sarthi Studio desktop app, not this extension — this server has no route for it. Save that rule in the desktop app.`,
+      );
     }
     if (!isDecision(input.decision)) throw new Error("Decision must be allow, ask or deny.");
     if (!isScope(input.scope)) throw new Error("Scope must be once, session, project or always.");

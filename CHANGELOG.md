@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.79.1
+
+### Fixed
+
+VS Code: Rules for four actions are no longer accepted where nothing can
+enforce them (extension 2.6.1).
+
+`router_install`, `update`, `uninstall` and `extension_tool` are part of the
+shared action language — the desktop app enforces all eleven
+(`app/src/update.rs`, `app/src/uninstall.rs`, `app/src/main.rs`) — but the
+extension's built-in Node server has no route for those four, so a rule saved
+there looked like protection and could never run. The `/api/permissions` answer
+now carries `enforced` per action, each desktop-only description says so, and
+saving a new rule for one is refused with a message naming the desktop app.
+
+Stored rules are untouched: a `permissions.json` written by an older build still
+loads, and its desktop-only rows are preserved rather than rewritten away.
+
+Verified: extension build clean, `tsc --noEmit` clean, 52/52 tests (7 permission
+tests, including the refusal and the legacy-file case).
+
 ## 3.79.0
 
 ### Added
