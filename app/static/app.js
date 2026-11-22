@@ -830,6 +830,7 @@ function renderSkillDetail() {
   const facts = [skill.enabled ? "Enabled" : "Disabled", skill.source || "local"];
   if (skill.version) facts.push(`v${skill.version}`);
   facts.push(skillUsageLine(skill));
+  if (skill.permissions && skill.permissions.length) facts.push(`declares ${skill.permissions.join(", ")}`);
   if (skill.modified) facts.push("edited since install");
   meta.textContent = facts.join(" · ");
   meta.title = skill.path || "";
@@ -838,6 +839,12 @@ function renderSkillDetail() {
     const desc = document.createElement("p");
     desc.textContent = skill.description;
     body.appendChild(desc);
+  }
+  if (skill.permissions && skill.permissions.length) {
+    const declared = document.createElement("p");
+    declared.className = "muted";
+    declared.textContent = `Expects ${skill.permissions.join(", ")}. A skill is instructions, not code, so this declares what the run may need; the run's own permissions still decide what it can do.`;
+    body.appendChild(declared);
   }
   if (!skill.writable || skill.last_error) {
     const note = document.createElement("p");

@@ -25,6 +25,59 @@ Verified: Android vector and colour XML parse; brand SVGs rendered and
 inspected at 16, 24, 32, 64, 128 and 512 px; website build and link checks;
 frontend, metadata and version scripts.
 
+## 3.84.0
+
+### Added
+
+Extensions can now reach the network and the shell through the sandbox instead
+of a wider ambient sandbox. `env.fetch` issues one HTTP request and answers a
+JSON envelope (`status`, `content_type`, `body`), with redirects disabled, a
+15-second timeout and a 64 KiB cap, so the approved host is the only one that
+answers. `env.command` runs one shell command in the open folder with a 10
+second cap and bounded output. Both are gated by their manifest permission
+(`network`, `terminal.run`) *and* a saved allow rule for the target; a rule
+policy of `ask` refuses the call, because an unattended extension has no one
+to ask. `mcp.call` still installs but is refused at run.
+
+- A skill may now declare the capabilities its instructions expect in its
+  front matter (`permissions`), validated against the extension vocabulary and
+  shown in the skill detail. A skill declares only; the run's own permissions
+  still decide what it may do.
+- Native OpenAI picks carry a published price for the exact model ids the
+  platform does not list (`openai::published_price`); an id missing from that
+  table stays unpriced rather than guessed. The cost recorder and the chat
+  stream now price native picks that way.
+- The file index watcher records every changed text path (up to 256 per flush,
+  1 MiB each) in the run conflict ledger, so a formatter, a `git checkout` or
+  another editor can no longer be silently overwritten. Binary and
+  over-cap paths still rely on the read/write fingerprint check.
+- Settings pages read the supported extension API version from the
+  manifest, and the extension list falls back to the previous label where it
+  had one.
+
+### Changed
+
+- `HostGrant` carries separate network and terminal allow bools, and every
+  new host function checks its own permission before dispatching. The
+  extension manifest vocabulary is now the single source of truth for both
+  the runner and the skill declarations.
+- The release backlog, the extension sandbox ADR and the website's
+  description of the sandbox were brought up to date so they match the
+  shipped behaviour.
+
+### Fixed
+
+- A stale `editor_writes` mark no longer blocks a later re-creation of a path
+  that an outside change removed. `record_external_write` with no payload
+  deletes the mark, so a file that is gone cannot block a later write.
+
+Verified: `cargo check` and `cargo fmt --check` clean on Linux; frontend
+103/103; the VS Code `crew-template` and `resume` suites exit zero (45 of 45,
+0 failed). Clippy and the Rust unit tests (extension sandbox, skill
+permissions, outside-write marking) could not be executed here: the build
+script linker (`ld`/`lld`) is absent, so `cargo test`/`clippy` stop at the
+same environmental link error and their assertions were not run.
+
 ## 3.82.0
 
 ### Added

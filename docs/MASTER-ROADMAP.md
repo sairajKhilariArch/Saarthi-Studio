@@ -30,7 +30,7 @@ Phase 18 Installers + updates               (needs verified builds everywhere)
 
 ## Remaining work at 3.50.0
 
-This is the ordered backlog for the current tree. It supersedes older
+This is the ordered backlog for the 3.84.0 tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
 `docs/FEATURE-STATUS.md`, and the defect ledger is `docs/KNOWN-ISSUES.md`.
 Re-checked at 3.50.0: the Phase 5, 9, 12, 13, 14, 15 and 18 entries were verified
@@ -55,18 +55,20 @@ against the tree, and the Phase 15 log's stale dependency note was corrected.
 | Phase | Remaining |
 |---|---|
 | 4 — Thinking + OpenAI Platform | Closed in 3.12.0/3.13.0 (structured output, then native tool calling); only a live platform call is unverified. |
-| 5 — Run queue | No workstream remains open. Cross-process admission closed in 3.50.0: promotion claims its slot inside one conditional UPDATE, so the live count and the promotion cannot be separated by another process. An abandoned checkout closed in 3.51.0: `POST /api/runs/:id/discard` removes a finished run's worktree and its `run/<short>` branch without touching the workspace. The editor half closed in 3.52.0: a save is recorded in the ledger, so a live run that never read the file refuses the write by name instead of silently replacing the person's change. Caveats that remain are in `KNOWN-ISSUES.md` 20 — a program outside Studio writing a file is still invisible until a fingerprint check. |
+| 5 — Run queue | No workstream remains open. Cross-process admission closed in 3.50.0: promotion claims its slot inside one conditional UPDATE, so the live count and the promotion cannot be separated by another process. An abandoned checkout closed in 3.51.0: `POST /api/runs/:id/discard` removes a finished run's worktree and its `run/<short>` branch without touching the workspace. The editor half closed in 3.52.0: a save is recorded in the ledger, so a live run that never read the file refuses the write by name instead of silently replacing the person's change. The outside-program half closed in 3.84.0: the index watcher records each changed text path (up to 256 per flush, 1 MiB each) in the same ledger, so a formatter, checkout or another editor is no longer invisible. Binary and over-cap paths still rely on the read/write fingerprint check. |
 | 9 — Developer environment | No named requirement. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0), language-server diagnostics (3.49.0) and the debugger (3.55.0) are done. The editor still has no document engine of its own and `ide.js` has no harness; those are recorded as product choices, not missing routes. |
-| 14 — Cross-platform | Android router management and local execution; VS Code parity. The local contract (3.20.0) now drives UI gating (3.22.0): 28 ids, the extension's subset, and controls hidden only on an explicit `false`. The embedded server asks for a reasoning level (3.47.0) and runs stdio MCP servers (3.48.0); remote transports, OAuth, agent-run reasoning and MCP tools in agent prompts remain missing there. |
-| 15 — Extensions | Custom tools, UI panels (3.70.0) and declarative provider presets (3.71.0). Remaining: a sandbox surface beyond workspace and the extension's own data. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
+| 14 — Cross-platform | Android router management and local execution remain. VS Code parity is complete: the local contract (3.20.0) drives UI gating (3.22.0), the embedded server asks for a reasoning level (3.47.0), runs stdio MCP servers (3.48.0), and the current tree also has HTTP/SSE transports with custom headers, MCP OAuth, per-run thinking levels and MCP tools in agent prompts. |
+| 15 — Extensions | Custom tools, UI panels (3.70.0), declarative provider presets (3.71.0), and broker-gated `network`/`terminal.run` host functions (3.84.0). Remaining: `mcp.call`, which still installs but is refused at run. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
 ### Smaller named gaps
 
-- Phase 3: native OpenAI picks carry no price; context is shown only when the
-  provider supplies it.
-- Phase 6: per-skill permissions remain absent; a skill is prompt text and is not
-  executed, so this only matters if that changes.
+- Phase 3: native OpenAI picks now carry a published price for the exact model
+  ids in `openai::published_price` (unknown/dated ids stay unpriced); context is
+  still shown only when the provider supplies it.
+- Phase 6: skills may declare `permissions` in front matter, validated against
+  the extension vocabulary and shown in the UI/detail. A skill is prompt text and
+  is not executed, so the declaration does not grant or sandbox anything yet.
 - Phase 8: semantic search embeds through the router, or through the runtime on this machine with a `local:` model (3.24.0); nothing else in the phase is open.
 - Phase 12: no workstream remains open; Move up/Move down covers one-step queue
   reordering, but drag-and-drop is not promised.
@@ -79,7 +81,7 @@ against the tree, and the Phase 15 log's stale dependency note was corrected.
 
 - Browser-level layout checks for the IDE and workflow canvas, and a privileged
   ENOSPC test.
-- Clippy on Linux and Windows since 3.34.1; macOS is still not linted (the whole tree is rustfmt-gated since 3.19.0).
+- Clippy on Linux, Windows and macOS since 3.84.0 (the whole tree is rustfmt-gated since 3.19.0).
 - Real-device checks for the macOS/Windows/Android icons. AppStream and desktop-entry
   agreement, including the packaged release version, is checked since 3.32.0.
 - Reconcile the diverged `website` branch. (The stale workflow names in

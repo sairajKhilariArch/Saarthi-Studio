@@ -25,6 +25,7 @@
 
 use notify::{EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -39,6 +40,13 @@ const DEBOUNCE: Duration = Duration::from_millis(400);
 /// The hard ceiling from the first event in a batch: continuous events can
 /// delay a flush, never skip it.
 const MAX_WAIT: Duration = Duration::from_secs(2);
+/// A flush also tells the run conflict ledger about outside edits. Only text at
+/// or below this size is marked: a huge binary cannot match the text reads and
+/// writes the ledger compares, so hashing it would add cost without an answer.
+const MAX_MARK_BYTES: u64 = 1024 * 1024;
+/// A checkout can touch thousands of files at once; the ledger retains a bounded
+/// number of marks anyway, so marking a bounded prefix of a huge batch is enough.
+const MAX_MARKS_PER_FLUSH: usize = 256;
 
 struct Active {
     watcher: notify::RecommendedWatcher,
@@ -196,6 +204,31 @@ fn flush(state: &AppState, root: &Path, paths: &[PathBuf]) {
         &relative,
         &cfg.privacy_exclusions,
     );
+    // A change made by a formatter, a checkout or another editor used to be
+    // invisible to the run/editor conflict ledger until Studio's own editor had
+    // saved the path. Record the bytes now on disk, so the next run that has not
+    // read the file refuses to overwrite them.
+    for relative in relative.iter().take(MAX_MARKS_PER_FLUSH) {
+        let path = root.join(relative);
+        match fs::metadata(&path) {
+            Ok(meta) if meta.is_file() && meta.len() <= MAX_MARK_BYTES => {
+                if let Ok(text) = fs::read_to_string(&path) {
+                    crate::filelock::record_external_write(
+                        state,
+                        root_str(root),
+                        relative,
+                        Some(&text),
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(_) => crate::filelock::record_external_write(state, root_str(root), relative, None),
+        }
+    }
+}
+
+fn root_str(root: &Path) -> &str {
+    root.to_str().unwrap_or("")
 }
 
 #[cfg(test)]
@@ -254,6 +287,31 @@ mod tests {
             )
             .expect("count");
         assert_eq!(build, 0, "a build folder never reaches the index");
+    }
+
+    #[test]
+    fn a_flush_records_an_outside_change_for_the_run_conflict_ledger() {
+        let state = fixture("outside-mark");
+        let root = std::path::PathBuf::from(state.database_path.parent().unwrap());
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let file = root.join("src/lib.rs");
+        std::fs::write(&file, "pub fn v1() {}\n").unwrap();
+        state.workspace.open(root.to_str().unwrap()).expect("open");
+
+        flush(&state, &root, &[file]);
+
+        let conn = crate::open_db(&state.database_path).expect("db");
+        let mark: i64 = conn
+            .query_row(
+                "SELECT fingerprint FROM editor_writes WHERE path='src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the outside change has a mark");
+        assert_eq!(
+            mark,
+            crate::filelock::fingerprint(Some("pub fn v1() {}\n")) as i64
+        );
     }
 
     #[test]

@@ -240,6 +240,35 @@ pub(crate) fn claim_write(
 /// hand and recreated later simply makes the mark stale, and a stale mark is
 /// dropped the first time a run asks about the path.
 pub(crate) fn record_editor_write(state: &AppState, root: &str, path: &str, content: &str) {
+    record_mark(state, root, path, fingerprint(Some(content)));
+}
+
+/// Record a change that happened outside the app entirely — a formatter, a
+/// `git checkout`, another editor — so the run conflict ledger can see it. The
+/// index watcher calls this for each text path in a flush; `None` means the path
+/// is gone, which drops a mark that could otherwise block a later re-creation.
+/// Without this, the ledger only knew about saves made through Studio's own
+/// editor, and a run that had never read the file could overwrite an outside
+/// change with no conflict step.
+pub(crate) fn record_external_write(
+    state: &AppState,
+    root: &str,
+    path: &str,
+    content: Option<&str>,
+) {
+    if content.is_none() {
+        if let Ok(conn) = connect(state) {
+            let _ = conn.execute(
+                "DELETE FROM editor_writes WHERE scope=?1 AND checkout=?2 AND path=?3",
+                params![scope(state), root, path],
+            );
+        }
+        return;
+    }
+    record_mark(state, root, path, fingerprint(content));
+}
+
+fn record_mark(state: &AppState, root: &str, path: &str, mark: u64) {
     let Ok(conn) = connect(state) else {
         return;
     };
@@ -251,7 +280,7 @@ pub(crate) fn record_editor_write(state: &AppState, root: &str, path: &str, cont
     let _ = conn.execute(
         "INSERT INTO editor_writes(scope, checkout, path, fingerprint, at) VALUES(?1,?2,?3,?4,?5) \
          ON CONFLICT(scope, checkout, path) DO UPDATE SET fingerprint=excluded.fingerprint, at=excluded.at",
-        params![db, root, path, fingerprint(Some(content)) as i64, at],
+        params![db, root, path, mark as i64, at],
     );
     let _ = conn.execute(
         "DELETE FROM editor_writes WHERE scope=?1 AND checkout=?2 AND path NOT IN (\

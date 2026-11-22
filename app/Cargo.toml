@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "3.83.0"
+version = "3.84.0"
 edition = "2021"
 rust-version = "1.80"
 description = "Sarthi Studio — local-first AI chat and coding workspace for FreeLLMAPI"
@@ -13,7 +13,7 @@ axum-server = { version = "=0.7.3", default-features = false, features = ["tls-r
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std", "alloc"] }
 getrandom = "=0.2.15"
-reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }

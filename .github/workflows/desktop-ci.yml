@@ -185,6 +185,8 @@ jobs:
 
       - name: Set up nightly Rust (see rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -198,3 +200,10 @@ jobs:
       - name: Run desktop tests
         working-directory: app
         run: cargo test --locked
+
+      # Linux and Windows already lint; an Apple-only cfg block was otherwise
+      # first compiled by a tagged release. The runner's system WebKit/AppKit
+      # satisfy the links.
+      - name: Run clippy (macOS)
+        working-directory: app
+        run: cargo clippy --locked --all-targets -- -D warnings

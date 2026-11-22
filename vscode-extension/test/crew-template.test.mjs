@@ -72,7 +72,12 @@ let embedded;
 test("crew template persistence: create, list, delete", async (t) => {
   const mock = await mockRouter();
   embedded = await startEmbedded(mock.router);
-  t.after(() => { embedded?.close(); cleanupTemp(); });
+  t.after(() => {
+    embedded?.close();
+    mock.router.closeAllConnections();
+    mock.router.close();
+    cleanupTemp();
+  });
 
   const save = (payload) =>
     request(embedded, "POST", "/api/crew-templates", payload);
@@ -129,7 +134,12 @@ test("crew template persistence: create, list, delete", async (t) => {
 test("crew template API refuses a roster that is not role names", async (t) => {
   const mock = await mockRouter([JSON.stringify({ action: "done" })]);
   embedded = await startEmbedded(mock.router);
-  t.after(() => { embedded?.close(); cleanupTemp(); });
+  t.after(() => {
+    embedded?.close();
+    mock.router.closeAllConnections();
+    mock.router.close();
+    cleanupTemp();
+  });
 
   const bad = await request(embedded, "POST", "/api/crew-templates", {
     crew: ["coding", 3],

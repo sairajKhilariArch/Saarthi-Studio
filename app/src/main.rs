@@ -1272,14 +1272,15 @@ async fn catalog_price(state: &AppState, cfg: &Config, id: &str) -> Option<capab
 
 /// What a recorded request cost: the provider's published price for the model
 /// that actually answered, times the tokens it reported. `None` unless both
-/// exist. Native platform picks have no router catalog row, so they stay
-/// unpriced rather than guessed.
+/// exist. A native platform pick has no router catalog row, so it reads the
+/// published OpenAI table; an id missing from that table stays unpriced rather
+/// than guessed.
 async fn priced_cost(state: &AppState, cfg: &Config, meta: &Value) -> Option<cost::Cost> {
     let model = meta.get("model").and_then(Value::as_str)?;
-    if openai::platform_model(model).is_some() {
-        return None;
-    }
-    let price = catalog_price(state, cfg, model).await?;
+    let price = match openai::platform_model(model) {
+        Some(platform_model) => openai::published_price(&platform_model)?,
+        None => catalog_price(state, cfg, model).await?,
+    };
     cost::estimate(
         &price,
         meta.get("prompt_tokens").and_then(Value::as_i64),
@@ -4838,7 +4839,10 @@ async fn chat_stream(
         context_tokens,
         state.events.clone(),
     )
-    .with_price(catalog_price(&state, &cfg, &chosen_model).await);
+    .with_price(match openai::platform_model(&chosen_model) {
+        Some(platform_model) => openai::published_price(&platform_model),
+        None => catalog_price(&state, &cfg, &chosen_model).await,
+    });
     if let Ok(mut held) = recorder.meta.lock() {
         held["model"] = json!(&chosen_model);
         if !auto_skills.is_empty() {

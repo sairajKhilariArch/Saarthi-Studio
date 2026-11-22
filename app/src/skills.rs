@@ -75,6 +75,27 @@ const AUTO_MIN_SCORE: usize = 2;
 const AUTO_MAX_SKILLS: usize = 2;
 /// Ceiling on the instructions automatic selection may add to one turn.
 const AUTO_MAX_TOKENS: usize = 1200;
+/// The capabilities a skill may declare. This is the extension permission
+/// vocabulary, so the same names mean the same things in both places.
+const SKILL_PERMISSIONS: [&str; 5] = [
+    "workspace.read",
+    "workspace.write",
+    "terminal.run",
+    "network",
+    "mcp.call",
+];
+
+/// `[a, b]`, `a, b` and a single name all describe the same declaration.
+fn permission_list(value: &str) -> Vec<String> {
+    value
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|item| item.trim().trim_matches('"').to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Skill {
@@ -84,6 +105,10 @@ pub(crate) struct Skill {
     pub version: String,
     /// Minimum Studio version from the manifest, empty when unstated.
     pub requires: String,
+    /// Capabilities the instructions expect, declared in the manifest. A skill
+    /// is prompt text, not code, so this is a declaration the UI shows and the
+    /// prompt repeats; it does not grant anything.
+    pub permissions: Vec<String>,
     pub body: String,
     pub path: String,
     pub source: &'static str,
@@ -194,6 +219,7 @@ fn parse_manifest(manifest: &FsPath, source: &str) -> Skill {
             description: String::new(),
             version: String::new(),
             requires: String::new(),
+            permissions: Vec::new(),
             body: String::new(),
             path: manifest.display().to_string(),
             source: label(source),
@@ -221,6 +247,7 @@ fn parse_text(folder: &str, text: &str, source: &str) -> Skill {
         description: String::new(),
         version: String::new(),
         requires: String::new(),
+        permissions: Vec::new(),
         body: String::new(),
         path: String::new(),
         source: label(source),
@@ -268,6 +295,35 @@ fn parse_text(folder: &str, text: &str, source: &str) -> Skill {
             }
             "description" if !value.is_empty() => skill.description = value,
             "version" if !value.is_empty() => skill.version = value,
+            "permissions" => {
+                let mut declared = permission_list(&value);
+                // YAML list form: the entries are indented `- name` lines
+                // after an empty `permissions:` key.
+                while let Some(next) = lines.peek() {
+                    let trimmed = next.trim();
+                    let Some(item) = trimmed.strip_prefix('-') else {
+                        break;
+                    };
+                    declared.push(item.trim().trim_matches('"').to_string());
+                    lines.next();
+                }
+                for permission in declared {
+                    let permission = permission.trim().to_ascii_lowercase();
+                    if permission.is_empty() {
+                        continue;
+                    }
+                    if !SKILL_PERMISSIONS.contains(&permission.as_str()) {
+                        skill.error = Some(format!(
+                            "permissions: \"{permission}\" is not a known permission (use {}).",
+                            SKILL_PERMISSIONS.join(", ")
+                        ));
+                        break;
+                    }
+                    if !skill.permissions.contains(&permission) {
+                        skill.permissions.push(permission);
+                    }
+                }
+            }
             "requires" if !value.is_empty() => {
                 if is_version(&value) {
                     skill.requires = value;
@@ -1145,6 +1201,7 @@ fn skill_json(state: &AppState, skill: &Skill, usage: &HashMap<String, (i64, f64
         // A compatibility fact, not an error: the manifest is valid, it just
         // names a newer Studio than this build.
         "requires": skill.requires,
+        "permissions": skill.permissions,
         "compatible": skill.compatible(),
         "installed_at": record.as_ref().map(|entry| entry.installed_at),
         "updated_at": record.as_ref().map(|entry| entry.updated_at),
@@ -1731,6 +1788,41 @@ mod tests {
     }
 
     #[test]
+    fn a_skill_declares_the_capabilities_its_instructions_expect() {
+        let root = scratch("permissions");
+        write_skill(
+            &root,
+            "deploy",
+            "---\nname: deploy\npermissions:\n  - terminal.run\n  - network\n---\nRun the deploy.\n",
+        );
+        write_skill(
+            &root,
+            "review",
+            "---\nname: review\npermissions: [workspace.read, workspace.write]\n---\nRead it.\n",
+        );
+        let skills = discover(&[("built-in".into(), root)]);
+        let deploy = skills.iter().find(|skill| skill.id == "deploy").unwrap();
+        assert_eq!(deploy.permissions, ["terminal.run", "network"]);
+        let review = skills.iter().find(|skill| skill.id == "review").unwrap();
+        assert_eq!(review.permissions, ["workspace.read", "workspace.write"]);
+    }
+
+    #[test]
+    fn an_unknown_skill_permission_is_a_load_error_not_a_silent_drop() {
+        let root = scratch("bad-permission");
+        write_skill(
+            &root,
+            "danger",
+            "---\nname: danger\npermissions: [root.everything]\n---\nDo it.\n",
+        );
+        let skills = discover(&[("built-in".into(), root)]);
+        assert!(skills[0]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("root.everything")));
+    }
+
+    #[test]
     fn parses_front_matter_and_body() {
         let root = scratch("parse");
         write_skill(
@@ -2222,6 +2314,7 @@ Go.
             description: description.to_string(),
             version: "1.0.0".to_string(),
             requires: String::new(),
+            permissions: Vec::new(),
             body: body.to_string(),
             path: format!("/skills/{id}/SKILL.md"),
             source: "user",

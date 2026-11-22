@@ -70,11 +70,16 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 /// unbounded copy could fill the disk. These are ceilings, not quotas.
 const MAX_FILES: usize = 500;
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
-/// The capabilities the runner actually provides (ADR 0001): the two workspace
-/// host functions. Everything else in the closed vocabulary installs but is
-/// refused at run by name, instead of running under a narrower sandbox than the
-/// manifest asked for.
-const V1_PERMISSIONS: [&str; 2] = ["workspace.read", "workspace.write"];
+/// The capabilities the runner actually provides (ADR 0001): the workspace
+/// functions plus the broker-gated network and terminal functions. `mcp.call`
+/// still installs but is refused at run by name, instead of running under a
+/// narrower sandbox than the manifest asked for.
+const V1_PERMISSIONS: [&str; 4] = [
+    "workspace.read",
+    "workspace.write",
+    "terminal.run",
+    "network",
+];
 /// The manifest schema this build understands. Only 1 exists, so any other
 /// declared number is a folder written for a different build.
 const SUPPORTED_API_VERSION: u32 = 1;
@@ -1790,6 +1795,10 @@ fn host_grant(
         write: declared
             .iter()
             .any(|permission| permission == "workspace.write"),
+        network: declared.iter().any(|permission| permission == "network"),
+        terminal: declared
+            .iter()
+            .any(|permission| permission == "terminal.run"),
     }
 }
 
@@ -2258,22 +2267,18 @@ mod tests {
             .unwrap_or_default()
             .contains("No runtime"));
         assert!(
-            run_block(&manifest(Some("wasm"), vec!["workspace.read", "network"]))
+            run_block(&manifest(Some("wasm"), vec!["workspace.read", "mcp.call"]))
                 .unwrap_or_default()
-                .contains("network")
+                .contains("mcp.call")
         );
-        assert!(run_block(&manifest(Some("wasm"), vec!["network"]))
-            .unwrap_or_default()
-            .contains("network"));
+        assert!(run_block(&manifest(Some("wasm"), vec!["network"])).is_none());
+        assert!(run_block(&manifest(Some("wasm"), vec!["terminal.run"])).is_none());
         assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"])).is_none());
         assert!(run_block(&manifest(
             Some("wasm"),
             vec!["workspace.read", "workspace.write"]
         ))
         .is_none());
-        assert!(run_block(&manifest(Some("wasm"), vec!["terminal.run"]))
-            .unwrap_or_default()
-            .contains("terminal.run"));
         assert!(run_block(&manifest(Some("wasm"), vec![])).is_none());
     }
 

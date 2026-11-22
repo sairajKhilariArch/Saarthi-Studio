@@ -85,6 +85,8 @@ test("resume: a live run continues as running", async (t) => {
   embedded = await startEmbedded(mock.router);
   t.after(() => {
     embedded?.close();
+    mock.router.closeAllConnections();
+    mock.router.close();
     cleanupTemp(workspace);
     cleanupTemp(storage);
   });
@@ -123,6 +125,8 @@ test("resume: failed and cancelled runs refuse to resume (desktop parity)", asyn
   embedded = await startEmbedded(mock.router);
   t.after(() => {
     embedded?.close();
+    mock.router.closeAllConnections();
+    mock.router.close();
     cleanupTemp(workspace);
     cleanupTemp(storage);
   });

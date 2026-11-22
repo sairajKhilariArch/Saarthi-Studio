@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0, run history in 2.24.0 (see the implementation notes below)
+- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0, run history in 2.24.0, broker-gated network and terminal host functions in 3.84.0 (see the implementation notes below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -62,12 +62,15 @@ once. This ADR exists so that decision is made before a loader, not after.
    |---|---|
    | `workspace.read` | host function, scoped to the open workspace; `..` and symlink escapes refused after canonicalisation |
    | `workspace.write` | as read, plus the permission rules; writes are atomic and size-capped |
-   | `network` | **no host function in v1**; a manifest requiring it installs but refuses to run |
-   | `terminal.run` | **no host function in v1**; refused at run |
-   | `mcp.call` | **no host function in v1**; refused at run |
+   | `network` | host function (`env.fetch`), one HTTP request; redirects disabled; needs a saved allow rule for the host |
+   | `terminal.run` | host function (`env.command`), one shell command in the open folder; 10 s cap, bounded output; needs a saved allow rule |
+   | `mcp.call` | **no host function**; refused at run |
 
-   Nothing in the v1 surface can reach config, the database, provider keys, the
-   terminal or the network.
+   Nothing in the runner surface can reach config, the database or provider
+   keys directly. The terminal and network are reachable only through the two
+   host functions above, each behind both the manifest permission and a saved
+   allow rule; the default `ask` is a refusal because no one is present to
+   answer it.
 
 6. **Resource limits are part of the boundary.** Each run has a fuel budget and
    a wall-clock cap, a fixed memory ceiling, a bounded output and a bounded
@@ -101,6 +104,20 @@ the ADR says.
    it is slower than a JIT — acceptable for short computations, and it means no
    executable memory is generated. Binary size grows; that was the ADR's
    accepted cost and it still holds.
+
+### Network and terminal (3.84.0)
+
+Both were added as host functions rather than by widening the ambient sandbox.
+`env.fetch` accepts a bounded JSON envelope, refuses credentials in the URL,
+uses GET/POST/PUT/PATCH/DELETE/HEAD, disables redirects (so the approved host is
+the host that answers), and caps the response at 1 MiB. Its permission target is
+the URL host. `env.command` runs one `sh -c` (or `cmd /C`) command in the open
+folder with a 10-second cap, captures both streams into bounded temporary files,
+and reports `exit N` before the output. Its permission target is the workspace
+root. Both need their manifest permission, a saved allow rule, and still count
+against the 64-call host budget. `mcp.call` remains refused.
+
+### First slice
 
 2. **No host functions at all in the first slice.** Point 5's `workspace.read`
    and `workspace.write` are **not** provided yet: the runner links an empty

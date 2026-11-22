@@ -15,6 +15,8 @@
 //! env.arguments(ptr, cap) -> i32                          argument bytes written
 //! env.result(ptr, len) -> i32                             0, or < 0
 //! env.last_error(ptr, cap) -> i32                         message bytes written
+//! env.fetch(req_ptr, req_len, out_ptr, out_cap) -> i32    response bytes written
+//! env.command(cmd_ptr, cmd_len, out_ptr, out_cap) -> i32  output bytes written
 //! ```
 //!
 //! `arguments`/`result` are the tool ABI: a call hands the module the JSON
@@ -28,6 +30,14 @@
 //! `workspace.read`/`workspace.write`, and both apply the same path containment
 //! and saved-rule checks.
 //!
+//! `fetch` takes a JSON request (`url`, optional `method`, `headers`, `body`) and
+//! answers JSON (`status`, `content_type`, `body`). Redirects are not followed,
+//! so the host a rule approved is the host that answers. `command` runs a shell
+//! command in the open folder and answers its combined output. Both need the
+//! manifest permission (`network`, `terminal.run`) *and* a saved allow rule for
+//! the target; an `ask` is a refusal because unattended code has no one to ask.
+//! Neither exists unless the manifest declares it.
+//!
 //! Error codes: `-1` refused, `-2` invalid path, `-3` missing, `-4` too large,
 //! `-5` not UTF-8 text, `-6` I/O failure. A host function is linked only when
 //! the manifest holds the matching permission, so a module that imports one it
@@ -39,6 +49,7 @@
 //! unattended code never gets an approval it could not obtain.
 
 use crate::permissions::{self, Action, Decision, Rule, Scope};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +70,12 @@ const MAX_MODULE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_HOST_CALLS: usize = 64;
 const MAX_HOST_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
+/// A network request's JSON envelope, its response body, and a command line are
+/// each bounded separately from the generic host-call limit.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_COMMAND_BYTES: usize = 4096;
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Wall-clock backstop. Computation is already bounded by fuel, which is
 /// deterministic; this bounds the part fuel cannot — time spent inside host
 /// calls — and is checked at every host boundary. A module that never calls a
@@ -111,6 +128,8 @@ pub(crate) struct HostGrant {
     pub rules: Vec<Rule>,
     pub read: bool,
     pub write: bool,
+    pub network: bool,
+    pub terminal: bool,
 }
 
 struct Limits {
@@ -296,6 +315,8 @@ fn run_bytes(
             ("env", "write") | ("env", "data_write") => {
                 grant.as_ref().map(|grant| grant.write).unwrap_or(false)
             }
+            ("env", "fetch") => grant.as_ref().map(|grant| grant.network).unwrap_or(false),
+            ("env", "command") => grant.as_ref().map(|grant| grant.terminal).unwrap_or(false),
             // The tool ABI is the shape of a call, not access to anything, so
             // it needs no permission: a module that imports it without a tool
             // declared simply reads empty arguments.
@@ -409,6 +430,34 @@ fn run_bytes(
             "last_error",
             |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
                 host_last_error(&mut caller, ptr, cap)
+            },
+        )
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap(
+            "env",
+            "fetch",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             request_ptr: i32,
+             request_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                host_fetch(&mut caller, request_ptr, request_len, out_ptr, out_cap)
+            },
+        )
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap(
+            "env",
+            "command",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             command_ptr: i32,
+             command_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                host_command(&mut caller, command_ptr, command_len, out_ptr, out_cap)
             },
         )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
@@ -728,6 +777,307 @@ fn host_data_write(
     )
 }
 
+/// Copy a host result into the module's memory, or say why it did not fit.
+fn write_out(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    bytes: &[u8],
+    out_ptr: i32,
+    out_cap: i32,
+) -> i32 {
+    let limit = (out_cap.max(0) as usize).min(MAX_HOST_BYTES);
+    if bytes.len() > limit {
+        let message = format!(
+            "The {} response bytes do not fit the {limit}-byte output buffer.",
+            bytes.len()
+        );
+        return caller.data_mut().fail(-4, message);
+    }
+    let Some(memory) = guest_memory(caller) else {
+        return caller
+            .data_mut()
+            .fail(-1, "The module exports no memory for the result.");
+    };
+    if memory
+        .write(&mut *caller, out_ptr.max(0) as usize, bytes)
+        .is_err()
+    {
+        return caller
+            .data_mut()
+            .fail(-4, "The result does not fit the module's memory.");
+    }
+    bytes.len() as i32
+}
+
+/// `network`: one HTTP request, with the host decided by a saved rule and
+/// redirects disabled so an allowed host cannot redirect to an unapproved one.
+fn host_fetch(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    request_ptr: i32,
+    request_len: i32,
+    out_ptr: i32,
+    out_cap: i32,
+) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let Some(bytes) = guest_bytes(caller, request_ptr, request_len, MAX_REQUEST_BYTES) else {
+        return caller.data_mut().fail(
+            -4,
+            format!("A network request must be at most {MAX_REQUEST_BYTES} bytes."),
+        );
+    };
+    let request: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return caller
+                .data_mut()
+                .fail(-2, "The network request is not valid JSON.")
+        }
+    };
+    let Some(url_text) = request.get("url").and_then(Value::as_str) else {
+        return caller
+            .data_mut()
+            .fail(-2, "The network request needs a url.");
+    };
+    let url = match reqwest::Url::parse(url_text) {
+        Ok(url)
+            if matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none() =>
+        {
+            url
+        }
+        _ => {
+            return caller.data_mut().fail(
+                -2,
+                "The url must be an absolute http(s) URL with no credentials in it.",
+            )
+        }
+    };
+    let host = url.host_str().unwrap_or_default().to_string();
+    if let Err(code) = caller
+        .data_mut()
+        .decide(Action::Network, &host, "network.fetch")
+    {
+        return code;
+    }
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("GET")
+        .to_ascii_uppercase();
+    let method = match method.as_str() {
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" => method,
+        _ => {
+            return caller
+                .data_mut()
+                .fail(-2, "That HTTP method is not allowed.")
+        }
+    };
+    let client = match reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(NETWORK_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return caller.data_mut().fail(-6, error.to_string()),
+    };
+    let mut outgoing = client.request(
+        reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
+        url,
+    );
+    if let Some(headers) = request.get("headers").and_then(Value::as_object) {
+        if headers.len() > 32 {
+            return caller
+                .data_mut()
+                .fail(-4, "At most 32 request headers are allowed.");
+        }
+        for (name, value) in headers {
+            let Some(value) = value.as_str() else {
+                return caller.data_mut().fail(-2, "Header values must be strings.");
+            };
+            outgoing = outgoing.header(name, value);
+        }
+    }
+    if let Some(body) = request.get("body").and_then(Value::as_str) {
+        if body.len() > MAX_REQUEST_BYTES {
+            return caller.data_mut().fail(-4, "The request body is too large.");
+        }
+        outgoing = outgoing.body(body.to_string());
+    }
+    let response = match outgoing.send() {
+        Ok(response) => response,
+        Err(error) => {
+            let message = format!("network.fetch to \"{host}\" failed: {error}");
+            return caller.data_mut().fail(-6, message);
+        }
+    };
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let mut body = Vec::new();
+    use std::io::Read;
+    if let Err(error) = response
+        .take(MAX_HOST_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+    {
+        let message = format!("network.fetch to \"{host}\" could not be read: {error}");
+        return caller.data_mut().fail(-6, message);
+    }
+    if body.len() > MAX_HOST_BYTES {
+        return caller
+            .data_mut()
+            .fail(-4, "The response body is too large.");
+    }
+    let answer = json!({
+        "status": status,
+        "content_type": content_type,
+        "body": String::from_utf8_lossy(&body),
+    })
+    .to_string();
+    write_out(caller, answer.as_bytes(), out_ptr, out_cap)
+}
+
+/// `terminal.run`: one shell command in the open folder, with a wall-clock
+/// cap and both streams captured into bounded temporary files. The command must
+/// be covered by a saved allow rule; the default command policy is `ask`, which
+/// is a refusal for an extension.
+fn host_command(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    command_ptr: i32,
+    command_len: i32,
+    out_ptr: i32,
+    out_cap: i32,
+) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let Some(raw) = guest_bytes(caller, command_ptr, command_len, MAX_COMMAND_BYTES) else {
+        return caller.data_mut().fail(
+            -4,
+            format!("A command must be at most {MAX_COMMAND_BYTES} bytes."),
+        );
+    };
+    let command = match String::from_utf8(raw) {
+        Ok(command) if !command.trim().is_empty() => command,
+        _ => {
+            return caller
+                .data_mut()
+                .fail(-2, "The command is not valid UTF-8 text.")
+        }
+    };
+    let Some((root, _)) = workspace_root(caller) else {
+        return caller.data_mut().fail(
+            -2,
+            "No folder is open, so there is nowhere to run a command.",
+        );
+    };
+    let target = root.to_string_lossy().to_string();
+    if let Err(code) = caller
+        .data_mut()
+        .decide(Action::Command, &target, "terminal.run")
+    {
+        return code;
+    }
+    let root = root.clone();
+    match run_shell(&root, &command) {
+        Ok(output) => write_out(caller, output.as_bytes(), out_ptr, out_cap),
+        Err((code, message)) => caller.data_mut().fail(code, message),
+    }
+}
+
+fn run_shell(root: &Path, command: &str) -> Result<String, (i32, String)> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let base = std::env::temp_dir().join(format!(
+        "saarthi-extension-command-{}-{stamp}",
+        std::process::id()
+    ));
+    let stdout_path = base.with_extension("out");
+    let stderr_path = base.with_extension("err");
+    let stdout = fs::File::create(&stdout_path).map_err(|error| (-6, error.to_string()))?;
+    let stderr = fs::File::create(&stderr_path).map_err(|error| (-6, error.to_string()))?;
+    let mut shell = if cfg!(windows) {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.arg("/C").arg(command);
+        cmd
+    } else {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    };
+    shell
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    let result = (|| {
+        let mut child = shell
+            .spawn()
+            .map_err(|error| (-6, format!("The command could not start: {error}")))?;
+        let started = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if started.elapsed() < COMMAND_TIMEOUT => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err((
+                        -6,
+                        format!(
+                            "The command exceeded its {}-second budget and was stopped.",
+                            COMMAND_TIMEOUT.as_secs()
+                        ),
+                    ));
+                }
+                Err(error) => return Err((-6, error.to_string())),
+            }
+        };
+        let stdout = read_bounded(&stdout_path)?;
+        let stderr = read_bounded(&stderr_path)?;
+        let code = status.code().unwrap_or(-1);
+        let mut output = format!("exit {code}\n");
+        if !stdout.is_empty() {
+            output.push_str(&stdout);
+        }
+        if !stderr.is_empty() {
+            if !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&stderr);
+        }
+        Ok(output)
+    })();
+    let _ = fs::remove_file(&stdout_path);
+    let _ = fs::remove_file(&stderr_path);
+    result
+}
+
+fn read_bounded(path: &Path) -> Result<String, (i32, String)> {
+    let meta = fs::metadata(path).map_err(|error| (-6, error.to_string()))?;
+    if meta.len() > MAX_HOST_BYTES as u64 {
+        return Err((-4, "The command output is too large.".to_string()));
+    }
+    let bytes = fs::read(path).map_err(|error| (-6, error.to_string()))?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
 /// Fetch a write's payload, leaving the reason in `last_error` on failure.
 fn guest_content(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, len: i32) -> Option<String> {
     let Some(data) = guest_bytes(caller, ptr, len, MAX_HOST_BYTES) else {
@@ -888,6 +1238,8 @@ mod tests {
             rules: Vec::new(),
             read,
             write,
+            network: false,
+            terminal: false,
         }
     }
 
@@ -987,6 +1339,98 @@ mod tests {
         assert_eq!(outcome.audit[0].capability, "workspace.read");
         assert_eq!(outcome.audit[0].path, "hello.txt");
         assert_eq!(outcome.audit[0].decision, Decision::Allow);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn network_and_terminal_imports_need_their_manifest_permission() {
+        for (name, import) in [("fetch", "fetch"), ("command", "command")] {
+            let root = workspace(&format!("gate-{name}"));
+            let path = module_file(
+                &format!("gate-{name}"),
+                &format!(
+                    r#"(module
+                         (import "env" "{import}" (func (param i32 i32 i32 i32) (result i32)))
+                         (memory (export "memory") 1)
+                         (func (export "run") (result i32) i32.const 0))"#
+                ),
+            );
+            let error = run_file(&path, Some(grant(&root, false, false))).expect_err("refused");
+            assert!(error.contains(import), "{error}");
+            let _ = fs::remove_file(&path);
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn a_network_fetch_needs_and_gets_a_saved_rule_and_never_follows_redirects() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nhello",
+            );
+        });
+        let root = workspace("fetch");
+        let request = format!(r#"{{"url":"http://{address}/"}}"#);
+        let escaped = request.replace('\\', "\\\\").replace('"', "\\\"");
+        let path = module_file(
+            "fetch",
+            &format!(
+                r#"(module
+                     (import "env" "fetch" (func $fetch (param i32 i32 i32 i32) (result i32)))
+                     (memory (export "memory") 1)
+                     (data (i32.const 0) "{escaped}")
+                     (func (export "run") (result i32)
+                       (call $fetch (i32.const 0) (i32.const {}) (i32.const 256) (i32.const 4096))))"#,
+                request.len()
+            ),
+        );
+        let mut host = grant(&root, false, false);
+        host.network = true;
+        // Without a rule the default is ask, which is a refusal here.
+        let refused = run_file(&path, Some(host.clone())).expect("run");
+        assert_eq!(refused.exit_code, -1);
+        host.rules = vec![rule(Action::Network, "127.0.0.1", Decision::Allow)];
+        let outcome = run_file(&path, Some(host)).expect("run");
+        assert!(outcome.exit_code > 0, "the response JSON was written");
+        assert_eq!(outcome.audit[0].capability, "network.fetch");
+        assert_eq!(outcome.audit[0].path, "127.0.0.1");
+        server.join().expect("server");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_runs_only_with_a_saved_rule_and_reports_its_output() {
+        let root = workspace("command");
+        let command = "printf hi";
+        let path = module_file(
+            "command",
+            &format!(
+                r#"(module
+                     (import "env" "command" (func $command (param i32 i32 i32 i32) (result i32)))
+                     (memory (export "memory") 1)
+                     (data (i32.const 0) "{command}")
+                     (func (export "run") (result i32)
+                       (call $command (i32.const 0) (i32.const {}) (i32.const 64) (i32.const 1024))))"#,
+                command.len()
+            ),
+        );
+        let mut host = grant(&root, false, false);
+        host.terminal = true;
+        let refused = run_file(&path, Some(host.clone())).expect("run");
+        assert_eq!(refused.exit_code, -1);
+        host.rules = vec![rule(Action::Command, "", Decision::Allow)];
+        let outcome = run_file(&path, Some(host)).expect("run");
+        assert_eq!(outcome.exit_code, 9, "exit 0 plus the two output bytes");
+        assert_eq!(outcome.audit[0].capability, "terminal.run");
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&root);
     }

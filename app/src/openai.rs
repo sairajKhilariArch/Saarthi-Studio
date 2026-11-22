@@ -767,6 +767,35 @@ pub(crate) async fn responses_stream_bytes(
     .boxed())
 }
 
+/// OpenAI's published price for a model, in dollars per million tokens.
+///
+/// The platform's `/models` endpoint carries no prices, so this is the one
+/// place a native pick can get one. Only exact, published model ids are listed:
+/// an unknown or dated variant stays unpriced rather than inheriting a family
+/// price, because a guess would make the spend total silently wrong.
+pub(crate) fn published_price(model: &str) -> Option<crate::capabilities::Price> {
+    let (input, output) = match model {
+        "gpt-5" => (1.25, 10.0),
+        "gpt-5-mini" => (0.25, 2.0),
+        "gpt-5-nano" => (0.05, 0.40),
+        "gpt-4.1" => (2.0, 8.0),
+        "gpt-4.1-mini" => (0.40, 1.60),
+        "gpt-4.1-nano" => (0.10, 0.40),
+        "gpt-4o" => (2.50, 10.0),
+        "gpt-4o-mini" => (0.15, 0.60),
+        "o3" => (2.0, 8.0),
+        "o3-mini" => (1.10, 4.40),
+        "o4-mini" => (1.10, 4.40),
+        "gpt-4-turbo" => (10.0, 30.0),
+        "gpt-3.5-turbo" => (0.50, 1.50),
+        _ => return None,
+    };
+    Some(crate::capabilities::Price {
+        input_per_million: input,
+        output_per_million: output,
+    })
+}
+
 /// The platform's own model list, with the `openai:` prefix and whatever
 /// capability metadata its rows carry (its `/models` rows carry none, so the
 /// flags stay `null` and the UI says unknown rather than promising reasoning).
@@ -800,7 +829,10 @@ pub(crate) async fn list_models(
         .iter()
         .filter_map(|row| {
             let id = row.get("id").and_then(Value::as_str)?;
-            let caps = crate::capabilities::from_catalog_row(row);
+            let mut caps = crate::capabilities::from_catalog_row(row);
+            // A native pick has no router catalog row; its price comes from the
+            // published table instead, and only when the id is known exactly.
+            caps.pricing = published_price(id);
             Some(json!({
                 "id": format!("{PREFIX}{id}"),
                 "label": id,
