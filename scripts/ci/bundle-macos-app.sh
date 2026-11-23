@@ -12,7 +12,7 @@
 #              staging step's output)
 #   version    the version from scripts/ci/version.sh; re-validated here
 #   out-dir    where the bundle and its zip are written
-#   app-name   bundle name, default "Sarthi Studio"
+#   app-name   bundle name, default "SAARTHI-STUDIO"
 #
 # It refuses rather than guessing: a missing binary, a static tree without
 # `index.html`, or an unusable version fails with the reason instead of
@@ -25,8 +25,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 stage="${1:-}"
 version="${2:-}"
 out="${3:-}"
-app_name="${4:-Sarthi Studio}"
-bundle_id="com.saarthi.freeaistudio"
+app_name="${4:-SAARTHI-STUDIO}"
+bundle_id="com.saarthi.studio"
 minimum_macos="10.15"
 
 die() {
@@ -40,8 +40,8 @@ die() {
 bash "$here/version.sh" --check-version "$version" ||
   die "unusable version '$version' (expected MAJOR.MINOR.PATCH)"
 
-binary="$(find "$stage" -maxdepth 1 -type f \( -name 'free-ai-studio' -o -name 'free-ai-studio.exe' \) 2>/dev/null | head -n 1)"
-[ -n "$binary" ] || die "$stage contains no free-ai-studio binary"
+binary="$(find "$stage" -maxdepth 1 -type f \( -name 'SAARTHI-STUDIO' -o -name 'SAARTHI-STUDIO.exe' \) 2>/dev/null | head -n 1)"
+[ -n "$binary" ] || die "$stage contains no SAARTHI-STUDIO binary"
 [ -f "$stage/static/index.html" ] ||
   die "$stage/static/index.html is missing, so the bundle would serve no UI"
 
@@ -92,7 +92,7 @@ grep -q "<string>$executable</string>" "$app/Contents/Info.plist" ||
   die "Info.plist does not name the bundled executable"
 
 mkdir -p "$out"
-zip_path="$out/sarthi-studio_${version}_macos-universal.app.zip"
+zip_path="$out/SAARTHI-STUDIO_${version}_macos-universal.app.zip"
 rm -f "$zip_path"
 
 # Python's zipfile keeps the archive names portable (forward slashes) and exists

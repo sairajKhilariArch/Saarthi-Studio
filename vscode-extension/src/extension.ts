@@ -11,7 +11,8 @@ import {
   normalizeBaseUrl,
 } from "./lib";
 
-const API_KEY_SECRET = "freeAiStudio.apiKey";
+const API_KEY_SECRET = "saarthiStudio.apiKey";
+const LEGACY_API_KEY_SECRET = "freeAiStudio.apiKey";
 const MAX_ATTACHMENT_CHARS = 50_000;
 
 interface Backend {
@@ -32,21 +33,41 @@ let apiKeyCache = "";
 
 export function activate(context: vscode.ExtensionContext): void {
   contextRef = context;
-  output = vscode.window.createOutputChannel("Sarthi Studio");
+  output = vscode.window.createOutputChannel("SAARTHI-STUDIO");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
-  statusBar.command = "freeAiStudio.showStatus";
+  statusBar.command = "saarthiStudio.showStatus";
   statusBar.text = "$(sparkle) Studio";
-  statusBar.tooltip = "Sarthi Studio";
+  statusBar.tooltip = "SAARTHI-STUDIO";
   statusBar.show();
   context.subscriptions.push(statusBar, output);
 
-  void context.secrets.get(API_KEY_SECRET).then((value) => {
+  void (async () => {
+    let value = await context.secrets.get(API_KEY_SECRET);
+    if (!value) {
+      value = await context.secrets.get(LEGACY_API_KEY_SECRET);
+      if (value) {
+        await context.secrets.store(API_KEY_SECRET, value);
+        await context.secrets.delete(LEGACY_API_KEY_SECRET);
+      }
+    }
     apiKeyCache = value || "";
-  });
+  })();
 
   const register = (id: string, handler: (...args: any[]) => unknown) =>
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
 
+  register("saarthiStudio.openChat", () => openChat());
+  register("saarthiStudio.askSelection", () => askSelection());
+  register("saarthiStudio.attachFile", () => attachActiveFile());
+  register("saarthiStudio.setApiKey", () => setApiKey());
+  register("saarthiStudio.showStatus", () => showStatus());
+  register("saarthiStudio.restartServer", () => restartServer());
+  register("saarthiStudio.openInDesktop", async () => {
+    const url = getSetting("desktopUrl", "http://127.0.0.1:8765");
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+  });
+
+  // Keep old command IDs callable so existing keybindings and command links survive.
   register("freeAiStudio.openChat", () => openChat());
   register("freeAiStudio.askSelection", () => askSelection());
   register("freeAiStudio.attachFile", () => attachActiveFile());
@@ -54,13 +75,13 @@ export function activate(context: vscode.ExtensionContext): void {
   register("freeAiStudio.showStatus", () => showStatus());
   register("freeAiStudio.restartServer", () => restartServer());
   register("freeAiStudio.openInDesktop", async () => {
-    const url = vscode.workspace.getConfiguration("freeAiStudio").get<string>("desktopUrl", "http://127.0.0.1:8765");
+    const url = getSetting("desktopUrl", "http://127.0.0.1:8765");
     await vscode.env.openExternal(vscode.Uri.parse(url));
   });
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      if (!event.affectsConfiguration("freeAiStudio")) return;
+      if (!event.affectsConfiguration("saarthiStudio") && !event.affectsConfiguration("freeAiStudio")) return;
       // A changed desktop URL or router setting invalidates the chosen backend.
       await shutdownEmbedded();
       backend = undefined;
@@ -87,17 +108,28 @@ export async function deactivate(): Promise<void> {
 /* backend selection                                                   */
 /* ------------------------------------------------------------------ */
 
+function getSetting<T>(key: string, fallback: T): T {
+  const current = vscode.workspace.getConfiguration("saarthiStudio");
+  const inspected = current.inspect<T>(key);
+  if (inspected && (
+    inspected.globalValue !== undefined ||
+    inspected.workspaceValue !== undefined ||
+    inspected.workspaceFolderValue !== undefined
+  )) {
+    return current.get<T>(key, fallback);
+  }
+  return vscode.workspace.getConfiguration("freeAiStudio").get<T>(key, fallback);
+}
+
 function readConfig(): StudioConfig {
-  const config = vscode.workspace.getConfiguration("freeAiStudio");
-  const apiKey = apiKeyCache;
   return {
-    routerBaseUrl: normalizeBaseUrl(config.get<string>("routerBaseUrl", "http://127.0.0.1:3001/v1")),
-    apiKey,
-    model: config.get<string>("model", "auto") || "auto",
-    contextBudgetTokens: clamp(config.get<number>("contextBudgetTokens", 6000), 1000, 32000),
-    historyMessages: clamp(config.get<number>("historyMessages", 6), 2, 24),
+    routerBaseUrl: normalizeBaseUrl(getSetting("routerBaseUrl", "http://127.0.0.1:3001/v1")),
+    apiKey: apiKeyCache,
+    model: getSetting("model", "auto") || "auto",
+    contextBudgetTokens: clamp(getSetting("contextBudgetTokens", 6000), 1000, 32000),
+    historyMessages: clamp(getSetting("historyMessages", 6), 2, 24),
     sendWorkspaceOutline: true,
-    thinkingLevel: config.get<string>("thinkingLevel", "") || "",
+    thinkingLevel: getSetting("thinkingLevel", "") || "",
   };
 }
 
@@ -109,8 +141,7 @@ function clamp(value: number, min: number, max: number): number {
 
 async function resolveBackend(): Promise<Backend> {
   if (backend) return backend;
-  const config = vscode.workspace.getConfiguration("freeAiStudio");
-  const desktopUrl = String(config.get<string>("desktopUrl", "http://127.0.0.1:8765") || "").replace(/\/+$/, "");
+  const desktopUrl = String(getSetting("desktopUrl", "http://127.0.0.1:8765") || "").replace(/\/+$/, "");
   const probe = await probeDesktop(desktopUrl);
   output.appendLine(`desktop probe ${desktopUrl}: running=${probe.running} embeddable=${probe.embeddable}`);
 
@@ -156,7 +187,7 @@ async function refreshStatus(): Promise<void> {
   try {
     const chosen = await resolveBackend();
     statusBar.text = chosen.kind === "desktop" ? "$(sparkle) Studio · desktop" : "$(sparkle) Studio · built-in";
-    statusBar.tooltip = `Sarthi Studio (${chosen.kind}) — ${chosen.url}`;
+    statusBar.tooltip = `SAARTHI-STUDIO (${chosen.kind}) — ${chosen.url}`;
   } catch (error) {
     statusBar.text = "$(sparkle) Studio · error";
     statusBar.tooltip = (error as Error).message;
@@ -172,8 +203,8 @@ async function openChat(prefill?: { prompt?: string; code?: string; language?: s
   const chosen = await resolveBackend();
   if (!panel) {
     panel = vscode.window.createWebviewPanel(
-      "freeAiStudio.chat",
-      "Sarthi Studio",
+      "saarthiStudio.chat",
+      "SAARTHI-STUDIO",
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
       {
         enableScripts: true,
@@ -259,14 +290,14 @@ function renderPanelHtml(chosen: Backend): string {
     <span class="note">${escapeAttribute(chosen.note || frameUrl)}</span>
     <button id="reload">Reload</button>
   </div>
-  <iframe id="studio" src="${frameUrl}" title="Sarthi Studio"></iframe>
+  <iframe id="studio" src="${frameUrl}" title="SAARTHI-STUDIO"></iframe>
   <script nonce="${nonce}">
     const frame = document.getElementById("studio");
     const vscode = acquireVsCodeApi();
     window.addEventListener("message", (event) => {
       const data = event.data;
       if (!data || data.type !== "freeai:prefill" || !frame.contentWindow) return;
-      frame.contentWindow.postMessage({ ...data, source: "free-ai-studio-extension" }, "${frameUrl}");
+      frame.contentWindow.postMessage({ ...data, source: "saarthi-studio-extension" }, "${frameUrl}");
     });
     document.getElementById("reload").addEventListener("click", () => {
       frame.src = "${frameUrl}";
@@ -303,7 +334,7 @@ async function askSelection(): Promise<void> {
   const code = (selected || editor.document.getText()).slice(0, MAX_ATTACHMENT_CHARS);
   const truncated = (selected || editor.document.getText()).length > MAX_ATTACHMENT_CHARS;
   const prompt = await vscode.window.showInputBox({
-    prompt: "What should Sarthi Studio do with this code?",
+    prompt: "What should SAARTHI-STUDIO do with this code?",
     value: "Explain what this code does and point out anything risky.",
   });
   if (prompt === undefined) return;
@@ -339,12 +370,14 @@ async function setApiKey(): Promise<void> {
   if (!value.trim()) {
     apiKeyCache = "";
     await contextRef.secrets.delete(API_KEY_SECRET);
-    void vscode.window.showInformationMessage("Sarthi Studio: router API key cleared.");
+    await contextRef.secrets.delete(LEGACY_API_KEY_SECRET);
+    void vscode.window.showInformationMessage("SAARTHI-STUDIO: router API key cleared.");
     return;
   }
   apiKeyCache = value.trim();
   await contextRef.secrets.store(API_KEY_SECRET, apiKeyCache);
-  void vscode.window.showInformationMessage("Sarthi Studio: router API key saved.");
+  await contextRef.secrets.delete(LEGACY_API_KEY_SECRET);
+  void vscode.window.showInformationMessage("SAARTHI-STUDIO: router API key saved.");
 }
 
 async function showStatus(): Promise<void> {
@@ -365,7 +398,7 @@ async function showStatus(): Promise<void> {
     `Router: ${config.routerBaseUrl}`,
     `Model: ${config.model}`,
     `Context budget: ${config.contextBudgetTokens} tokens · ${config.historyMessages} messages`,
-    `API key: ${config.apiKey ? "saved" : "not set (run “Sarthi Studio: Set router API key”)"}`,
+    `API key: ${config.apiKey ? "saved" : "not set (run “SAARTHI-STUDIO: Set router API key”)"}`,
     `Workspace: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "no folder open"}`,
   ];
   const action = await vscode.window.showInformationMessage(lines.join("\n"), "Open chat", "Restart server");
@@ -378,5 +411,5 @@ async function restartServer(): Promise<void> {
   backend = undefined;
   await refreshStatus();
   if (panel) await reloadPanel();
-  void vscode.window.showInformationMessage("Sarthi Studio: server restarted.");
+  void vscode.window.showInformationMessage("SAARTHI-STUDIO: server restarted.");
 }

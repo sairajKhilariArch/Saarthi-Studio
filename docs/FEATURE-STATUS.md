@@ -110,7 +110,7 @@ non-fatal step. The suite's new case covers all four paths against the real
 fake stdio server: **35 passed, 0 failed**. Not pre-validated: a call's
 arguments against the tool's schema (the desktop does that first).
 **Revision 3.57.0 (2026-11-19):** the VS Code embedded server's agent runs
-honour Thinking. Every agent step had ignored `freeAiStudio.thinkingLevel`,
+honour Thinking. Every agent step had ignored `saarthiStudio.thinkingLevel`,
 because the runtime's `callRouter` passed no level; it now resolves the global
 setting and sends `reasoning_effort` for low/medium/high, none for off/unset. A
 new test drives a real agent run against a fake router and asserts the body for
@@ -212,7 +212,7 @@ first).
 embedded server. `callRouter` carries `reasoning_effort` for low/medium/high
 and nothing for off or unset; the server parses `@Thinking` exactly as the
 desktop does, resolves this message's choice above its directive above the new
-`freeAiStudio.thinkingLevel` setting, reports `meta.thinking` with its scope,
+`saarthiStudio.thinkingLevel` setting, reports `meta.thinking` with its scope,
 serves `GET /api/thinking/levels` and `thinking_level` in `/api/config`, and the
 contract says `thinking: true`. Four extension tests cover the parse, the
 directive, the precedence and the real request body. Still absent there: MCP,
@@ -289,7 +289,7 @@ folder, requires a root `SKILL.md`, refuses more than 200 files or 2 MiB and any
 symlink, and installs under the user skills folder, rewriting the manifest to
 name that folder so discovery keeps the id. The clone is removed either way, an
 installed id is refused, and the route is gated on `git`. Both skill roots now
-follow `FREE_AI_STUDIO_HOME`. Updating a Git-imported skill still means removing
+follow `SAARTHI_STUDIO_HOME`. Updating a Git-imported skill still means removing
 and importing it again (KNOWN-ISSUES 43).
 **Revision 3.35.0 (2026-11-13):** Replace in file. The find bar now has a
 Replace field: Replace (Enter) rewrites the match under the selection or the
@@ -579,7 +579,7 @@ checks out that tag, refuses a mismatch with `app/Cargo.toml`, and scopes
 attachment and concurrency to it. `scripts/ci/verify-release.sh` requires all 11
 promised assets with non-zero size, and the final `verify-release` job fails a
 tag run when one is missing. `smoke-package.sh` now recognises the
-AppImage/deb UI under `share/sarthi-studio/static` (and the legacy
+AppImage/deb UI under `share/SAARTHI-STUDIO/static` (and the legacy
 `share/free-ai-suite` path), matching `static_dir_candidates`; that layout false
 negative is what failed the AppImage smoke in run `42908396329`. The same run's
 deb job still fails `cargo test --no-default-features` with exit 101 on `3.0.2`,
@@ -674,7 +674,7 @@ portable (tarball/zip) install still has no uninstall of its own. Phase 18 is 10
 rows — 9 Working + 1 Partial = 95% — and the overall mean stays 92% (1,659/18).
 
 **Revision 2.42.0 (2026-11-10):** Phase 18 gained the macOS application bundle:
-`scripts/ci/bundle-macos-app.sh` builds `Sarthi Studio.app` from the staged tree
+`scripts/ci/bundle-macos-app.sh` builds `SAARTHI-STUDIO.app` from the staged tree
 and the binary resolves `<exe>/../Resources/static`, so the bundle is a real
 installable app rather than a renamed binary; the release job smokes its zip and
 attaches it. Phase 18's install row moves from Missing to Partial (macOS bundled,
@@ -1112,7 +1112,7 @@ it needs, and both are enforced rather than displayed.
 | Android | Working | JVM + emulator instrumentation + validation gate |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
 | Frontend | Working (2.33.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 21 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys, the icon fallback, the workflow graph helpers (layout by dependency depth, add/rename/delete with edge rewriting, per-edge conditions), and a render smoke (2.33.0) that runs `renderWorkflowCanvas` (a card per node, an edge per dependency, an empty-graph note) and evaluates `ide.js` on top of `app.js` (chrome built, `api` wrapped, workbench inside the main pane). Wired into `desktop-ci.yml`. Still not a layout or pixel check — that needs a browser |
-| End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
+| End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `SAARTHI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
 | Failure-injection matrix | Working (2.34.0) | Four process-level cases in `scripts/ci/test-e2e.sh`: (1) the mock provider is killed and the next run must reach `failed` with an error while `/api/ready` keeps answering; (2) the provider is slowed and the process killed mid-run, and the restarted app must mark that run `interrupted` with a readable step log; (3) the database is replaced with garbage — the process must exit with `file is not a database` in its log, nothing may answer on the port, and restoring the saved copy must bring it back ready; (4) the data directory is made read-only (POSIX only: Windows Git Bash ignores `chmod`, so the case prints `skip`) and the `data directory` readiness check must go false and then recover. SQLite's locked and full-database paths are unit-tested since 3.39.1 (a waiting writer, and `max_page_count`'s `SQLITE_FULL` with the rows intact and `quick_check` clean); a true filesystem ENOSPC (needs a privileged loop/tmpfs mount) and browser-level layout are still not run |
 | Install smokes in CI | Working (2.31.0) | `scripts/ci/smoke-package.sh` unpacks a tarball, zip, `.deb` (`dpkg-deb -x`) or AppImage (`--appimage-extract`), boots the packaged binary headless against a scratch home, checks `/api/ready`, serves `/`, and compares `/api/diagnostics/bundle`'s `app.version` with `app/Cargo.toml`. `desktop-release.yml` runs it on the `.deb`, the Linux tarball and AppImage, the Windows zip and the macOS tarball; VSIX and APK are not covered. Verified locally on a zip and a tarball; the `.deb` and AppImage paths run only in the Linux release jobs |
 | Windows Rust CI job | Working (2.32.0) | `desktop-ci.yml` builds the default `gui` feature and runs `cargo test --locked` on `windows-latest`; WebView2 and MSVC come with the runner and mold/`-Z threads` are Linux-scoped. Linux owns the formatting gate and the end-to-end smoke; since 3.34.1 this job also runs clippy, so Windows-only code is linted. Verified locally with the same commands on Windows; the GitHub job itself runs on push |
@@ -1180,7 +1180,7 @@ portable uninstall.
 
 | Area | State | Detail |
 |---|---|---|
-| Display name | Working (2.51.0) | `Sarthi Studio` in the window/tab title, About, settings, empty states, toasts and docs; no `Free AI Studio` or `Saarthi Studio` remains in tracked text |
-| Package and installer metadata | Working (2.51.0) | `productName`, crate description, MSI product/shortcut/uninstaller names, AppStream name and desktop entry, Android `android:label`, VS Code `displayName`, artifacts `sarthi-studio_<version>_<platform>`; AppStream validation is still outstanding (KNOWN-ISSUES 33) |
+| Display name | Working (2.51.0) | `SAARTHI-STUDIO` in the window/tab title, About, settings, empty states, toasts and docs; no `Free AI Studio` or `Saarthi Studio` remains in tracked text |
+| Package and installer metadata | Working (2.51.0) | `productName`, crate description, MSI product/shortcut/uninstaller names, AppStream name and desktop entry, Android `android:label`, VS Code `displayName`, artifacts `SAARTHI-STUDIO_<version>_<platform>`; AppStream validation is still outstanding (KNOWN-ISSUES 33) |
 | Logo, mascot and icons | Working (3.83.0) | Guide-path S logo, flat orange/black/white, from one geometry (`scripts/brand/build-brand-assets.py`); sidebar, welcome, website, favicon, Windows `.ico`, Linux desktop/AppImage/.deb, macOS bundle and Android adaptive launcher. The tardigrade face remains the assistant avatar. Rasters rendered from the canonical SVG; the MSI/macOS/Android icons are unverified on their platforms (KNOWN-ISSUES 35) |
 | Technical identity | Deliberately retained (2.51.0) | crate/binary, env vars, config/data paths, bundle and Android ids, conversation image marker, VS Code ids and repo slug keep old names so installs and stored data survive; reasons and migrations in `docs/KNOWN-ISSUES.md` #32 |

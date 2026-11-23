@@ -19,7 +19,7 @@ debug = 1
 # and dev runs must stay hermetic: selecting the keyring mock store here means
 # `cargo test` and `cargo run` never touch a real user vault. Production
 # binaries launched outside cargo (installer, tarball, AppImage) set nothing
-# and get the real platform store. `FREE_AI_STUDIO_KEYCHAIN=off` is the
+# and get the real platform store. `SAARTHI_STUDIO_KEYCHAIN=off` is the
 # escape hatch that keeps secrets in config.json.
 [env]
-FREE_AI_STUDIO_KEYCHAIN = "mock"
+SAARTHI_STUDIO_KEYCHAIN = "mock"

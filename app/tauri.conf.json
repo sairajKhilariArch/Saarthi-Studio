@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Sarthi Studio",
+  "productName": "SAARTHI-STUDIO",
   "version": "3.50.1",
-  "identifier": "com.saarthi.freeaistudio",
+  "identifier": "com.saarthi.studio",
   "build": {
     "frontendDist": "static"
   },

@@ -1,4 +1,4 @@
-# Sarthi Studio platform architecture
+# SAARTHI-STUDIO platform architecture
 
 ## Product roles
 

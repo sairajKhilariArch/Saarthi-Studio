@@ -1162,7 +1162,7 @@ async fn connect_once(server: &Server) -> Result<Handshake, String> {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "sarthi-studio",
+                    "name": "SAARTHI-STUDIO",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             }),

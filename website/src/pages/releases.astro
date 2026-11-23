@@ -1,98 +1,87 @@
 ---
-  import { ASSETS, TOTAL_ASSETS } from '../lib/releases';
   import BaseLayout from '../layouts/BaseLayout.astro';
   import Icon from '../components/Icon.astro';
-  import { LATEST_RELEASE } from '../lib/releases';
   import PageHero from '../components/PageHero.astro';
+  import { LATEST_RELEASE, LATEST_STABLE_RELEASE, RELEASES, formatBytes } from '../lib/releases';
   import { SITE } from '../lib/site';
-  import { formatBytes } from '../lib/releases';
-  import { withBase } from '../lib/url';
 ---
 
 <BaseLayout
-  title="Releases — Sarthi Studio"
-  description="Every published release of Sarthi Studio with its assets, sizes, and checksums."
+  title="Releases — SAARTHI-STUDIO"
+  description="Published SAARTHI-STUDIO releases, real downloadable assets, sizes, and release notes."
 >
   <PageHero
     eyebrow="Releases"
     title="Release history"
-    description="Browse published releases, the latest stable, and the newest build with assets. All assets are attached to GitHub Releases by the release workflow."
+    description="This list is generated from GitHub Releases. Only files actually attached to a published release are shown."
     breadcrumb={[{ label: 'Releases' }]}
   />
 
   <section class="section">
     <div class="container container-narrow">
       <div class="release-banner">
-        <strong>Latest stable: {LATEST_RELEASE.tag}</strong>
+        <strong>Latest stable: {LATEST_STABLE_RELEASE.tag}</strong>
         <span class="release-meta">
-          Published {LATEST_RELEASE.date}
-          {' · '}
-          {ASSETS.linuxTar.name ? TOTAL_ASSETS : 'no build assets'}
+          Latest downloadable: {LATEST_RELEASE.tag}
         </span>
-        <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
-          Release notes ↗
-        </a>
+        <a href={SITE.releases} target="_blank" rel="noopener noreferrer">All GitHub releases ↗</a>
       </div>
 
-      <div class="release-card">
-        <span class="release-card-tag">{LATEST_RELEASE.tag}</span>
-        <span class="release-card-date">Published {LATEST_RELEASE.date}</span>
-        <p class="release-card-body">
-          Latest stable release, with build assets for every platform. The
-          full release history, including versions with no build assets, is
-          available on
-          <a href={SITE.releases} target="_blank" rel="noopener noreferrer">
-            GitHub Releases
-          </a>
-          and on the
-          <a href={withBase('/changelog/')}>changelog</a>.
-        </p>
-      </div>
-
-      <div class="assets-summary">
-        <div class="asset-summary-item">
-          <span class="asset-summary-label">Linux</span>
-          <span class="asset-summary-value">
-            {ASSETS.linuxTar.name ? formatBytes(ASSETS.linuxTar.size) : '—'}
-          </span>
+      {RELEASES.length ? (
+        <div class="release-history">
+          {RELEASES.map((release) => (
+            <article class="release-card">
+              <div class="release-card-header">
+                <span class="release-card-tag">{release.tag}</span>
+                <span class="release-card-date">
+                  {release.date ? `Published ${release.date}` : 'Publication date unavailable'}
+                </span>
+              </div>
+              <p class="release-card-body">
+                {release.body.trim()
+                  ? release.body
+                  : 'No release notes were published. Open the GitHub release page for details.'}
+              </p>
+              <div class="release-meta">
+                {release.assets.length} attached {release.assets.length === 1 ? 'asset' : 'assets'}
+              </div>
+              {release.assets.length > 0 && (
+                <ul class="release-asset-list">
+                  {release.assets.map((asset) => (
+                    <li>
+                      <a href={asset.url} target="_blank" rel="noopener noreferrer">{asset.name}</a>
+                      <span>{formatBytes(asset.size)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <a href={release.url} target="_blank" rel="noopener noreferrer">Release page ↗</a>
+            </article>
+          ))}
         </div>
-        <div class="asset-summary-item">
-          <span class="asset-summary-label">Windows</span>
-          <span class="asset-summary-value">
-            {ASSETS.windowsZip.name ? formatBytes(ASSETS.windowsZip.size) : '—'}
-          </span>
+      ) : (
+        <div class="note-card">
+          <Icon name="info" size={18} />
+          <div>No published releases are available in the local manifest yet. Visit <a href={SITE.releases}>GitHub Releases</a>.</div>
         </div>
-        <div class="asset-summary-item">
-          <span class="asset-summary-label">macOS</span>
-          <span class="asset-summary-value">
-            {ASSETS.macTar.name ? formatBytes(ASSETS.macTar.size) : '—'}
-          </span>
-        </div>
-        <div class="asset-summary-item">
-          <span class="asset-summary-label">Android</span>
-          <span class="asset-summary-value">
-            {ASSETS.androidApk.name ? formatBytes(ASSETS.androidApk.size) : '—'}
-          </span>
-        </div>
-        <div class="asset-summary-item">
-          <span class="asset-summary-label">VS Code</span>
-          <span class="asset-summary-value">
-            {ASSETS.vsix.name ? formatBytes(ASSETS.vsix.size) : '—'}
-          </span>
-        </div>
-      </div>
+      )}
 
       <div class="note-card">
         <Icon name="shield" size={18} />
         <div>
-          <strong>Verify before you install.</strong> Every release ships
-          <code>SHA256SUMS.txt</code>. After downloading, run
-          <code>sha256sum -c SHA256SUMS.txt</code> (Linux/macOS) or
-          <code>Get-FileHash</code> (PowerShell) and compare. Desktop
-          installers and macOS/Windows builds are unsigned; see the
-          per-platform download pages for first-launch steps.
+          <strong>Verify before you install.</strong> When a release includes
+          <code>SHA256SUMS.txt</code>, use it to verify the downloaded file.
+          Releases without a checksum file are shown as published; this page
+          does not invent or imply a checksum.
         </div>
       </div>
     </div>
   </section>
+  <style>
+    .release-card-header { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+    .release-asset-list { margin: 1rem 0; padding-left: 1.2rem; }
+    .release-asset-list li { display: flex; justify-content: space-between; gap: 1rem; padding: .25rem 0; }
+    .release-asset-list span { color: var(--muted, #777); white-space: nowrap; }
+    .release-card-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
 </BaseLayout>

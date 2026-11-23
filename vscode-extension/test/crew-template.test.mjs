@@ -1,7 +1,7 @@
 /**
  * S5-template: crew templates — storage / API / test on the extension REST
  * surface. Desktop parity (app/src/main.rs): crew templates are a JSON file
- * (~/.config/free-ai-studio/crew-templates.json) with list/save/delete.
+ * (~/.config/SAARTHI-STUDIO/crew-templates.json) with list/save/delete.
  *
  *   - save:    POST /api/crew-templates  { crew: [role, ...] } -> { ok, name }
  *   - get:     GET  /api/crew-templates  -> { ok: true, templates: [...] }

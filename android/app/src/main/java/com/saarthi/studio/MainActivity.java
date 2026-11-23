@@ -227,7 +227,7 @@ public class MainActivity extends Activity {
         LinearLayout brand = new LinearLayout(this);
         brand.setOrientation(LinearLayout.VERTICAL);
         brand.setPadding(dp(11), 0, 0, 0);
-        brand.addView(label("Sarthi Studio", 19, TEXT, true));
+        brand.addView(label("SAARTHI-STUDIO", 19, TEXT, true));
         TextView tagline = label("local coding agent", 11, MUTED, false);
         brand.addView(tagline);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
@@ -351,7 +351,7 @@ public class MainActivity extends Activity {
             welcome.setOrientation(LinearLayout.VERTICAL);
             welcome.setPadding(dp(18), dp(18), dp(18), dp(18));
             welcome.setBackground(round(PANEL, 18));
-            TextView title = label("Welcome to Sarthi Studio", 20, TEXT, true);
+            TextView title = label("Welcome to SAARTHI-STUDIO", 20, TEXT, true);
             welcome.addView(title);
             TextView body = label("This is a separate conversation. Connect FreeLLMAPI in Settings, then ask questions, debug code, or explore ideas. Your chats stay on this phone.", 14, MUTED, false);
             body.setPadding(0, dp(9), 0, 0); welcome.addView(body);
@@ -1006,7 +1006,7 @@ public class MainActivity extends Activity {
         try {
             Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your message to Sarthi Studio");
+            intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your message to SAARTHI-STUDIO");
             startActivityForResult(intent, REQUEST_VOICE_INPUT);
         } catch (Exception e) {
             toast("Speech recognition is unavailable on this device. Install or enable a speech-recognition service.");
@@ -1235,7 +1235,7 @@ public class MainActivity extends Activity {
                         && features != null && features.optBoolean("agent_runs", false);
                 main.post(() -> {
                     if (supported) showAgentRunsList();
-                    else toast("This desktop host does not expose agent runs. Update Sarthi Studio on the desktop.");
+                    else toast("This desktop host does not expose agent runs. Update SAARTHI-STUDIO on the desktop.");
                 });
             } catch (Exception e) {
                 main.post(() -> toast("Could not check the desktop host: " + friendlyError(e.getMessage())));
@@ -1929,7 +1929,7 @@ public class MainActivity extends Activity {
         List<Message> messages = store.allMessages(currentConversationId, 10000);
         StringBuilder markdown = new StringBuilder();
         markdown.append("# ").append(conversation.title.replace("\n", " ").replace("\r", " "))
-                .append("\n\nExported from Sarthi Studio on ")
+                .append("\n\nExported from SAARTHI-STUDIO on ")
                 .append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(new Date()))
                 .append(".\n\n");
         for (Message message : messages) {
@@ -1984,7 +1984,7 @@ public class MainActivity extends Activity {
                 presetsJson.put(new JSONObject().put("name", preset.name).put("content", preset.content));
             }
             backup.put("prompt_presets", presetsJson);
-            String filename = "sarthi-studio-backup-" + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".json";
+            String filename = "SAARTHI-STUDIO-backup-" + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date()) + ".json";
             String jsonText = backup.toString(2);
             if (jsonText.getBytes(StandardCharsets.UTF_8).length > MAX_BACKUP_BYTES) {
                 throw new Exception("Backup would exceed 10 MB. Export individual conversations instead.");
@@ -1998,7 +1998,7 @@ public class MainActivity extends Activity {
     private void confirmRestoreBackup() {
         new AlertDialog.Builder(this)
                 .setTitle("Restore chat backup?")
-                .setMessage("Choose a Sarthi Studio JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. The exact same backup file will only be imported once to avoid accidental duplicates.")
+                .setMessage("Choose a SAARTHI-STUDIO JSON backup. Imported conversations will be added to this phone; your existing chats will not be deleted. The exact same backup file will only be imported once to avoid accidental duplicates.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Choose backup", (dialog, which) -> {
                     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -2042,7 +2042,7 @@ public class MainActivity extends Activity {
                 JSONObject backup = BackupPolicy.parseObject(bytes);
                 int backupSchema = backup.optInt("schema_version", -1);
                 if (!BackupPolicy.isSupportedBackup(backup.optString("format"), backupSchema)) {
-                    throw new Exception("This is not a supported Sarthi Studio backup (schemas 1, 2, and 3 are supported).");
+                    throw new Exception("This is not a supported SAARTHI-STUDIO backup (schemas 1, 2, and 3 are supported).");
                 }
                 JSONArray inputConversations = backup.optJSONArray("conversations");
                 if (inputConversations == null || inputConversations.length() == 0) {

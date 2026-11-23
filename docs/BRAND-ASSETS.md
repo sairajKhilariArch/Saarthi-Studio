@@ -36,7 +36,7 @@ The script writes `app/static/brand/`, plus the logo set into
 | `app/static/brand/splash.svg` | logo + wordmark, 640×360, transparent | splash / release banner |
 | `app/icons/icon.png` | 512×512 RGBA raster of `app-icon.svg` | Tauri window/app icon |
 | `app/icons/icon.ico` | 16–256 multi-size ICO of the same render | Windows executable, MSI |
-| `app/packaging/icons/sarthi-studio-256.png` | 256×256 PNG | AppImage, `.deb` hicolor theme |
+| `app/packaging/icons/SAARTHI-STUDIO-256.png` | 256×256 PNG | AppImage, `.deb` hicolor theme |
 
 The inline mascot geometry lives in `app/static/index.html` as `<symbol
 id="i-tardigrade">`; it is used only by the assistant avatar and chat welcome
@@ -52,7 +52,7 @@ rsvg-convert -w 512 -h 512 app/static/brand/app-icon.svg -o /tmp/icon.png
 
 magick /tmp/icon.png -background none -alpha on app/icons/icon.png
 magick app/icons/icon.png -resize 256x256 \
-  app/packaging/icons/sarthi-studio-256.png
+  app/packaging/icons/SAARTHI-STUDIO-256.png
 magick app/icons/icon.png \
   -define icon:auto-resize=256,128,64,48,32,24,16 app/icons/icon.ico
 ```
@@ -68,8 +68,8 @@ frames inherit the alpha channel.
 | Sidebar / welcome | `logo.svg` |
 | Assistant avatar | inline `#i-tardigrade` symbol |
 | Windows executable + MSI | `app/icons/icon.ico` (Tauri `bundle.icon`) |
-| Linux .deb / AppImage | `app/static/brand/app-icon.svg` (installed as `usr/share/icons/hicolor/scalable/apps/sarthi-studio.svg`) and `sarthi-studio-256.png`; desktop entry `Icon=sarthi-studio` |
-| macOS bundle | `app/icons/icon.png` via Tauri, `CFBundleName` = Sarthi Studio |
+| Linux .deb / AppImage | `app/static/brand/app-icon.svg` (installed as `usr/share/icons/hicolor/scalable/apps/SAARTHI-STUDIO.svg`) and `SAARTHI-STUDIO-256.png`; desktop entry `Icon=SAARTHI-STUDIO` |
+| macOS bundle | `app/icons/icon.png` via Tauri, `CFBundleName` = SAARTHI-STUDIO |
 | Android | `res/drawable/ic_launcher_foreground.xml` (orange S, centred in the 66 dp safe zone) over `ic_launcher_background` `#111111`; adaptive + monochrome layers |
 | VS Code webview | `vscode-extension/media/ui/brand/` (copied from the same script) |
 

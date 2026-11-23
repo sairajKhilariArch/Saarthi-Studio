@@ -1,10 +1,14 @@
 [package]
-name = "free-ai-studio"
+name = "saarthi-studio"
 version = "3.84.0"
 edition = "2021"
 rust-version = "1.80"
-description = "Sarthi Studio — local-first AI chat and coding workspace for FreeLLMAPI"
+description = "SAARTHI-STUDIO — local-first AI chat and coding workspace for FreeLLMAPI"
 license = "MIT"
+
+[[bin]]
+name = "SAARTHI-STUDIO"
+path = "src/main.rs"
 
 [dependencies]
 axum = "=0.7.9"
@@ -48,7 +52,7 @@ tauri = { version = "=2.12.5", optional = true }
 # three platform stores: Windows Credential Manager, macOS Keychain, Linux
 # Secret Service (sync) — maintained by the RustOS team lineage and the
 # de facto standard for this. Tests and dev runs use the built-in mock
-# store via FREE_AI_STUDIO_KEYCHAIN in ../.cargo/config.toml.
+# store via SAARTHI_STUDIO_KEYCHAIN in ../.cargo/config.toml.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [features]
@@ -62,7 +66,7 @@ codegen-units = 1
 strip = "symbols"
 
 # Packaging metadata for `cargo deb` (used by the desktop release workflow).
-# The binary locates its UI via <exe dir>/../share/sarthi-studio/static at
+# The binary locates its UI via <exe dir>/../share/SAARTHI-STUDIO/static at
 # runtime, so the deb asset paths below are load-bearing.
 #
 # The released deb is built on ubuntu-22.04 with `cargo build
@@ -76,25 +80,27 @@ strip = "symbols"
 maintainer = "SAIRAJ KHILARI <sairajkhilari191918110+github1@gmail.com>"
 section = "utils"
 priority = "optional"
+conflicts = "free-ai-studio"
+replaces = "free-ai-studio"
 depends = "$auto"
-extended-description = """Sarthi Studio is a local-first AI chat and coding workspace. It runs a
+extended-description = """SAARTHI-STUDIO is a local-first AI chat and coding workspace. It runs a
 loopback-only HTTP service that serves a browser UI (opened automatically by
 this package's launcher) and routes chat requests to a self-hosted FreeLLMAPI
 endpoint. Upgrades replace only the binaries and UI under /usr; conversations,
 projects, settings and credentials in the user's home are preserved."""
 assets = [
-    ["target/release/free-ai-studio", "usr/bin/free-ai-studio", "755"],
-    ["static/index.html", "usr/share/sarthi-studio/static/index.html", "644"],
-    ["static/app.js", "usr/share/sarthi-studio/static/app.js", "644"],
-    ["static/styles.css", "usr/share/sarthi-studio/static/styles.css", "644"],
-    ["static/skills/code-review/SKILL.md", "usr/share/sarthi-studio/static/skills/code-review/SKILL.md", "644"],
-    ["static/skills/debug/SKILL.md", "usr/share/sarthi-studio/static/skills/debug/SKILL.md", "644"],
-    ["static/skills/tests/SKILL.md", "usr/share/sarthi-studio/static/skills/tests/SKILL.md", "644"],
+    ["target/release/SAARTHI-STUDIO", "usr/bin/SAARTHI-STUDIO", "755"],
+    ["static/index.html", "usr/share/SAARTHI-STUDIO/static/index.html", "644"],
+    ["static/app.js", "usr/share/SAARTHI-STUDIO/static/app.js", "644"],
+    ["static/styles.css", "usr/share/SAARTHI-STUDIO/static/styles.css", "644"],
+    ["static/skills/code-review/SKILL.md", "usr/share/SAARTHI-STUDIO/static/skills/code-review/SKILL.md", "644"],
+    ["static/skills/debug/SKILL.md", "usr/share/SAARTHI-STUDIO/static/skills/debug/SKILL.md", "644"],
+    ["static/skills/tests/SKILL.md", "usr/share/SAARTHI-STUDIO/static/skills/tests/SKILL.md", "644"],
     # The desktop entry and its AppStream metadata carry the reverse-DNS name:
     # appstreamcli rejects a non-RDNS component ID, and the two file names must
     # match that ID or validate-tree reports a mismatch.
-    ["packaging/io.github.sairajkhilariarch.SarthiStudio.desktop", "usr/share/applications/io.github.sairajkhilariarch.SarthiStudio.desktop", "644"],
-    ["packaging/io.github.sairajkhilariarch.SarthiStudio.appdata.xml", "usr/share/metainfo/io.github.sairajkhilariarch.SarthiStudio.appdata.xml", "644"],
+    ["packaging/io.github.sairajkhilariarch.saarthi-studio.desktop", "usr/share/applications/io.github.sairajkhilariarch.saarthi-studio.desktop", "644"],
+    ["packaging/io.github.sairajkhilariarch.saarthi-studio.appdata.xml", "usr/share/metainfo/io.github.sairajkhilariarch.saarthi-studio.appdata.xml", "644"],
     ["static/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/sarthi-studio.svg", "644"],
 ]
 [build-dependencies]

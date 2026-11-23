@@ -1,4 +1,4 @@
-# Sarthi Studio official website — audit and implementation plan
+# SAARTHI-STUDIO official website — audit and implementation plan
 
 **Status:** approved 2026-11-11; Milestone 2 foundation implemented.
 **Date:** 2026-11-11
@@ -1050,3 +1050,43 @@ Owner decisions on 2026-11-11:
 Milestone 2 is implemented and committed. No deployment has been made: the
 Pages source is still the old Jekyll branch until the owner switches it to
 GitHub Actions.
+
+
+---
+
+## 10. Release synchronization implementation update — 2026-11-23
+
+The website release-data pipeline is now implemented on the `website-release-sync`
+branch.
+
+- `website/scripts/sync-releases.mjs` fetches paginated GitHub Releases using
+  Node's built-in `fetch`, normalizes release metadata, and preserves every
+  attached asset (including assets that do not match a known platform).
+- Asset classification covers Linux DEB/AppImage/tarball, Windows MSI/ZIP,
+  macOS app ZIP/tarball, Android APK/AAB, VS Code VSIX, and SHA256SUMS.
+- The generated `website/data/releases.json` manifest stores release notes,
+  dates, URLs, asset sizes, download counts, content types, and asset links.
+  The file is written atomically; API errors and empty API responses do not
+  overwrite the last known good manifest.
+- `website/src/lib/releases.ts` exposes compatibility exports for existing
+  pages and selects the newest stable release that actually has downloadable
+  assets. Platform pages hide missing files instead of rendering broken links.
+- Releases and changelog pages now read the generated manifest. Release notes
+  are rendered as text, not injected as HTML.
+- `.github/workflows/website-release-sync.yml` runs after successful Desktop
+  Release workflows, daily, and manually. It commits only a changed manifest
+  and invokes the existing Pages deployment workflow.
+- `.github/workflows/website-checks.yml` runs release-parser tests, Astro
+  checks, and a production build on website pull requests and main-branch
+  website changes.
+
+The committed manifest is seeded from the website's previous known release
+record (`v3.74.4`) so the site remains buildable before the first successful
+sync. It is a seed, not a claim that it is the newest source version. The
+scheduled/manual sync replaces it with the live published-release history.
+
+**Not yet verified:** the GitHub Actions workflows have not run from this
+feature branch, so the Astro build, test suite, permissions for the automated
+manifest commit, and Pages deployment still require CI verification after the
+pull request is opened/merged. The repository's Pages source must be set to
+GitHub Actions for deployment.

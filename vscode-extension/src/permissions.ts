@@ -265,7 +265,7 @@ export class PermissionStore {
     // and never run. Refusing it keeps the panel honest.
     if (!ENFORCED_ACTIONS.includes(input.action)) {
       throw new Error(
-        `${input.action} is enforced by the Sarthi Studio desktop app, not this extension — this server has no route for it. Save that rule in the desktop app.`,
+        `${input.action} is enforced by the SAARTHI-STUDIO desktop app, not this extension — this server has no route for it. Save that rule in the desktop app.`,
       );
     }
     if (!isDecision(input.decision)) throw new Error("Decision must be allow, ask or deny.");

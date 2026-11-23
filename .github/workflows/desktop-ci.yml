@@ -57,8 +57,8 @@ jobs:
           test -f app/static/index.html
           test -f app/static/app.js
           test -f app/static/styles.css
-          test -f app/packaging/io.github.sairajkhilariarch.SarthiStudio.desktop
-          test -f app/packaging/io.github.sairajkhilariarch.SarthiStudio.appdata.xml
+          test -f app/packaging/io.github.sairajkhilariarch.saarthi-studio.desktop
+          test -f app/packaging/io.github.sairajkhilariarch.saarthi-studio.appdata.xml
           test -f app/static/brand/app-icon.svg
           test -f app/packaging/windows/installer.wxs
 

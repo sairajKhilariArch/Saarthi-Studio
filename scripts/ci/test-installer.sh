@@ -38,8 +38,8 @@ fi
 
 stage_tree() { # dir
   mkdir -p "$1/static"
-  printf 'MZ-not-a-real-binary\n' >"$1/free-ai-studio.exe"
-  printf '<html><title>Sarthi Studio</title></html>\n' >"$1/static/index.html"
+  printf 'MZ-not-a-real-binary\n' >"$1/SAARTHI-STUDIO.exe"
+  printf '<html><title>SAARTHI-STUDIO</title></html>\n' >"$1/static/index.html"
   printf 'console.log("ui");\n' >"$1/static/app.js"
   mkdir -p "$1/static/skills/debug"
   printf '# Debug\n' >"$1/static/skills/debug/SKILL.md"
@@ -56,9 +56,9 @@ else
     cat "$tmp/build.log" >&2
   fi
 
-  msi="$tmp/out/sarthi-studio_${version}_windows-x86_64.msi"
+  msi="$tmp/out/SAARTHI-STUDIO_${version}_windows-x86_64.msi"
   if [ -f "$msi" ]; then
-    pass "the package is named sarthi-studio_${version}_windows-x86_64.msi"
+    pass "the package is named SAARTHI-STUDIO_${version}_windows-x86_64.msi"
   else
     die "no MSI was written to $tmp/out"
   fi
@@ -75,11 +75,11 @@ else
     else
       die "msiexec could not open the package"
     fi
-    installed="$(dirname "$(find "$admin" -type f -name 'free-ai-studio.exe' | head -n 1)")"
-    if [ -f "$installed/free-ai-studio.exe" ]; then
+    installed="$(dirname "$(find "$admin" -type f -name 'SAARTHI-STUDIO.exe' | head -n 1)")"
+    if [ -f "$installed/SAARTHI-STUDIO.exe" ]; then
       pass "the payload installs the binary into one install folder"
     else
-      die "the unpacked package has no free-ai-studio.exe"
+      die "the unpacked package has no SAARTHI-STUDIO.exe"
     fi
     if [ -f "$installed/static/index.html" ] && [ -f "$installed/static/app.js" ]; then
       pass "the payload installs the UI beside the binary"
@@ -97,7 +97,7 @@ else
     if command -v strings >/dev/null 2>&1; then
       strings "$msi" >"$strings_file" 2>/dev/null || true
     fi
-    if [ -s "$strings_file" ] && grep -qi "Sarthi Studio" "$strings_file"; then
+    if [ -s "$strings_file" ] && grep -qi "SAARTHI-STUDIO" "$strings_file"; then
       pass "the package carries the product name"
     else
       skip "product name readout (no strings command)"
@@ -108,7 +108,7 @@ else
 
   # --- refusals ------------------------------------------------------------
   mkdir -p "$tmp/nostatic"
-  printf 'MZ\n' >"$tmp/nostatic/free-ai-studio.exe"
+  printf 'MZ\n' >"$tmp/nostatic/SAARTHI-STUDIO.exe"
   if WIX_EXE="$wix" bash "$builder" "$tmp/nostatic" "$version" "$tmp/out2" >/dev/null 2>&1; then
     die "accepted a stage with no static tree"
   else
@@ -120,7 +120,7 @@ else
   if WIX_EXE="$wix" bash "$builder" "$tmp/nobinary" "$version" "$tmp/out2" >/dev/null 2>&1; then
     die "accepted a stage with no binary"
   else
-    pass "refuses a stage with no free-ai-studio.exe"
+    pass "refuses a stage with no SAARTHI-STUDIO.exe"
   fi
 
   if WIX_EXE="$wix" bash "$builder" "$tmp/stage" "not-a-version" "$tmp/out2" >/dev/null 2>&1; then

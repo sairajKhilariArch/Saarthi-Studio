@@ -71,7 +71,7 @@ fn origin() -> String {
 
 fn session_path() -> PathBuf {
     crate::home_dir()
-        .join(".config/free-ai-studio")
+        .join(".config/SAARTHI-STUDIO")
         .join(SESSION_FILE)
 }
 

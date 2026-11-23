@@ -1,0 +1,68 @@
+name: Website Release Sync
+
+on:
+  workflow_run:
+    workflows: ["Desktop Release"]
+    types: [completed]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: website-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Fetch published release metadata
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+
+      - name: Sync GitHub Releases
+        working-directory: website
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/sync-releases.mjs
+
+      - name: Commit manifest only when changed
+        id: commit
+        run: |
+          set -eu
+          if git diff --quiet -- website/data/releases.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Release manifest is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add website/data/releases.json
+          git commit -m "website: sync published GitHub releases"
+          git push origin HEAD:main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy updated release data
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    uses: ./.github/workflows/website-deploy.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

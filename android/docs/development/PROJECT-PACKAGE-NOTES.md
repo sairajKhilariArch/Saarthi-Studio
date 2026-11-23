@@ -1,4 +1,4 @@
-# Sarthi Studio v1.11.1 — Full Project Package Notes
+# SAARTHI-STUDIO v1.11.1 — Full Project Package Notes
 
 This archive contains the complete Android project source and the tracked top-level files from the `android` branch snapshot at commit `98609b38b3a6e08b7c258ac11d52d983d51bb2da` (v1.11.1). It does not include Git history (`.git`) or a built APK.
 

@@ -3,7 +3,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHero from '../../components/PageHero.astro';
 import Card from '../../components/Card.astro';
 import Icon from '../../components/Icon.astro';
-import { LATEST_RELEASE, ASSETS } from '../../lib/releases';
+import { LATEST_RELEASE, ASSETS, TOTAL_ASSETS } from '../../lib/releases';
 import { SITE } from '../../lib/site';
 import { withBase } from '../../lib/url';
 
@@ -35,20 +35,20 @@ const platforms = [
   {
     icon: 'code',
     name: 'VS Code',
-    body: 'The same workspace inside your editor, with an embedded server.',
+    body: 'The same SAARTHI-STUDIO workspace inside your editor, with an embedded server.',
     href: '/download/vscode/',
   },
 ] as const;
 ---
 
 <BaseLayout
-  title="Downloads — Sarthi Studio"
-  description="Download Sarthi Studio for Linux, Windows, macOS, Android, and VS Code. Every asset comes from the signed release workflow with SHA-256 checksums."
+  title="Downloads — SAARTHI-STUDIO"
+  description="Download SAARTHI-STUDIO for Linux, Windows, macOS, Android, and VS Code. Download assets are linked directly from published GitHub Releases. Checksum files are shown only when attached to a release."
 >
   <PageHero
     eyebrow="Downloads"
-    title="Get Sarthi Studio"
-    description="Pick your platform. Every file below is attached to the latest GitHub release by the release workflow, and every release ships a SHA256SUMS.txt so you can verify what you downloaded."
+    title="Get SAARTHI-STUDIO"
+    description="Pick your platform. Files are shown only when attached to the latest downloadable GitHub release. A SHA256SUMS.txt link appears when that release includes one."
     breadcrumb={[{ label: 'Downloads' }]}
   />
 
@@ -56,13 +56,11 @@ const platforms = [
     <div class="container">
       <div class="release-banner">
         <strong>Latest release: {LATEST_RELEASE.tag}</strong>
-        <span class="release-meta">Published {LATEST_RELEASE.date} · 11 assets · all platforms</span>
+        <span class="release-meta">Published {LATEST_RELEASE.date || 'date unavailable'} · {TOTAL_ASSETS} available assets</span>
         <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
           Release notes ↗
         </a>
-        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">
-          SHA256SUMS.txt ↗
-        </a>
+        {ASSETS.sums.name && <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>}
       </div>
 
       <div class="platform-grid">
@@ -86,8 +84,8 @@ const platforms = [
       <div class="note-card">
         <Icon name="shield" size={18} />
         <div>
-          <strong>Verify before you install.</strong> Each release attaches
-          <code>SHA256SUMS.txt</code>. After downloading, run
+          <strong>Verify before you install.</strong> When a release includes
+          <code>SHA256SUMS.txt</code>, you can verify the downloaded files with
           <code>sha256sum -c SHA256SUMS.txt</code> (Linux/macOS) or
           <code>Get-FileHash</code> (PowerShell) and compare. Builds are
           produced by the public release workflow; desktop installers are

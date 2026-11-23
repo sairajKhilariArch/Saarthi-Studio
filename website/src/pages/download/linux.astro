@@ -2,7 +2,7 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHero from '../../components/PageHero.astro';
 import Icon from '../../components/Icon.astro';
-import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { ASSETS, LATEST_RELEASE, EXECUTABLE_NAME, LEGACY_EXECUTABLE_NAMES, formatBytes } from '../../lib/releases';
 import { withBase } from '../../lib/url';
 
 const assets = [
@@ -20,12 +20,12 @@ const others = [
 ---
 
 <BaseLayout
-  title="Download for Linux — Sarthi Studio"
-  description="Sarthi Studio for Linux x86_64: Debian package, AppImage, and portable tarball, with install steps and checksum verification."
+  title="Download for Linux — SAARTHI-STUDIO"
+  description="SAARTHI-STUDIO for Linux x86_64: Debian package, AppImage, and portable tarball, with install steps and checksum verification."
 >
   <PageHero
     eyebrow="Downloads · Linux"
-    title="Sarthi Studio for Linux"
+    title="SAARTHI-STUDIO for Linux"
     description="Three formats, one app. The native window uses WebKitGTK; if you prefer a browser tab or a headless server, the same binary does both."
     breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'Linux' }]}
   />
@@ -35,12 +35,12 @@ const others = [
       <div class="release-banner">
         <strong>{LATEST_RELEASE.tag}</strong>
         <span class="release-meta">x86_64 · published {LATEST_RELEASE.date}</span>
-        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
+        {ASSETS.sums.name && <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>}
       </div>
 
       <div class="asset-list">
         {
-          assets.map(({ asset, note }) => (
+          assets.filter(({ asset }) => asset.name).map(({ asset, note }) => (
             <div class="asset-row">
               <div class="asset-info">
                 <span class="asset-name">{asset.name}</span>
@@ -56,32 +56,36 @@ const others = [
         }
       </div>
 
+      {!assets.some(({ asset }) => asset.name) && <p class="asset-note">No build for this platform is attached to the latest release yet. Check the <a href={LATEST_RELEASE.url}>GitHub release</a> for updates.</p>}
+
+      {assets.some(({ asset }) => asset.name) && <>
       <h2 class="docs-hub-label">Install</h2>
       <ol class="install-steps">
-        <li>
+        {ASSETS.linuxDeb.name && <li>
           <h3>Debian / Ubuntu (.deb)</h3>
           <p>
-            <code>sudo dpkg -i SAARTHI-STUDIO_{LATEST_RELEASE.version}-1_amd64.deb</code>,
-            then launch <strong>Sarthi Studio</strong> from your applications menu or run
-            <code>SAARTHI-STUDIO</code>.
+            <code>sudo apt install ./{ASSETS.linuxDeb.name}</code>,
+            then launch <strong>{EXECUTABLE_NAME}</strong> from your applications menu or run
+            <code>{EXECUTABLE_NAME}</code>.
           </p>
-        </li>
-        <li>
+        </li>}
+        {ASSETS.linuxAppImage.name && <li>
           <h3>AppImage</h3>
           <p>
-            <code>chmod +x SAARTHI-STUDIO_{LATEST_RELEASE.version}_x86_64.AppImage</code>
+            <code>chmod +x {ASSETS.linuxAppImage.name}</code>
             and run it. Nothing else is installed; delete the file to remove the app.
           </p>
-        </li>
-        <li>
+        </li>}
+        {ASSETS.linuxTar.name && <li>
           <h3>Portable tarball</h3>
           <p>
-            Extract, verify the checksum, and run <code>./SAARTHI-STUDIO</code>.
+            Extract, verify the checksum, and run <code>./{EXECUTABLE_NAME}</code>.
             Add <code>--browser</code> to open the UI in your default browser, or
             <code>--no-gui</code> to serve it headless.
           </p>
-        </li>
+        </li>}
       </ol>
+      </>}
 
       <div class="note-card">
         <Icon name="cpu" size={18} />

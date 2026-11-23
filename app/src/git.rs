@@ -1554,7 +1554,7 @@ pub(crate) fn snapshot_tree(root: &Path) -> Result<TreeSnapshot, String> {
         let tree = tree.stdout.trim().to_string();
         let mut args: Vec<String> = vec![
             "-c".to_string(),
-            "user.name=Sarthi Studio".to_string(),
+            "user.name=SAARTHI-STUDIO".to_string(),
             "-c".to_string(),
             "user.email=checkpoint@localhost".to_string(),
             "commit-tree".to_string(),
@@ -1570,7 +1570,7 @@ pub(crate) fn snapshot_tree(root: &Path) -> Result<TreeSnapshot, String> {
             }
         }
         args.push("-m".to_string());
-        args.push("Sarthi Studio: checkpoint before an agent run".to_string());
+        args.push("SAARTHI-STUDIO: checkpoint before an agent run".to_string());
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
         let commit = git(root, &borrowed)?;
         if !commit.ok {

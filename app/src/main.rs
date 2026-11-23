@@ -83,7 +83,7 @@ mod watch;
 mod workflow;
 mod workspace;
 
-const APP_NAME: &str = "Sarthi Studio";
+const APP_NAME: &str = "SAARTHI-STUDIO";
 /// The most agent runs that may work in one workspace together. Enforced by the
 /// config clamp and reported in the capability contract.
 pub(crate) const MAX_CONCURRENT_RUNS: i64 = 4;
@@ -273,7 +273,8 @@ fn default_outline_enabled() -> bool {
 impl Config {
     pub(crate) fn defaults() -> Self {
         Self {
-            base_url: env::var("FREE_AI_STUDIO_BASE_URL")
+            base_url: env::var("SAARTHI_STUDIO_BASE_URL")
+                .or_else(|_| env::var("FREE_AI_STUDIO_BASE_URL"))
                 .unwrap_or_else(|_| "http://localhost:3001/v1".to_string()),
             model: "auto".to_string(),
             api_key: String::new(),
@@ -345,19 +346,40 @@ fn home_dir() -> PathBuf {
 fn paths() -> (PathBuf, PathBuf, PathBuf) {
     // One override keeps tests and sandboxed runs off the real user data:
     // both config and database live under this root, like a fake home.
-    let home = env::var_os("FREE_AI_STUDIO_HOME")
+    let home = env::var_os("SAARTHI_STUDIO_HOME")
+        .or_else(|| env::var_os("FREE_AI_STUDIO_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(home_dir);
+    let config_dir = home.join(".config/SAARTHI-STUDIO");
+    let data_dir = home.join(".local/share/SAARTHI-STUDIO");
+    // Move legacy user data only when the canonical destination does not exist.
+    // This preserves existing settings and conversation history across the rename.
+    for (legacy, current) in [
+        (home.join(".config/free-ai-studio"), config_dir.clone()),
+        (home.join(".local/share/free-ai-studio"), data_dir.clone()),
+    ] {
+        if !current.exists() && legacy.exists() {
+            if let Some(parent) = current.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Err(error) = fs::rename(&legacy, &current) {
+                eprintln!(
+                    "Could not migrate legacy data directory {}: {error}",
+                    legacy.display()
+                );
+            }
+        }
+    }
     (
-        home.join(".config/free-ai-studio/config.json"),
-        home.join(".local/share/free-ai-studio/history.sqlite3"),
+        config_dir.join("config.json"),
+        data_dir.join("history.sqlite3"),
         resolve_static_dir(),
     )
 }
 
-/// Ordered candidate directories for the static UI. `FREE_AI_STUDIO_STATIC_DIR`
+/// Ordered candidate directories for the static UI. `SAARTHI_STUDIO_STATIC_DIR`
 /// (when set) is authoritative; otherwise the installed system layout
-/// (`<exe dir>/../share/sarthi-studio/static`, used by the .deb and AppImage)
+/// (`<exe dir>/../share/SAARTHI-STUDIO/static`, used by the .deb and AppImage)
 /// is preferred, then a macOS application bundle
 /// (`<exe dir>/../Resources/static`, since the binary sits in
 /// `Contents/MacOS`), then a `static/` directory next to the executable
@@ -370,6 +392,8 @@ fn static_dir_candidates(exe_dir: Option<&FsPath>, env_dir: Option<PathBuf>) -> 
         candidates.push(dir);
     }
     if let Some(dir) = exe_dir {
+        candidates.push(dir.join("../share/SAARTHI-STUDIO/static"));
+        // Previous releases installed the UI under this directory.
         candidates.push(dir.join("../share/sarthi-studio/static"));
         // Pre-2.51 installs put the same tree under the legacy name.
         candidates.push(dir.join("../share/free-ai-suite/static"));
@@ -381,7 +405,9 @@ fn static_dir_candidates(exe_dir: Option<&FsPath>, env_dir: Option<PathBuf>) -> 
 }
 
 fn resolve_static_dir() -> PathBuf {
-    if let Some(dir) = env::var_os("FREE_AI_STUDIO_STATIC_DIR") {
+    if let Some(dir) = env::var_os("SAARTHI_STUDIO_STATIC_DIR")
+        .or_else(|| env::var_os("FREE_AI_STUDIO_STATIC_DIR"))
+    {
         return PathBuf::from(dir);
     }
     let exe_dir = env::current_exe()
@@ -474,7 +500,7 @@ fn initialize_database(path: &FsPath) -> Result<SchemaUpgrade, String> {
     })?;
     if from > schema::SCHEMA_VERSION {
         return Err(format!(
-            "The database at {} was written by a newer Sarthi Studio (schema {from}); this build understands schema {}. Update the app instead of opening that database with an older build.",
+            "The database at {} was written by a newer SAARTHI-STUDIO (schema {from}); this build understands schema {}. Update the app instead of opening that database with an older build.",
             path.display(),
             schema::SCHEMA_VERSION
         ));
@@ -3619,7 +3645,8 @@ async fn capabilities() -> Json<Value> {
 /// Set when the app is launched by an embedding host. Framing stays disabled
 /// by default and, when enabled, only a VS Code webview may frame the UI.
 fn embed_framing_allowed() -> bool {
-    std::env::var("FREE_AI_STUDIO_EMBED")
+    std::env::var("SAARTHI_STUDIO_EMBED")
+        .or_else(|_| env::var("FREE_AI_STUDIO_EMBED"))
         .map(|value| value == "vscode")
         .unwrap_or(false)
 }
@@ -5093,7 +5120,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
     // Auto-start runs once the state exists, because it applies the same measured
     // state the Router view shows: only a router that is enabled, installed here
     // and not already answering is started, and one that answers is never adopted.
-    if env::var_os("FREE_AI_STUDIO_SKIP_ROUTER").is_none() {
+    if env::var_os("SAARTHI_STUDIO_SKIP_ROUTER")
+        .or_else(|| env::var_os("FREE_AI_STUDIO_SKIP_ROUTER"))
+        .is_none()
+    {
         for outcome in router_registry::startup_sweep(&state).await {
             println!("{}", outcome.message);
         }
@@ -5108,7 +5138,8 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
     // freed the slots they were waiting for, so admit them now instead of
     // leaving them parked until something else happens to dispatch.
     agent::start_queued(&state).await;
-    let port: u16 = env::var("FREE_AI_STUDIO_PORT")
+    let port: u16 = env::var("SAARTHI_STUDIO_PORT")
+        .or_else(|_| env::var("FREE_AI_STUDIO_PORT"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_PORT);
@@ -5270,7 +5301,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         let token_path = state.config_path.with_file_name("host-auth.json");
         let token_store = host_auth::HostTokenStore::new(token_path);
         if token_store.status()?.is_none() {
-            return Err("Desktop Host API is enabled but no host token exists. Run `free-ai-studio host-token create` locally first.".into());
+            return Err("Desktop Host API is enabled but no host token exists. Run `SAARTHI-STUDIO host-token create` locally first.".into());
         }
 
         let tls_config = remote.load_tls_config().await?;
@@ -5302,7 +5333,7 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             }
         }))
     } else {
-        println!("Desktop Host API disabled (default). Set FREE_AI_STUDIO_HOST_API_ENABLED=true only after configuring TLS and a host token.");
+        println!("Desktop Host API disabled (default). Set SAARTHI_STUDIO_HOST_API_ENABLED=true only after configuring TLS and a host token.");
         None
     };
 
@@ -5385,7 +5416,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && !args
             .iter()
             .any(|arg| arg == "--no-gui" || arg == "--headless")
-        && env::var_os("FREE_AI_STUDIO_NO_GUI").is_none();
+        && env::var_os("SAARTHI_STUDIO_NO_GUI")
+            .or_else(|| env::var_os("FREE_AI_STUDIO_NO_GUI"))
+            .is_none();
 
     let runtime = tokio::runtime::Runtime::new()?;
     let boot = runtime.block_on(bootstrap())?;
@@ -5463,7 +5496,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+        std::env::temp_dir().join(format!("SAARTHI-STUDIO-test-{}-{name}", std::process::id()))
     }
 
     #[test]
@@ -6350,14 +6383,18 @@ mod tests {
         let env_dir = scratch("override");
         let candidates = static_dir_candidates(Some(&exe_dir), Some(env_dir.clone()));
         assert_eq!(candidates[0], env_dir);
-        assert_eq!(candidates[1], exe_dir.join("../share/sarthi-studio/static"));
-        // Installs from before 2.51 unpacked the same tree under the old name.
-        assert_eq!(candidates[2], exe_dir.join("../share/free-ai-suite/static"));
-        // A macOS .app: binary in Contents/MacOS, UI in Contents/Resources.
-        assert_eq!(candidates[3], exe_dir.join("../Resources/static"));
-        assert_eq!(candidates[4], exe_dir.join("static"));
         assert_eq!(
-            candidates[5],
+            candidates[1],
+            exe_dir.join("../share/SAARTHI-STUDIO/static")
+        );
+        assert_eq!(candidates[2], exe_dir.join("../share/sarthi-studio/static"));
+        // Installs from before 2.51 unpacked the same tree under the old name.
+        assert_eq!(candidates[3], exe_dir.join("../share/free-ai-suite/static"));
+        // A macOS .app: binary in Contents/MacOS, UI in Contents/Resources.
+        assert_eq!(candidates[4], exe_dir.join("../Resources/static"));
+        assert_eq!(candidates[5], exe_dir.join("static"));
+        assert_eq!(
+            candidates[6],
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static")
         );
     }
@@ -6365,8 +6402,8 @@ mod tests {
     #[test]
     fn a_bundle_layout_is_resolved_before_the_adjacent_tree() {
         let root = scratch("macos-bundle");
-        let macos = root.join("Sarthi Studio.app/Contents/MacOS");
-        let resources = root.join("Sarthi Studio.app/Contents/Resources/static");
+        let macos = root.join("SAARTHI-STUDIO.app/Contents/MacOS");
+        let resources = root.join("SAARTHI-STUDIO.app/Contents/Resources/static");
         std::fs::create_dir_all(&macos).expect("macos dir");
         std::fs::create_dir_all(&resources).expect("resources dir");
         std::fs::write(resources.join("index.html"), "<html></html>").expect("ui");
@@ -6634,7 +6671,7 @@ mod tests {
         let before = fs::read(&path).expect("read before");
 
         let error = initialize_database(&path).expect_err("a newer schema is refused");
-        assert!(error.contains("newer Sarthi Studio"), "{error}");
+        assert!(error.contains("newer SAARTHI-STUDIO"), "{error}");
         assert!(error.contains(&future.to_string()), "{error}");
         assert!(
             error.contains(&schema::SCHEMA_VERSION.to_string()),

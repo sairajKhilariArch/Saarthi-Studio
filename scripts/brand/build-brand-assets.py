@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate every Sarthi Studio brand SVG from one geometry.
+"""Generate every SAARTHI-STUDIO brand SVG from one geometry.
 
 The product logo is the guide-path **S**: a rounded route in orange on a black
 tile, with a white start node. It replaces the old mascot-face mark in the
@@ -80,7 +80,7 @@ def logo_glyph(color=ORANGE, dot=None):
     )
 
 
-def doc(inner, size=128, background="", label="Sarthi Studio"):
+def doc(inner, size=128, background="", label="SAARTHI-STUDIO"):
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" '
         f'width="{size}" height="{size}" role="img" aria-label="{label}">'
@@ -99,19 +99,19 @@ def logo(rounded=True, size=128, inset=0):
     return doc(
         rect + logo_glyph(dot=WHITE),
         size=size,
-        label="Sarthi Studio logo",
+        label="SAARTHI-STUDIO logo",
     )
 
 
 def mono(color):
-    return doc(logo_glyph(color=color), label="Sarthi Studio logo")
+    return doc(logo_glyph(color=color), label="SAARTHI-STUDIO logo")
 
 
 def mark(size=24):
     """The 24 px mascot glyph used inline by the assistant avatar."""
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="{size}" '
-        f'height="{size}" role="img" aria-label="Sarthi Studio mascot">'
+        f'height="{size}" role="img" aria-label="SAARTHI-STUDIO mascot">'
         '<path d="M12 2.4c4.6 0 7.7 3.1 7.7 7.6v2c0 1.9-.5 3.5-1.6 4.7'
         '-1.2 1.5-3.3 2.4-6.1 2.4s-4.9-.9-6.1-2.4C4.8 15.5 4.3 13.9 4.3 12v-2'
         f'c0-4.5 3.1-7.6 7.7-7.6Z" fill="{ORANGE}" stroke="{BLACK}" stroke-width="1.3"/>'
@@ -134,13 +134,13 @@ def favicon():
 
 def splash():
     glyph = logo_glyph(dot=WHITE)
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360" role="img" aria-label="Sarthi Studio">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360" role="img" aria-label="SAARTHI-STUDIO">
   <g transform="translate(72 116)">
     <rect width="128" height="128" rx="28" fill="{BLACK}"/>
     {glyph}
   </g>
   <text x="224" y="180" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="58"
-        font-weight="700" letter-spacing="-1.5" fill="{WHITE}">Sarthi Studio</text>
+        font-weight="700" letter-spacing="-1.5" fill="{WHITE}">SAARTHI-STUDIO</text>
   <text x="228" y="216" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="18"
         letter-spacing="4.2" fill="{ORANGE}">LOCAL CODING AGENT</text>
 </svg>
@@ -153,9 +153,9 @@ def main():
         "logo.svg": logo(),
         "logo-mono-white.svg": mono(WHITE),
         "logo-mono-black.svg": mono(BLACK),
-        "tardigrade.svg": doc(face(), label="Sarthi Studio mascot"),
-        "tardigrade-mono-white.svg": doc(silhouette(WHITE), label="Sarthi Studio mascot"),
-        "tardigrade-mono-black.svg": doc(silhouette(BLACK), label="Sarthi Studio mascot"),
+        "tardigrade.svg": doc(face(), label="SAARTHI-STUDIO mascot"),
+        "tardigrade-mono-white.svg": doc(silhouette(WHITE), label="SAARTHI-STUDIO mascot"),
+        "tardigrade-mono-black.svg": doc(silhouette(BLACK), label="SAARTHI-STUDIO mascot"),
         "tardigrade-mark.svg": mark(),
         "app-icon.svg": app_icon(),
         "favicon.svg": favicon(),

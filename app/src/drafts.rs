@@ -394,7 +394,7 @@ mod tests {
 
     fn scratch(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let base = std::env::temp_dir().join(format!(
-            "free-ai-studio-drafts-{}-{name}",
+            "SAARTHI-STUDIO-drafts-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&base);

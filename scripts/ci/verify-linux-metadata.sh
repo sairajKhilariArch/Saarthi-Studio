@@ -14,7 +14,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-id="io.github.sairajkhilariarch.SarthiStudio"
+id="io.github.sairajkhilariarch.saarthi-studio"
 appdata="${1:-$root/app/packaging/$id.appdata.xml}"
 desktop="${2:-$root/app/packaging/$id.desktop}"
 version="${3:-}"

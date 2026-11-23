@@ -6,7 +6,7 @@ planned, not real.
 
 ## 1. Runtime shape
 
-One Rust binary (`app/`, crate `free-ai-studio`, binary `free-ai-studio`)
+One Rust binary (`app/`, crate `SAARTHI-STUDIO`, binary `SAARTHI-STUDIO`)
 serves everything:
 
 | Listener | Default | Mounted routes | Auth |
@@ -87,7 +87,7 @@ Host API (`host_api.rs`, version `1`): `GET /api/host/v1/health`, `/capabilities
 
 ## 4. Persistence
 
-SQLite at `~/.local/share/free-ai-studio/studio.db` (`rusqlite`, bundled).
+SQLite at `~/.local/share/SAARTHI-STUDIO/studio.db` (`rusqlite`, bundled).
 Tables created by `main.rs`/`agent.rs`:
 
 - `projects(id, name, folder, created_at, updated_at, archived)`
@@ -98,8 +98,8 @@ Tables created by `main.rs`/`agent.rs`:
   `running|awaiting_approval|succeeded|failed|cancelled|interrupted`
 - `agent_steps(run_id, seq, action, summary, output, at, checkpoint)`
 
-Config lives in `~/.config/free-ai-studio/config.json` (never moved — brand
-string is "Sarthi Studio", internal `free-ai-studio` paths stay).
+Config lives in `~/.config/SAARTHI-STUDIO/config.json` (never moved — brand
+string is "SAARTHI-STUDIO", internal `SAARTHI-STUDIO` paths stay).
 
 ## 5. Platform clients
 
@@ -113,7 +113,7 @@ string is "Sarthi Studio", internal `free-ai-studio` paths stay).
   HTTP server implementing a subset of the desktop routes), `agent.ts` (a port
   of the Rust run loop), `mcp.ts` (a stdio MCP client: spawn, JSON-RPC handshake
   per operation, tool discovery, health and call routes). The embedded server
-  also resolves a reasoning level and a `freeAiStudio.thinkingLevel` setting
+  also resolves a reasoning level and a `saarthiStudio.thinkingLevel` setting
   (3.47.0). Node `--test` suite under `test/`.
 
 ## 6. Delivery

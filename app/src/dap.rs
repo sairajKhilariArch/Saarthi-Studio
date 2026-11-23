@@ -68,7 +68,7 @@ const MAX_ARGS: usize = 20;
 const MAX_ARG_CHARS: usize = 500;
 const MAX_PATH_CHARS: usize = 1000;
 
-/// One debugger Sarthi Studio knows how to speak to.
+/// One debugger SAARTHI-STUDIO knows how to speak to.
 #[derive(Debug)]
 struct AdapterSpec {
     id: &'static str,
@@ -586,7 +586,7 @@ fn resolve_launch(spec: &AdapterSpec) -> Result<LaunchSpec, (StatusCode, String)
     Err((
         StatusCode::BAD_REQUEST,
         format!(
-            "No debugger for this file type is installed. Sarthi Studio speaks the Debug Adapter \
+            "No debugger for this file type is installed. SAARTHI-STUDIO speaks the Debug Adapter \
              Protocol to {}; {} and then try again.",
             spec.id, spec.install
         ),
@@ -734,8 +734,8 @@ fn begin(options: SessionOptions) -> Result<Value, (StatusCode, String)> {
     if let Err(message) = debugger.request(
         "initialize",
         json!({
-            "clientID": "sarthi-studio",
-            "clientName": "Sarthi Studio",
+            "clientID": "SAARTHI-STUDIO",
+            "clientName": "SAARTHI-STUDIO",
             "adapterID": adapter,
             "pathFormat": "path",
             "linesStartAt1": true,

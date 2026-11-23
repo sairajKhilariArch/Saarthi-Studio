@@ -13,7 +13,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 tool="$here/verify-linux-metadata.sh"
-id="io.github.sairajkhilariarch.SarthiStudio"
+id="io.github.sairajkhilariarch.saarthi-studio"
 appdata="$root/app/packaging/$id.appdata.xml"
 desktop="$root/app/packaging/$id.desktop"
 version="$(bash "$here/version.sh" "$root/app/Cargo.toml")"
@@ -68,7 +68,7 @@ refuse "a component id that does not match the file name is refused" "component 
   bash "$tool" "$bad" "$desktop" "$version"
 
 launch="$tmp/launch.appdata.xml"
-sed 's|SarthiStudio.desktop|Other.desktop|' "$appdata" >"$launch"
+sed 's|saarthi-studio.desktop|Other.desktop|' "$appdata" >"$launch"
 refuse "a launchable that names another desktop file is refused" "launchable" \
   bash "$tool" "$launch" "$desktop" "$version"
 
@@ -94,7 +94,7 @@ refuse "a Categories entry without its semicolon is refused" "semicolon" \
   bash "$tool" "$appdata" "$categories" "$version"
 
 otherbinary="$tmp/other.desktop"
-sed 's|Exec=free-ai-studio|Exec=something-else|' "$desktop" >"$otherbinary"
+sed 's|Exec=SAARTHI-STUDIO|Exec=something-else|' "$desktop" >"$otherbinary"
 refuse "an Exec that runs another binary is refused" "but the component provides" \
   bash "$tool" "$appdata" "$otherbinary" "$version"
 

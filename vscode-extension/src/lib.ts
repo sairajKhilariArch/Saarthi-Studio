@@ -1,4 +1,4 @@
-// Pure logic for the Sarthi Studio VS Code extension: token-budgeted context
+// Pure logic for the SAARTHI-STUDIO VS Code extension: token-budgeted context
 // packing, a small conversation store, a workspace API, and the built-in HTTP
 // server used when the desktop app is not running. Nothing here imports
 // `vscode`, so `node --test` can exercise all of it.
@@ -906,7 +906,7 @@ export interface CapabilityContract {
 export function embeddedCapabilities(): CapabilityContract {
   return {
     contract: CONTRACT_VERSION,
-    product: "Sarthi Studio",
+    product: "SAARTHI-STUDIO",
     version: null,
     platform: "embedded",
     features: {
@@ -997,7 +997,7 @@ export interface DesktopProbe {
   health: Record<string, unknown> | null;
 }
 
-/** Is a Sarthi Studio desktop app answering on this loopback address? */
+/** Is a SAARTHI-STUDIO desktop app answering on this loopback address? */
 export async function probeDesktop(
   desktopUrl: string,
   fetchImpl: typeof fetch = fetch,
@@ -1307,7 +1307,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
     if (options.workspaceRoot) roots.push({ source: "project", dir: path.join(options.workspaceRoot, "skills") });
     const home = homeDir();
     if (home) {
-      roots.push({ source: "user", dir: path.join(home, ".config", "free-ai-studio", "skills") });
+      roots.push({ source: "user", dir: path.join(home, ".config", "saarthi-studio", "skills") });
       roots.push({ source: "agents", dir: path.join(home, ".agents", "skills") });
     }
     return roots;
@@ -1777,7 +1777,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
           });
           return;
         }
-        sendJson(response, 400, { ok: false, error: "Change these values in VS Code settings (Sarthi Studio)." });
+        sendJson(response, 400, { ok: false, error: "Change these values in VS Code settings (SAARTHI-STUDIO)." });
         return;
       }
 
@@ -2483,7 +2483,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         // Honest refusal: process supervision lives in the desktop binary.
         sendJson(response, 400, {
           ok: false,
-          error: "Start or stop the gateway from the Sarthi Studio desktop app, or run it yourself in a terminal — the VS Code built-in server does not manage background processes.",
+          error: "Start or stop the gateway from the SAARTHI-STUDIO desktop app, or run it yourself in a terminal — the VS Code built-in server does not manage background processes.",
         });
         return;
       }
@@ -2517,7 +2517,7 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
       if (routePath.startsWith("/api/terminal/")) {
         sendJson(response, 501, {
           ok: false,
-          error: "The built-in terminal is not available in VS Code's built-in server. Use VS Code's own terminal, or the Sarthi Studio desktop app for the project terminal.",
+          error: "The built-in terminal is not available in VS Code's built-in server. Use VS Code's own terminal, or the SAARTHI-STUDIO desktop app for the project terminal.",
         });
         return;
       }

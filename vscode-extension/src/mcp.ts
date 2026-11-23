@@ -196,7 +196,7 @@ export function normalizeMcpServer(input: Record<string, unknown>): McpServer {
   // Saying so is better than saving a server this build cannot use.
   throw new McpError(
     400,
-    `The VS Code built-in server speaks stdio, streamable HTTP and SSE. ${rawTransport.toUpperCase()} servers need the Sarthi Studio desktop app.`,
+    `The VS Code built-in server speaks stdio, streamable HTTP and SSE. ${rawTransport.toUpperCase()} servers need the SAARTHI-STUDIO desktop app.`,
   );
 }
 
@@ -365,7 +365,7 @@ class McpSession implements McpWire {
       this.write({
         jsonrpc: "2.0",
         id,
-        error: { code: -32601, message: "Not supported by Sarthi Studio's built-in server." },
+        error: { code: -32601, message: "Not supported by SAARTHI-STUDIO's built-in server." },
       });
       return;
     }

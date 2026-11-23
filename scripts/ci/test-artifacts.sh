@@ -47,19 +47,19 @@ accept() { # label, then the command
 # --- a complete directory -----------------------------------------------------
 dist="$tmp/dist"
 mkdir -p "$dist"
-printf 'binary\n' >"$dist/sarthi-studio_9.9.9_x86_64.AppImage"
-printf 'tarball\n' >"$dist/sarthi-studio_9.9.9_linux-x86_64.tar.gz"
+printf 'binary\n' >"$dist/SAARTHI-STUDIO_9.9.9_x86_64.AppImage"
+printf 'tarball\n' >"$dist/SAARTHI-STUDIO_9.9.9_linux-x86_64.tar.gz"
 
 accept "two files pass without an expected list" bash "$tool" "$dist"
 accept "every expected file present passes" \
-  bash "$tool" "$dist" "sarthi-studio_9.9.9_x86_64.AppImage"
+  bash "$tool" "$dist" "SAARTHI-STUDIO_9.9.9_x86_64.AppImage"
 accept "extra files do not fail the gate" \
-  bash "$tool" "$dist" "sarthi-studio_9.9.9_x86_64.AppImage" \
-  "sarthi-studio_9.9.9_linux-x86_64.tar.gz"
+  bash "$tool" "$dist" "SAARTHI-STUDIO_9.9.9_x86_64.AppImage" \
+  "SAARTHI-STUDIO_9.9.9_linux-x86_64.tar.gz"
 
 # --- a missing expected file --------------------------------------------------
 refuse "a missing expected file fails" \
-  bash "$tool" "$dist" "sarthi-studio_9.9.9_x86_64.AppImage" "SHA256SUMS.txt"
+  bash "$tool" "$dist" "SAARTHI-STUDIO_9.9.9_x86_64.AppImage" "SHA256SUMS.txt"
 if grep -q "missing expected artifact: SHA256SUMS.txt" "$err"; then
   pass "the missing file is named in the error"
 else
@@ -99,16 +99,16 @@ refuse "a tampered file fails its checksum" bash "$tool" "$sums"
 names="$tmp/names"
 mkdir -p "$names"
 all=(
-  "free-ai-studio-android.aab"
-  "free-ai-studio-android.apk"
-  "free-ai-studio-vscode.vsix"
-  "free-ai-studio_9.9.9-1_amd64.deb"
-  "sarthi-studio_9.9.9_linux-x86_64.tar.gz"
-  "sarthi-studio_9.9.9_macos-universal.app.zip"
-  "sarthi-studio_9.9.9_macos-universal.tar.gz"
-  "sarthi-studio_9.9.9_windows-x86_64.msi"
-  "sarthi-studio_9.9.9_windows-x86_64.zip"
-  "sarthi-studio_9.9.9_x86_64.AppImage"
+  "SAARTHI-STUDIO-android.aab"
+  "SAARTHI-STUDIO-android.apk"
+  "SAARTHI-STUDIO-vscode.vsix"
+  "SAARTHI-STUDIO_9.9.9-1_amd64.deb"
+  "SAARTHI-STUDIO_9.9.9_linux-x86_64.tar.gz"
+  "SAARTHI-STUDIO_9.9.9_macos-universal.app.zip"
+  "SAARTHI-STUDIO_9.9.9_macos-universal.tar.gz"
+  "SAARTHI-STUDIO_9.9.9_windows-x86_64.msi"
+  "SAARTHI-STUDIO_9.9.9_windows-x86_64.zip"
+  "SAARTHI-STUDIO_9.9.9_x86_64.AppImage"
 )
 for name in "${all[@]}"; do
   printf 'artifact\n' >"$names/$name"
@@ -121,7 +121,7 @@ done
 )
 all+=("SHA256SUMS.txt")
 accept "the full release set passes" bash "$tool" "$names" "${all[@]}"
-rm "$names/free-ai-studio-vscode.vsix"
+rm "$names/SAARTHI-STUDIO-vscode.vsix"
 refuse "dropping one release file fails" bash "$tool" "$names" "${all[@]}"
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"

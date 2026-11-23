@@ -21,9 +21,9 @@ const {
 const site = Astro.site ?? new URL('https://sairajkhilariarch.github.io/Saarthi-Studio');
 const canonical = new URL(Astro.url.pathname, site);
 const imageUrl = new URL(withBase(image), site);
-const pageTitle = title.includes('Sarthi Studio')
+const pageTitle = title.includes('SAARTHI-STUDIO')
   ? title
-  : `${title} — Sarthi Studio`;
+  : `${title} — SAARTHI-STUDIO`;
 
 const jsonLd = {
   '@context': 'https://schema.org',
@@ -51,7 +51,7 @@ const jsonLd = {
 <meta property="og:description" content={description} />
 <meta property="og:url" content={canonical} />
 <meta property="og:image" content={imageUrl} />
-<meta property="og:image:alt" content="The Sarthi Studio desktop shell" />
+<meta property="og:image:alt" content="The SAARTHI-STUDIO desktop shell" />
 
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content={pageTitle} />

@@ -5,10 +5,10 @@
 //! that (once picked) rides along with the next chat request. Roots are
 //! scanned in precedence order:
 //!
-//! 1. `FREE_AI_STUDIO_SKILLS_DIR` (tests and packagers), when set,
+//! 1. `SAARTHI_STUDIO_SKILLS_DIR` (tests and packagers), when set,
 //! 2. the app's bundled `static/skills/`, next to the UI it already serves,
 //! 3. `skills/` inside the folder the user opened (project skills),
-//! 4. `~/.config/free-ai-studio/skills/` (user skills),
+//! 4. `~/.config/SAARTHI-STUDIO/skills/` (user skills),
 //! 5. `~/.agents/skills/` (the agent skill packs installed on this machine).
 //!
 //! Front matter is a small `key: value` block between `---` fences:
@@ -153,7 +153,9 @@ pub(crate) fn roots(
     static_dir: &FsPath,
     workspace_root: Option<&FsPath>,
 ) -> Vec<(String, PathBuf)> {
-    if let Some(dir) = std::env::var_os("FREE_AI_STUDIO_SKILLS_DIR") {
+    if let Some(dir) = std::env::var_os("SAARTHI_STUDIO_SKILLS_DIR")
+        .or_else(|| std::env::var_os("FREE_AI_STUDIO_SKILLS_DIR"))
+    {
         return vec![("built-in".to_string(), PathBuf::from(dir))];
     }
     let mut roots = vec![("built-in".to_string(), static_dir.join("skills"))];
@@ -161,14 +163,15 @@ pub(crate) fn roots(
         roots.push(("project".to_string(), root.join("skills")));
     }
     // A test or sandboxed run must not read or write the real user's skills:
-    // FREE_AI_STUDIO_HOME already relocates config and data, so both skill
+    // SAARTHI_STUDIO_HOME already relocates config and data, so both skill
     // folders follow it too.
-    let home = std::env::var_os("FREE_AI_STUDIO_HOME")
+    let home = std::env::var_os("SAARTHI_STUDIO_HOME")
+        .or_else(|| std::env::var_os("FREE_AI_STUDIO_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(home_dir);
     roots.push((
         "user".to_string(),
-        home.join(".config/free-ai-studio/skills"),
+        home.join(".config/SAARTHI-STUDIO/skills"),
     ));
     roots.push(("agents".to_string(), home.join(".agents/skills")));
     roots
@@ -1301,7 +1304,7 @@ async fn install_skill(State(state): State<AppState>, Json(input): Json<Value>) 
     let Some(root) = writable_root(&state) else {
         return crate::json_error(
             StatusCode::CONFLICT,
-            "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
+            "There is no writable skills folder: SAARTHI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
         );
     };
     let target = root.join(&slug).join(MANIFEST).display().to_string();
@@ -1390,7 +1393,7 @@ async fn import_skill(State(state): State<AppState>, Json(input): Json<Value>) -
     let Some(root) = writable_root(&state) else {
         return crate::json_error(
             StatusCode::CONFLICT,
-            "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
+            "There is no writable skills folder: SAARTHI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
         );
     };
     // A folder without `.git` is a plain skill directory: copy it, so installing
@@ -1518,7 +1521,7 @@ async fn refresh_skill(
     let Some(root) = writable_root(&state) else {
         return crate::json_error(
             StatusCode::CONFLICT,
-            "There is no writable skills folder: FREE_AI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
+            "There is no writable skills folder: SAARTHI_STUDIO_SKILLS_DIR replaces the roots while it is set.",
         );
     };
     let Some(dir) = folder_of(&skill) else {
@@ -1773,7 +1776,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "free-ai-studio-skills-test-{}-{name}",
+            "SAARTHI-STUDIO-skills-test-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

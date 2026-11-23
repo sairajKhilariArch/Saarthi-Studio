@@ -799,7 +799,7 @@ fn run_folder_picker() -> PickerResult {
         .args([
             "--file-selection",
             "--directory",
-            "--title=Open a folder in Sarthi Studio",
+            "--title=Open a folder in SAARTHI-STUDIO",
         ])
         .output();
     match zenity {
@@ -1573,7 +1573,7 @@ fn run_folder_picker() -> PickerResult {
     const SCRIPT: &str = concat!(
         "Add-Type -AssemblyName System.Windows.Forms; ",
         "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; ",
-        "$dialog.Description = 'Open a folder in Sarthi Studio'; ",
+        "$dialog.Description = 'Open a folder in SAARTHI-STUDIO'; ",
         "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { ",
         "[Console]::Out.Write($dialog.SelectedPath) }"
     );
@@ -1600,7 +1600,7 @@ fn run_folder_picker() -> PickerResult {
     match Command::new("osascript")
         .args([
             "-e",
-            "POSIX path of (choose folder with prompt \"Open a folder in Sarthi Studio\")",
+            "POSIX path of (choose folder with prompt \"Open a folder in SAARTHI-STUDIO\")",
         ])
         .output()
     {

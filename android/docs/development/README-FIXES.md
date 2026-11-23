@@ -1,4 +1,4 @@
-# Sarthi Studio CI repair notes — follow-up
+# SAARTHI-STUDIO CI repair notes — follow-up
 
 This patch is intended for the `android` branch.
 

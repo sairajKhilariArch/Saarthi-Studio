@@ -1,49 +1,50 @@
 ---
   import BaseLayout from '../layouts/BaseLayout.astro';
   import Icon from '../components/Icon.astro';
-  import { LATEST_RELEASE } from '../lib/releases';
   import PageHero from '../components/PageHero.astro';
+  import { RELEASES } from '../lib/releases';
 ---
 
 <BaseLayout
-  title="Changelog — Sarthi Studio"
-  description="What changed in each Sarthi Studio release, from the release notes published on GitHub."
+  title="Changelog — SAARTHI-STUDIO"
+  description="Release notes published with SAARTHI-STUDIO GitHub releases."
 >
   <PageHero
     eyebrow="Changelog"
     title="What's new"
-    description="Release notes are published with every GitHub release. This page renders the notes that were published; older releases may not have notes yet."
+    description="These notes are read from published GitHub Releases. Missing notes are shown as missing; no changes are invented."
   />
 
   <section class="section">
     <div class="container container-narrow">
       <div class="changelog">
-        <article class="changelog-entry">
-          <h2 class="changelog-version">
-            <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
-              {LATEST_RELEASE.tag}
-            </a>
-          </h2>
-          <p class="changelog-date">Published {LATEST_RELEASE.date}</p>
-          <div class="changelog-body">
-            {LATEST_RELEASE.tag === 'v3.74.4' ? (
-              <p class="changelog-note">No release notes were published for this version yet. See the <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">GitHub release page</a>.</p>
-            ) : (
-              <p class="changelog-note">No release notes were published for this version yet. See the <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">GitHub release page</a>.</p>
-            )}
-          </div>
-        </article>
+        {RELEASES.filter((release) => release.body.trim()).map((release) => (
+          <article class="changelog-entry">
+            <h2 class="changelog-version">
+              <a href={release.url} target="_blank" rel="noopener noreferrer">{release.tag}</a>
+            </h2>
+            <p class="changelog-date">
+              {release.date ? `Published ${release.date}` : 'Publication date unavailable'}
+            </p>
+            <div class="changelog-body">{release.body}</div>
+          </article>
+        ))}
+        {!RELEASES.some((release) => release.body.trim()) && (
+          <p class="changelog-note">No published release notes are available yet. See <a href="https://github.com/sairajKhilariArch/Saarthi-Studio/releases">GitHub Releases</a>.</p>
+        )}
       </div>
 
       <div class="note-card">
         <Icon name="download" size={18} />
         <div>
-          <strong>Notes are rendered as published.</strong> Only sections and
-          entries that appear in the release notes are shown — nothing is
-          invented. If a release has no notes, this page says so and links to
-          the release on GitHub.
+          <strong>Notes are rendered as plain text.</strong> Release descriptions
+          are not treated as HTML, so remote release text cannot inject markup
+          into this website.
         </div>
       </div>
     </div>
   </section>
+  <style>
+    .changelog-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
 </BaseLayout>

@@ -1,6 +1,6 @@
-# Sarthi Studio — desktop, Windows, macOS, Android and VS Code
+# SAARTHI-STUDIO — desktop, Windows, macOS, Android and VS Code
 
-<img src="app/static/brand/logo.svg" width="88" height="88" alt="Sarthi Studio logo">
+<img src="app/static/brand/logo.svg" width="88" height="88" alt="SAARTHI-STUDIO logo">
 
 A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The backend, local HTTP server, router client, settings persistence, usage tracking, folder workspace API, and SQLite history are implemented in Rust (`axum`, `reqwest`, `rusqlite`). The interface uses HTML, CSS, and JavaScript, served locally by the Rust app and shown in the application window: a compact agent-style shell with threads, a file explorer, tabbed editing, and a router-backed chat.
 
@@ -10,7 +10,7 @@ Pushing a `v*` tag (e.g. `v2.0.0`) to GitHub Actions attaches every release file
 
 | Platform | Artifact | Install & run |
 | --- | --- | --- |
-| Linux (deb) | `SAARTHI-STUDIO_<version>_amd64.deb` | `sudo dpkg -i SAARTHI-STUDIO_*_amd64.deb`, then launch **Sarthi Studio** from the menu or run `SAARTHI-STUDIO` |
+| Linux (deb) | `SAARTHI-STUDIO_<version>_amd64.deb` | `sudo dpkg -i SAARTHI-STUDIO_*_amd64.deb`, then launch **SAARTHI-STUDIO** from the menu or run `SAARTHI-STUDIO` |
 | Linux (AppImage) | `SAARTHI-STUDIO_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
 | Linux (portable) | `SAARTHI-STUDIO_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./SAARTHI-STUDIO` (run `./install-and-run.sh` for the full source-build install instead) |
 | Windows | `SAARTHI-STUDIO_<version>_windows-x86_64.zip` | Extract, run `SAARTHI-STUDIO.exe` (WebView2 ships with Windows 10/11) |
@@ -148,7 +148,7 @@ FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi �
 
 ## Other GitHub projects this app uses
 
-- **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Sarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
+- **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. SAARTHI-STUDIO starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
 - **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local `0600` config file.
 
 ## Contacts

@@ -335,7 +335,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "free-ai-studio-memory-test-{}-{name}.db",
+            "SAARTHI-STUDIO-memory-test-{}-{name}.db",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

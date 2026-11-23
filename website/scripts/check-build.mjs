@@ -146,7 +146,7 @@ for (const file of htmlFiles) {
 const index = join(dist, 'index.html');
 try {
   const html = await readFile(index, 'utf8');
-  if (!html.includes('Sarthi Studio')) errors.push('index.html does not name Sarthi Studio.');
+  if (!html.includes('SAARTHI-STUDIO')) errors.push('index.html does not name SAARTHI-STUDIO.');
 } catch {
   errors.push('index.html is missing.');
 }

@@ -1,0 +1,57 @@
+name: Website Checks
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/website-checks.yml"
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/website-checks.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, test, and build website
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test release synchronization
+        run: npm run test:releases
+
+      - name: Check types and content
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+        env:
+          SITE_URL: https://sairajkhilariarch.github.io
+          SITE_BASE: /Saarthi-Studio/
+
+      - name: Validate build output
+        run: npm run check:build
+        env:
+          SITE_BASE: /Saarthi-Studio/

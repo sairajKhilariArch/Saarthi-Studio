@@ -1,6 +1,6 @@
 {
-  "name": "free-ai-studio",
-  "displayName": "Sarthi Studio",
+  "name": "saarthi-studio",
+  "displayName": "SAARTHI-STUDIO",
   "description": "Chat with your FreeLLMAPI router from VS Code. Uses the desktop app when it is running and starts a built-in local server when it is not.",
   "version": "2.6.1",
   "publisher": "sarthi",
@@ -14,47 +14,47 @@
   "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [
-      { "command": "freeAiStudio.openChat", "title": "Sarthi Studio: Open chat" },
-      { "command": "freeAiStudio.askSelection", "title": "Sarthi Studio: Ask about the selection" },
-      { "command": "freeAiStudio.attachFile", "title": "Sarthi Studio: Attach the active file" },
-      { "command": "freeAiStudio.setApiKey", "title": "Sarthi Studio: Set router API key" },
-      { "command": "freeAiStudio.showStatus", "title": "Sarthi Studio: Show server status" },
-      { "command": "freeAiStudio.restartServer", "title": "Sarthi Studio: Restart the built-in server" },
-      { "command": "freeAiStudio.openInDesktop", "title": "Sarthi Studio: Open the desktop app" }
+      { "command": "saarthiStudio.openChat", "title": "SAARTHI-STUDIO: Open chat" },
+      { "command": "saarthiStudio.askSelection", "title": "SAARTHI-STUDIO: Ask about the selection" },
+      { "command": "saarthiStudio.attachFile", "title": "SAARTHI-STUDIO: Attach the active file" },
+      { "command": "saarthiStudio.setApiKey", "title": "SAARTHI-STUDIO: Set router API key" },
+      { "command": "saarthiStudio.showStatus", "title": "SAARTHI-STUDIO: Show server status" },
+      { "command": "saarthiStudio.restartServer", "title": "SAARTHI-STUDIO: Restart the built-in server" },
+      { "command": "saarthiStudio.openInDesktop", "title": "SAARTHI-STUDIO: Open the desktop app" }
     ],
     "configuration": {
-      "title": "Sarthi Studio",
+      "title": "SAARTHI-STUDIO",
       "properties": {
-        "freeAiStudio.desktopUrl": {
+        "saarthiStudio.desktopUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8765",
-          "description": "Loopback address of a running Sarthi Studio desktop app."
+          "description": "Loopback address of a running SAARTHI-STUDIO desktop app."
         },
-        "freeAiStudio.routerBaseUrl": {
+        "saarthiStudio.routerBaseUrl": {
           "type": "string",
           "default": "http://127.0.0.1:3001/v1",
           "description": "OpenAI-compatible base URL of your router (FreeLLMAPI by default)."
         },
-        "freeAiStudio.model": {
+        "saarthiStudio.model": {
           "type": "string",
           "default": "auto",
           "description": "Model the built-in server requests. `auto` lets the router choose and fall back."
         },
-        "freeAiStudio.contextBudgetTokens": {
+        "saarthiStudio.contextBudgetTokens": {
           "type": "number",
           "default": 6000,
           "minimum": 1000,
           "maximum": 32000,
           "description": "Hard token budget for each request sent by the built-in server."
         },
-        "freeAiStudio.historyMessages": {
+        "saarthiStudio.historyMessages": {
           "type": "number",
           "default": 6,
           "minimum": 2,
           "maximum": 24,
           "description": "How many recent messages compete for the token budget."
         },
-        "freeAiStudio.thinkingLevel": {
+        "saarthiStudio.thinkingLevel": {
           "type": "string",
           "default": "",
           "enum": ["", "off", "low", "medium", "high"],

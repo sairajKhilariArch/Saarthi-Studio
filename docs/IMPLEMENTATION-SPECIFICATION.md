@@ -1,6 +1,6 @@
 # Implementation specification (adopted)
 
-This is the engineering contract for Sarthi Studio. It states the rules every
+This is the engineering contract for SAARTHI-STUDIO. It states the rules every
 phase must follow; the phase-by-phase work is in `docs/MASTER-ROADMAP.md` and
 the current state in `docs/FEATURE-STATUS.md`.
 
@@ -51,8 +51,8 @@ logic that changes persistent state.
    second query, and an index for the query the UI actually runs.
 3. Config additions are optional with defaults; a missing key never fails
    startup.
-4. Paths stay `~/.config/free-ai-studio/config.json` and
-   `~/.local/share/free-ai-studio/studio.db`.
+4. Paths stay `~/.config/SAARTHI-STUDIO/config.json` and
+   `~/.local/share/SAARTHI-STUDIO/studio.db`.
 5. A crash must leave an honest record (agent runs become `interrupted`), not
    a silently resumed half-run.
 
