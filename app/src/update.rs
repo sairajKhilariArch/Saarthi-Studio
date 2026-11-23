@@ -675,10 +675,12 @@ fn version_dir_name(version: &str) -> Option<String> {
 fn app_binary_rank(path: &FsPath) -> Option<u8> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     let stem = name.strip_suffix(".exe").unwrap_or(&name);
+    // `name` was lowercased above; compare the lowercased names. Keep accepting
+    // the pre-rename binary so an update can still install an older release.
     match stem {
-        "SAARTHI-STUDIO" | "SAARTHI-STUDIO" => Some(0),
-        _ if stem.starts_with("SAARTHI-STUDIO") => Some(1),
-        _ if stem.starts_with("sarthi") => Some(2),
+        "saarthi-studio" | "free-ai-studio" => Some(0),
+        _ if stem.starts_with("saarthi-studio") || stem.starts_with("free-ai-studio") => Some(1),
+        _ if stem.starts_with("sarthi") || stem.starts_with("free-ai") => Some(2),
         _ => None,
     }
 }

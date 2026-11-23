@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.84.1
+
+### Fixed
+
+Update staging finds the renamed binary again.
+
+- `app_binary_rank` lowercased the unpacked file name but compared it with the
+  uppercase literal `SAARTHI-STUDIO`, so no candidate ever matched. Every
+  prepared update was refused with "none of them is a SAARTHI-STUDIO binary",
+  which the macOS, Windows and Linux test jobs all caught.
+- The matcher now compares the lowercased names and still accepts the legacy
+  `free-ai-studio` spelling, so an update can install either an older or a
+  renamed release.
+
+Verified: `cargo test --locked` 700 passed, 0 failed, 1 ignored; clippy
+`--all-targets -D warnings` and `cargo fmt --check` clean.
+
 ## 3.83.0
 
 ### Changed
