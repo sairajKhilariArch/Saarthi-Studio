@@ -239,6 +239,7 @@
       '<button type="button" class="ai-dock-tab" data-dock="router" role="tab" aria-selected="false">Router</button>',
       "</div>",
       '<div class="ai-dock-actions">',
+      `<button type="button" class="icon-btn" id="aiDockCenter" title="Center the thread" aria-label="Center the thread" aria-pressed="false">${svg("panel-right")}</button>`,
       `<button type="button" class="icon-btn" id="aiDockClose" title="Hide the AI panel" aria-label="Hide the AI panel">${svg("close")}</button>`,
       "</div></header>",
       '<div class="ai-dock-body"><div class="ai-chat-host" id="aiChatHost"></div>',
@@ -252,6 +253,7 @@
     dock.querySelectorAll(".ai-dock-tab").forEach((tab) => {
       tab.addEventListener("click", () => selectDockTab(tab.dataset.dock));
     });
+    $("aiDockCenter").addEventListener("click", () => setChatCenter(!state.chatCenter));
     $("aiDockClose").addEventListener("click", () => togglePanel("right"));
   }
 

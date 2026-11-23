@@ -1,5 +1,51 @@
 # Changelog
 
+## 3.85.0
+
+### Added
+
+Every part of the workspace can now be shown or hidden from one Layout menu,
+and the conversation can be centered in the window instead of living only in
+the right-hand dock.
+
+- The tab bar's **Layout** button toggles the activity bar, left panel,
+  assistant panel, bottom panel and status bar, plus **Center thread**. Choices
+  persist across reloads; **Reset layout** returns to the full workspace.
+- Centered thread is the first-run default. It makes the conversation the whole
+  surface — editor, activity rail and sidebar yield — so the thread is centered
+  in the viewport (633 px against a 640 px center at 1280 px wide, 228 px
+  against 228 px at 455 px) rather than centered in the space left of the
+  editor. The dock header gains a **Dock**/**Center** button so the mode is
+  reachable while the tab bar is hidden.
+- Closing the assistant, or turning off **Center thread**, restores the editor;
+  an explicitly closed assistant stays closed.
+
+### Fixed
+
+- The default sidebar thread list no longer fails with
+  `Invalid column type Text at index: 5, name: project`. The project-filtered
+  query returns six fields after `last_message`; the handler read the project
+  name at index 5 as the integer token budget. Every fresh app therefore
+  answered `500` to `GET /api/conversations` until the person switched to
+  "All projects". The handler now reads `project` at 5 and `token_budget` at 6,
+  and a route-level test pins the mapping.
+- Centered mode at narrow widths no longer leaves a 121 px assistant strip; the
+  thread fills the viewport at 455 px.
+
+### Changed
+
+- `README.md`'s production section now matches the release: Android 1.51.0
+  (code 60), the `sarthi-studio-android-release-unsigned` artifact, all 11
+  release assets, the macOS universal build from `macos-15-intel`, and
+  `FREE_AI_STUDIO_STATIC_DIR` with the real installed static paths. The
+  malformed monorepo paragraph is repaired and the website is documented on
+  `main` under `website/`.
+
+Verified: `test-frontend.sh` 107/107, `cargo fmt --check`, the new conversation
+list route test, a rebuilt debug binary answering `GET /api/conversations` with
+`200` and real `project`/`token_budget` values, plus the version, metadata and
+release-contract checks.
+
 ## 3.84.6
 
 ### Changed

@@ -450,6 +450,31 @@ body.no-bottom { --bottom-h: 0px; }
 .tab-close .icon { width: 11px; height: 11px; }
 .tab-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .tabbar-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; padding: 0 12px; flex: none; }
+
+/* ---------- layout menu ---------- */
+.layout-wrap { position: relative; display: inline-flex; }
+.layout-menu {
+  position: absolute; top: calc(100% + 7px); right: 0; z-index: 70;
+  width: 220px; padding: 6px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--panel); box-shadow: var(--shadow-2);
+}
+.layout-menu.hidden { display: none; }
+.layout-head {
+  margin: 6px 8px 3px; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--mute);
+}
+.layout-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-radius: 6px; color: var(--text); font-size: 12px; cursor: pointer;
+}
+.layout-item:hover { background: var(--surface-2); }
+.layout-item input { accent-color: var(--accent); margin: 0; }
+.layout-reset {
+  width: 100%; margin-top: 5px; padding: 6px 8px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--mute); font: inherit; font-size: 11.5px;
+  text-align: left; cursor: pointer;
+}
+.layout-reset:hover { background: var(--surface-2); color: var(--text); }
 .status-pill {
   display: inline-flex; align-items: center; gap: 7px; padding: 5px 10px;
   border: 1px solid var(--line); border-radius: 999px; background: var(--surface);

@@ -49,6 +49,32 @@
 .app > .status-bar { grid-column: 1 / 5; grid-row: 3; }
 .app > .right-panel { display: none; }
 body.no-right { --right-w: 0px; }
+body.no-activity { --activity-w: 0px; }
+body.no-status { --status-h: 0px; }
+body.no-activity .activity-bar, body.no-status .status-bar { display: none; }
+
+/* A centered conversation is the whole surface: the editor, activity rail and
+   sidebar yield to it, so the thread is centered in the viewport rather than
+   in the space left of the editor. The dock keeps its header — Router, the
+   Dock button and Close stay reachable. */
+body.chat-center .app { grid-template-columns: minmax(0, 1fr); }
+body.chat-center .main,
+body.chat-center .activity-bar,
+body.chat-center .sidebar { display: none; }
+body.chat-center .app > .ai-dock { grid-column: 1 / -1; border-left: 0; }
+body.chat-center .app > .bottom-panel,
+body.chat-center .app > .status-bar { grid-column: 1 / -1; }
+body.chat-center .ai-dock .chat-column {
+  max-width: 840px; margin: 0 auto; padding: 26px 28px 8px;
+}
+body.chat-center .ai-dock .welcome { padding: 44px 0 30px; }
+body.chat-center .ai-dock .welcome-mark { width: 46px; height: 46px; margin: 0 auto 18px; }
+body.chat-center .ai-dock .welcome h1 { font-size: 27px; }
+body.chat-center .ai-dock .welcome p { font-size: 13px; line-height: 1.7; max-width: 520px; margin: 0 auto 26px; }
+body.chat-center .ai-dock .suggestions { grid-template-columns: 1fr 1fr; gap: 9px; }
+body.chat-center .ai-dock .suggestion { padding: 13px 14px; }
+body.chat-center .ai-dock .composer-shell { padding: 8px 28px 18px; }
+body.chat-center .ai-dock .msg { font-size: 13.5px; }
 
 /* ---------- activity bar ---------- */
 .activity-bar {
@@ -355,6 +381,16 @@ body.no-right { --right-w: 0px; }
     width: min(400px, 94vw); z-index: 40; box-shadow: var(--shadow-2);
   }
   body.no-right .app > .ai-dock { display: none; }
+  /* A centered thread stays in the grid on narrow windows instead of becoming
+     the 400 px overlay; it is already the only column left. */
+  body.chat-center .app { grid-template-columns: minmax(0, 1fr); }
+  body.chat-center .activity-bar, body.chat-center .sidebar { display: none; }
+  body.chat-center .app > .ai-dock {
+    display: flex; position: static; width: auto; z-index: auto;
+    grid-column: 1 / -1; box-shadow: none;
+  }
+  body.chat-center .app > .bottom-panel,
+  body.chat-center .app > .status-bar { grid-column: 1 / -1; }
   .app > .bottom-panel { grid-column: 3 / 4; }
 }
 

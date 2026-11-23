@@ -1102,6 +1102,11 @@ const state = {
   /* Thread pane scope: "project" lists the active project's threads, "all"
      lists recent threads from every project, each labelled with its project. */
   threadScope: (() => { try { return localStorage.getItem("freeai-thread-scope") === "all" ? "all" : "project"; } catch { return "project"; } })(),
+  /* Chrome that is not a resizable panel: the activity rail and the status
+     bar. The centered thread is a placement of the assistant, not a fourth
+     column, so it has its own switch too. */
+  uiShow: { activity: true, status: true },
+  chatCenter: false,
   model: "auto",
   /* thinking: "" means "model default" (no reasoning parameter). The choice is
      per message and sticky for the session; the server resolves
@@ -2763,26 +2768,118 @@ function defaultPanelShow(stored, hasDock) {
   };
 }
 
+function loadUiShow() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("freeai-ui-show") || "{}");
+    return { activity: raw.activity !== false, status: raw.status !== false };
+  } catch {
+    return { activity: true, status: true };
+  }
+}
+
+/* First run centers the conversation, because it is the main surface. A profile
+   that explicitly closed the assistant keeps it closed; a saved placement is
+   always honoured. */
+function loadChatCenter(storedPanelShow) {
+  try {
+    const raw = localStorage.getItem("freeai-chat-center");
+    if (raw != null) return raw !== "false";
+  } catch { /* private mode */ }
+  return !(storedPanelShow && storedPanelShow.right === false);
+}
+
+function saveLayout() {
+  try {
+    localStorage.setItem("freeai-panel-show", JSON.stringify(state.panelShow));
+    localStorage.setItem("freeai-ui-show", JSON.stringify(state.uiShow));
+    localStorage.setItem("freeai-chat-center", String(state.chatCenter));
+  } catch { /* private mode */ }
+}
+
+function syncLayoutControls() {
+  const menu = $("layoutMenu");
+  if (menu && typeof menu.querySelectorAll === "function") {
+    for (const input of menu.querySelectorAll("[data-layout]")) {
+      const key = input.dataset ? input.dataset.layout : "";
+      if (!key) continue;
+      input.checked = key === "center"
+        ? state.chatCenter
+        : key in state.panelShow
+          ? state.panelShow[key]
+          : Boolean(state.uiShow[key]);
+    }
+  }
+  const button = $("layoutBtn");
+  if (button && menu) {
+    button.setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
+  }
+}
+
 function applyPanels() {
+  const dock = $("aiDock");
+  // A centered thread has no meaning without the dock; the legacy shell keeps
+  // its own centered chat view and never gets this class.
+  if (dock && state.chatCenter && !state.panelShow.right) state.panelShow.right = true;
   document.body.classList.toggle("no-left", !state.panelShow.left);
   document.body.classList.toggle("no-right", !state.panelShow.right);
   document.body.classList.toggle("no-bottom", !state.panelShow.bottom);
+  document.body.classList.toggle("no-activity", !state.uiShow.activity);
+  document.body.classList.toggle("no-status", !state.uiShow.status);
+  document.body.classList.toggle("chat-center", Boolean(dock) && state.chatCenter);
   for (const name of ["left", "right", "bottom"]) {
     const button = $(`${name}PanelToggle`);
     if (!button) continue;
     button.setAttribute("aria-pressed", String(state.panelShow[name]));
     button.classList.toggle("active", state.panelShow[name]);
   }
+  if (dock) dock.classList.toggle("hidden", !state.panelShow.right);
   if ($("rightPanel")) $("rightPanel").classList.toggle("hidden", !state.panelShow.right);
   if ($("bottomPanel")) $("bottomPanel").classList.toggle("hidden", !state.panelShow.bottom);
+  const centerButton = $("aiDockCenter");
+  if (centerButton) {
+    const centered = Boolean(dock) && state.chatCenter;
+    centerButton.setAttribute("aria-pressed", String(centered));
+    centerButton.title = centered ? "Dock the thread on the right" : "Center the thread";
+    centerButton.setAttribute("aria-label", centerButton.title);
+  }
+  syncLayoutControls();
 }
 
-function togglePanel(name) {
-  state.panelShow[name] = !state.panelShow[name];
-  try { localStorage.setItem("freeai-panel-show", JSON.stringify(state.panelShow)); } catch { /* private mode */ }
+function setPanel(name, on) {
+  state.panelShow[name] = Boolean(on);
+  // Closing the assistant while centered would leave the editor hidden and the
+  // conversation gone; closing it returns to the editor instead.
+  if (name === "right" && !state.panelShow.right) state.chatCenter = false;
+  saveLayout();
   applyPanels();
   if (name === "bottom" && state.panelShow.bottom) showTerminalPanel();
   if (name === "right" && state.panelShow.right) refreshRightPanel();
+}
+
+function togglePanel(name) {
+  setPanel(name, !state.panelShow[name]);
+}
+
+function setChatCenter(on) {
+  state.chatCenter = Boolean(on);
+  if (state.chatCenter) state.panelShow.right = true;
+  saveLayout();
+  applyPanels();
+  if (state.chatCenter && $("prompt")) $("prompt").focus();
+}
+
+function toggleUi(name) {
+  state.uiShow[name] = !state.uiShow[name];
+  saveLayout();
+  applyPanels();
+}
+
+function resetLayout() {
+  state.panelShow = { left: true, right: Boolean($("aiDock")), bottom: false };
+  state.uiShow = { activity: true, status: true };
+  state.chatCenter = true;
+  saveLayout();
+  applyPanels();
 }
 
 function startPanelDrag(event) {
@@ -8846,12 +8943,12 @@ function bindEvents() {
   /* Sizes and visibility live in localStorage with the same pattern as the
      theme, and drive :root custom properties — no re-render involved. */
   state.panelSize = JSON.parse(localStorage.getItem("freeai-panel-size") || "{}") || {};
+  const storedPanelShow = JSON.parse(localStorage.getItem("freeai-panel-show") || "{}") || {};
   // No dock exists yet (ide.js builds it), so this is the legacy default; the IDE
   // shell recomputes it with hasDock once the dock is in place.
-  state.panelShow = defaultPanelShow(
-    JSON.parse(localStorage.getItem("freeai-panel-show") || "{}") || {},
-    Boolean(document.getElementById("aiDock")),
-  );
+  state.panelShow = defaultPanelShow(storedPanelShow, Boolean(document.getElementById("aiDock")));
+  state.uiShow = loadUiShow();
+  state.chatCenter = loadChatCenter(storedPanelShow);
   PANEL_MIN = { left: 212, right: 240, bottom: 120 };
   PANEL_MAX = { left: 560, right: 640, bottom: 520 };
   writePanelVars();
@@ -8859,6 +8956,38 @@ function bindEvents() {
   $("leftPanelToggle").addEventListener("click", () => togglePanel("left"));
   $("rightPanelToggle").addEventListener("click", () => togglePanel("right"));
   $("bottomPanelToggle").addEventListener("click", () => togglePanel("bottom"));
+
+  /* Layout menu: every chrome region, including the two that have no panel
+     toggle, and the assistant placement. Checkbox changes flow through the
+     same state as the icon buttons, so the two controls cannot disagree. */
+  const layoutBtn = $("layoutBtn");
+  const layoutMenu = $("layoutMenu");
+  if (layoutBtn && layoutMenu) {
+    layoutBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      layoutMenu.classList.toggle("hidden");
+      syncLayoutControls();
+    });
+    layoutMenu.addEventListener("click", (event) => event.stopPropagation());
+    layoutMenu.addEventListener("change", (event) => {
+      const input = event.target;
+      const key = input && input.dataset ? input.dataset.layout : "";
+      if (!key) return;
+      if (key === "center") setChatCenter(Boolean(input.checked));
+      else if (key in state.uiShow) { state.uiShow[key] = Boolean(input.checked); saveLayout(); applyPanels(); }
+      else if (key in state.panelShow) setPanel(key, Boolean(input.checked));
+    });
+    if ($("layoutReset")) {
+      $("layoutReset").addEventListener("click", () => {
+        resetLayout();
+        layoutMenu.classList.add("hidden");
+      });
+    }
+    document.addEventListener("click", () => layoutMenu.classList.add("hidden"));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") layoutMenu.classList.add("hidden");
+    });
+  }
   document.querySelectorAll(".panel-handle").forEach((handle) => {
     handle.addEventListener("pointerdown", startPanelDrag);
   });

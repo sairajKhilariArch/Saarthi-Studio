@@ -616,3 +616,35 @@ test("a finished run's checkout can be discarded from the detail view", () => {
   );
   assert.match(app, /Cannot be undone|nothing is forced/, "the confirmation says what it costs");
 });
+
+test("the layout switch can hide every chrome region", () => {
+  const ui = loadApp();
+  evaluate(
+    ui,
+    `state.panelShow = { left: false, right: false, bottom: false };
+     state.uiShow = { activity: false, status: false };
+     state.chatCenter = false;
+     applyPanels();`,
+  );
+  const has = (name) => evaluate(ui, `document.body.classList.contains('${name}')`);
+  assert.equal(has("no-left"), true);
+  assert.equal(has("no-right"), true);
+  assert.equal(has("no-bottom"), true);
+  assert.equal(has("no-activity"), true);
+  assert.equal(has("no-status"), true);
+  assert.equal(has("chat-center"), false);
+});
+
+test("a centered thread opens the assistant and closing it returns the editor", () => {
+  const ui = loadApp();
+  const has = (name) => evaluate(ui, `document.body.classList.contains('${name}')`);
+  evaluate(ui, `state.chatCenter = true; state.panelShow.right = false; applyPanels();`);
+  assert.equal(evaluate(ui, "state.panelShow.right"), true, "centering reveals the assistant");
+  assert.equal(has("chat-center"), true);
+  assert.equal(has("no-right"), false);
+
+  evaluate(ui, `setPanel("right", false)`);
+  assert.equal(evaluate(ui, "state.chatCenter"), false, "closing the assistant leaves centered mode");
+  assert.equal(has("chat-center"), false);
+  assert.equal(has("no-right"), true);
+});

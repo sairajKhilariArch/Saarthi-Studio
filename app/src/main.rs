@@ -3248,7 +3248,8 @@ async fn list_conversations(
                     "id": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?,
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                     "last_message": row.get::<_, Option<String>>(4)?,
-                    "token_budget": row.get::<_, i64>(5)?
+                    "project": row.get::<_, String>(5)?,
+                    "token_budget": row.get::<_, i64>(6)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -5872,6 +5873,38 @@ mod tests {
         };
         ensure_setup(&state).expect("ensure_setup");
         state
+    }
+
+    /// The default (project-filtered) thread list used to read the project name
+    /// at index 5 as the integer budget, so every fresh app answered 500 until
+    /// the person switched the sidebar to "All projects". Keep the mapping tied
+    /// to the SELECT it reads.
+    #[tokio::test]
+    async fn the_project_filtered_thread_list_reads_project_and_budget() {
+        let state = fixture("conversation-list-project");
+        let project = active_project_id(&state);
+        let conn = open_db(&state.database_path).expect("database");
+        let project_name: String = conn
+            .query_row("SELECT name FROM projects WHERE id=?1", [&project], |row| {
+                row.get(0)
+            })
+            .expect("the default project");
+        conn.execute(
+            "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget)
+             VALUES('c1','Thread',1.0,1.0,?1,7)",
+            [&project],
+        )
+        .expect("conversation");
+        drop(conn);
+
+        let response = list_conversations(AxumQuery(HashMap::new()), State(state)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(value[0]["project"], project_name);
+        assert_eq!(value[0]["token_budget"], 7);
     }
 
     /// A router that answers with the scripted statuses in order (then 200 with

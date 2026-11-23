@@ -250,6 +250,22 @@
             <svg class="icon"><use href="#i-terminal"/></svg>
           </button>
         </span>
+        <div class="layout-wrap">
+          <button id="layoutBtn" class="icon-btn" title="Layout and panels" aria-label="Layout and panels" aria-expanded="false" aria-controls="layoutMenu">
+            <svg class="icon"><use href="#i-layers"/></svg>
+          </button>
+          <div id="layoutMenu" class="layout-menu hidden" role="group" aria-label="Layout">
+            <p class="layout-head">Show</p>
+            <label class="layout-item"><input type="checkbox" data-layout="activity" checked><span>Activity bar</span></label>
+            <label class="layout-item"><input type="checkbox" data-layout="left" checked><span>Left panel</span></label>
+            <label class="layout-item"><input type="checkbox" data-layout="right" checked><span>Assistant panel</span></label>
+            <label class="layout-item"><input type="checkbox" data-layout="bottom"><span>Bottom panel</span></label>
+            <label class="layout-item"><input type="checkbox" data-layout="status" checked><span>Status bar</span></label>
+            <p class="layout-head">Assistant</p>
+            <label class="layout-item"><input type="checkbox" data-layout="center" checked><span>Center thread</span></label>
+            <button id="layoutReset" class="layout-reset" type="button">Reset layout</button>
+          </div>
+        </div>
         <button id="themeToggle" class="icon-btn" title="Switch light / dark theme" aria-label="Switch light or dark theme">
           <svg class="icon"><use href="#i-moon"/></svg>
         </button>

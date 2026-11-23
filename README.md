@@ -155,7 +155,9 @@ FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi �
 
 - Source & issues: https://github.com/sairajKhilariArch/Saarthi-Studio/issues
 - FreeLLMAPI (upstream router): https://github.com/tashfeenahmed/freellmapi
-- A standalone marketing/help site (simple landing page: what the app is, how to use it, installation steps, contacts) is maintained on the `website` branch under `website/`.## Monorepo layout and application roles
+- A standalone marketing/help site (simple landing page: what the app is, how to use it, installation steps, contacts) lives under `website/` on `main` and deploys to GitHub Pages.
+
+## Monorepo layout and application roles
 
 The Rust desktop app remains the **primary product and intended host**. Its existing Rust service and web UI remain at `app/`; the desktop README, build scripts, and data locations remain the root-level source of truth.
 
@@ -168,16 +170,16 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 
 **Platform parity (current state):** the Android client supports both Direct Router and Desktop Host mode (authenticated HTTPS, bearer host token — see `docs/android/`); host bridge chat is non-streaming text, and the capabilities endpoint advertises `streaming: false` / `attachments: false` honestly, so media and streaming in chat remain desktop/web/VS Code features until the host API declares and implements them.
 
-## Production Ready - Branch: main
+## Production readiness
 
 ### Android (companion client)
-- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.19.0` (version code `16`).
-- The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB (`SAARTHI-STUDIO-android-release-unsigned`). Sign artifacts with your own keystore at distribution time.
+- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.51.0` (version code `60`).
+- The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB as `sarthi-studio-android-release-unsigned`. Sign artifacts with your own keystore at distribution time.
 - Plaintext router endpoints are restricted to loopback/private LAN ranges via `network_security_config.xml`; public hosts must use HTTPS.
 - Local helper: `android/BUILD-APK-UBUNTU.sh` runs unit tests, lint, debug and release assembly.
 
 ### Desktop (Rust host)
 - The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
-- Pushing a `v*` tag runs "Desktop Release", which builds and attaches every platform: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage with SHA-256 checksums; a Windows x86_64 portable zip built on `windows-latest`; a macOS arm64 portable tarball (unsigned) built on `macos-latest`; the unsigned Android release APK/AAB; and the VS Code `.vsix`.
-- Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`SAARTHI_STUDIO_STATIC_DIR` override → installed `../share/SAARTHI-STUDIO/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
+- Pushing a `v*` tag runs "Desktop Release" and attaches all 11 assets: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage; Windows x86_64 zip and MSI; a macOS universal `.app.zip` and tarball (unsigned, built on `macos-15-intel`); the unsigned Android APK/AAB (`free-ai-studio-android.apk`/`.aab`); the VS Code extension (`free-ai-studio-vscode.vsix`); and `SHA256SUMS.txt`.
+- Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/sarthi-studio/static` → macOS `../Resources/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.
 
