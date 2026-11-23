@@ -303,44 +303,65 @@ else
 fi
 
 # --- the four known-incomplete historical releases ---------------------------
-# These release pages predate the 11-asset contract and cannot be rebuilt. The
-# audit tolerates exactly the names each one lacks; a fifth release, or one more
-# gap in an exempt release, must still fail.
-known_version=3.83.0
-known_tag="v$known_version"
-known_release="$release_dir/$known_tag"
-known_assets="$tmp/assets-$known_version.txt"
-bash "$here/release-assets.sh" "$known_version" >"$known_assets"
-known_missing=(
-  "sarthi-studio_${known_version}_macos-universal.app.zip"
-  "sarthi-studio_${known_version}_macos-universal.tar.gz"
-  "sarthi-studio_${known_version}_windows-x86_64.msi"
-  "sarthi-studio_${known_version}_windows-x86_64.zip"
-)
-write_release_for "$known_release" "$known_assets" "${known_missing[@]}"
-write_audit_index "$known_tag"
+# These release pages predate the 11-asset contract and cannot be rebuilt. Each
+# fixture removes exactly the names that release actually lacks, then one asset
+# it does have: the first audit must pass and the second must fail. This pins
+# all four allow-lists, not just the newest one.
+check_known_release() { # version, an asset it has, then the names it lacks
+  local version="$1" extra_gap="$2"
+  shift 2
+  local tag="v$version"
+  local release="$release_dir/$tag"
+  local assets="$tmp/assets-$version.txt"
+  local out="$tmp/audit-$version.out"
+  bash "$here/release-assets.sh" "$version" >"$assets"
 
-if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
-  MIN_RELEASE_VERSION="$known_version" bash "$audit" >"$tmp/audit-known.out" 2>&1; then
-  grep -q 'known-incomplete historical release' "$tmp/audit-known.out" ||
-    die "audit did not report the historical exception"
-  pass "audit accepts the known-incomplete v3.83.0"
-else
-  cat "$tmp/audit-known.out" >&2
-  die "audit rejected the known-incomplete v3.83.0"
-fi
+  write_release_for "$release" "$assets" "$@"
+  write_audit_index "$tag"
+  if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+    MIN_RELEASE_VERSION="$version" bash "$audit" >"$out" 2>&1; then
+    grep -q 'known-incomplete historical release' "$out" ||
+      die "audit did not report the historical exception for $tag"
+    pass "audit accepts the known-incomplete $tag"
+  else
+    cat "$out" >&2
+    die "audit rejected the known-incomplete $tag"
+  fi
 
-# The same release with one more asset missing is a new gap, not history.
-write_release_for "$known_release" "$known_assets" \
-  "${known_missing[@]}" "free-ai-studio-vscode.vsix"
-if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
-  MIN_RELEASE_VERSION="$known_version" bash "$audit" >"$tmp/audit-known-extra.out" 2>&1; then
-  die "audit accepted a new missing asset on an exempt historical release"
-else
-  grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-known-extra.out" ||
-    die "the new missing asset was not named"
-  pass "audit rejects a new gap on an exempt historical release"
-fi
+  write_release_for "$release" "$assets" "$@" "$extra_gap"
+  if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+    MIN_RELEASE_VERSION="$version" bash "$audit" >"$out" 2>&1; then
+    die "audit accepted a new gap ($extra_gap) on $tag"
+  else
+    grep -Fq "$extra_gap" "$out" ||
+      die "the new gap $extra_gap was not named for $tag"
+    pass "audit rejects a new gap on $tag"
+  fi
+}
+
+check_known_release 3.83.0 free-ai-studio-vscode.vsix \
+  sarthi-studio_3.83.0_macos-universal.app.zip \
+  sarthi-studio_3.83.0_macos-universal.tar.gz \
+  sarthi-studio_3.83.0_windows-x86_64.msi \
+  sarthi-studio_3.83.0_windows-x86_64.zip
+check_known_release 3.75.9 free-ai-studio-android.apk \
+  free-ai-studio-vscode.vsix \
+  free-ai-studio_3.75.9-1_amd64.deb \
+  sarthi-studio_3.75.9_linux-x86_64.tar.gz \
+  sarthi-studio_3.75.9_x86_64.AppImage \
+  SHA256SUMS.txt
+check_known_release 3.74.2 free-ai-studio-vscode.vsix \
+  free-ai-studio-android.aab \
+  free-ai-studio-android.apk \
+  free-ai-studio_3.74.2-1_amd64.deb \
+  sarthi-studio_3.74.2_windows-x86_64.msi \
+  sarthi-studio_3.74.2_windows-x86_64.zip
+check_known_release 3.74.1 free-ai-studio-vscode.vsix \
+  free-ai-studio-android.aab \
+  free-ai-studio-android.apk \
+  free-ai-studio_3.74.1-1_amd64.deb \
+  sarthi-studio_3.74.1_windows-x86_64.msi \
+  sarthi-studio_3.74.1_windows-x86_64.zip
 
 # The exemption is keyed by release, not by the asset pattern.
 write_release_for "$release_dir/v9.9.9" "$assets_list" "free-ai-studio-vscode.vsix"

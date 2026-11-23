@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.84.5
+
+### Changed
+
+Release Audit's four historical exceptions are now regression-tested per
+release, not just at v3.83.0.
+
+- `test-release.sh` builds a fixture for v3.74.1, v3.74.2, v3.75.9 and
+  v3.83.0 with exactly the gap each published release has, proves the audit
+  accepts it, then removes one asset the release does have and proves the
+  audit fails and names it.
+- A live recheck of the published release pages confirms those four are the
+  only incomplete releases at or above the 3.4.0 audit floor, and that each
+  allow-list matches its release asset for asset.
+- `test-release.sh` is now 27 checks, 11 of them audit cases.
+
 ## 3.84.4
 
 ### Fixed
