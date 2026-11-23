@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.84.4
+
+### Fixed
+
+Release Audit no longer fails forever on four historical releases it cannot
+repair, while still catching any new gap.
+
+- `audit-releases.sh` exempts only v3.74.1, v3.74.2, v3.75.9 and v3.83.0, and
+  only for the exact contract assets each one actually lacks (19 names total:
+  4 for v3.83.0, and 5 each for v3.75.9, v3.74.2 and v3.74.1).
+- `verify-release.sh` accepts `ALLOWED_MISSING_ASSETS`, subtracts those names
+  from its missing set, still treats a present-but-empty asset as broken, and
+  refuses an allow-list entry the 11-asset contract does not name.
+- Every other release, and any additional gap in the four exempt releases,
+  still fails the audit. `test-release.sh` now proves all three outcomes
+  offline: the exempt release passes, one extra gap fails, and the same gap on
+  an unknown release fails.
+
 ## 3.84.3
 
 ### Changed

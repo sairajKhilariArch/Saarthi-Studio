@@ -13,6 +13,10 @@
 # Usage: GH_TOKEN=... scripts/ci/verify-release.sh <tag> [version]
 #   GH_REPOSITORY   owner/repo (default: sairajKhilariArch/Saarthi-Studio)
 #   GH_API_URL      API base for a local/fixture server
+#   ALLOWED_MISSING_ASSETS
+#                   newline-separated contract names this release may lack.
+#                   Only audit-releases.sh sets this, and only for a published
+#                   historical release whose release page cannot be rebuilt.
 #
 # Needs: curl and python3 (or python).
 
@@ -63,6 +67,7 @@ curl -fsS --max-time 30 --retry 3 --retry-delay 2 \
 
 "$py" - "$json" "$tag" "$assets" <<'PY'
 import json
+import os
 import sys
 
 path, tag, assets_path = sys.argv[1:4]
@@ -76,11 +81,35 @@ if release.get("draft"):
 with open(assets_path, encoding="utf-8") as handle:
     expected = {line.strip() for line in handle if line.strip()}
 
+allowed_missing = {
+    line.strip()
+    for line in os.environ.get("ALLOWED_MISSING_ASSETS", "").splitlines()
+    if line.strip()
+}
+unknown_allowed = sorted(allowed_missing - expected)
+if unknown_allowed:
+    print(
+        f"ERROR: ALLOWED_MISSING_ASSETS names {len(unknown_allowed)} asset(s) "
+        "the release contract does not promise:",
+        file=sys.stderr,
+    )
+    for name in unknown_allowed:
+        print(f"  {name}", file=sys.stderr)
+    sys.exit(1)
+
 assets = release.get("assets") or []
 sizes = {str(a.get("name")): int(a.get("size") or 0) for a in assets}
-missing = sorted(expected - set(sizes))
-empty = sorted(name for name in expected if sizes.get(name, 0) <= 0)
+present = set(sizes)
+missing = sorted(expected - present - allowed_missing)
+# An allowed absence is not an empty asset; an allowed asset that is present
+# but zero bytes is still broken and fails below.
+empty = sorted(name for name in expected if name in present and sizes[name] <= 0)
 
+if allowed_missing:
+    print(
+        f"note: release {tag} is a known-incomplete historical release; "
+        f"{len(allowed_missing)} asset(s) may be absent"
+    )
 if missing:
     print(f"ERROR: release {tag} is missing {len(missing)} expected asset(s):", file=sys.stderr)
     for name in missing:

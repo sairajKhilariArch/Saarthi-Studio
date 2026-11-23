@@ -42,25 +42,43 @@ list_file="$list_dir/index.html"
 assets_list="$tmp/assets-9.9.9.txt"
 bash "$here/release-assets.sh" 9.9.9 >"$assets_list"
 
-write_release() { # missing asset name (empty for complete)
-  "$py" - "$release_file" "$1" "$assets_list" <<'PY'
+write_release_for() { # path, assets file, then the names to leave out
+  "$py" - "$@" <<'PY'
 import json
 import sys
 
-path, missing, assets_path = sys.argv[1:4]
+path, assets_path, *missing = sys.argv[1:]
 with open(assets_path, encoding="utf-8") as handle:
     names = [line.strip() for line in handle if line.strip()]
-assets = [{"name": name, "size": 1024} for name in names if name != missing]
+assets = [{"name": name, "size": 1024} for name in names if name not in missing]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({"draft": False, "assets": assets}, handle)
 PY
 }
 
-write_releases_index() {
+write_release() { # missing asset name (empty for complete)
+  write_release_for "$release_file" "$assets_list" "$@"
+}
+
+write_audit_index() { # tag...
   # http.server serves index.html for the directory URL, and the audit's curl
   # follows the directory redirect. The body is JSON; the content type is not
   # consulted.
-  printf '%s\n' '[{"tag_name":"v9.9.9","draft":false,"prerelease":false}]' >"$list_file"
+  "$py" - "$list_file" "$@" <<'PY'
+import json
+import sys
+
+path, *tags = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(
+        [{"tag_name": tag, "draft": False, "prerelease": False} for tag in tags],
+        handle,
+    )
+PY
+}
+
+write_releases_index() {
+  write_audit_index v9.9.9
 }
 
 port="$("$py" - <<'PY'
@@ -282,6 +300,58 @@ else
   grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-missing.out" ||
     die "audit failure did not name the missing asset"
   pass "audit rejects a release with a missing asset"
+fi
+
+# --- the four known-incomplete historical releases ---------------------------
+# These release pages predate the 11-asset contract and cannot be rebuilt. The
+# audit tolerates exactly the names each one lacks; a fifth release, or one more
+# gap in an exempt release, must still fail.
+known_version=3.83.0
+known_tag="v$known_version"
+known_release="$release_dir/$known_tag"
+known_assets="$tmp/assets-$known_version.txt"
+bash "$here/release-assets.sh" "$known_version" >"$known_assets"
+known_missing=(
+  "sarthi-studio_${known_version}_macos-universal.app.zip"
+  "sarthi-studio_${known_version}_macos-universal.tar.gz"
+  "sarthi-studio_${known_version}_windows-x86_64.msi"
+  "sarthi-studio_${known_version}_windows-x86_64.zip"
+)
+write_release_for "$known_release" "$known_assets" "${known_missing[@]}"
+write_audit_index "$known_tag"
+
+if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+  MIN_RELEASE_VERSION="$known_version" bash "$audit" >"$tmp/audit-known.out" 2>&1; then
+  grep -q 'known-incomplete historical release' "$tmp/audit-known.out" ||
+    die "audit did not report the historical exception"
+  pass "audit accepts the known-incomplete v3.83.0"
+else
+  cat "$tmp/audit-known.out" >&2
+  die "audit rejected the known-incomplete v3.83.0"
+fi
+
+# The same release with one more asset missing is a new gap, not history.
+write_release_for "$known_release" "$known_assets" \
+  "${known_missing[@]}" "free-ai-studio-vscode.vsix"
+if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+  MIN_RELEASE_VERSION="$known_version" bash "$audit" >"$tmp/audit-known-extra.out" 2>&1; then
+  die "audit accepted a new missing asset on an exempt historical release"
+else
+  grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-known-extra.out" ||
+    die "the new missing asset was not named"
+  pass "audit rejects a new gap on an exempt historical release"
+fi
+
+# The exemption is keyed by release, not by the asset pattern.
+write_release_for "$release_dir/v9.9.9" "$assets_list" "free-ai-studio-vscode.vsix"
+write_audit_index v9.9.9
+if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
+  MIN_RELEASE_VERSION=9.9.9 bash "$audit" >"$tmp/audit-unknown.out" 2>&1; then
+  die "audit applied the historical exemption to an unknown release"
+else
+  grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-unknown.out" ||
+    die "the unknown release's missing asset was not named"
+  pass "audit rejects the same gap on an unknown release"
 fi
 
 # --- the release contract -----------------------------------------------------

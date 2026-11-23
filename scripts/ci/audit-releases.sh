@@ -14,8 +14,10 @@
 #   GH_API_URL            API base for a fixture server
 #   MIN_RELEASE_VERSION   first version to audit (default: 3.4.0)
 #
-# The list request asks for the newest 100 releases, which is enough to cover
-# every release at or above the current audit floor.
+# Four releases published before the 11-asset contract existed are known to be
+# incomplete and cannot be repaired without republishing an immutable release
+# page. Each one is exempted by exact tag and exact asset name below; any other
+# release, and any additional gap in those four, still fails the audit.
 
 set -euo pipefail
 
@@ -42,6 +44,52 @@ elif command -v python >/dev/null 2>&1; then
 else
   die "python is required to read the release list"
 fi
+
+# Known-incomplete published releases: the exact contract assets each one may
+# lack. Keep this list exact, never a blanket "incomplete" flag: an asset not
+# named here must still make the audit fail, including on these four tags.
+known_missing_assets() {
+  case "$1" in
+    3.83.0)
+      cat <<'EOF'
+sarthi-studio_3.83.0_macos-universal.app.zip
+sarthi-studio_3.83.0_macos-universal.tar.gz
+sarthi-studio_3.83.0_windows-x86_64.msi
+sarthi-studio_3.83.0_windows-x86_64.zip
+EOF
+      ;;
+    3.75.9)
+      cat <<'EOF'
+free-ai-studio-vscode.vsix
+free-ai-studio_3.75.9-1_amd64.deb
+sarthi-studio_3.75.9_linux-x86_64.tar.gz
+sarthi-studio_3.75.9_x86_64.AppImage
+SHA256SUMS.txt
+EOF
+      ;;
+    3.74.2)
+      cat <<'EOF'
+free-ai-studio-android.aab
+free-ai-studio-android.apk
+free-ai-studio_3.74.2-1_amd64.deb
+sarthi-studio_3.74.2_windows-x86_64.msi
+sarthi-studio_3.74.2_windows-x86_64.zip
+EOF
+      ;;
+    3.74.1)
+      cat <<'EOF'
+free-ai-studio-android.aab
+free-ai-studio-android.apk
+free-ai-studio_3.74.1-1_amd64.deb
+sarthi-studio_3.74.1_windows-x86_64.msi
+sarthi-studio_3.74.1_windows-x86_64.zip
+EOF
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
 
 json="$(mktemp)"
 tags="$(mktemp)"
@@ -104,7 +152,12 @@ while IFS= read -r tag; do
   [ -n "$tag" ] || continue
   version="${tag#v}"
   printf 'release audit: checking %s\n' "$tag"
-  if ! bash "$here/verify-release.sh" "$tag" "$version"; then
+  allowed_missing="$(known_missing_assets "$version")"
+  if [ -n "$allowed_missing" ]; then
+    printf 'release audit: %s is a known-incomplete historical release\n' "$tag"
+  fi
+  if ! ALLOWED_MISSING_ASSETS="$allowed_missing" \
+    bash "$here/verify-release.sh" "$tag" "$version"; then
     failed=1
   fi
 done <"$tags"
