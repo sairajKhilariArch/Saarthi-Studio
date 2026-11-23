@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.84.3
+
+### Changed
+
+- Ignore the local `.scratch/` issue workspace, so issue notes and the linked
+  worktrees used while fixing them no longer show up as untracked files.
+
 ## 3.84.1
 
 ### Fixed
