@@ -1,6 +1,7 @@
 ---
   import DocLayout from '../../../components/DocLayout.astro';
   import { withBase } from '../../../lib/url';
+  import { EXECUTABLE_NAME } from '../../../lib/releases';
 ---
 
 <DocLayout
@@ -17,7 +18,7 @@
 
   <h2>Repository layout</h2>
   <ul>
-    <li><code>app/</code> — the Rust server and desktop binary (crate/binary <code>SAARTHI-STUDIO</code>).</li>
+    <li><code>app/</code> — the Rust server and desktop binary (crate/binary <code>{EXECUTABLE_NAME}</code>).</li>
     <li><code>app/static/</code> — the app's UI: <code>index.html</code>, <code>app.js</code>, <code>styles.css</code>. No build step.</li>
     <li><code>docs/</code> — engineering documentation: architecture, feature status, testing, design system.</li>
     <li><code>android/</code> — React Native companion client and native emitters.</li>

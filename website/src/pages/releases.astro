@@ -27,7 +27,7 @@
         <span class="release-meta">
           Published {LATEST_RELEASE.date}
           {' · '}
-          {ASSETS.linuxTar.name ? TOTAL_ASSETS : 'no build assets'}
+          {TOTAL_ASSETS} assets
         </span>
         <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
           Release notes ↗
@@ -38,8 +38,9 @@
         <span class="release-card-tag">{LATEST_RELEASE.tag}</span>
         <span class="release-card-date">Published {LATEST_RELEASE.date}</span>
         <p class="release-card-body">
-          Latest stable release, with build assets for every platform. The
-          full release history, including versions with no build assets, is
+          Latest stable release, with the assets attached to that release.
+          A platform the release did not build shows “—” below; the full
+          release history, including versions with no build assets, is
           available on
           <a href={SITE.releases} target="_blank" rel="noopener noreferrer">
             GitHub Releases

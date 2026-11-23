@@ -3,7 +3,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHero from '../../components/PageHero.astro';
 import Card from '../../components/Card.astro';
 import Icon from '../../components/Icon.astro';
-import { LATEST_RELEASE, ASSETS } from '../../lib/releases';
+import { LATEST_RELEASE, ASSETS, TOTAL_ASSETS } from '../../lib/releases';
 import { SITE } from '../../lib/site';
 import { withBase } from '../../lib/url';
 
@@ -56,7 +56,7 @@ const platforms = [
     <div class="container">
       <div class="release-banner">
         <strong>Latest release: {LATEST_RELEASE.tag}</strong>
-        <span class="release-meta">Published {LATEST_RELEASE.date} · 11 assets · all platforms</span>
+        <span class="release-meta">Published {LATEST_RELEASE.date} · {TOTAL_ASSETS} assets</span>
         <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">
           Release notes ↗
         </a>

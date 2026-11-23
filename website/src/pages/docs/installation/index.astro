@@ -2,6 +2,7 @@
   import DocLayout from '../../../components/DocLayout.astro';
   import Icon from '../../../components/Icon.astro';
   import { withBase } from '../../../lib/url';
+  import { EXECUTABLE_NAME } from '../../../lib/releases';
 ---
 
 <DocLayout
@@ -62,7 +63,7 @@
   <h2>Installing on several machines</h2>
   <p>
     The same release can be installed on every machine you use. Linux users
-    may prefer the Debian package (menu entry plus <code>SAARTHI-STUDIO</code>
+    may prefer the Debian package (menu entry plus <code>{EXECUTABLE_NAME}</code>
     command); AppImage and tarballs are portable and need nothing else. On
     Windows, the MSI is per-user; the portable zip needs no installer at all.
     On macOS, the universal build runs on Apple Silicon and Intel, and first
@@ -74,6 +75,6 @@
     Once installed, the workflow is the same everywhere: start the local
     service, connect a model (router or local), open a project, and run an
     agent. The UI is identical in the native window, a browser tab
-    (<code>SAARTHI-STUDIO --browser</code>), and the VS Code extension.
+    (<code>{EXECUTABLE_NAME} --browser</code>), and the VS Code extension.
   </p>
 </DocLayout>

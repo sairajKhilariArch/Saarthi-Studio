@@ -2,12 +2,12 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHero from '../../components/PageHero.astro';
 import Icon from '../../components/Icon.astro';
-import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { ASSETS, LATEST_RELEASE, EXECUTABLE_NAME, formatBytes } from '../../lib/releases';
 import { withBase } from '../../lib/url';
 
 const assets = [
   { asset: ASSETS.macApp, note: 'The .app bundle, zipped — drag to Applications.' },
-  { asset: ASSETS.macTar, note: 'Command-line tarball — extract and run ./SAARTHI-STUDIO.' },
+  { asset: ASSETS.macTar, note: `Command-line tarball — extract and run ./${EXECUTABLE_NAME}.` },
 ];
 
 const others = [
@@ -39,7 +39,7 @@ const others = [
 
       <div class="asset-list">
         {
-          assets.map(({ asset, note }) => (
+          assets.filter(({ asset }) => asset.name).map(({ asset, note }) => (
             <div class="asset-row">
               <div class="asset-info">
                 <span class="asset-name">{asset.name}</span>
@@ -55,13 +55,28 @@ const others = [
         }
       </div>
 
+      {!assets.some(({ asset }) => asset.name) && (
+        <div class="note-card">
+          <Icon name="laptop" size={18} />
+          <div>
+            <strong>No macOS build is attached to {LATEST_RELEASE.tag}.</strong>{' '}
+            The <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">release page</a>{' '}
+            lists what this release did publish. The
+            <a href={withBase('/download/linux/')}>Linux build</a> and the
+            <a href={withBase('/download/vscode/')}>VS Code extension</a> are
+            available now.
+          </div>
+        </div>
+      )}
+
+      {(ASSETS.macApp.name || ASSETS.macTar.name) && (<>
       <h2 class="docs-hub-label">Install</h2>
       <ol class="install-steps">
         <li>
           <h3>App bundle</h3>
           <p>
-            Unzip <code>SAARTHI-STUDIO_{LATEST_RELEASE.version}_macos-universal.app.zip</code>
-            and drag <strong>Sarthi Studio.app</strong> into <code>/Applications</code>.
+            Unzip <code>{ASSETS.macApp.name}</code> and drag
+            <strong>Sarthi Studio.app</strong> into <code>/Applications</code>.
           </p>
         </li>
         <li>
@@ -75,10 +90,10 @@ const others = [
         <li>
           <h3>Tarball alternative</h3>
           <p>
-            Extract and run <code>./SAARTHI-STUDIO</code> from a terminal.
+            Extract and run <code>./{EXECUTABLE_NAME}</code> from a terminal.
             The same right-click → Open rule applies to the binary, or clear
             the quarantine attribute with
-            <code>xattr -d com.apple.quarantine ./SAARTHI-STUDIO</code>.
+            <code>xattr -d com.apple.quarantine ./{EXECUTABLE_NAME}</code>.
           </p>
         </li>
       </ol>
@@ -92,6 +107,7 @@ const others = [
           before opening. Signing and notarization are on the roadmap.
         </div>
       </div>
+      </>)}
 
       <nav class="platform-nav" aria-label="Other platforms">
         <a href={withBase('/download/')}>All platforms</a>

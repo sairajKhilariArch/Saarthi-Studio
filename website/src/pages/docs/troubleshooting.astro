@@ -1,6 +1,7 @@
 ---
 import DocLayout from '../../components/DocLayout.astro';
 import { withBase } from '../../lib/url';
+import { EXECUTABLE_NAME } from '../../lib/releases';
 ---
 
 <DocLayout
@@ -37,7 +38,7 @@ import { withBase } from '../../lib/url';
     The native window needs WebKitGTK 4.1. Install your distribution's
     package (<code>libwebkit2gtk-4.1-0</code> on Debian/Ubuntu,
     <code>webkit2gtk4.1</code> on Arch), or run
-    <code>SAARTHI-STUDIO --browser</code> to use the identical UI in your
+    <code>{EXECUTABLE_NAME} --browser</code> to use the identical UI in your
     browser while you sort the dependency out.
   </p>
 
@@ -45,7 +46,7 @@ import { withBase } from '../../lib/url';
   <p>
     Another Studio instance (or another service) holds the port. Close
     the other instance, or choose a different port:
-    <code>SAARTHI_STUDIO_PORT=9000 SAARTHI-STUDIO</code>.
+    <code>SAARTHI_STUDIO_PORT=9000 {EXECUTABLE_NAME}</code>.
   </p>
 
   <h2>No diagnostics in the Problems panel</h2>

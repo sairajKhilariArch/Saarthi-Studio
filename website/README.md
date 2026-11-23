@@ -53,8 +53,11 @@ custom domain is added, set `SITE_BASE=/` and add the domain in Pages settings.
 - Do not invent a feature, endpoint, install command, asset, screenshot, or
   platform. Every public status has a source path or release asset behind it.
 - Screenshots must come from the running product. Do not create mock UI images.
-- Release data will be generated into `data/releases.json` by the sync script;
-  browsers must never call the GitHub API with a token.
+- Download data is a hand-checked snapshot in `src/lib/releases.ts`, pinned to
+  one published tag: every name and URL must exist on that release, and a
+  platform the release did not build stays empty so its page can say so
+  (v3.83.0 has no Windows or macOS assets). Browsers must never call the GitHub
+  API with a token.
 - Keep the canonical brand colours: orange `#FF7A1A`, black `#111111`, white
   `#FFFFFF`. There is no purple in the brand assets.
 

@@ -1,5 +1,6 @@
 ---
 import DocLayout from '../../components/DocLayout.astro';
+import { EXECUTABLE_NAME } from '../../lib/releases';
 ---
 
 <DocLayout
@@ -40,7 +41,7 @@ import DocLayout from '../../components/DocLayout.astro';
     The Host API is <strong>disabled by default</strong>. Enabling it
     requires TLS (cert and key) and a bind address you choose, and the
     phone pairs with a token you create explicitly
-    (<code>SAARTHI-STUDIO host-token create</code>). Reach the desktop
+    (<code>{EXECUTABLE_NAME} host-token create</code>). Reach the desktop
     from another device through an SSH tunnel rather than exposing a
     port. The security model is documented in the repository's
     PLATFORM-ARCHITECTURE.md.

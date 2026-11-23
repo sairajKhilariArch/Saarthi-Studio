@@ -1,6 +1,7 @@
 ---
   import DocLayout from '../../../components/DocLayout.astro';
   import { withBase } from '../../../lib/url';
+  import { EXECUTABLE_NAME } from '../../../lib/releases';
 ---
 
 <DocLayout
@@ -42,7 +43,7 @@
   <p>
     A few settings can be set with environment variables. For example, to
     run on a different port:
-    <code>SAARTHI_STUDIO_PORT=9000 SAARTHI-STUDIO</code>. See the
+    <code>SAARTHI_STUDIO_PORT=9000 {EXECUTABLE_NAME}</code>. See the
     configuration section in the repository's README and the
     <a href={withBase('/docs/getting-started/')}>Getting started</a>
     page for the exact variables.

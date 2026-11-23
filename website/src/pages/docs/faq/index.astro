@@ -1,6 +1,7 @@
 ---
   import DocLayout from '../../../components/DocLayout.astro';
 import { withBase } from '../../../lib/url';
+import { EXECUTABLE_NAME } from '../../../lib/releases';
 ---
 
 <DocLayout
@@ -20,7 +21,7 @@ import { withBase } from '../../../lib/url';
   </p>
   <h3>Do I need the native window?</h3>
   <p>
-    No. Run <code>SAARTHI-STUDIO --browser</code> to use the identical UI in
+    No. Run <code>{EXECUTABLE_NAME} --browser</code> to use the identical UI in
     any modern browser, or <code>--no-gui</code> for a headless server.
   </p>
   <h3>How do I verify a download?</h3>

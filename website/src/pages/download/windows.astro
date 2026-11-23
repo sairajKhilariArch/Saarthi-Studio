@@ -2,12 +2,12 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHero from '../../components/PageHero.astro';
 import Icon from '../../components/Icon.astro';
-import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { ASSETS, LATEST_RELEASE, EXECUTABLE_NAME, formatBytes } from '../../lib/releases';
 import { withBase } from '../../lib/url';
 
 const assets = [
   { asset: ASSETS.windowsMsi, note: 'Per-user MSI installer — no administrator rights needed.' },
-  { asset: ASSETS.windowsZip, note: 'Portable zip — extract anywhere and run SAARTHI-STUDIO.exe.' },
+  { asset: ASSETS.windowsZip, note: `Portable zip — extract anywhere and run ${EXECUTABLE_NAME}.exe.` },
 ];
 
 const others = [
@@ -39,7 +39,7 @@ const others = [
 
       <div class="asset-list">
         {
-          assets.map(({ asset, note }) => (
+          assets.filter(({ asset }) => asset.name).map(({ asset, note }) => (
             <div class="asset-row">
               <div class="asset-info">
                 <span class="asset-name">{asset.name}</span>
@@ -55,24 +55,43 @@ const others = [
         }
       </div>
 
+      {!assets.some(({ asset }) => asset.name) && (
+        <div class="note-card">
+          <Icon name="monitor" size={18} />
+          <div>
+            <strong>No Windows build is attached to {LATEST_RELEASE.tag}.</strong>{' '}
+            The <a href={LATEST_RELEASE.url} target="_blank" rel="noopener noreferrer">release page</a>{' '}
+            lists what this release did publish. The
+            <a href={withBase('/download/linux/')}>Linux build</a> and the
+            <a href={withBase('/download/vscode/')}>VS Code extension</a> are
+            available now.
+          </div>
+        </div>
+      )}
+
+      {(ASSETS.windowsMsi.name || ASSETS.windowsZip.name) && (<>
       <h2 class="docs-hub-label">Install</h2>
       <ol class="install-steps">
-        <li>
-          <h3>MSI installer</h3>
-          <p>
-            Double-click the MSI and follow the prompts. It installs for your
-            user account only, adds a Start-menu entry, and registers
-            <code>SAARTHI-STUDIO.exe</code> on your PATH.
-          </p>
-        </li>
-        <li>
-          <h3>Portable zip</h3>
-          <p>
-            Extract the zip to a folder you own (for example
-            <code>%LOCALAPPDATA%\SarthiStudio</code>) and run
-            <code>SAARTHI-STUDIO.exe</code>. No registry changes, no installer.
-          </p>
-        </li>
+        {ASSETS.windowsMsi.name && (
+          <li>
+            <h3>MSI installer</h3>
+            <p>
+              Double-click the MSI and follow the prompts. It installs for your
+              user account only, adds a Start-menu entry, and registers
+              <code>{EXECUTABLE_NAME}.exe</code> on your PATH.
+            </p>
+          </li>
+        )}
+        {ASSETS.windowsZip.name && (
+          <li>
+            <h3>Portable zip</h3>
+            <p>
+              Extract the zip to a folder you own (for example
+              <code>%LOCALAPPDATA%\SarthiStudio</code>) and run
+              <code>{EXECUTABLE_NAME}.exe</code>. No registry changes, no installer.
+            </p>
+          </li>
+        )}
         <li>
           <h3>First launch</h3>
           <p>
@@ -91,9 +110,10 @@ const others = [
           code-signed. When Windows shows “Windows protected your PC”, choose
           <strong>More info → Run anyway</strong> — after verifying the file's
           SHA-256 against <code>SHA256SUMS.txt</code> with
-          <code>Get-FileHash .\SAARTHI-STUDIO_{LATEST_RELEASE.version}_windows-x86_64.msi</code>.
+          <code>Get-FileHash .\{ASSETS.windowsMsi.name || ASSETS.windowsZip.name}</code>.
         </div>
       </div>
+      </>)}
 
       <nav class="platform-nav" aria-label="Other platforms">
         <a href={withBase('/download/')}>All platforms</a>
