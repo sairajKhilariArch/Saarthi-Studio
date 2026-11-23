@@ -5,6 +5,31 @@ criteria in `docs/IMPLEMENTATION-SPECIFICATION.md` are demonstrated end to end.
 Current status of each area is in `docs/FEATURE-STATUS.md`; the per-version
 record of what shipped is `CHANGELOG.md`.
 
+## Stabilization v1 — fix before adding
+
+The 3.84.5 cycle stops feature work until the mandatory gates and their evidence
+agree with the tree:
+
+- **Green mandatory checks.** Desktop CI (Linux, Windows, macOS), Host API,
+  Website Deploy and Release Audit must pass. On `c7a5b9d`, Desktop
+  `45223311666`, Host API `45223311755` and Website Deploy `45223311700` are
+  green; Android has no run for a docs-only `main` push, and PR #3's old tip is
+  still red.
+- **Verification matches the claim.** A feature is not "Working" because its
+  route exists; it needs the test, platform run or real peer named beside it.
+  Mock-only evidence stays Partial and says so.
+- **Platform claims are observed.** A Linux pass does not stand in for Windows,
+  macOS or Android. The filewatch fix is now green on all three desktop CI jobs;
+  Android instrumentation is not.
+- **Docs move with the code.** `FEATURE-STATUS.md`, `KNOWN-ISSUES.md` and this
+  roadmap are part of the change, not a later cleanup.
+- **No version race.** A stable patch release is worth more than a higher
+  number; new feature work waits for the checklist above.
+
+Stabilization v1 is complete when a tagged release attaches all 11 assets and
+its install smokes pass, Android's release gate is green, and the status docs
+name every remaining gap without a stale version header.
+
 ## Dependency order
 
 ```
@@ -28,13 +53,14 @@ Phase 15 Extension ecosystem                (needs 10 + 15 manifest)
 Phase 18 Installers + updates               (needs verified builds everywhere)
 ```
 
-## Remaining work at 3.50.0
+## Remaining work at 3.84.5
 
-This is the ordered backlog for the 3.84.0 tree. It supersedes older
+This is the ordered backlog for the 3.84.5 tree. It supersedes older
 "remaining" notes inside individual phase logs; the evidence tables are in
 `docs/FEATURE-STATUS.md`, and the defect ledger is `docs/KNOWN-ISSUES.md`.
-Re-checked at 3.50.0: the Phase 5, 9, 12, 13, 14, 15 and 18 entries were verified
-against the tree, and the Phase 15 log's stale dependency note was corrected.
+Re-checked at 3.84.5 against the green `c7a5b9d` CI and the current sources; the
+Phase 4, 15 and 16 entries, the release-audit exception and the Android gate
+state were corrected in that pass.
 
 ### Phase 1 — release reliability (blocker)
 

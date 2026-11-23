@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.73.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.84.5
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -17,6 +17,23 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
 
+**Revision 3.84.5 (2026-11-23):** Stabilization pass. The mandatory
+`main`-branch gates are green on `c7a5b9d`: Desktop CI run `45223311666` passed
+Linux, Windows and macOS (700 Rust tests, clippy, fmt, frontend and the
+end-to-end smoke), the Host API run `45223311755` passed, and Website Deploy
+run `45223311700` built and published the site. Android CI does not run for a
+`main` push that does not touch `android/**`; the open PR's old tip (`2f6dc97`)
+still fails its release gate, and the local boot-wait/diagnostics fix is not
+pushed. Release Audit now exempts exactly four historical releases and was
+checked against every published release at or above 3.4.0: only v3.74.1,
+v3.74.2, v3.75.9 and v3.83.0 are incomplete, and each gap matches its
+allow-list asset for asset (3.84.4–3.84.5). The filewatch tests pass on all
+three CI platforms since the canonical-root fix (3.84.1), closing the
+macOS/Windows observation in #47. Provider adapters (3.71.0), UI extensions
+(3.70.0), the debugger (3.55.0), workflow notices (3.82.0), named providers
+(3.79.0) and the extension network/terminal host functions (3.84.0) are
+shipped; the 3.84.0 sandbox change's Rust assertions were not run locally when
+it landed, but the green Desktop CI above ran them.
 **Revision 3.71.0 (2026-11-19):** Phase 15's last missing row closes: a manifest
 declares `providers` (≤8), validated at parse time (https off-machine, http only
 for loopback, no credentials in the URL) and served by
@@ -543,7 +560,7 @@ passed, 1 ignored and clippy is clean; the phase states below are otherwise
 unchanged, and the old percentage arithmetic stays retired.
 
 **Revision 3.8.0 (2026-11-11):** documentation correction. The ordered backlog
-now lives in `MASTER-ROADMAP.md` under "Remaining work at 3.8.0"; this report
+now lives in `MASTER-ROADMAP.md` under "Remaining work at 3.84.5" (the heading then read 3.8.0); this report
 replaces the stale 2.1.0 percentage table with a qualitative phase state and
 calls out the work that has shipped since it was written (MSI, macOS `.app`,
 portable uninstall, free-position canvas and extension tools). No code or test
@@ -914,7 +931,7 @@ Backend in 1.29.0, composer and settings in 1.30.0.
 | Structured output for agent steps | Working (3.12.0) — `text.format` `json_schema` on a platform pick, one retry without it and the refusal remembered; router and local calls unchanged |
 | Native tool calling (`tools` / `function_call`) | Working (3.13.0) — seven core functions plus `mcp_call`/`extension_call` when the prompt advertised them, `tool_choice: "auto"`, each call translated into the same action object the text protocol uses |
 | Tests | Working — 21 new cases, 204 total; live smoke on :8799 for the new routes |
-| Tool calling / structured output through the platform path | Missing — the request shape allows it, no agent tool loop uses `openai:` yet |
+| Native structured output and tool calls on the platform path | Working (3.12.0/3.13.0) — a platform step sends `text.format` json_schema, and native calls are translated into the same action object the text protocol uses; see KNOWN-ISSUES #40 and #41 |
 
 ## Phase 5 — Agent execution engine
 
@@ -1085,7 +1102,7 @@ Manifests are discovered and validated as of 2.15.0, listed in Settings as of
 wasmi sandbox (ADR 0001). Since 2.21.0 that sandbox provides workspace
 read/write host functions, scoped to the open folder and checked per call
 against saved rules, and since 2.22.0 a per-extension data folder through
-data_read/data_write; network, terminal and MCP capabilities remain unprovided.
+data_read/data_write; network and terminal host functions arrived in 3.84.0, while MCP remains unprovided.
 Since 2.25.0 a manifest also declares the builds it works on and the extensions
 it needs, and both are enforced rather than displayed.
 
@@ -1094,7 +1111,7 @@ it needs, and both are enforced rather than displayed.
 | Manifest (id, name, version, description, author, entry, permissions) | Working (2.15.0) | `GET /api/extensions` scans `<data>/extensions/*/manifest.json`; the id must equal the folder, the version must be `1.2.3`, `entry` must stay inside the folder and exist, and permissions are a closed list |
 | Management UI | Working (2.16.0) | Settings → Extensions shows the directory, each folder's validity, description or error, and a Refresh action |
 | Install / uninstall | Working (2.17.0) | install copies a folder through staging with validation and rollback, symlink refusal and a 500-file/16 MiB cap; uninstall moves the folder to `.removed/` after a canonical containment check |
-| Execution and sandboxing | Working, workspace + own data (2.22.0) | ADR 0001: no in-process execution. `app/src/extension_run.rs` runs a module in a wasmi 0.31.2 interpreter with no WASI: `run() -> i32`, 50,000,000 fuel, 64 MiB memory, 100,000 table elements, 8 MiB module cap. The whole host surface is `env.read`/`env.write` (open folder), `env.data_read`/`env.data_write` (`<extensions>/<id>/data`) and `env.last_error`, linked only when the manifest declares `workspace.read`/`workspace.write`. Paths use `workspace::resolve_inside` and writes `write_text_file`; saved rules apply per call (`ask` refuses because nothing can answer) and every call is audited. No network, terminal, MCP or config access exists |
+| Execution and sandboxing | Working, workspace + own data (2.22.0) | ADR 0001: no in-process execution. `app/src/extension_run.rs` runs a module in a wasmi 0.31.2 interpreter with no WASI: `run() -> i32`, 50,000,000 fuel, 64 MiB memory, 100,000 table elements, 8 MiB module cap. The whole host surface is `env.read`/`env.write` (open folder), `env.data_read`/`env.data_write` (`<extensions>/<id>/data`) and `env.last_error`, linked only when the manifest declares `workspace.read`/`workspace.write`. Paths use `workspace::resolve_inside` and writes `write_text_file`; saved rules apply per call (`ask` refuses because nothing can answer) and every call is audited. Since 3.84.0 `env.fetch` and `env.command` are linked only when the manifest declares `network`/`terminal.run`; each call also needs a saved allow rule, with redirects disabled, a 15 s/64 KiB network cap and a 10 s/limited-output command cap. MCP and config access remain unavailable |
 | Runtime gating | Working (2.19.0, host functions 2.21.0) | `runtime: "wasm"` requires a `.wasm` entry; discovery exposes `runnable`/`blockedReason`; `POST /api/extensions/:id/run` refuses a capability with no host function behind it and otherwise runs the module, answering `{exitCode, fuelUsed, elapsedMs, hostCalls}` |
 | Run control | Working (2.23.0) | One run per extension (409 while one is open); `POST /api/extensions/:id/cancel` stops it at the next host call (a pure-compute loop still ends at the fuel limit); a 5-second wall-clock budget is checked at each host boundary; uninstall cancels first; Settings shows `Running…` and `Cancel` |
 | Run history | Working (2.24.0) | `extension_runs` records extension, project, start, duration, exit code, fuel, host calls and error for every run that reached the sandbox, including loader failures and cancellations; `GET /api/extension-runs` returns the newest 50 and Settings lists them |
@@ -1107,9 +1124,9 @@ it needs, and both are enforced rather than displayed.
 
 | Layer | Status | Notes |
 |---|---|---|
-| Rust unit/integration | Working | 483 passed, 1 ignored at the 2.24.0 run; the count for each release is recorded in `CHANGELOG.md` |
+| Rust unit/integration | Working | 700 passed, 0 failed, 1 ignored at the 3.84.1 run; Desktop CI run `45223311666` reran the suite on Linux, Windows and macOS for 3.84.5 |
 | VS Code extension | Working | `node --test` suites |
-| Android | Working | JVM + emulator instrumentation + validation gate |
+| Android | Partial (3.84.2 local) | JVM, build and lint pass; the emulator instrumentation's release gate is red on PR #3's old tip (`2f6dc97`). The boot-wait and diagnostics fix is committed locally but not pushed, so it has not run in CI |
 | Release-pipeline regressions | Working | `scripts/ci/test-version.sh` |
 | Frontend | Working (2.33.0) | `scripts/ci/test-frontend.sh` → `node --test app/static/tests/*.test.js`: the real `app.js` is evaluated in a `node:vm` context with a stub DOM, and 21 cases cover escaping, the markdown subset (including a `javascript:` link staying text), byte and time formatting, path keys, the icon fallback, the workflow graph helpers (layout by dependency depth, add/rename/delete with edge rewriting, per-edge conditions), and a render smoke (2.33.0) that runs `renderWorkflowCanvas` (a card per node, an edge per dependency, an empty-graph note) and evaluates `ide.js` on top of `app.js` (chrome built, `api` wrapped, workbench inside the main pane). Wired into `desktop-ci.yml`. Still not a layout or pixel check — that needs a browser |
 | End-to-end (launch → chat → agent → restart) | Working (2.8.0) | `scripts/ci/test-e2e.sh` launches the real binary against a scratch `FREE_AI_STUDIO_HOME`, boots the mock provider, runs a chat turn and reads the two stored messages, checks the process log and readiness, opens a workspace folder, starts an agent run that parks at its write approval gate, approves it, sees the write on disk and the `write, verify, done` step log, then kills the process and re-reads both the conversation and the run with its steps from the database; and finishes with two failure cases — a killed provider (the run must fail with a recorded error while readiness keeps answering) and a process killed while a run has a recorded step and its next call in flight (the restarted app must report `interrupted` with a readable log); 28 checks |
@@ -1150,31 +1167,37 @@ table and no second log pipeline, so it cannot disagree with the panels:
 | Replace the installed binary | Working | 2.39.0: copies the prepared binary beside the target, hash-checks the copy, keeps `<name>.old-<version>` and restores it if the new one cannot take its place; a restart runs it, and 2.40.0 removes the leftover backup at the next start |
 | Installer and uninstaller | Working (2.43.0 / 2.44.0) | per-user WiX MSI with Start Menu shortcut and major-upgrade code; `GET /api/uninstall/preview` + `POST /api/uninstall` remove the trees an uninstall owns unless kept, with the About card driving it |
 
-## Remaining work at 3.8.0
+## Remaining work at 3.84.5
 
-The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In brief:
+The ordered backlog lives in `MASTER-ROADMAP.md` under the same heading. In
+brief, with the 3.84.5 tree and the observed `c7a5b9d` CI:
 
-1. **Phase 1 — release reliability.** Get a green tagged run with the 11-asset
-   set, confirm the deb headless tests, pass the existing install smokes, add
-   and decide the historical tags. This is the only release
-   blocker.
+1. **Phase 1 — release reliability.** The release audit now passes against the
+   four documented historical gaps; what remains is a tagged run that attaches
+   all 11 assets and passes the install smokes. The newest published release,
+   v3.83.0, lacks the macOS and Windows assets; those pages are immutable, so
+   the audit exception is the honest record rather than a repair.
 2. **Phase 4 — OpenAI Platform.** Complete in the tree since 3.13.0 (structured
    output, then native tool calling); only a live platform call is unverified.
-3. **Phase 14 — cross-platform.** Android router management/local execution,
-   VS Code parity, and capability negotiation instead of hand-wired gates.
-4. **Phase 15 — extensions.** Provider adapters and UI extensions    (dependency cycles, dependency compatibility and the post-upgrade re-judge
-   shipped in 3.9.0/3.14.0).
+3. **Phase 14 — cross-platform.** Android router management/local execution and
+   VS Code parity remain; capability negotiation shipped in 3.22.0. The Android
+   release gate is red on the old PR tip, and the diagnostic fix is not pushed.
+4. **Phase 15 — extensions.** Provider adapters (3.71.0), UI extensions
+   (3.70.0) and the network/terminal host functions (3.84.0) have shipped.
+   Remaining: the MCP host function, which installs but is refused at run, and
+   real network/terminal peers beyond the test doubles.
 5. **Phase 18 — packaging.** Code signing/notarization, a macOS `.dmg`, and a
    per-machine MSI choice.
-6. **Smaller:** Phase 3 native OpenAI pricing/context, Phase 6 per-skill
-   permissions, Phase 8 local embeddings, Phase 13 automated canvas coverage and
-   child cancellation. Phase 9's editor engine/debugger/watch mode and Phase 3
-   pricing are product decisions, not missing routes. Phase 9's watch mode
-   shipped in 3.21.0; only its editor engine and debugger remain.
+6. **Smaller:** Phase 3's remaining native context limits, Phase 6 per-skill
+   permissions, Phase 13 automated browser/canvas coverage. Phase 9's watch
+   mode (3.21.0), debugger (3.55.0) and language-server diagnostics (3.49.0)
+   shipped; only its editor engine remains a product decision, and the one-shot
+   diagnostics session stays open (KNOWN-ISSUES #45).
 
-Already closed in substance: Phases 2, 5, 7, 10, 11, 12, 16 and 17; Phase 13's
-graph engine, canvas, scheduling and resume; Phase 18's installers, updater and
-portable uninstall.
+Already closed in substance: Phases 2, 5, 7, 10, 11, 12 and 17; Phase 13's
+graph engine, canvas, scheduling and resume; Phase 14's capability negotiation;
+Phase 15's manifests, sandbox, custom tools, provider adapters and UI
+extensions; Phase 18's installers, updater and portable uninstall.
 
 ## Identity and branding
 

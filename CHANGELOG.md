@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.84.6
+
+### Changed
+
+Stabilization documentation now matches the 3.84.5 tree instead of 3.73.0.
+
+- `FEATURE-STATUS.md` is revised through 3.84.5 and records the green `main`
+  CI: Desktop (Linux, Windows and macOS), Host API and Website Deploy. The
+  stale "Remaining work at 3.8.0" list is replaced, and Phase 4's platform tool
+  path, Phase 15's sandbox surface and Phase 16's test counts now describe what
+  shipped rather than what was missing.
+- The Android row is honest: a docs-only `main` push has no Android run, and the
+  open PR's old tip still fails the instrumentation release gate. The boot-wait
+  and diagnostics fix is local and has not been tested by CI.
+- `KNOWN-ISSUES.md` #47 and #27 record the observed green macOS and Windows CI,
+  and #18 records the live audit check: exactly four incomplete releases, all
+  exempted, with each gap matching its allow-list.
+- `MASTER-ROADMAP.md` gains the Stabilization v1 rule: no new feature work until
+  the mandatory checks are green, platform claims are observed, and the status
+  docs match the tree.
+
+Verified: `test-version.sh` 26/26, Linux metadata 9/9, release contract 11
+assets for 3.84.6, `cargo metadata --locked` clean, `git diff --check` clean.
+
 ## 3.84.5
 
 ### Changed
