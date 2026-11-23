@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.84.1
+
+### Fixed
+
+The two desktop CI gates that 3.84.0 left red.
+
+- The AppStream metainfo lists the release again. 3.84.0 bumped
+  `app/Cargo.toml` without adding its `<release>` entry, so the Linux job's
+  `test-linux-metadata.sh` failed on the version mismatch.
+- The filewatch tests open and compare the folder the way the app does, through
+  `fs::canonicalize`. `WorkspaceStore::open` stores a canonical root (macOS
+  `/var` → `/private/var`, Windows `C:\…` → `\\?\C:\…`), while the tests used
+  the raw temporary path, so `flush` dropped every batch and the live-watcher
+  case timed out on macOS and Windows. Linux passed only because `/tmp`
+  canonicalizes to itself.
+
+Verified: `cargo test --locked` 700 passed, 0 failed, 1 ignored; clippy
+`--all-targets -D warnings` and `cargo fmt --check` clean; the Linux metadata
+gate 9/9; the filewatch suite also runs under a symlinked `TMPDIR` that
+reproduces the macOS alias.
+
 ## 3.83.0
 
 ### Changed

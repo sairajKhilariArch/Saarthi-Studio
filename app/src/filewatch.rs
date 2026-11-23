@@ -260,7 +260,11 @@ mod tests {
     #[test]
     fn a_flush_indexes_a_source_file_and_never_a_build_folder() {
         let state = fixture("flush");
-        let root = std::path::PathBuf::from(state.database_path.parent().unwrap());
+        // The store canonicalizes what it opens (macOS /var is a symlink to
+        // /private/var, Windows canonical paths carry a verbatim prefix), and
+        // the watcher is handed that canonical root. Compare like the app does.
+        let root = std::fs::canonicalize(state.database_path.parent().unwrap())
+            .expect("canonical fixture root");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("target/debug")).unwrap();
         std::fs::write(root.join("src/main.rs"), "pub fn hello() -> u32 { 42 }\n").unwrap();
@@ -292,7 +296,8 @@ mod tests {
     #[test]
     fn a_flush_records_an_outside_change_for_the_run_conflict_ledger() {
         let state = fixture("outside-mark");
-        let root = std::path::PathBuf::from(state.database_path.parent().unwrap());
+        let root = std::fs::canonicalize(state.database_path.parent().unwrap())
+            .expect("canonical fixture root");
         std::fs::create_dir_all(root.join("src")).unwrap();
         let file = root.join("src/lib.rs");
         std::fs::write(&file, "pub fn v1() {}\n").unwrap();
@@ -317,7 +322,8 @@ mod tests {
     #[test]
     fn a_batch_for_a_folder_that_is_no_longer_open_is_dropped() {
         let state = fixture("stale");
-        let open_root = std::path::PathBuf::from(state.database_path.parent().unwrap());
+        let open_root = std::fs::canonicalize(state.database_path.parent().unwrap())
+            .expect("canonical fixture root");
         let other = open_root.join("other");
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("hidden.rs"), "pub fn hidden() {}\n").unwrap();
@@ -341,7 +347,8 @@ mod tests {
     #[test]
     fn a_started_watcher_indexes_a_file_written_after_open() {
         let state = fixture("live");
-        let root = std::path::PathBuf::from(state.database_path.parent().unwrap());
+        let root = std::fs::canonicalize(state.database_path.parent().unwrap())
+            .expect("canonical fixture root");
         std::fs::create_dir_all(root.join("src")).unwrap();
         state.workspace.open(root.to_str().unwrap()).expect("open");
         start(&state, &root);
