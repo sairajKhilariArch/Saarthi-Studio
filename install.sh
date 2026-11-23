@@ -6,31 +6,129 @@ SUITE_HOME="$HOME/.local/share/sarthi-studio"
 CONFIG_HOME="$HOME/.config/sarthi-studio"
 LOG_HOME="$HOME/.local/state/sarthi-studio"
 APP_HOME="$SUITE_HOME/app"
-mkdir -p "$CONFIG_HOME" "$LOG_HOME" "$HOME/.local/share/applications"
 
 say() { printf '\n[Free AI Suite — Rust] %s\n' "$*"; }
 fail() { say "ERROR: $*" >&2; exit 1; }
 
+MODE=install
+case "${1:-}" in
+  --check|--check-deps) MODE=check ;;
+  --deps-only) MODE=deps ;;
+  "") ;;
+  *) fail "Unknown option: ${1}. Use --check to report missing dependencies, or --deps-only to install them." ;;
+esac
+
 [[ "$(uname -s)" == "Linux" ]] || fail "This installer is for Linux/Ubuntu."
 command -v apt-get >/dev/null 2>&1 || fail "This installer expects Ubuntu or an apt-based Linux distribution."
 
-packages=()
-command -v git >/dev/null 2>&1 || packages+=(git)
-command -v docker >/dev/null 2>&1 || packages+=(docker.io)
-command -v openssl >/dev/null 2>&1 || packages+=(openssl)
-command -v curl >/dev/null 2>&1 || packages+=(curl)
-command -v cc >/dev/null 2>&1 || packages+=(build-essential)
-[[ -f /etc/ssl/certs/ca-certificates.crt ]] || packages+=(ca-certificates)
-command -v xdg-open >/dev/null 2>&1 || packages+=(xdg-utils)
-if ((${#packages[@]})); then
-  say "Installing required system packages: ${packages[*]}"
-  sudo apt-get update
-  sudo apt-get install -y "${packages[@]}"
+# Every check below corresponds to something the Rust build or the packaged UI
+# actually needs. Keep the name, apt package and reason together: a bare "build
+# failed" is what made a missing package impossible to identify. `--check`
+# prints this list and exits before touching the system.
+missing_names=()
+missing_packages=()
+missing_rust=""
+compose_missing=0
+
+add_missing() { # name package reason
+  missing_names+=("$1 — $3")
+  if [[ -n "$2" ]]; then missing_packages+=("$2"); fi
+}
+
+need_command() { # command package reason
+  command -v "$1" >/dev/null 2>&1 || add_missing "$1" "$2" "$3"
+}
+
+need_module() { # pkg-config module package reason
+  if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists "$1" >/dev/null 2>&1; then
+    add_missing "pkg-config module $1" "$2" "$3"
+  fi
+}
+
+collect_missing() {
+  missing_names=()
+  missing_packages=()
+  missing_rust=""
+  compose_missing=0
+
+  need_command git git "cloning FreeLLMAPI and the Git features"
+  need_command curl curl "downloading the Rust toolchain and releases"
+  need_command cc build-essential "compiling native Rust dependencies"
+  need_command mold mold "linking the app (.cargo/config.toml selects mold)"
+  need_command pkg-config pkg-config "finding native libraries while building"
+  need_command openssl openssl "generating the router encryption key"
+  need_command xdg-open xdg-utils "opening links and the browser fallback"
+  [[ -f /etc/ssl/certs/ca-certificates.crt ]] || add_missing "CA certificates" ca-certificates "trusting HTTPS downloads"
+
+  # Tauri's Linux window, the tray indicator and the release linker need these
+  # development packages. They are separate from the runtime libraries because
+  # the installer builds from source here.
+  need_module gtk+-3.0 libgtk-3-dev "the desktop window (GTK 3)"
+  need_module webkit2gtk-4.1 libwebkit2gtk-4.1-dev "the embedded web UI (WebKitGTK 4.1)"
+  need_module ayatana-appindicator3-0.1 libayatana-appindicator3-dev "the tray indicator"
+  need_module librsvg-2.0 librsvg2-dev "SVG icons in the window and tray"
+  need_module libxdo libxdo-dev "window activation from the launcher"
+  need_module openssl libssl-dev "TLS for the provider and host API"
+  need_module dbus-1 libdbus-1-dev "the desktop session bus"
+
+  if ! command -v rustc >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+    missing_rust="Rust toolchain (rustc and cargo) — building the app"
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    add_missing docker docker.io "running the bundled FreeLLMAPI router"
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    compose_missing=1
+  fi
+}
+
+collect_missing
+if ((${#missing_names[@]})) || [[ -n "$missing_rust" ]] || [[ "$compose_missing" == 1 ]]; then
+  say "Missing dependencies:"
+  ((${#missing_names[@]})) && printf '  - %s\n' "${missing_names[@]}"
+  [[ -n "$missing_rust" ]] && printf '  - %s\n' "$missing_rust"
+  [[ "$compose_missing" == 1 ]] && printf '  - %s\n' "docker compose — starting the bundled FreeLLMAPI router"
+
+  if [[ "$MODE" == "check" ]]; then
+    ((${#missing_packages[@]})) && printf '\nInstall the missing apt packages with:\n  sudo apt-get install -y %s\n' "${missing_packages[*]}"
+    [[ "$compose_missing" == 1 ]] && printf '  sudo apt-get install -y docker-compose-v2\n'
+    [[ -n "$missing_rust" ]] && printf '\nInstall Rust with:\n  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal\n'
+    exit 1
+  fi
+
+  if ((${#missing_packages[@]})); then
+    say "Installing missing apt packages: ${missing_packages[*]}"
+    if [[ "$(id -u)" == "0" ]]; then
+      apt-get update && apt-get install -y "${missing_packages[@]}" || fail "Could not install: ${missing_packages[*]}. Install those packages manually, then rerun this installer."
+    else
+      command -v sudo >/dev/null 2>&1 || fail "Missing ${missing_packages[*]}, and sudo is not available. Run this installer as root or install sudo."
+      sudo apt-get update && sudo apt-get install -y "${missing_packages[@]}" || fail "Could not install: ${missing_packages[*]}. Install those packages manually, then rerun this installer."
+    fi
+  fi
+  if [[ "$compose_missing" == 1 ]]; then
+    say "Installing Docker Compose v2."
+    if [[ "$(id -u)" == "0" ]]; then
+      apt-get install -y docker-compose-v2 || apt-get install -y docker-compose-plugin || fail "Could not install Docker Compose v2. Install the Docker Compose plugin, then rerun this installer."
+    else
+      sudo apt-get install -y docker-compose-v2 || sudo apt-get install -y docker-compose-plugin || fail "Could not install Docker Compose v2. Install the Docker Compose plugin, then rerun this installer."
+    fi
+  fi
+
+  # apt can answer successfully while a package was already the newest version
+  # of a name that does not satisfy this build. Re-measure instead of assuming.
+  collect_missing
+  if ((${#missing_names[@]})) || [[ -n "$missing_rust" ]] || [[ "$compose_missing" == 1 ]]; then
+    say "Still missing after installation:"
+    ((${#missing_names[@]})) && printf '  - %s\n' "${missing_names[@]}"
+    [[ -n "$missing_rust" ]] && printf '  - %s\n' "$missing_rust"
+    [[ "$compose_missing" == 1 ]] && printf '  - %s\n' "docker compose"
+    fail "The installer could not resolve every dependency. Install the missing entries above, then rerun."
+  fi
 fi
 
-if ! docker compose version >/dev/null 2>&1; then
-  say "Installing Docker Compose v2."
-  sudo apt-get install -y docker-compose-v2 || fail "Could not install Docker Compose v2. Install the Docker Compose plugin, then rerun this installer."
+if [[ "$MODE" == "check" ]]; then
+  say "All dependencies are present."
+  exit 0
 fi
 
 # Install the stable Rust toolchain only if it is unavailable or too old.
@@ -53,6 +151,13 @@ if [[ "$RUST_OK" != 1 ]]; then
   [[ -x "$HOME/.cargo/bin/cargo" ]] || fail "Rust installation did not produce cargo."
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
+
+if [[ "$MODE" == "deps" ]]; then
+  say "Dependencies are installed."
+  exit 0
+fi
+
+mkdir -p "$CONFIG_HOME" "$LOG_HOME" "$HOME/.local/share/applications"
 
 say "Enabling Docker."
 sudo systemctl enable --now docker

@@ -1,5 +1,35 @@
 # Changelog
 
+## 3.86.0
+
+### Fixed
+
+The source installer now measures every dependency it needs before building,
+names the missing ones, installs them, and verifies the result instead of
+leaving a compiler or linker error to explain a missing package.
+
+- The preflight covers `git`, `curl`, `cc`, `mold`, `pkg-config`, `openssl`,
+  `xdg-open`, CA certificates, Docker and Compose, the Rust toolchain, and the
+  native libraries the window needs: GTK 3, WebKitGTK 4.1, Ayatana AppIndicator,
+  librsvg, libxdo, OpenSSL and D-Bus. Each failure prints the command or
+  `pkg-config` module, why it is needed, and the apt package that provides it.
+- Missing apt packages are installed in one pass. If apt reports success but a
+  library still does not resolve, the installer re-checks and fails with the
+  remaining list rather than continuing into a misleading build failure.
+- `./install.sh --check` reports the complete missing set without changing the
+  system; `./install.sh --deps-only` installs the dependencies and exits before
+  building. `install-and-run.sh` forwards both options.
+
+### Changed
+
+- The README installation section documents the preflight, the exact package
+  categories it covers, and the two check-only/deps-only entry points.
+
+Verified: `bash -n install.sh`, the new `scripts/ci/test-install-deps.sh`
+(a complete fake PATH passes, a removed `mold` is named with its apt package,
+and `--deps-only` installs it again), plus the version, Linux metadata and
+release-contract checks. The test runs in the Linux desktop CI job.
+
 ## 3.85.0
 
 ### Added

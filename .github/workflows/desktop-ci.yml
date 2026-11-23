@@ -95,6 +95,13 @@ jobs:
       - name: Run frontend tests
         run: bash scripts/ci/test-frontend.sh
 
+      # The source installer is what a Linux user runs before Rust exists, so
+      # its dependency preflight is tested against a fake PATH: a complete
+      # toolchain passes, a missing mold is named with its apt package, and
+      # --deps-only installs it again.
+      - name: Test installer dependency detection
+        run: bash scripts/ci/test-install-deps.sh
+
       # The macOS .app packager decides what a macOS user double-clicks, and it
       # is plain shell so it runs here on every push, not only in a release.
       - name: Test the macOS bundle packager

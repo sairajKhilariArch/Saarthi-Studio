@@ -30,7 +30,9 @@ Every artifact ships a `SHA256SUMS.txt`; verify before installing. All creatives
    ./install-and-run.sh
    ```
 
-The installer installs missing Ubuntu prerequisites, installs the stable Rust toolchain if needed, builds the Rust app in release mode, starts FreeLLMAPI via Docker Compose, and creates an Applications-menu shortcut named **Free AI Suite (Rust)**. The first Rust build downloads crates from the Cargo registry, so internet is required during installation.
+The installer checks every prerequisite before it builds and names the missing ones instead of failing with a bare compiler error. It installs the missing apt packages (including `mold`, `pkg-config`, and the GTK/WebKit/AppIndicator development packages), installs the stable Rust toolchain if needed, builds the Rust app in release mode, starts FreeLLMAPI via Docker Compose, and creates an Applications-menu shortcut named **Free AI Suite (Rust)**. The first Rust build downloads crates from the Cargo registry, so internet is required during installation.
+
+To inspect the dependencies without changing the machine, run `./install.sh --check`. It prints every missing command and native library with the apt package that provides it, then exits non-zero. `./install.sh --deps-only` installs those dependencies and exits before building. The normal install path runs the same check, installs what is missing, and re-checks the result before continuing.
 
 The installer reuses `~/freellmapi` if it exists. It preserves FreeLLMAPI's existing `.env`, database, provider configuration, and the AI Studio's existing local settings/history outside the application folder. It does not remove or reset provider settings.
 
