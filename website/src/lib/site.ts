@@ -1,8 +1,8 @@
 export const SITE = {
-  name: 'Sarthi Studio',
-  title: 'Sarthi Studio — a local-first AI development workspace',
+  name: 'SAARTHI-STUDIO',
+  title: 'SAARTHI-STUDIO — a local-first AI development workspace',
   description:
-    'Sarthi Studio is a local-first AI development workspace with chat, agents, local models, routers, skills, MCP, memory, and a real developer environment.',
+    'SAARTHI-STUDIO is a local-first AI development workspace with chat, agents, local models, routers, skills, MCP, memory, and a real developer environment.',
   repo: 'https://github.com/sairajKhilariArch/Saarthi-Studio',
   releases: 'https://github.com/sairajKhilariArch/Saarthi-Studio/releases',
   issues: 'https://github.com/sairajKhilariArch/Saarthi-Studio/issues',

@@ -516,7 +516,7 @@ fn run(
         json!({
             "processId": null,
             "clientInfo": {
-                "name": "sarthi-studio",
+                "name": "SAARTHI-STUDIO",
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "rootUri": root_uri,

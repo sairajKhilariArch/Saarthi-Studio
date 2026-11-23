@@ -33,15 +33,15 @@ if [ "$(printf '%s' "$version" | tr -d '[:cntrl:]')" != "$version" ]; then
 fi
 
 cat <<EOF
-free-ai-studio-android.aab
-free-ai-studio-android.apk
-free-ai-studio-vscode.vsix
-free-ai-studio_${version}-1_amd64.deb
-sarthi-studio_${version}_linux-x86_64.tar.gz
-sarthi-studio_${version}_macos-universal.app.zip
-sarthi-studio_${version}_macos-universal.tar.gz
-sarthi-studio_${version}_windows-x86_64.msi
-sarthi-studio_${version}_windows-x86_64.zip
-sarthi-studio_${version}_x86_64.AppImage
+SAARTHI-STUDIO-android.aab
+SAARTHI-STUDIO-android.apk
+SAARTHI-STUDIO-vscode.vsix
+SAARTHI-STUDIO_${version}-1_amd64.deb
+SAARTHI-STUDIO_${version}_linux-x86_64.tar.gz
+SAARTHI-STUDIO_${version}_macos-universal.app.zip
+SAARTHI-STUDIO_${version}_macos-universal.tar.gz
+SAARTHI-STUDIO_${version}_windows-x86_64.msi
+SAARTHI-STUDIO_${version}_windows-x86_64.zip
+SAARTHI-STUDIO_${version}_x86_64.AppImage
 SHA256SUMS.txt
 EOF

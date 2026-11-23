@@ -232,7 +232,7 @@ pub fn run_cli(args: &[String], store: &HostTokenStore) -> Result<(), Box<dyn st
         },
         _ => {
             println!(
-                "Usage:\n  free-ai-studio host-token create\n  free-ai-studio host-token rotate\n  free-ai-studio host-token status\n  free-ai-studio host-token revoke"
+                "Usage:\n  SAARTHI-STUDIO host-token create\n  SAARTHI-STUDIO host-token rotate\n  SAARTHI-STUDIO host-token status\n  SAARTHI-STUDIO host-token revoke"
             );
         }
     }

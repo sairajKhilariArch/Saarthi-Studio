@@ -5,7 +5,7 @@
 # Everything below the HTTP surface is real. The only fixture is
 # `scripts/mock-router.py`, which answers `/v1/chat/completions` the way a router
 # does; the studio is launched exactly as a user's would be, pointed at a
-# scratch `FREE_AI_STUDIO_HOME` so the run can never touch real settings.
+# scratch `SAARTHI_STUDIO_HOME` so the run can never touch real settings.
 #
 # The flow asserts the properties a unit test cannot: that the binary boots,
 # binds the port it was told to, answers a chat turn through a provider, writes
@@ -83,7 +83,7 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-binary="${E2E_BINARY:-$root/app/target/debug/free-ai-studio}"
+binary="${E2E_BINARY:-$root/app/target/debug/SAARTHI-STUDIO}"
 [ -f "$binary.exe" ] && binary="$binary.exe"
 if [ ! -f "$binary" ]; then
   if [ "${E2E_NO_BUILD:-0}" = "1" ]; then
@@ -119,12 +119,12 @@ base="http://127.0.0.1:$port"
 log="$work/studio.log"
 
 # One scratch home holds everything the app writes: config, database, process
-# log. `FREE_AI_STUDIO_HOME` is the documented sandbox root, so a bug here can
+# log. `SAARTHI_STUDIO_HOME` is the documented sandbox root, so a bug here can
 # never reach the developer's real install.
-export FREE_AI_STUDIO_HOME="$work/home"
-mkdir -p "$FREE_AI_STUDIO_HOME/.config/free-ai-studio"
+export SAARTHI_STUDIO_HOME="$work/home"
+mkdir -p "$SAARTHI_STUDIO_HOME/.config/SAARTHI-STUDIO"
 
-cat >"$FREE_AI_STUDIO_HOME/.config/free-ai-studio/config.json" <<EOF
+cat >"$SAARTHI_STUDIO_HOME/.config/SAARTHI-STUDIO/config.json" <<EOF
 {
   "base_url": "http://127.0.0.1:$mock_port/v1",
   "model": "mock-model",
@@ -208,7 +208,7 @@ step_actions() { # comma-joined action tags of the run in $work/body
 }
 
 start_studio() {
-  ( cd "${FREE_AI_STUDIO_HOME}" && exec "$binary" --headless ) \
+  ( cd "${SAARTHI_STUDIO_HOME}" && exec "$binary" --headless ) \
     >>"$log" 2>&1 &
   studio_pid=$!
 }
@@ -252,8 +252,8 @@ else
   die "mock provider did not start (see $work/mock.log)"
 fi
 
-export FREE_AI_STUDIO_PORT="$port"
-export FREE_AI_STUDIO_SKIP_ROUTER=1
+export SAARTHI_STUDIO_PORT="$port"
+export SAARTHI_STUDIO_SKIP_ROUTER=1
 start_studio
 
 if wait_ready; then
@@ -413,7 +413,7 @@ fi
 
 # The database file itself must exist where the app documents it, or a user
 # backing up that path would silently lose their history.
-if [ -f "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3" ]; then
+if [ -f "$SAARTHI_STUDIO_HOME/.local/share/SAARTHI-STUDIO/history.sqlite3" ]; then
   pass "history is in the documented database path"
 else
   die "no database at the documented path"
@@ -563,7 +563,7 @@ fi
 # 3. Corrupt database. A broken file must stop the process with a reason, not
 #    boot a half-working server; restoring a saved copy must bring it back.
 stop_studio
-data_dir="$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio"
+data_dir="$SAARTHI_STUDIO_HOME/.local/share/SAARTHI-STUDIO"
 db_file="$data_dir/history.sqlite3"
 cp "$db_file" "$work/history-good.sqlite3"
 printf 'this is not a sqlite database' >"$db_file"

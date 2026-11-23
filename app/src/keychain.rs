@@ -1,7 +1,7 @@
 //! The OS credential store for API keys, so a plaintext secret does not live
 //! in `config.json` (Phase 10).
 //!
-//! One entry per secret: service `io.github.sairajkhilariarch.SarthiStudio`
+//! One entry per secret: service `io.github.sairajkhilariarch.saarthi-studio`
 //! (the same reverse-DNS id the AppStream metadata carries), account = the
 //! config field name. `save_config_file` moves every non-empty secret into
 //! the store and blanks it from the JSON it writes; `load_config` merges the
@@ -9,7 +9,7 @@
 //! secret simply stays in the (permission-restricted) config file — the
 //! pre-keychain behavior — rather than being dropped.
 //!
-//! Store selection, via `FREE_AI_STUDIO_KEYCHAIN`:
+//! Store selection, via `SAARTHI_STUDIO_KEYCHAIN`:
 //! - unset or `os`: the platform store (Windows Credential Manager, macOS
 //!   Keychain, Linux Secret Service under the `sync` features).
 //! - `mock`: the keyring crate's in-memory mock store. `.cargo/config.toml`
@@ -22,7 +22,7 @@
 //! parallel test fixtures never share credentials, and the real store always
 //! keeps the stable production name.
 //!
-//! `FREE_AI_STUDIO_KEYCHAIN_SERVICE` renames the service, so a live smoke can
+//! `SAARTHI_STUDIO_KEYCHAIN_SERVICE` renames the service, so a live smoke can
 //! use the real store under a throw-away name instead of the production one.
 
 use std::collections::HashMap;
@@ -37,8 +37,10 @@ use sha2::{Digest, Sha256};
 pub(crate) const SECRET_FIELDS: [&str; 3] = ["api_key", "search_api_key", "openai_api_key"];
 
 const fn default_service() -> &'static str {
-    "io.github.sairajkhilariarch.SarthiStudio"
+    "io.github.sairajkhilariarch.saarthi-studio"
 }
+
+const LEGACY_SERVICE: &str = "io.github.sairajkhilariarch.SarthiStudio";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -71,7 +73,8 @@ impl Mode {
 }
 
 fn service() -> String {
-    env::var("FREE_AI_STUDIO_KEYCHAIN_SERVICE")
+    env::var("SAARTHI_STUDIO_KEYCHAIN_SERVICE")
+        .or_else(|_| env::var("FREE_AI_STUDIO_KEYCHAIN_SERVICE"))
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -100,7 +103,8 @@ pub(crate) fn service_for(location: &str) -> String {
 fn mode() -> Mode {
     static MODE: OnceLock<Mode> = OnceLock::new();
     *MODE.get_or_init(|| {
-        env::var("FREE_AI_STUDIO_KEYCHAIN")
+        env::var("SAARTHI_STUDIO_KEYCHAIN")
+            .or_else(|_| env::var("FREE_AI_STUDIO_KEYCHAIN"))
             .map(|value| Mode::from_env_string(&value))
             .unwrap_or(Mode::Os)
     })
@@ -153,11 +157,25 @@ pub(crate) fn read_secret(location: &str, name: &str) -> Result<Option<String>, 
     if mode() == Mode::Off {
         return Ok(None);
     }
-    with_entry(location, name, |entry| match entry.get_password() {
+    let current = with_entry(location, name, |entry| match entry.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!("keychain read: {error}")),
-    })
+    })?;
+    if current.is_some() || mode() != Mode::Os || service() != default_service() {
+        return Ok(current);
+    }
+    let legacy = Entry::new(LEGACY_SERVICE, name)
+        .map_err(|error| format!("legacy keychain entry: {error}"))?;
+    match legacy.get_password() {
+        Ok(value) => {
+            write_secret(location, name, &value)?;
+            let _ = legacy.delete_credential();
+            Ok(Some(value))
+        }
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("legacy keychain read: {error}")),
+    }
 }
 
 /// Store (or replace) a secret.
@@ -169,7 +187,13 @@ pub(crate) fn write_secret(location: &str, name: &str, value: &str) -> Result<()
         entry
             .set_password(value)
             .map_err(|error| format!("keychain write: {error}"))
-    })
+    })?;
+    if mode() == Mode::Os && service() == default_service() {
+        if let Ok(legacy) = Entry::new(LEGACY_SERVICE, name) {
+            let _ = legacy.delete_credential();
+        }
+    }
+    Ok(())
 }
 
 /// Remove a stored secret. A name that was never stored counts as removed.
@@ -181,7 +205,16 @@ pub(crate) fn delete_secret(location: &str, name: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(format!("keychain delete: {error}")),
-    })
+    })?;
+    if mode() == Mode::Os && service() == default_service() {
+        if let Ok(legacy) = Entry::new(LEGACY_SERVICE, name) {
+            match legacy.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(error) => return Err(format!("legacy keychain delete: {error}")),
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -209,7 +242,7 @@ mod tests {
     fn the_default_service_is_the_appstream_id() {
         assert_eq!(
             default_service(),
-            "io.github.sairajkhilariarch.SarthiStudio"
+            "io.github.sairajkhilariarch.saarthi-studio"
         );
     }
 

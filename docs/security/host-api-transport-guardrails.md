@@ -4,7 +4,7 @@
 
 This step mounts the Step 3 restricted API only on a second listener. It does not replace the desktop UI listener and does not enable remote mode by default.
 
-- Existing UI listener: `127.0.0.1:<FREE_AI_STUDIO_PORT or 8765>` over local HTTP, unchanged.
+- Existing UI listener: `127.0.0.1:<SAARTHI_STUDIO_PORT or 8765>` over local HTTP, unchanged.
 - Remote host API: HTTPS only, default disabled, default port `8766` when enabled.
 - Remote router: `host_api::build_router(...)`; never the desktop UI router.
 - Authentication: active Step 2 bearer token; startup fails if no active token exists.
@@ -13,13 +13,13 @@ This step mounts the Step 3 restricted API only on a second listener. It does no
 
 Set all variables only for a deliberate test/deployment:
 
-- `FREE_AI_STUDIO_HOST_API_ENABLED=true`
-- `FREE_AI_STUDIO_HOST_API_BIND=<specific loopback/private/link-local/VPN IP>`
-- `FREE_AI_STUDIO_HOST_API_PORT=8766` (optional)
-- `FREE_AI_STUDIO_HOST_API_TLS_CERT=/absolute/path/to/fullchain.pem`
-- `FREE_AI_STUDIO_HOST_API_TLS_KEY=/absolute/path/to/private-key.pem`
+- `SAARTHI_STUDIO_HOST_API_ENABLED=true`
+- `SAARTHI_STUDIO_HOST_API_BIND=<specific loopback/private/link-local/VPN IP>`
+- `SAARTHI_STUDIO_HOST_API_PORT=8766` (optional)
+- `SAARTHI_STUDIO_HOST_API_TLS_CERT=/absolute/path/to/fullchain.pem`
+- `SAARTHI_STUDIO_HOST_API_TLS_KEY=/absolute/path/to/private-key.pem`
 
-`FREE_AI_STUDIO_HOST_API_ENABLED` defaults to disabled. Its accepted values are exactly `true` and `false`; an invalid value fails closed. Binding requires a literal IP address, not a hostname. Unspecified addresses (`0.0.0.0`, `::`) and public addresses are rejected. Loopback is accepted for HTTPS testing; RFC1918 private, IPv4 link-local, shared `100.64.0.0/10` VPN ranges, IPv6 ULA and IPv6 link-local addresses are allowed.
+`SAARTHI_STUDIO_HOST_API_ENABLED` defaults to disabled. Its accepted values are exactly `true` and `false`; an invalid value fails closed. Binding requires a literal IP address, not a hostname. Unspecified addresses (`0.0.0.0`, `::`) and public addresses are rejected. Loopback is accepted for HTTPS testing; RFC1918 private, IPv4 link-local, shared `100.64.0.0/10` VPN ranges, IPv6 ULA and IPv6 link-local addresses are allowed.
 
 The TLS private key must be a regular, non-symlink file with Unix permissions no broader than `0600`. The certificate must be a non-empty regular, non-symlink file. Malformed certificates, mismatched keys, or an unavailable IP/port abort startup. Do not use `curl -k`, Android trust-all code, or any other certificate-verification bypass.
 
@@ -37,7 +37,7 @@ The remote socket is bound before serving begins; configuration, token existence
 
 ## Acceptance checks
 
-- [ ] With `FREE_AI_STUDIO_HOST_API_ENABLED` unset, no host API listener starts and desktop UI still binds loopback only.
+- [ ] With `SAARTHI_STUDIO_HOST_API_ENABLED` unset, no host API listener starts and desktop UI still binds loopback only.
 - [ ] Explicit false disables remote mode.
 - [ ] Invalid enable values fail startup.
 - [ ] True without bind/certificate/key settings fails startup.

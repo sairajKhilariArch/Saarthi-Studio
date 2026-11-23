@@ -159,7 +159,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "free-ai-studio-schema-{}-{name}",
+            "SAARTHI-STUDIO-schema-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_file(&path);

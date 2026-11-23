@@ -174,7 +174,7 @@ Delivered in 1.26.4:
   manifests and bad artifact names; wired into `desktop-ci.yml`.
 - All three release jobs call the helper instead of inline `sed`; each job
   validates names before upload; `concurrency` prevents overlapping releases.
-- AppStream metadata (`app/packaging/sarthi-studio.appdata.xml`) shipped into
+- AppStream metadata (`app/packaging/SAARTHI-STUDIO.appdata.xml`) shipped into
   the AppImage.
 
 Delivered in 3.6.0:
@@ -204,7 +204,7 @@ Delivered in 3.4.0:
   tag run when one is missing; `scripts/ci/test-release.sh` proves the pass and
   missing-asset failure offline.
 - `smoke-package.sh` recognises the installed AppImage/deb UI layout under
-  `<exe>/../share/sarthi-studio/static` and the legacy `free-ai-suite` path,
+  `<exe>/../share/SAARTHI-STUDIO/static` and the legacy `free-ai-suite` path,
   matching `static_dir_candidates`. This removes a false failure in the
   AppImage smoke.
 
@@ -364,7 +364,7 @@ root `SKILL.md`, refuses more than 200 files / 2 MiB and any symlink, and
 installs it under the user skills folder as `<slug>`, rewriting the copied
 manifest to name that folder so discovery keeps the id. The clone is removed
 either way; an installed id is refused rather than overwritten. The route is
-gated on `git`, and both skill roots follow `FREE_AI_STUDIO_HOME`. Per-skill
+gated on `git`, and both skill roots follow `SAARTHI_STUDIO_HOME`. Per-skill
 permissions remain open, and only matter if a skill ever executes.*
 *Delivered 3.37.0: refresh from Git. An import records its origin and ref, and
 `POST /api/skills/:id/refresh` re-clones that recorded repository under Import's
@@ -801,7 +801,7 @@ router for `reasoning_effort` when the level is low, medium or high, and sends n
 parameter for off or "model default". `@Thinking`, `@Thinking:high`,
 `@Thinking high` and `\@Thinking` behave exactly as they do on the desktop, the
 level resolves from the message's own choice to its directive to the new
-`freeAiStudio.thinkingLevel` setting, `meta.thinking` names the level and its
+`saarthiStudio.thinkingLevel` setting, `meta.thinking` names the level and its
 scope, and `GET /api/thinking/levels` gives the composer each level's effort and
 what it does. The contract's `thinking` is now true because the request and the
 route are real. What the embedded server still does not have: MCP, and a
@@ -1095,7 +1095,7 @@ backup name is not one this app wrote; the panel says which build is back and wh
 the newer one went.
 
 Delivered in 2.42.0: the macOS application bundle. `scripts/ci/bundle-macos-app.sh`
-builds `Sarthi Studio.app` from the staged universal tree — binary in
+builds `SAARTHI-STUDIO.app` from the staged universal tree — binary in
 `Contents/MacOS`, UI in `Contents/Resources/static`, an `Info.plist` with the
 version, identifier and executable — and `static_dir_candidates` resolves that
 layout, so the bundle runs as an app rather than a binary with no UI. The release
@@ -1143,7 +1143,7 @@ The portable uninstall shipped in 2.44.0.
 
 ## Identity (2.51.0)
 
-The product name is **Sarthi Studio** across the UI, documentation, installers and artifacts. Every identifier that was deliberately kept, with its migration path, is ledger entry #32 in `docs/KNOWN-ISSUES.md`. The GitHub repository keeps its own name; the two are not the same thing.
+The product name is **SAARTHI-STUDIO** across the UI, documentation, installers and artifacts. Every identifier that was deliberately kept, with its migration path, is ledger entry #32 in `docs/KNOWN-ISSUES.md`. The GitHub repository keeps its own name; the two are not the same thing.
 
 ## Mascot (2.52.0)
 

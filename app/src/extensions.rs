@@ -714,7 +714,7 @@ fn compatibility_block(manifest: &Manifest, app_version: &str) -> Option<String>
         None => None,
         Some(required) if version_at_least(app_version, required) => None,
         Some(required) => Some(format!(
-            "Requires Sarthi Studio {required} or newer; this build is {app_version}."
+            "Requires SAARTHI-STUDIO {required} or newer; this build is {app_version}."
         )),
     }
 }
@@ -1164,7 +1164,7 @@ fn inspect_for(dir: &Path, app_version: &str) -> Vec<Value> {
                 let blocked = blocked.or_else(|| {
                     (!incompatible_dependencies.is_empty()).then(|| {
                         format!(
-                            "Needs {}, which requires a newer Sarthi Studio.",
+                            "Needs {}, which requires a newer SAARTHI-STUDIO.",
                             incompatible_dependencies.join(", ")
                         )
                     })
@@ -2083,7 +2083,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "free-ai-studio-extensions-test-{}-{name}",
+            "SAARTHI-STUDIO-extensions-test-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

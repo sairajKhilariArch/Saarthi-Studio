@@ -2,12 +2,12 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import PageHero from '../../components/PageHero.astro';
 import Icon from '../../components/Icon.astro';
-import { ASSETS, LATEST_RELEASE, formatBytes } from '../../lib/releases';
+import { ASSETS, LATEST_RELEASE, EXECUTABLE_NAME, MAC_APP_NAME, formatBytes } from '../../lib/releases';
 import { withBase } from '../../lib/url';
 
 const assets = [
   { asset: ASSETS.macApp, note: 'The .app bundle, zipped — drag to Applications.' },
-  { asset: ASSETS.macTar, note: 'Command-line tarball — extract and run ./SAARTHI-STUDIO.' },
+  { asset: ASSETS.macTar, note: 'Command-line tarball — extract and run ./{EXECUTABLE_NAME}.' },
 ];
 
 const others = [
@@ -19,12 +19,12 @@ const others = [
 ---
 
 <BaseLayout
-  title="Download for macOS — Sarthi Studio"
-  description="Sarthi Studio for macOS: one universal build for Apple Silicon and Intel, with Gatekeeper first-launch instructions."
+  title="Download for macOS — SAARTHI-STUDIO"
+  description="SAARTHI-STUDIO for macOS: one universal build for Apple Silicon and Intel, with Gatekeeper first-launch instructions."
 >
   <PageHero
     eyebrow="Downloads · macOS"
-    title="Sarthi Studio for macOS"
+    title="SAARTHI-STUDIO for macOS"
     description="One universal binary runs natively on both Apple Silicon and Intel Macs. The build is unsigned, so the first launch takes one extra step — documented below."
     breadcrumb={[{ label: 'Downloads', href: withBase('/download/') }, { label: 'macOS' }]}
   />
@@ -34,12 +34,11 @@ const others = [
       <div class="release-banner">
         <strong>{LATEST_RELEASE.tag}</strong>
         <span class="release-meta">universal (arm64 + x86_64) · published {LATEST_RELEASE.date}</span>
-        <a href={ASSETS.sums.url} target="_blank" rel="noopener noreferrer">SHA256SUMS.txt ↗</a>
       </div>
 
       <div class="asset-list">
         {
-          assets.map(({ asset, note }) => (
+          assets.filter(({ asset }) => asset.name).map(({ asset, note }) => (
             <div class="asset-row">
               <div class="asset-info">
                 <span class="asset-name">{asset.name}</span>
@@ -55,41 +54,45 @@ const others = [
         }
       </div>
 
+      {!assets.some(({ asset }) => asset.name) && <p class="asset-note">No build for this platform is attached to the latest release yet. Check the <a href={LATEST_RELEASE.url}>GitHub release</a> for updates.</p>}
+
+      {(ASSETS.macApp.name || ASSETS.macTar.name) && <>
       <h2 class="docs-hub-label">Install</h2>
       <ol class="install-steps">
-        <li>
+        {ASSETS.macApp.name && <li>
           <h3>App bundle</h3>
           <p>
-            Unzip <code>SAARTHI-STUDIO_{LATEST_RELEASE.version}_macos-universal.app.zip</code>
-            and drag <strong>Sarthi Studio.app</strong> into <code>/Applications</code>.
+            Unzip <code>{ASSETS.macApp.name}</code>
+            and drag <strong>{MAC_APP_NAME}</strong> into <code>/Applications</code>.
           </p>
-        </li>
-        <li>
+        </li>}
+        {ASSETS.macApp.name && <li>
           <h3>First launch (Gatekeeper)</h3>
           <p>
             Because the build is unsigned, a double-click is blocked the first
             time. Instead: <strong>right-click the app → Open → Open</strong>.
             macOS remembers the choice; later launches work normally.
           </p>
-        </li>
-        <li>
+        </li>}
+        {ASSETS.macTar.name && <li>
           <h3>Tarball alternative</h3>
           <p>
-            Extract and run <code>./SAARTHI-STUDIO</code> from a terminal.
+            Extract and run <code>./{EXECUTABLE_NAME}</code> from a terminal.
             The same right-click → Open rule applies to the binary, or clear
             the quarantine attribute with
-            <code>xattr -d com.apple.quarantine ./SAARTHI-STUDIO</code>.
+            <code>xattr -d com.apple.quarantine ./{EXECUTABLE_NAME}</code>.
           </p>
-        </li>
+        </li>}
       </ol>
+      </>}
 
       <div class="note-card warning">
         <Icon name="shield" size={18} />
         <div>
           <strong>Unsigned, not notarized.</strong> Only download from the
-          official release page, and verify the SHA-256 against
-          <code>SHA256SUMS.txt</code> (<code>shasum -a 256 -c SHA256SUMS.txt</code>)
-          before opening. Signing and notarization are on the roadmap.
+          official release page, and verify the SHA-256 only when the release checksum file contains an entry
+          for the exact downloaded filename. The available checksum file may
+          cover only Linux artifacts. Signing and notarization are on the roadmap.
         </div>
       </div>
 

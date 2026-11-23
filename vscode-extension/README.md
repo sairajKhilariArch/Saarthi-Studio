@@ -1,4 +1,4 @@
-# Sarthi Studio for VS Code
+# SAARTHI-STUDIO for VS Code
 
 The same local-first AI workspace as the desktop app, inside VS Code.
 
@@ -19,23 +19,23 @@ router.
 
 | Command | What it does |
 | --- | --- |
-| `Sarthi Studio: Open chat` | Opens the panel in a side column |
-| `Sarthi Studio: Ask about the selection` | Sends the selection (or the file) with your question |
-| `Sarthi Studio: Attach the active file` | Attaches the whole file (up to 50,000 characters) |
-| `Sarthi Studio: Set router API key` | Stores the router key in VS Code's secret storage |
-| `Sarthi Studio: Show server status` | Backend, router URL, model, budget, workspace |
-| `Sarthi Studio: Restart the built-in server` | Restarts the embedded server |
-| `Sarthi Studio: Open the desktop app` | Opens the desktop app in a browser window |
+| `SAARTHI-STUDIO: Open chat` | Opens the panel in a side column |
+| `SAARTHI-STUDIO: Ask about the selection` | Sends the selection (or the file) with your question |
+| `SAARTHI-STUDIO: Attach the active file` | Attaches the whole file (up to 50,000 characters) |
+| `SAARTHI-STUDIO: Set router API key` | Stores the router key in VS Code's secret storage |
+| `SAARTHI-STUDIO: Show server status` | Backend, router URL, model, budget, workspace |
+| `SAARTHI-STUDIO: Restart the built-in server` | Restarts the embedded server |
+| `SAARTHI-STUDIO: Open the desktop app` | Opens the desktop app in a browser window |
 
 ## Settings
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `freeAiStudio.desktopUrl` | `http://127.0.0.1:8765` | Loopback address of the desktop app |
-| `freeAiStudio.routerBaseUrl` | `http://127.0.0.1:3001/v1` | Router base URL for the built-in server |
-| `freeAiStudio.model` | `auto` | Model requested by the built-in server |
-| `freeAiStudio.contextBudgetTokens` | `6000` | Hard per-request token budget |
-| `freeAiStudio.historyMessages` | `6` | Recent messages competing for that budget |
+| `saarthiStudio.desktopUrl` | `http://127.0.0.1:8765` | Loopback address of the desktop app |
+| `saarthiStudio.routerBaseUrl` | `http://127.0.0.1:3001/v1` | Router base URL for the built-in server |
+| `saarthiStudio.model` | `auto` | Model requested by the built-in server |
+| `saarthiStudio.contextBudgetTokens` | `6000` | Hard per-request token budget |
+| `saarthiStudio.historyMessages` | `6` | Recent messages competing for that budget |
 
 ## How the built-in server packs context
 
@@ -67,7 +67,7 @@ cd vscode-extension
 npm install
 npm run build        # bundles dist/extension.js and copies the desktop UI
 npm test             # builds dist/lib.mjs and runs node --test
-npm run package      # produces free-ai-studio-vscode.vsix
+npm run package      # produces SAARTHI-STUDIO-vscode.vsix
 ```
 
 `npm run build` copies `../app/static` into `media/ui`, so the extension always

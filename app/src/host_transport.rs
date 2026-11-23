@@ -26,7 +26,9 @@ pub(super) struct RemoteListenerConfig {
 impl RemoteListenerConfig {
     /// Read opt-in listener settings. Missing ENABLED means disabled.
     pub(super) fn from_env() -> Result<Option<Self>, Box<dyn Error>> {
-        let enabled = match env::var("FREE_AI_STUDIO_HOST_API_ENABLED") {
+        let enabled = match env::var("SAARTHI_STUDIO_HOST_API_ENABLED")
+            .or_else(|_| env::var("FREE_AI_STUDIO_HOST_API_ENABLED"))
+        {
             Ok(value) => parse_enabled(&value)?,
             Err(env::VarError::NotPresent) => false,
             Err(error) => return Err(Box::new(error)),
@@ -35,15 +37,19 @@ impl RemoteListenerConfig {
             return Ok(None);
         }
 
-        let bind_text = env::var("FREE_AI_STUDIO_HOST_API_BIND").map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Host API is enabled, but FREE_AI_STUDIO_HOST_API_BIND is not set.",
-            )
-        })?;
+        let bind_text = env::var("SAARTHI_STUDIO_HOST_API_BIND")
+            .or_else(|_| env::var("FREE_AI_STUDIO_HOST_API_BIND"))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Host API is enabled, but SAARTHI_STUDIO_HOST_API_BIND is not set.",
+                )
+            })?;
         let bind_ip = parse_bind_ip(&bind_text)?;
 
-        let port = match env::var("FREE_AI_STUDIO_HOST_API_PORT") {
+        let port = match env::var("SAARTHI_STUDIO_HOST_API_PORT")
+            .or_else(|_| env::var("FREE_AI_STUDIO_HOST_API_PORT"))
+        {
             Ok(value) => {
                 let value: u16 = value.parse().map_err(|_| {
                     io::Error::new(
@@ -64,8 +70,14 @@ impl RemoteListenerConfig {
             Err(error) => return Err(Box::new(error)),
         };
 
-        let certificate_path = required_path("FREE_AI_STUDIO_HOST_API_TLS_CERT")?;
-        let private_key_path = required_path("FREE_AI_STUDIO_HOST_API_TLS_KEY")?;
+        let certificate_path = required_path(
+            "SAARTHI_STUDIO_HOST_API_TLS_CERT",
+            "FREE_AI_STUDIO_HOST_API_TLS_CERT",
+        )?;
+        let private_key_path = required_path(
+            "SAARTHI_STUDIO_HOST_API_TLS_KEY",
+            "FREE_AI_STUDIO_HOST_API_TLS_KEY",
+        )?;
         validate_regular_file(&certificate_path, false)?;
         validate_regular_file(&private_key_path, true)?;
 
@@ -89,13 +101,15 @@ impl RemoteListenerConfig {
     }
 }
 
-fn required_path(name: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let raw = env::var(name).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("Host API is enabled, but {name} is not set."),
-        )
-    })?;
+fn required_path(name: &str, legacy_name: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let raw = env::var(name)
+        .or_else(|_| env::var(legacy_name))
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Host API is enabled, but {name} is not set."),
+            )
+        })?;
     if raw.trim().is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -112,7 +126,7 @@ fn parse_enabled(raw: &str) -> Result<bool, io::Error> {
         "false" => Ok(false),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "FREE_AI_STUDIO_HOST_API_ENABLED must be exactly true or false.",
+            "SAARTHI_STUDIO_HOST_API_ENABLED must be exactly true or false.",
         )),
     }
 }

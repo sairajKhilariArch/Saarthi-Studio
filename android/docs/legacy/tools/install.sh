@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITE_HOME="$HOME/.local/share/sarthi-studio"
-CONFIG_HOME="$HOME/.config/sarthi-studio"
-LOG_HOME="$HOME/.local/state/sarthi-studio"
+SUITE_HOME="$HOME/.local/share/SAARTHI-STUDIO"
+CONFIG_HOME="$HOME/.config/SAARTHI-STUDIO"
+LOG_HOME="$HOME/.local/state/SAARTHI-STUDIO"
 APP_HOME="$SUITE_HOME/app"
 mkdir -p "$CONFIG_HOME" "$LOG_HOME" "$HOME/.local/share/applications"
 
@@ -100,7 +100,7 @@ chmod 600 "$CONFIG_HOME/freellmapi-dir" "$CONFIG_HOME/freellmapi-port"
 
 say "Building the Free AI Suite Rust application (first build downloads Rust crates)."
 (cd "$APP_HOME" && cargo build --release)
-[[ -x "$APP_HOME/target/release/free-ai-studio" ]] || fail "Rust build did not create the application binary."
+[[ -x "$APP_HOME/target/release/SAARTHI-STUDIO" ]] || fail "Rust build did not create the application binary."
 
 say "Starting FreeLLMAPI; existing provider configuration and database are preserved."
 (cd "$API_DIR" && sudo docker compose up -d)
@@ -130,9 +130,9 @@ chmod 755 "$SUITE_HOME/start-router-root.sh"
 cat > "$SUITE_HOME/launch.sh" <<'LAUNCH_SCRIPT_EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-SUITE_HOME="$HOME/.local/share/sarthi-studio"
-CONFIG_HOME="$HOME/.config/sarthi-studio"
-LOG_HOME="$HOME/.local/state/sarthi-studio"
+SUITE_HOME="$HOME/.local/share/SAARTHI-STUDIO"
+CONFIG_HOME="$HOME/.config/SAARTHI-STUDIO"
+LOG_HOME="$HOME/.local/state/SAARTHI-STUDIO"
 APP_HOME="$SUITE_HOME/app"
 API_DIR="$(cat "$CONFIG_HOME/freellmapi-dir" 2>/dev/null || true)"
 API_PORT="$(cat "$CONFIG_HOME/freellmapi-port" 2>/dev/null || printf 3001)"
@@ -167,18 +167,18 @@ studio_is_rust() {
 if ! studio_is_rust; then
   # Stop the previous Python backend from the earlier edition if it is still occupying the port.
   if [[ -f "$APP_HOME/server.py" ]]; then pkill -f "$APP_HOME/server.py" >/dev/null 2>&1 || true; sleep 1; fi
-  FREE_AI_STUDIO_BASE_URL="$API_URL/v1" FREE_AI_STUDIO_PORT=8765 nohup "$APP_HOME/target/release/free-ai-studio" >> "$LOG_HOME/studio.log" 2>&1 </dev/null &
+  SAARTHI_STUDIO_BASE_URL="$API_URL/v1" SAARTHI_STUDIO_PORT=8765 nohup "$APP_HOME/target/release/SAARTHI-STUDIO" >> "$LOG_HOME/studio.log" 2>&1 </dev/null &
   for _ in $(seq 1 30); do studio_is_rust && break; sleep 1; done
 fi
 if ! studio_is_rust; then
-  command -v notify-send >/dev/null 2>&1 && notify-send "Free AI Suite" "Rust Sarthi Studio failed to start. See $LOG_HOME/studio.log"
+  command -v notify-send >/dev/null 2>&1 && notify-send "Free AI Suite" "Rust SAARTHI-STUDIO failed to start. See $LOG_HOME/studio.log"
   exit 1
 fi
 xdg-open "$STUDIO_URL" >/dev/null 2>&1 || true
 LAUNCH_SCRIPT_EOF
 chmod 755 "$SUITE_HOME/launch.sh"
 
-cat > "$HOME/.local/share/applications/sarthi-studio.desktop" <<DESKTOP_FILE_EOF
+cat > "$HOME/.local/share/applications/SAARTHI-STUDIO.desktop" <<DESKTOP_FILE_EOF
 [Desktop Entry]
 Type=Application
 Name=Free AI Suite (Rust)
@@ -189,13 +189,13 @@ Terminal=false
 Categories=Development;Utility;
 StartupNotify=true
 DESKTOP_FILE_EOF
-chmod 644 "$HOME/.local/share/applications/sarthi-studio.desktop"
+chmod 644 "$HOME/.local/share/applications/SAARTHI-STUDIO.desktop"
 mkdir -p "$HOME/.local/bin"
-cat > "$HOME/.local/bin/sarthi-studio" <<COMMAND_FILE_EOF
+cat > "$HOME/.local/bin/SAARTHI-STUDIO" <<COMMAND_FILE_EOF
 #!/usr/bin/env bash
 exec "$SUITE_HOME/launch.sh" "\$@"
 COMMAND_FILE_EOF
-chmod 755 "$HOME/.local/bin/sarthi-studio"
+chmod 755 "$HOME/.local/bin/SAARTHI-STUDIO"
 
 say "Installation finished. Starting Free AI Suite..."
 "$SUITE_HOME/launch.sh"

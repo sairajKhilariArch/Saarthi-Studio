@@ -1212,7 +1212,7 @@ mod tests {
 
     fn module_file(name: &str, source: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "free-ai-studio-extension-run-{}-{name}.wasm",
+            "SAARTHI-STUDIO-extension-run-{}-{name}.wasm",
             std::process::id()
         ));
         let bytes = wat::parse_str(source).expect("wat compiles");
@@ -1222,7 +1222,7 @@ mod tests {
 
     fn workspace(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "free-ai-studio-extension-ws-{}-{name}",
+            "SAARTHI-STUDIO-extension-ws-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

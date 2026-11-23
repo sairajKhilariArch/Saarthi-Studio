@@ -1071,7 +1071,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "free-ai-studio"
+name = "saarthi-studio"
 version = "3.84.0"
 dependencies = [
  "axum",

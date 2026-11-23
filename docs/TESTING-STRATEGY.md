@@ -19,7 +19,7 @@
 | Extension sandbox host surface | `app/src/extension_run.rs` tests + a live headless smoke | `cd app && cargo test extension_run` | WAT modules driven through the real interpreter: read/write with and without the grant, path escape, saved rule deny, I/O error codes |
 | macOS bundle packager | `scripts/ci/bundle-macos-app.sh` | `bash scripts/ci/test-bundle.sh` | 13 checks: a complete stage builds the bundle, the executable is in `Contents/MacOS` and still executable, the whole UI is in `Contents/Resources/static`, `PkgInfo` is `APPL????`, `Info.plist` declares executable/identifier/type/name/versions and carries the staged version, the zip holds both paths with forward slashes, a stage with no static tree / no binary / an unusable version is refused, and a rebuild replaces rather than merges |
 | Windows MSI packager | `app/packaging/windows/installer.wxs` + `scripts/ci/build-windows-msi.sh` | `bash scripts/ci/test-installer.sh` | 11 checks against a real WiX build: a complete stage builds the MSI and it is named for the version, `msiexec /a` performs an administrative install, the payload puts the binary and the UI beside it in one install folder, a nested file (`static/skills/debug/SKILL.md`) survives, the product name is in the package, three refusals (no static tree, no binary, unusable version), and a rebuild replaces the previous MSI. Prints `skip` where WiX or msiexec is absent |
-| End-to-end (process level) | `scripts/ci/test-e2e.sh` | `bash scripts/ci/test-e2e.sh` | 32 checks: real binary boots headless against a scratch `FREE_AI_STUDIO_HOME`, mock provider answers a chat turn, the turn is stored, the process log and readiness payload are read, a workspace opens, an agent run parks at its write approval gate, the write is approved and lands on disk, the step log is `write, verify, done`, the process is killed and restarted, and both the conversation and the run with its steps are re-read from disk |
+| End-to-end (process level) | `scripts/ci/test-e2e.sh` | `bash scripts/ci/test-e2e.sh` | 32 checks: real binary boots headless against a scratch `SAARTHI_STUDIO_HOME`, mock provider answers a chat turn, the turn is stored, the process log and readiness payload are read, a workspace opens, an agent run parks at its write approval gate, the write is approved and lands on disk, the step log is `write, verify, done`, the process is killed and restarted, and both the conversation and the run with its steps are re-read from disk |
 | Workspace change signal | `app/src/workspace.rs`, `app/static/app.js` | `cargo test workspace::tests::fingerprint` | the hash is stable across reads, ignores `target/`, moves on an edit and on a new file; the frontend seeds on the first poll and refreshes only when the hash moves |
 | Brand assets | `scripts/brand/build-brand-assets.py`, `app/static/brand/` | `python scripts/brand/build-brand-assets.py` + `rsvg-convert`/ImageMagick | 10 SVGs from two geometries (guide-path logo + mascot face); rasters at 16/24/32/48/64/128/512 inspected |
 | Retained identifiers | `docs/KNOWN-ISSUES.md` #32 | `git grep -I -o -F <pattern>` | the ledger entry naming every deliberately kept identifier and its migration path; 2.51.0 left 0 `Free AI Studio`, 0 `Saarthi Studio`, 0 `SaarthiStudio` |
@@ -66,7 +66,7 @@ smoke layer below, not here.
 ## Conventions
 
 - Tests never touch the user's real config or DB: use `HOME`/`USERPROFILE`
-  overrides or temp dirs (`FREE_AI_STUDIO_SKILLS_DIR` already exists for skills).
+  overrides or temp dirs (`SAARTHI_STUDIO_SKILLS_DIR` already exists for skills).
 - Tests that need a network are marked and skipped by default.
 - A regression test is added for every fixed defect; the test must fail against
   the old behaviour (state the old behaviour in a comment).
@@ -100,7 +100,7 @@ or skipped checks are listed as gaps, never as passing.
 
 The frontend layer above runs without a document, so layout-dependent behaviour is
 not covered by it. 2.49.0 added the first recorded browser check: a headless build
-on a scratch `FREE_AI_STUDIO_HOME`, Chromium at 1440×900, and pointer events
+on a scratch `SAARTHI_STUDIO_HOME`, Chromium at 1440×900, and pointer events
 dispatched through the app's own listeners. It drove the workflow canvas — drag,
 live edge redraw, clamping to the canvas width, and a saved position restored after
 reload — and found a real defect in the drag handler that the unit layer could not

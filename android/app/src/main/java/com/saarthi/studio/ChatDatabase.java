@@ -8,7 +8,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** SQLite persistence and data records for Sarthi Studio chat history. */
+/** SQLite persistence and data records for SAARTHI-STUDIO chat history. */
 public final class ChatDatabase extends android.database.sqlite.SQLiteOpenHelper {
     public static final class PromptPreset {
         final long id; final String name, content; final boolean builtIn;

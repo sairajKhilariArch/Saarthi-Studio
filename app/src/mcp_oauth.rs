@@ -45,7 +45,7 @@ use crate::AppState;
 const FLOW_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The keychain account name for one server's OAuth material
-/// (`io.github.sairajkhilariarch.SarthiStudio` is the service).
+/// (`io.github.sairajkhilariarch.saarthi-studio` is the service).
 fn credential_account(server_name: &str) -> String {
     format!("mcp_oauth/{server_name}")
 }
@@ -306,7 +306,7 @@ pub(crate) async fn register_client(
         );
     }
     let body = json!({
-        "client_name": "Sarthi Studio MCP",
+        "client_name": "SAARTHI-STUDIO MCP",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
@@ -736,7 +736,7 @@ pub(crate) fn browser_callback(
         verifier: pending.verifier,
         server_name: pending.server_name,
     });
-    Ok("<html><body><p>Authorization received. You can close this window and return to Sarthi Studio.</p></body></html>")
+    Ok("<html><body><p>Authorization received. You can close this window and return to SAARTHI-STUDIO.</p></body></html>")
 }
 
 /// The route that opened the browser: wait (bounded) for the callback, then

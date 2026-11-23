@@ -33,9 +33,9 @@ fi
 
 stage_tree() { # dir
   mkdir -p "$1/static"
-  printf '#!/bin/sh\nexit 0\n' >"$1/free-ai-studio"
-  chmod +x "$1/free-ai-studio"
-  printf '<html><title>Sarthi Studio</title></html>\n' >"$1/static/index.html"
+  printf '#!/bin/sh\nexit 0\n' >"$1/SAARTHI-STUDIO"
+  chmod +x "$1/SAARTHI-STUDIO"
+  printf '<html><title>SAARTHI-STUDIO</title></html>\n' >"$1/static/index.html"
   printf 'console.log("ui");\n' >"$1/static/app.js"
 }
 
@@ -48,13 +48,13 @@ else
   cat "$tmp/bundle.log" >&2
 fi
 
-app="$tmp/out/Sarthi Studio.app"
+app="$tmp/out/SAARTHI-STUDIO.app"
 plist="$app/Contents/Info.plist"
 
-if [ -x "$app/Contents/MacOS/free-ai-studio" ]; then
+if [ -x "$app/Contents/MacOS/SAARTHI-STUDIO" ]; then
   pass "Contents/MacOS holds the executable, still executable"
 else
-  die "Contents/MacOS/free-ai-studio is missing or not executable"
+  die "Contents/MacOS/SAARTHI-STUDIO is missing or not executable"
 fi
 
 if [ -f "$app/Contents/Resources/static/index.html" ] &&
@@ -82,14 +82,14 @@ else
 fi
 
 if grep -q "<string>$version</string>" "$plist" &&
-  grep -q "<string>free-ai-studio</string>" "$plist" &&
-  grep -q "com.saarthi.freeaistudio" "$plist"; then
+  grep -q "<string>SAARTHI-STUDIO</string>" "$plist" &&
+  grep -q "com.saarthi.studio" "$plist"; then
   pass "Info.plist carries the version and the bundled binary's name"
 else
-  die "Info.plist does not carry $version, free-ai-studio and the bundle id"
+  die "Info.plist does not carry $version, SAARTHI-STUDIO and the bundle id"
 fi
 
-zip_path="$tmp/out/sarthi-studio_${version}_macos-universal.app.zip"
+zip_path="$tmp/out/SAARTHI-STUDIO_${version}_macos-universal.app.zip"
 if [ -f "$zip_path" ]; then
   pass "the bundle is archived as $(basename "$zip_path")"
 else
@@ -105,13 +105,13 @@ for name in zipfile.ZipFile(sys.argv[1]).namelist():
     print(name)
 EOF
 )"
-  if printf '%s\n' "$listing" | grep -qx "Sarthi Studio.app/Contents/Info.plist"; then
+  if printf '%s\n' "$listing" | grep -qx "SAARTHI-STUDIO.app/Contents/Info.plist"; then
     pass "the zip carries the bundle's Info.plist at the right path"
   else
-    die "the zip does not contain Sarthi Studio.app/Contents/Info.plist"
+    die "the zip does not contain SAARTHI-STUDIO.app/Contents/Info.plist"
   fi
   if printf '%s\n' "$listing" |
-    grep -qx "Sarthi Studio.app/Contents/Resources/static/index.html"; then
+    grep -qx "SAARTHI-STUDIO.app/Contents/Resources/static/index.html"; then
     pass "the zip carries the UI inside Resources with forward-slash paths"
   else
     die "the zip's UI path is missing or uses the host separator"
@@ -122,7 +122,7 @@ fi
 
 # --- refusals --------------------------------------------------------------
 mkdir -p "$tmp/nostatic"
-printf '#!/bin/sh\nexit 0\n' >"$tmp/nostatic/free-ai-studio"
+printf '#!/bin/sh\nexit 0\n' >"$tmp/nostatic/SAARTHI-STUDIO"
 if bash "$bundler" "$tmp/nostatic" "$version" "$tmp/out2" >/dev/null 2>&1; then
   die "accepted a stage with no static tree"
 else

@@ -110,7 +110,7 @@ export async function log(ctx: GitContext, limit: number): Promise<{ ok: true; l
 export async function commit(ctx: GitContext, message: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     gate(ctx, "commit");
-    const result = await run(ctx, ["-c", "user.name=Sarthi Studio", "-c", "user.email=studio@localhost", "commit", "-m", message]);
+    const result = await run(ctx, ["-c", "user.name=SAARTHI-STUDIO", "-c", "user.email=studio@localhost", "commit", "-m", message]);
     if (result.code === 0) return { ok: true };
     if (result.stderr.includes("nothing to commit")) return { ok: true }; // nothing to commit is not an error
     return { ok: false, error: result.stderr.trim() };

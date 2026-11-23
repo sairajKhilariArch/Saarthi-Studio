@@ -130,28 +130,28 @@ esac
 search="$unpacked"
 [ -d "$work/squashfs-root" ] && search="$work/squashfs-root"
 [ -d "$work/bare" ] && search="$work/bare"
-binary="$(find "$search" -type f \( -name 'free-ai-studio' -o -name 'free-ai-studio.exe' \) 2>/dev/null | head -n1)"
+binary="$(find "$search" -type f \( -name 'SAARTHI-STUDIO' -o -name 'SAARTHI-STUDIO.exe' \) 2>/dev/null | head -n1)"
 [ -n "$binary" ] || {
-  die "$base contains no free-ai-studio binary"
+  die "$base contains no SAARTHI-STUDIO binary"
   exit 1
 }
 chmod +x "$binary" 2>/dev/null || true
 pass "artifact contains the binary ($(basename "$search")/$(realpath --relative-to="$search" "$binary" 2>/dev/null || basename "$binary"))"
 
 # The UI is resolved from one of the layouts `static_dir_candidates` knows:
-# beside the binary (portable tarball/zip), under `share/sarthi-studio` (deb
+# beside the binary (portable tarball/zip), under `share/SAARTHI-STUDIO` (deb
 # and AppImage), under the pre-2.51 `share/free-ai-suite` name, or in a macOS
 # bundle's Contents/Resources. A package without one boots a server that serves
 # nothing, so every recognised layout is checked before failing.
 exe_dir="$(dirname "$binary")"
 static="$exe_dir/static"
-installed_static="$exe_dir/../share/sarthi-studio/static"
+installed_static="$exe_dir/../share/SAARTHI-STUDIO/static"
 legacy_static="$exe_dir/../share/free-ai-suite/static"
 bundle_static="$exe_dir/../Resources/static"
 if [ -f "$static/index.html" ] || [ -f "$static/app.js" ]; then
   pass "the packaged static tree is beside the binary"
 elif [ -f "$installed_static/index.html" ] || [ -f "$installed_static/app.js" ]; then
-  pass "the packaged static tree is under share/sarthi-studio"
+  pass "the packaged static tree is under share/SAARTHI-STUDIO"
 elif [ -f "$legacy_static/index.html" ] || [ -f "$legacy_static/app.js" ]; then
   pass "the packaged static tree is under the legacy share/free-ai-suite name"
 elif [ -f "$bundle_static/index.html" ] || [ -f "$bundle_static/app.js" ]; then
@@ -173,8 +173,8 @@ base_url="http://127.0.0.1:$port"
 home="$(native "$work/home")"
 mkdir -p "$work/home"
 
-( cd "$work" && FREE_AI_STUDIO_HOME="$home" FREE_AI_STUDIO_PORT="$port" \
-  FREE_AI_STUDIO_SKIP_ROUTER=1 exec "$binary" --headless ) >>"$work/studio.log" 2>&1 &
+( cd "$work" && SAARTHI_STUDIO_HOME="$home" SAARTHI_STUDIO_PORT="$port" \
+  SAARTHI_STUDIO_SKIP_ROUTER=1 exec "$binary" --headless ) >>"$work/studio.log" 2>&1 &
 studio_pid=$!
 
 ready="no"

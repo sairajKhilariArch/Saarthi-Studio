@@ -372,7 +372,7 @@ mod tests {
 
     fn database(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "free-ai-studio-embeddings-test-{}-{name}.db",
+            "SAARTHI-STUDIO-embeddings-test-{}-{name}.db",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -389,7 +389,7 @@ mod tests {
     /// a provider through it would fail.
     fn runtime_state(tag: &str, local_base_url: &str) -> (AppState, PathBuf) {
         let root = std::env::temp_dir().join(format!(
-            "free-ai-studio-embedding-e2e-{tag}-{}",
+            "SAARTHI-STUDIO-embedding-e2e-{tag}-{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(&root).unwrap();

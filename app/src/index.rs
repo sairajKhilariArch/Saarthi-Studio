@@ -1435,7 +1435,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "free-ai-studio-index-test-{}-{name}",
+            "SAARTHI-STUDIO-index-test-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

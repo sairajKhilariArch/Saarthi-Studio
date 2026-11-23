@@ -256,7 +256,7 @@ export async function registerClient(
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
-        client_name: "Sarthi Studio MCP",
+        client_name: "SAARTHI-STUDIO MCP",
         redirect_uris: [redirectUri],
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
@@ -586,7 +586,7 @@ export class McpOAuth {
       this.flows.delete(state);
       finish(
         200,
-        "<html><body><p>Authorization received. You can close this window and return to Sarthi Studio.</p></body></html>",
+        "<html><body><p>Authorization received. You can close this window and return to SAARTHI-STUDIO.</p></body></html>",
       );
       pending.resolve({
         code: url.searchParams.get("code") || "",

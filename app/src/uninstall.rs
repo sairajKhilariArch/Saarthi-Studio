@@ -79,7 +79,14 @@ fn counts(dir: &FsPath) -> (u64, u64) {
 /// also has `static/`, so `Cargo.toml`, `.git` and `target/` mark a tree this app
 /// did not install and must not delete.
 fn looks_like_portable_install(dir: &FsPath) -> bool {
-    let binary = dir.join("free-ai-studio").is_file() || dir.join("free-ai-studio.exe").is_file();
+    let binary = [
+        "SAARTHI-STUDIO",
+        "SAARTHI-STUDIO.exe",
+        "free-ai-studio",
+        "free-ai-studio.exe",
+    ]
+    .iter()
+    .any(|name| dir.join(name).is_file());
     let ui = dir.join("static/index.html").is_file();
     let foreign =
         dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("target").is_dir();
@@ -225,7 +232,7 @@ fn remove_install(dir: &FsPath) -> Result<(), String> {
             let stem = exe
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().to_string())
-                .unwrap_or_else(|| "free-ai-studio".to_string());
+                .unwrap_or_else(|| "SAARTHI-STUDIO".to_string());
             let extension = exe
                 .extension()
                 .map(|extension| format!(".{}", extension.to_string_lossy()))
@@ -461,7 +468,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "free-ai-studio-uninstall-{}-{name}",
+            "SAARTHI-STUDIO-uninstall-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
@@ -470,7 +477,7 @@ mod tests {
 
     fn portable_install(dir: &FsPath) {
         fs::create_dir_all(dir.join("static")).expect("static");
-        fs::write(dir.join("free-ai-studio"), b"binary").expect("binary");
+        fs::write(dir.join("SAARTHI-STUDIO"), b"binary").expect("binary");
         fs::write(dir.join("static/index.html"), b"<html></html>").expect("ui");
     }
 
@@ -490,7 +497,7 @@ mod tests {
         // folder around it.
         fs::write(
             install.join(format!(
-                "free-ai-studio.uninstalling-{}.exe",
+                "SAARTHI-STUDIO.uninstalling-{}.exe",
                 std::process::id()
             )),
             b"binary",

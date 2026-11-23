@@ -143,7 +143,7 @@ descriptor = f"L{namespace.replace('.', '/')}/MainActivity;".encode()
 def vsix(name, entry=True, secret=False):
     with zipfile.ZipFile(f"{out}/{name}", "w") as archive:
         package = {
-            "name": "free-ai-studio",
+            "name": "SAARTHI-STUDIO",
             "publisher": "sarthi",
             "version": "9.9.9",
             "engines": {"vscode": "^1.92.0"},
@@ -153,7 +153,7 @@ def vsix(name, entry=True, secret=False):
         archive.writestr(
             "extension.vsixmanifest",
             '<PackageManifest><Metadata><Identity Language="en-US" '
-            'Id="free-ai-studio" Version="9.9.9" Publisher="sarthi" />'
+            'Id="SAARTHI-STUDIO" Version="9.9.9" Publisher="sarthi" />'
             "</Metadata></PackageManifest>",
         )
         if entry:
@@ -265,12 +265,12 @@ else
   die "audit rejected a complete release"
 fi
 
-write_release "free-ai-studio-vscode.vsix"
+write_release "SAARTHI-STUDIO-vscode.vsix"
 if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
   bash "$tool" v9.9.9 9.9.9 >"$tmp/missing.out" 2>&1; then
   die "accepted a release with a missing asset"
 else
-  grep -q "free-ai-studio-vscode.vsix" "$tmp/missing.out" ||
+  grep -q "SAARTHI-STUDIO-vscode.vsix" "$tmp/missing.out" ||
     die "missing-asset failure did not name the asset"
   pass "rejects a release with a missing asset"
 fi
@@ -279,7 +279,7 @@ if GH_TOKEN=test GH_API_URL="$base" GH_REPOSITORY=fixture/repo \
   MIN_RELEASE_VERSION=9.9.9 bash "$audit" >"$tmp/audit-missing.out" 2>&1; then
   die "audit accepted a release with a missing asset"
 else
-  grep -q "free-ai-studio-vscode.vsix" "$tmp/audit-missing.out" ||
+  grep -q "SAARTHI-STUDIO-vscode.vsix" "$tmp/audit-missing.out" ||
     die "audit failure did not name the missing asset"
   pass "audit rejects a release with a missing asset"
 fi
@@ -304,14 +304,14 @@ fi
 
 # A rename in one job only: the contract still demands the old name and nothing
 # builds it, so both sides are reported.
-sed 's/free-ai-studio-android\.aab/free-ai-studio-android-signed.aab/' \
+sed 's/SAARTHI-STUDIO-android\.aab/SAARTHI-STUDIO-android-signed.aab/' \
   "$workflow" >"$tmp/renamed.yml"
 if bash "$contract" "$tmp/renamed.yml" 9.9.9 >"$tmp/renamed.out" 2>&1; then
   die "the contract check accepted an asset only one side names"
 else
-  grep -q 'free-ai-studio-android\.aab' "$tmp/renamed.out" ||
+  grep -q 'SAARTHI-STUDIO-android\.aab' "$tmp/renamed.out" ||
     die "the contract failure did not name the unbuilt asset"
-  grep -q 'free-ai-studio-android-signed\.aab' "$tmp/renamed.out" ||
+  grep -q 'SAARTHI-STUDIO-android-signed\.aab' "$tmp/renamed.out" ||
     die "the contract failure did not name the ungoverned asset"
   pass "a renamed asset is refused with both names"
 fi

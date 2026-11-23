@@ -181,7 +181,7 @@ async fn fetch(state: &AppState) -> Result<Value, String> {
         .header("accept", "application/vnd.github+json")
         .header(
             "user-agent",
-            format!("sarthi-studio/{}", env!("CARGO_PKG_VERSION")),
+            format!("SAARTHI-STUDIO/{}", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
@@ -438,7 +438,7 @@ async fn published_checksum(
         .timeout(TIMEOUT)
         .header(
             "user-agent",
-            format!("sarthi-studio/{}", env!("CARGO_PKG_VERSION")),
+            format!("SAARTHI-STUDIO/{}", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
@@ -676,8 +676,8 @@ fn app_binary_rank(path: &FsPath) -> Option<u8> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     let stem = name.strip_suffix(".exe").unwrap_or(&name);
     match stem {
-        "free-ai-studio" | "sarthi-studio" => Some(0),
-        _ if stem.starts_with("free-ai-studio") => Some(1),
+        "SAARTHI-STUDIO" | "SAARTHI-STUDIO" => Some(0),
+        _ if stem.starts_with("SAARTHI-STUDIO") => Some(1),
         _ if stem.starts_with("sarthi") => Some(2),
         _ => None,
     }
@@ -790,7 +790,7 @@ pub(crate) fn prepare_from(data_dir: &FsPath, staged: &Value) -> Result<Value, S
     let Some(binary) = find_app_binary(&target) else {
         let _ = fs::remove_dir_all(&target);
         return Err(StageError::Refused(format!(
-            "{name} unpacks to {files} files but none of them is a Sarthi Studio binary, so it was not prepared."
+            "{name} unpacks to {files} files but none of them is a SAARTHI-STUDIO binary, so it was not prepared."
         )));
     };
     let relative = binary
@@ -962,7 +962,7 @@ fn backup_path(target: &FsPath, current: &str) -> PathBuf {
     let name = target
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "free-ai-studio".to_string());
+        .unwrap_or_else(|| "SAARTHI-STUDIO".to_string());
     let named = match name.strip_suffix(".exe") {
         Some(stem) => format!("{stem}.old-{current}.exe"),
         None => format!("{name}.old-{current}"),
@@ -1067,7 +1067,7 @@ pub(crate) fn swap_binary(
             let name = wanted
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "free-ai-studio.old".to_string());
+                .unwrap_or_else(|| "SAARTHI-STUDIO.old".to_string());
             target.with_file_name(format!("{name}-{stamp}"))
         }
     };
@@ -1080,7 +1080,7 @@ pub(crate) fn swap_binary(
     })
 }
 
-/// Remove the binaries this app replaced, e.g. `free-ai-studio.old-2.38.0.exe`.
+/// Remove the binaries this app replaced, e.g. `SAARTHI-STUDIO.old-2.38.0.exe`.
 ///
 /// By the time this runs the app is executing from the swapped-in file, so a backup
 /// is a leftover rather than something anyone is running. Two things are never
@@ -1277,7 +1277,7 @@ fn displaced_path(target: &FsPath, version: &str, restoring: &FsPath) -> PathBuf
     let name = wanted
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "free-ai-studio.old".to_string());
+        .unwrap_or_else(|| "SAARTHI-STUDIO.old".to_string());
     target.with_file_name(format!("{name}-{stamp}"))
 }
 
@@ -1463,7 +1463,7 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "free-ai-studio-update-{}-{name}",
+            "SAARTHI-STUDIO-update-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
@@ -1495,7 +1495,7 @@ mod tests {
         // only carries a Windows zip and freebsd is the platform under test
         // through choose_asset, which stage_from reaches via report().
         let payload = report(
-            &release("9.9.9", &["sarthi-studio_9.9.9_freebsd-x86_64.tar.gz"]),
+            &release("9.9.9", &["SAARTHI-STUDIO_9.9.9_freebsd-x86_64.tar.gz"]),
             "freebsd",
             "x86_64",
             "1.0.0",
@@ -1523,14 +1523,14 @@ mod tests {
         assert!(safe_staged_file(&dir, "a\\b.zip").is_none());
         assert!(safe_staged_file(&dir, "").is_none());
         assert_eq!(
-            safe_staged_file(&dir, "sarthi-studio_2.37.0_windows-x86_64.zip"),
-            Some(staged_dir(&dir).join("sarthi-studio_2.37.0_windows-x86_64.zip"))
+            safe_staged_file(&dir, "SAARTHI-STUDIO_2.37.0_windows-x86_64.zip"),
+            Some(staged_dir(&dir).join("SAARTHI-STUDIO_2.37.0_windows-x86_64.zip"))
         );
     }
 
     #[test]
     fn a_malformed_digest_is_never_used_as_the_expected_hash() {
-        let mut broken = release("9.9.9", &["sarthi-studio_9.9.9_windows-x86_64.zip"]);
+        let mut broken = release("9.9.9", &["SAARTHI-STUDIO_9.9.9_windows-x86_64.zip"]);
         broken["assets"][0]["digest"] = json!("sha256:not-a-hash");
         // No SHA256SUMS.txt in this release either, so the refusal is the only
         // correct answer: an unverifiable download cannot be installed.
@@ -1540,7 +1540,7 @@ mod tests {
             .block_on(published_checksum(
                 &client,
                 &broken,
-                "sarthi-studio_9.9.9_windows-x86_64.zip",
+                "SAARTHI-STUDIO_9.9.9_windows-x86_64.zip",
             ))
             .expect_err("no usable checksum");
         assert!(
@@ -1581,7 +1581,7 @@ mod tests {
         let url = serve(body.clone()).await;
         let dir = scratch("stage");
         let meta = json!({"format": "sarthi.update.staged", "version": 1, "latest": "2.37.0", "current": "2.36.0"});
-        let name = "sarthi-studio_2.37.0_windows-x86_64.zip";
+        let name = "SAARTHI-STUDIO_2.37.0_windows-x86_64.zip";
 
         let manifest = stage_asset(&staged_dir(&dir), name, &url, &checksum, &meta)
             .await
@@ -1617,7 +1617,7 @@ mod tests {
     fn release(version: &str, assets: &[&str]) -> Value {
         json!({
             "tag_name": format!("v{version}"),
-            "name": format!("Sarthi Studio {version}"),
+            "name": format!("SAARTHI-STUDIO {version}"),
             "html_url": format!("https://github.com/sairajKhilariArch/Saarthi-Studio/releases/tag/v{version}"),
             "published_at": "2026-11-10T00:00:00Z",
             "body": "Release notes here.",
@@ -1647,11 +1647,11 @@ mod tests {
     #[test]
     fn the_asset_choice_follows_the_platform_and_refuses_an_unsupported_arch() {
         let names: Vec<String> = [
-            "sarthi-studio_2.36.0_linux-x86_64.tar.gz",
-            "sarthi-studio_2.36.0_windows-x86_64.zip",
-            "sarthi-studio_2.36.0_macos-universal.tar.gz",
-            "sarthi-studio_2.36.0_x86_64.AppImage",
-            "free-ai-studio_2.36.0-1_amd64.deb",
+            "SAARTHI-STUDIO_2.36.0_linux-x86_64.tar.gz",
+            "SAARTHI-STUDIO_2.36.0_windows-x86_64.zip",
+            "SAARTHI-STUDIO_2.36.0_macos-universal.tar.gz",
+            "SAARTHI-STUDIO_2.36.0_x86_64.AppImage",
+            "SAARTHI-STUDIO_2.36.0-1_amd64.deb",
             "SHA256SUMS.txt",
         ]
         .iter()
@@ -1660,17 +1660,17 @@ mod tests {
 
         assert_eq!(
             choose_asset(&names, "windows", "x86_64").as_deref(),
-            Some("sarthi-studio_2.36.0_windows-x86_64.zip")
+            Some("SAARTHI-STUDIO_2.36.0_windows-x86_64.zip")
         );
         // The portable tarball, not the .deb or the AppImage: no root, no fuse,
         // and the same file the Linux release already smokes.
         assert_eq!(
             choose_asset(&names, "linux", "x86_64").as_deref(),
-            Some("sarthi-studio_2.36.0_linux-x86_64.tar.gz")
+            Some("SAARTHI-STUDIO_2.36.0_linux-x86_64.tar.gz")
         );
         assert_eq!(
             choose_asset(&names, "macos", "aarch64").as_deref(),
-            Some("sarthi-studio_2.36.0_macos-universal.tar.gz")
+            Some("SAARTHI-STUDIO_2.36.0_macos-universal.tar.gz")
         );
         // Nothing is published for this target, so nothing is offered.
         assert_eq!(choose_asset(&names, "linux", "aarch64"), None);
@@ -1681,7 +1681,7 @@ mod tests {
         let payload = report(
             &release(
                 "2.36.0",
-                &["sarthi-studio_2.36.0_windows-x86_64.zip", "SHA256SUMS.txt"],
+                &["SAARTHI-STUDIO_2.36.0_windows-x86_64.zip", "SHA256SUMS.txt"],
             ),
             "windows",
             "x86_64",
@@ -1694,7 +1694,7 @@ mod tests {
         assert_eq!(payload["latest"], "2.36.0");
         assert_eq!(
             payload["asset"]["name"],
-            "sarthi-studio_2.36.0_windows-x86_64.zip"
+            "SAARTHI-STUDIO_2.36.0_windows-x86_64.zip"
         );
         assert_eq!(payload["asset"]["digest"], "sha256:abc");
         assert_eq!(payload["asset"]["size"], 1024);
@@ -1709,7 +1709,7 @@ mod tests {
     #[test]
     fn the_same_or_an_older_release_says_there_is_no_update() {
         let same = report(
-            &release("2.35.0", &["sarthi-studio_2.35.0_windows-x86_64.zip"]),
+            &release("2.35.0", &["SAARTHI-STUDIO_2.35.0_windows-x86_64.zip"]),
             "windows",
             "x86_64",
             "2.35.0",
@@ -1718,7 +1718,7 @@ mod tests {
         assert_eq!(same["update_available"], false);
 
         let older = report(
-            &release("2.34.0", &["sarthi-studio_2.34.0_windows-x86_64.zip"]),
+            &release("2.34.0", &["SAARTHI-STUDIO_2.34.0_windows-x86_64.zip"]),
             "windows",
             "x86_64",
             "2.35.0",
@@ -1737,7 +1737,7 @@ mod tests {
     #[test]
     fn an_unsupported_platform_still_reports_the_release_without_an_asset() {
         let payload = report(
-            &release("2.36.0", &["sarthi-studio_2.36.0_windows-x86_64.zip"]),
+            &release("2.36.0", &["SAARTHI-STUDIO_2.36.0_windows-x86_64.zip"]),
             "freebsd",
             "x86_64",
             "2.35.0",
@@ -1750,7 +1750,7 @@ mod tests {
             .as_array()
             .expect("list")
             .iter()
-            .any(|name| name == "sarthi-studio_2.36.0_windows-x86_64.zip"));
+            .any(|name| name == "SAARTHI-STUDIO_2.36.0_windows-x86_64.zip"));
     }
 
     fn write_zip(path: &FsPath, entries: &[(&str, &[u8])]) {
@@ -1805,7 +1805,7 @@ mod tests {
         let dir = scratch("prepare-changed");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "sarthi-studio_9.9.9_windows-x86_64.zip";
+        let name = "SAARTHI-STUDIO_9.9.9_windows-x86_64.zip";
         fs::write(staging.join(name), b"replaced after verification").expect("write");
         // A well-formed hash that is simply not this file's hash.
         let error = prepare_from(&dir, &staged_record("9.9.9", name, &"a".repeat(64)))
@@ -1825,12 +1825,12 @@ mod tests {
         let dir = scratch("prepare-zip");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "sarthi-studio_9.9.9_windows-x86_64.zip";
+        let name = "SAARTHI-STUDIO_9.9.9_windows-x86_64.zip";
         let archive = staging.join(name);
         write_zip(
             &archive,
             &[
-                ("free-ai-studio.exe", b"binary"),
+                ("SAARTHI-STUDIO.exe", b"binary"),
                 ("static/index.html", b"<html></html>"),
                 ("lib/webview.dll", b"dll"),
             ],
@@ -1839,7 +1839,7 @@ mod tests {
         let prepared = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect("prepare");
 
         assert_eq!(prepared["latest"], "9.9.9");
-        assert_eq!(prepared["binary"], "free-ai-studio.exe");
+        assert_eq!(prepared["binary"], "SAARTHI-STUDIO.exe");
         assert_eq!(prepared["files"], 3);
         assert_eq!(prepared["sha256"], sha);
         assert_eq!(prepared["replaces_running_binary"], false);
@@ -1862,13 +1862,13 @@ mod tests {
         let dir = scratch("prepare-no-binary");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "sarthi-studio_9.9.9_windows-x86_64.zip";
+        let name = "SAARTHI-STUDIO_9.9.9_windows-x86_64.zip";
         let archive = staging.join(name);
         write_zip(&archive, &[("README.txt", b"notes")]);
         let sha = installer::sha256_file(&archive).expect("hash");
         let error = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect_err("no binary");
         assert!(
-            error.message().contains("Sarthi Studio binary"),
+            error.message().contains("SAARTHI-STUDIO binary"),
             "{}",
             error.message()
         );
@@ -1881,9 +1881,9 @@ mod tests {
     fn a_swap_replaces_the_binary_and_keeps_the_previous_one() {
         let dir = scratch("swap-ok");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio.exe");
+        let target = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&target, b"old build").expect("old");
-        let prepared = dir.join("free-ai-studio-new.exe");
+        let prepared = dir.join("SAARTHI-STUDIO-new.exe");
         fs::write(&prepared, b"new build").expect("new");
 
         let swap = swap_binary(&target, &prepared, "9.9.9").expect("swap");
@@ -1905,11 +1905,11 @@ mod tests {
     fn a_copy_that_does_not_match_is_rolled_back() {
         let dir = scratch("swap-mismatch");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio");
+        let target = dir.join("SAARTHI-STUDIO");
         fs::write(&target, b"old build").expect("old");
         let prepared = dir.join("prepared");
         fs::write(&prepared, b"new build").expect("new");
-        let backup = dir.join("free-ai-studio.old-test");
+        let backup = dir.join("SAARTHI-STUDIO.old-test");
 
         // A copy that lands wrong must stop the swap before anything is renamed.
         let error = swap_using(&target, &prepared, &backup, |_, to| {
@@ -1921,7 +1921,7 @@ mod tests {
         assert_eq!(fs::read(&target).expect("target"), b"old build");
         assert!(!backup.exists());
         // The half-written copy is not left behind either.
-        assert!(!dir.join(".free-ai-studio.incoming").exists());
+        assert!(!dir.join(".SAARTHI-STUDIO.incoming").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1929,7 +1929,7 @@ mod tests {
     fn a_missing_prepared_binary_changes_nothing() {
         let dir = scratch("swap-missing");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio.exe");
+        let target = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&target, b"old build").expect("old");
 
         let error = swap_binary(&target, &dir.join("absent.exe"), "9.9.9").expect_err("missing");
@@ -1942,7 +1942,7 @@ mod tests {
     fn a_second_swap_replaces_the_previous_backup() {
         let dir = scratch("swap-twice");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio.exe");
+        let target = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&target, b"build one").expect("one");
         let first = dir.join("first.exe");
         fs::write(&first, b"build two").expect("two");
@@ -1964,17 +1964,17 @@ mod tests {
     fn leftover_backups_are_removed_but_newer_and_unknown_files_are_kept() {
         let dir = scratch("backup-cleanup");
         fs::create_dir_all(&dir).expect("dir");
-        let exe = dir.join("free-ai-studio.exe");
+        let exe = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&exe, b"running").expect("running");
-        let stale = dir.join("free-ai-studio.old-2.38.0.exe");
+        let stale = dir.join("SAARTHI-STUDIO.old-2.38.0.exe");
         fs::write(&stale, b"old").expect("stale");
         // A backup of a newer build is somebody's roll-forward, not litter.
-        let newer = dir.join("free-ai-studio.old-9.9.9.exe");
+        let newer = dir.join("SAARTHI-STUDIO.old-9.9.9.exe");
         fs::write(&newer, b"newer").expect("newer");
         // Not one of ours, so not ours to delete.
         let other = dir.join("notes.txt");
         fs::write(&other, b"notes").expect("notes");
-        let unparseable = dir.join("free-ai-studio.old-notaversion.exe");
+        let unparseable = dir.join("SAARTHI-STUDIO.old-notaversion.exe");
         fs::write(&unparseable, b"?").expect("unknown");
 
         let removed = cleanup_backups(&exe, "2.40.0").expect("cleanup");
@@ -1992,7 +1992,7 @@ mod tests {
         let dir = scratch("backup-running");
         fs::create_dir_all(&dir).expect("dir");
         // What a by-hand rollback looks like: the app started from the backup itself.
-        let exe = dir.join("free-ai-studio.old-1.0.0.exe");
+        let exe = dir.join("SAARTHI-STUDIO.old-1.0.0.exe");
         fs::write(&exe, b"rolled back").expect("running");
 
         let removed = cleanup_backups(&exe, "2.40.0").expect("cleanup");
@@ -2005,9 +2005,9 @@ mod tests {
     fn a_rollback_restores_the_previous_build_and_keeps_the_new_one() {
         let dir = scratch("rollback-ok");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio.exe");
+        let target = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&target, b"new build").expect("new");
-        let backup = dir.join("free-ai-studio.old-9.8.0.exe");
+        let backup = dir.join("SAARTHI-STUDIO.old-9.8.0.exe");
         fs::write(&backup, b"old build").expect("old");
         let applied = json!({
             "latest": "9.9.9",
@@ -2040,7 +2040,7 @@ mod tests {
     fn a_rollback_is_refused_without_a_record_a_backup_or_the_same_binary() {
         let dir = scratch("rollback-refused");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio.exe");
+        let target = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&target, b"new build").expect("new");
 
         let error = rollback_from(&Value::Null, &target).expect_err("no record");
@@ -2050,15 +2050,15 @@ mod tests {
         let missing = json!({
             "latest": "9.9.9",
             "target": target.to_string_lossy(),
-            "backup": dir.join("free-ai-studio.old-9.8.0.exe").to_string_lossy(),
+            "backup": dir.join("SAARTHI-STUDIO.old-9.8.0.exe").to_string_lossy(),
         });
         let error = rollback_from(&missing, &target).expect_err("no backup");
         assert!(error.contains("no longer at"), "{error}");
 
         // The record has to name the binary this process is running from.
-        let elsewhere = dir.join("other").join("free-ai-studio.exe");
+        let elsewhere = dir.join("other").join("SAARTHI-STUDIO.exe");
         fs::create_dir_all(elsewhere.parent().expect("parent")).expect("other");
-        let backup = dir.join("free-ai-studio.old-9.8.0.exe");
+        let backup = dir.join("SAARTHI-STUDIO.old-9.8.0.exe");
         fs::write(&backup, b"old build").expect("old");
         let wrong = json!({
             "latest": "9.9.9",
@@ -2075,7 +2075,7 @@ mod tests {
     fn a_rollback_refuses_a_backup_name_this_app_did_not_write() {
         let dir = scratch("rollback-foreign");
         fs::create_dir_all(&dir).expect("dir");
-        let target = dir.join("free-ai-studio.exe");
+        let target = dir.join("SAARTHI-STUDIO.exe");
         fs::write(&target, b"new build").expect("new");
 
         // Right folder, plausible name, but not `<stem>.old-<version>`.
@@ -2093,7 +2093,7 @@ mod tests {
 
         // A backup-shaped name outside the install directory is refused too, even
         // though its bytes are real: containment is part of being one of ours.
-        let outside = scratch("rollback-outside").join("free-ai-studio.old-1.0.0.exe");
+        let outside = scratch("rollback-outside").join("SAARTHI-STUDIO.old-1.0.0.exe");
         let outside_dir = outside.parent().expect("parent").to_path_buf();
         fs::create_dir_all(&outside_dir).expect("outside");
         fs::write(&outside, b"old build").expect("write");
@@ -2115,7 +2115,7 @@ mod tests {
             "format": "sarthi.update.rollback",
             "restored": "9.8.0",
             "replaced": "9.9.9",
-            "superseded": "free-ai-studio.old-9.9.9.exe",
+            "superseded": "SAARTHI-STUDIO.old-9.9.9.exe",
             "restart_required": true,
         });
         assert_eq!(self::rollback(&dir), Value::Null);
@@ -2148,7 +2148,7 @@ mod tests {
         let dir = scratch("prepare-gz");
         let staging = staged_dir(&dir);
         fs::create_dir_all(&staging).expect("staging");
-        let name = "sarthi-studio_9.9.9_linux-x86_64.tar.gz";
+        let name = "SAARTHI-STUDIO_9.9.9_linux-x86_64.tar.gz";
         let archive = staging.join(name);
         {
             let encoder = flate2::write::GzEncoder::new(
@@ -2162,7 +2162,7 @@ mod tests {
             header.set_mode(0o755);
             header.set_cksum();
             builder
-                .append_data(&mut header, "free-ai-studio", body.as_slice())
+                .append_data(&mut header, "SAARTHI-STUDIO", body.as_slice())
                 .expect("append");
             builder.finish().expect("tar finish");
             builder
@@ -2173,7 +2173,7 @@ mod tests {
         }
         let sha = installer::sha256_file(&archive).expect("hash");
         let prepared = prepare_from(&dir, &staged_record("9.9.9", name, &sha)).expect("prepare");
-        assert_eq!(prepared["binary"], "free-ai-studio");
+        assert_eq!(prepared["binary"], "SAARTHI-STUDIO");
         assert_eq!(prepared["files"], 1);
         let _ = fs::remove_dir_all(&dir);
     }

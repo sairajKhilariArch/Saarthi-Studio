@@ -33,8 +33,8 @@ die() {
 [ -d "$stage" ] || die "no such staged tree: $stage"
 bash "$here/version.sh" --check-version "$version" ||
   die "unusable version '$version' (expected MAJOR.MINOR.PATCH)"
-[ -f "$stage/free-ai-studio.exe" ] ||
-  die "$stage has no free-ai-studio.exe, so there is nothing to install"
+[ -f "$stage/SAARTHI-STUDIO.exe" ] ||
+  die "$stage has no SAARTHI-STUDIO.exe, so there is nothing to install"
 [ -f "$stage/static/index.html" ] ||
   die "$stage/static/index.html is missing, so the installed app would serve no UI"
 
@@ -58,7 +58,7 @@ stage_abs="$(cd "$stage" && pwd)"
 win_stage="$(cygpath -w "$stage_abs" 2>/dev/null || printf '%s' "$stage_abs")"
 
 mkdir -p "$out"
-msi="$out/sarthi-studio_${version}_windows-x86_64.msi"
+msi="$out/SAARTHI-STUDIO_${version}_windows-x86_64.msi"
 rm -f "$msi"
 
 # `-bindpath stage=<dir>` is what `!(bindpath.stage)` in the authoring resolves
@@ -101,9 +101,9 @@ if command -v msiexec >/dev/null 2>&1; then
     die "msiexec could not unpack the package it just built"
   fi
   # An administrative image keeps the package's directory tree below TARGETDIR
-  # (`LocalApp\\Programs\\Sarthi Studio`), so the payload is found by searching
+  # (`LocalApp\\Programs\\SAARTHI-STUDIO`), so the payload is found by searching
   # rather than by assuming a fixed depth.
-  if [ -z "$(find "$admin" -type f -name 'free-ai-studio.exe' | head -n 1)" ] ||
+  if [ -z "$(find "$admin" -type f -name 'SAARTHI-STUDIO.exe' | head -n 1)" ] ||
     [ -z "$(find "$admin" -type f -path '*static/index.html' | head -n 1)" ]; then
     ls -R "$admin" >&2 || true
     rm -rf "$admin"

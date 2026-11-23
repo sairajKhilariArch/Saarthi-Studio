@@ -1,4 +1,4 @@
-# Sarthi Studio
+# SAARTHI-STUDIO
 
 Rust + SQLite + static frontend desktop AI studio (Linux/Windows/macOS), with an
 Android client, a VS Code extension, and a headless server mode. This file is the
@@ -41,7 +41,7 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agen
 
 - Config in `~/.config/SAARTHI-STUDIO/config.json`; data in
   `~/.local/share/SAARTHI-STUDIO/studio.db` (SQLite). Never move these paths.
-- User-facing brand string is **Sarthi Studio**; internal identifiers
+- User-facing brand string is **SAARTHI-STUDIO**; internal identifiers
   (`SAARTHI-STUDIO` crate/package/app paths) must stay.
 - Frontend has no build step or package manager: hand-written ES modules served
   from `app/static/`. Style through CSS custom-property tokens in `styles.css`.

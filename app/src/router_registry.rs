@@ -1,4 +1,4 @@
-//! Phase 2 router registry: what Sarthi Studio knows about each router it can
+//! Phase 2 router registry: what SAARTHI-STUDIO knows about each router it can
 //! manage, independent of which one is installed.
 //!
 //! This is the data layer the Router Manager is built on. It deliberately does
@@ -103,7 +103,7 @@ const ROUTERS: &[RouterSpec] = &[
         arches: &["x86_64", "arm64"],
         methods: &[InstallMethod::NativeBinary, InstallMethod::Remote],
         auto_start_default: false,
-        config: ".config/free-ai-studio/local.json",
+        config: ".config/saarthi-studio/local.json",
         health: "GET /api/tags",
         docs: "https://github.com/sairajKhilariArch/Saarthi-Studio#local-runtime",
     },
@@ -2511,7 +2511,7 @@ mod tests {
 
     fn temp_prefs(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "free-ai-studio-prefs-{}-{name}.json",
+            "saarthi-studio-prefs-{}-{name}.json",
             std::process::id()
         ))
     }

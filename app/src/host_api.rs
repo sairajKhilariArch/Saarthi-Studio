@@ -203,7 +203,7 @@ async fn host_health(State(state): State<AppState>) -> Response<Body> {
     match load_or_create_host_id(&state.config_path) {
         Ok(host_id) => Json(json!({
             "ok": true,
-            "product": "Sarthi Studio",
+            "product": "SAARTHI-STUDIO",
             "api_version": API_VERSION,
             "host_id": host_id.to_string()
         }))
@@ -1183,7 +1183,7 @@ mod tests {
         assert_eq!(first.status(), StatusCode::OK);
         let first_body = Fixture::response_json(first).await;
         assert_eq!(first_body["api_version"], API_VERSION);
-        assert_eq!(first_body["product"], "Sarthi Studio");
+        assert_eq!(first_body["product"], "SAARTHI-STUDIO");
         assert!(first_body.get("router").is_none());
         assert!(first_body.get("base_url").is_none());
         assert!(first_body.get("api_key").is_none());

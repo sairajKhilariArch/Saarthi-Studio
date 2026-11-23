@@ -314,12 +314,12 @@ test("updateStatusText reports an up-to-date build with its own version", () => 
 test("updateStatusText names the newer release, its asset and its size", () => {
   const text = call(`updateStatusText({
     ok: true, current: "2.35.0", latest: "2.36.0", update_available: true,
-    asset: { name: "sarthi-studio_2.36.0_windows-x86_64.zip", size: 2048 },
+    asset: { name: "SAARTHI-STUDIO_2.36.0_windows-x86_64.zip", size: 2048 },
     platform: "windows/x86_64"
   })`);
   assert.ok(text.includes("Version 2.36.0 is available"), text);
   assert.ok(text.includes("this build is 2.35.0"), text);
-  assert.ok(text.includes("Download sarthi-studio_2.36.0_windows-x86_64.zip"), text);
+  assert.ok(text.includes("Download SAARTHI-STUDIO_2.36.0_windows-x86_64.zip"), text);
   assert.ok(/\(.*(KB|kB|kb).*\)/.test(text), `size was not formatted: ${text}`);
 });
 
@@ -342,10 +342,10 @@ test("updateStatusText passes a failed check through as a failure", () => {
 
 test("stagedStatusText describes a verified file that is not installed", () => {
   const text = call(`stagedStatusText({
-    asset: "sarthi-studio_2.37.0_windows-x86_64.zip", bytes: 2048,
+    asset: "SAARTHI-STUDIO_2.37.0_windows-x86_64.zip", bytes: 2048,
     latest: "2.37.0", sha256: "abcdef0123456789abcdef"
   })`);
-  assert.ok(text.includes("sarthi-studio_2.37.0_windows-x86_64.zip"), text);
+  assert.ok(text.includes("SAARTHI-STUDIO_2.37.0_windows-x86_64.zip"), text);
   assert.ok(text.includes("2.37.0"), text);
   assert.ok(text.includes("abcdef012345"), text);
   assert.ok(text.includes("not installed"), text);
@@ -359,11 +359,11 @@ test("stagedStatusText stays empty when nothing is staged", () => {
 
 test("preparedStatusText names the folder and says the running build is unchanged", () => {
   const text = call(`preparedStatusText({
-    latest: "2.38.0", root: "C:/data/updates/prepared/2.38.0", binary: "free-ai-studio.exe"
+    latest: "2.38.0", root: "C:/data/updates/prepared/2.38.0", binary: "SAARTHI-STUDIO.exe"
   })`);
   assert.ok(text.includes("2.38.0"), text);
   assert.ok(text.includes("C:/data/updates/prepared/2.38.0"), text);
-  assert.ok(text.includes("free-ai-studio.exe"), text);
+  assert.ok(text.includes("SAARTHI-STUDIO.exe"), text);
   assert.ok(text.includes("unchanged"), text);
   assert.ok(text.includes("Start that copy"), text);
 });
@@ -376,36 +376,36 @@ test("preparedStatusText stays empty when nothing is prepared", () => {
 
 test("appliedStatusText says restart, what it replaced and where the copy is", () => {
   const text = call(`appliedStatusText({
-    latest: "2.39.0", previous: "2.38.0", backup: "C:/app/free-ai-studio.old-2.38.0.exe"
+    latest: "2.39.0", previous: "2.38.0", backup: "C:/app/SAARTHI-STUDIO.old-2.38.0.exe"
   })`);
   assert.ok(text.includes("2.39.0"), text);
   assert.ok(text.includes("restart"), text);
   assert.ok(text.includes("2.38.0"), text);
-  assert.ok(text.includes("free-ai-studio.old-2.38.0.exe"), text);
+  assert.ok(text.includes("SAARTHI-STUDIO.old-2.38.0.exe"), text);
 });
 
 test("rollbackStatusText names the restored build, the one it replaced and where that is", () => {
   const text = call(`rollbackStatusText({
-    restored: "2.40.0", replaced: "2.41.0", superseded: "C:/app/free-ai-studio.old-2.41.0.exe"
+    restored: "2.40.0", replaced: "2.41.0", superseded: "C:/app/SAARTHI-STUDIO.old-2.41.0.exe"
   })`);
   assert.ok(text.includes("2.40.0"), text);
   assert.ok(text.includes("2.41.0"), text);
   assert.ok(text.includes("restart"), text);
-  assert.ok(text.includes("free-ai-studio.old-2.41.0.exe"), text);
+  assert.ok(text.includes("SAARTHI-STUDIO.old-2.41.0.exe"), text);
 });
 
 test("uninstallSummary names every path and count before anything is offered", () => {
   const text = call(`uninstallSummary({
-    confirmation: "C:/Users/me/AppData/Roaming/free-ai-studio",
+    confirmation: "C:/Users/me/AppData/Roaming/SAARTHI-STUDIO",
     targets: {
       install: { path: "C:/apps/studio", exists: true, files: 120, bytes: 4096, removable: true, reason: "" },
-      data: { path: "C:/Users/me/AppData/Roaming/free-ai-studio", exists: true, files: 9, bytes: 2048 },
-      config: { path: "C:/Users/me/AppData/Roaming/free-ai-studio", exists: false, files: 0, bytes: 0 }
+      data: { path: "C:/Users/me/AppData/Roaming/SAARTHI-STUDIO", exists: true, files: 9, bytes: 2048 },
+      config: { path: "C:/Users/me/AppData/Roaming/SAARTHI-STUDIO", exists: false, files: 0, bytes: 0 }
     }
   })`);
   assert.ok(text.includes("program folder: C:/apps/studio"), text);
   assert.ok(text.includes("120 files"), text);
-  assert.ok(text.includes("data: C:/Users/me/AppData/Roaming/free-ai-studio"), text);
+  assert.ok(text.includes("data: C:/Users/me/AppData/Roaming/SAARTHI-STUDIO"), text);
   assert.ok(text.includes("settings:"), text);
   assert.ok(text.includes("nothing there"), text);
 });

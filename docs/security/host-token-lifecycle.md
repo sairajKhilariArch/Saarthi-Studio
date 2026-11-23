@@ -21,7 +21,7 @@ cargo run --manifest-path app/Cargo.toml -- host-token revoke
 
 ## Storage and verification
 
-- Verifier path: `~/.config/free-ai-studio/host-auth.json` (alongside the desktop config, but as a separate file).
+- Verifier path: `~/.config/SAARTHI-STUDIO/host-auth.json` (alongside the desktop config, but as a separate file).
 - Token format: `sarthi_host_v1_` followed by 32 cryptographically random bytes encoded as 64 lowercase hex characters (256 bits of entropy).
 - Disk stores only SHA-256 of the complete token, schema version and creation timestamp. It never stores the raw bearer token.
 - File mode is enforced as `0600`; containing directory is enforced as `0700` on Unix. Existing permissive verifier-file modes are rejected. Symlinks and non-regular verifier paths are rejected during verification.

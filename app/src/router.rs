@@ -3,7 +3,7 @@
 //!
 //! The installer records where the compose project lives and which port the
 //! router uses. This module reads those files, tracks ownership in a small
-//! state file, and exposes `free-ai-studio router start|stop|status` plus the
+//! state file, and exposes `SAARTHI-STUDIO router start|stop|status` plus the
 //! `/api/router*` endpoints the UI uses.
 
 use crate::home_dir;
@@ -16,9 +16,9 @@ use std::{
     time::Duration,
 };
 
-const OWNERSHIP_FILE: &str = ".config/free-ai-studio/router-owned.json";
-const INSTALLER_DIR_FILE: &str = ".config/sarthi-studio/freellmapi-dir";
-const INSTALLER_PORT_FILE: &str = ".config/sarthi-studio/freellmapi-port";
+const OWNERSHIP_FILE: &str = ".config/SAARTHI-STUDIO/router-owned.json";
+const INSTALLER_DIR_FILE: &str = ".config/SAARTHI-STUDIO/freellmapi-dir";
+const INSTALLER_PORT_FILE: &str = ".config/SAARTHI-STUDIO/freellmapi-port";
 const COMPOSE_FILES: [&str; 4] = [
     "docker-compose.yml",
     "docker-compose.yaml",
@@ -92,7 +92,8 @@ pub(crate) fn compose_dir() -> Option<PathBuf> {
 
 /// Router port as recorded by the installer (default 3001).
 pub(crate) fn router_port() -> u16 {
-    std::env::var("FREE_AI_STUDIO_ROUTER_PORT")
+    std::env::var("SAARTHI_STUDIO_ROUTER_PORT")
+        .or_else(|_| std::env::var("FREE_AI_STUDIO_ROUTER_PORT"))
         .ok()
         .and_then(|value| value.parse().ok())
         .or_else(|| {
@@ -356,7 +357,7 @@ pub(crate) async fn status() -> Status {
         "Router containers are up but the API is not answering yet.".to_string()
     } else if let Some(dir) = &dir {
         format!(
-            "Router is stopped. Start it with `free-ai-studio router start` or from {}.",
+            "Router is stopped. Start it with `SAARTHI-STUDIO router start` or from {}.",
             dir.display()
         )
     } else if freellmapi_container_exists() {
@@ -433,7 +434,7 @@ pub(crate) async fn manual_stop() -> Result<Status, String> {
     Ok(status().await)
 }
 
-/// `free-ai-studio router <start|stop|status>`
+/// `SAARTHI-STUDIO router <start|stop|status>`
 pub(crate) fn run_cli(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let action = args.first().map(String::as_str).unwrap_or("status");
     let runtime = tokio::runtime::Runtime::new()?;
@@ -471,7 +472,7 @@ pub(crate) fn run_cli(args: &[String]) -> Result<(), Box<dyn std::error::Error>>
 /* ---------------------------------------------------------------- */
 
 const OMNIROUTE_PORT: u16 = 20128;
-const OMNIROUTE_OWNERSHIP_FILE: &str = ".config/free-ai-studio/omniroute-owned.json";
+const OMNIROUTE_OWNERSHIP_FILE: &str = ".config/SAARTHI-STUDIO/omniroute-owned.json";
 const OMNIROUTE_CONTAINER: &str = "omniroute";
 const OMNIROUTE_IMAGE: &str = "diegosouzapw/omniroute:latest";
 
@@ -518,7 +519,8 @@ fn save_omniroute_ownership(owned_by_app: bool) {
 
 /// Studio's own port override, else the OmniRoute default.
 pub(crate) fn omniroute_port() -> u16 {
-    std::env::var("FREE_AI_STUDIO_OMNIROUTE_PORT")
+    std::env::var("SAARTHI_STUDIO_OMNIROUTE_PORT")
+        .or_else(|_| std::env::var("FREE_AI_STUDIO_OMNIROUTE_PORT"))
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(OMNIROUTE_PORT)
@@ -687,7 +689,7 @@ pub(crate) async fn omniroute_shutdown_cleanup() {
     save_omniroute_ownership(false);
 }
 
-/// `free-ai-studio omniroute <start|stop|status>`
+/// `SAARTHI-STUDIO omniroute <start|stop|status>`
 pub(crate) fn run_omniroute_cli(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let action = args.first().map(String::as_str).unwrap_or("status");
     let runtime = tokio::runtime::Runtime::new()?;
