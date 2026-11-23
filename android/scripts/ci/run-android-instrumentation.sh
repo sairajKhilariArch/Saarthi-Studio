@@ -47,11 +47,26 @@ else
     # The emulator action normally waits for boot, but keep an explicit device
     # readiness check and capture its output for diagnosis if that assumption fails.
     adb devices -l > "${DIAG_DIR}/adb-devices.txt" 2>&1 || true
-    timeout --signal=TERM --kill-after=5s 90s adb wait-for-device > "${DIAG_DIR}/adb-wait-for-device.log" 2>&1
+    timeout --signal=TERM --kill-after=5s 180s adb wait-for-device > "${DIAG_DIR}/adb-wait-for-device.log" 2>&1
     ADB_READY_EXIT=$?
 
+    # `adb wait-for-device` returns when the device is connected, not when the
+    # framework is up. A cold emulator can still be booting here, and installing
+    # into that window fails with an unhelpful package-manager error. Poll the
+    # boot property before touching the package manager.
+    if [[ "$ADB_READY_EXIT" -eq 0 ]]; then
+        BOOT_COMPLETED=""
+        for _ in $(seq 1 60); do
+            BOOT_COMPLETED="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [[ "$BOOT_COMPLETED" == "1" ]]; then break; fi
+            sleep 2
+        done
+        printf 'sys.boot_completed=%s\n' "${BOOT_COMPLETED:-unknown}" >> "${DIAG_DIR}/adb-wait-for-device.log"
+        if [[ "${BOOT_COMPLETED:-}" != "1" ]]; then ADB_READY_EXIT=125; fi
+    fi
+
     if [[ "$ADB_READY_EXIT" -ne 0 ]]; then
-        write_summary "FAIL: adb could not connect to the emulator (exit ${ADB_READY_EXIT})."
+        write_summary "FAIL: adb could not connect to a booted emulator (exit ${ADB_READY_EXIT}; 125 means connected but not booted)."
         TEST_EXIT=1
     else
         # Keep the captured log focused on this instrumentation run.
@@ -127,7 +142,7 @@ fi
 echo 'Recent Android runtime errors:'
 if [[ -f "${DIAG_DIR}/logcat.txt" ]]; then
     grep -Ei \
-        'FATAL EXCEPTION|AndroidRuntime|INSTRUMENTATION_FAILED|Process: com\.sarthi|Fatal signal|Permission Denial|lowmemorykiller' \
+        'FATAL EXCEPTION|AndroidRuntime|INSTRUMENTATION_FAILED|Process: com\.saarthi\.studio|Fatal signal|Permission Denial|lowmemorykiller' \
         "${DIAG_DIR}/logcat.txt" | tail -n 200 || true
 fi
 

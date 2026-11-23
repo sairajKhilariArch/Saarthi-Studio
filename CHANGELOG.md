@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.84.2
+
+### Fixed
+
+Android instrumentation now waits for a booted emulator, and its diagnostics
+find the app again.
+
+- `adb wait-for-device` only proves the device is connected; a cold emulator
+  can still be booting. The runner now polls `sys.boot_completed` for up to two
+  minutes, logs the result, and reports a distinct exit 125 when the device is
+  connected but the framework never came up, instead of letting the package
+  manager fail with an unclear error.
+- The adb wait window rose from 90 s to 180 s.
+- The logcat diagnostic grep looked for `com.sarthi` (missing the second `a`),
+  so `com.saarthi.studio` crashes were filtered out of the failure summary.
+
+Verified: `bash -n` on the runner script; the suite and platform steps it
+wraps are unchanged.
+
 ## 3.84.1
 
 ### Fixed
