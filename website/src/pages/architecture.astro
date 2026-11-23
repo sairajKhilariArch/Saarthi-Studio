@@ -19,7 +19,7 @@
     <div class="container">
       <h2>The runtime</h2>
       <p>
-        One Rust binary (crate and binary <code>SAARTHI-STUDIO</code>) serves the
+        One Rust binary (crate and binary <code>free-ai-studio</code>) serves the
         loopback UI and API at <code>127.0.0.1:8765</code>. The
         <code>gui</code> feature adds a native window over Tauri 2. The
         frontend is hand-written static HTML/CSS/JS served from the Rust
@@ -27,8 +27,8 @@
       </p>
       <p>
         SQLite persists conversations, runs, steps, keys, and usage at
-        <code>~/.local/share/SAARTHI-STUDIO/studio.db</code>; configuration
-        lives at <code>~/.config/SAARTHI-STUDIO/config.json</code>. These paths
+        <code>~/.local/share/free-ai-studio/history.sqlite3</code>; configuration
+        lives at <code>~/.config/free-ai-studio/config.json</code>. These paths
         are fixed by design.
       </p>
 

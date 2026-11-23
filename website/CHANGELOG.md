@@ -1,5 +1,16 @@
 # Website changelog
 
+## 0.5.2
+
+### Fixed
+
+- Start commands and data paths name the binaries and files that actually ship:
+  `free-ai-studio --browser` instead of `SAARTHI-STUDIO --browser`, and
+  `~/.config/free-ai-studio/config.json` plus
+  `~/.local/share/free-ai-studio/history.sqlite3` instead of uppercase paths
+  and `studio.db`. The old documentation told people to run a command that
+  does not exist and look in files the app never writes.
+
 ## 0.5.1
 
 ### Fixed
