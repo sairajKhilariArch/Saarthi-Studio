@@ -253,6 +253,7 @@
     dock.id = "aiDock";
     dock.setAttribute("aria-label", "AI assistant");
     dock.innerHTML = [
+      '<div class="dock-resizer" data-drag="right" role="separator" aria-orientation="vertical" aria-label="Resize assistant panel"></div>',
       '<header class="ai-dock-head">',
       `<span class="ai-dock-title">${svg("spark")}AI</span>`,
       '<span class="status-pill" id="aiDockModel">auto</span>',
@@ -261,6 +262,7 @@
       '<button type="button" class="ai-dock-tab" data-dock="router" role="tab" aria-selected="false">Router</button>',
       "</div>",
       '<div class="ai-dock-actions">',
+      `<button type="button" class="icon-btn" id="aiDockMax" title="Full-screen assistant" aria-label="Full-screen assistant" aria-pressed="false">${svg("maximize")}</button>`,
       `<button type="button" class="icon-btn" id="aiDockCenter" title="Center the thread" aria-label="Center the thread" aria-pressed="false">${svg("panel-right")}</button>`,
       `<button type="button" class="icon-btn" id="aiDockClose" title="Hide the AI panel" aria-label="Hide the AI panel">${svg("close")}</button>`,
       "</div></header>",
@@ -276,7 +278,10 @@
       tab.addEventListener("click", () => selectDockTab(tab.dataset.dock));
     });
     $("aiDockCenter").addEventListener("click", () => setChatCenter(!state.chatCenter));
+    $("aiDockMax").addEventListener("click", () => setChatMax(!state.chatMax));
     $("aiDockClose").addEventListener("click", () => togglePanel("right"));
+    const dockResizer = dock.querySelector(".dock-resizer");
+    if (dockResizer) dockResizer.addEventListener("pointerdown", startPanelDrag);
   }
 
   function selectDockTab(name) {
@@ -3003,6 +3008,7 @@
     { label: "View: Tasks", run: () => selectBottomTab("tasks") },
     { label: "View: Terminal", hint: "Ctrl+J", run: () => selectBottomTab("terminal") },
     { label: "View: Toggle AI panel", run: () => togglePanel("right") },
+    { label: "View: Full-screen assistant", run: () => setChatMax(!state.chatMax) },
     { label: "View: Toggle sidebar", hint: "Ctrl+B", run: () => togglePanel("left") },
     { label: "AI: New thread", run: () => { if ($("newChat")) $("newChat").click(); } },
     { label: "Preferences: Open settings", run: () => openActivity("settings") },
@@ -3066,7 +3072,8 @@
       if (event.key === "F3") { event.preventDefault(); jumpMatch(event.shiftKey ? -1 : 1); return; }
       if (event.key === "Escape") {
         if ($("palette") && !$("palette").classList.contains("hidden")) { closePalette(); return; }
-        if ($("findBar") && !$("findBar").classList.contains("hidden")) closeFind();
+        if ($("findBar") && !$("findBar").classList.contains("hidden")) { closeFind(); return; }
+        if (state.chatMax) { event.preventDefault(); setChatMax(false); return; }
       }
     });
   }
@@ -3074,28 +3081,18 @@
   function setupResizer() {
     const handle = document.querySelector(".sidebar-resizer");
     if (!handle) return;
+    // Use the same panel-drag path as the dock and bottom handles so every
+    // panel shares one clamp, one save key and one reset behaviour.
     try {
       const stored = localStorage.getItem("freeai-sidebar-w");
-      if (stored) document.documentElement.style.setProperty("--sidebar-w", `${stored}px`);
+      const width = parseInt(stored, 10);
+      if (width > 0 && !state.panelSize.left) {
+        state.panelSize.left = width;
+        document.documentElement.style.setProperty("--sidebar-w", `${state.panelSize.left}px`);
+      }
     } catch { /* private mode */ }
-    handle.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
-      handle.setPointerCapture(event.pointerId);
-      const startX = event.clientX;
-      const startWidth = $("sidebar").getBoundingClientRect().width;
-      const onMove = (move) => {
-        const width = Math.max(200, Math.min(520, Math.round(startWidth + move.clientX - startX)));
-        document.documentElement.style.setProperty("--sidebar-w", `${width}px`);
-      };
-      const onUp = () => {
-        handle.removeEventListener("pointermove", onMove);
-        handle.removeEventListener("pointerup", onUp);
-        const width = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w"), 10);
-        if (width) { try { localStorage.setItem("freeai-sidebar-w", String(width)); } catch { /* private */ } }
-      };
-      handle.addEventListener("pointermove", onMove);
-      handle.addEventListener("pointerup", onUp);
-    });
+    handle.dataset.drag = "left";
+    handle.addEventListener("pointerdown", startPanelDrag);
   }
 
   let lastWorkspace = null;

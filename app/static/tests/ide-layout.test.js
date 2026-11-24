@@ -61,7 +61,7 @@ test("a narrow window keeps the chat dock reachable", () => {
 test("the layout menu exposes every chrome region", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   assert.match(html, /id="layoutBtn"/, "there is a layout control");
-  for (const key of ["activity", "left", "right", "bottom", "status", "center"]) {
+  for (const key of ["activity", "left", "right", "bottom", "status", "center", "maximize"]) {
     assert.match(html, new RegExp(`data-layout="${key}"`), `the menu can toggle ${key}`);
   }
   assert.match(html, /id="layoutReset"/, "the layout can be reset");
@@ -108,4 +108,28 @@ test("activity navigation exits the centered and overlay layouts", () => {
   assert.match(ide, /matchMedia\("\(max-width: 1100px\)"\)/);
   assert.match(ide, /setPanel\("right", false\)/);
   assert.match(ide, /document\.body\.classList\.add\("nav-open"\)/);
+});
+
+test("the assistant dock is resizable and can fill the window", () => {
+  const ide = fs.readFileSync(path.join(__dirname, "..", "ide.js"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.match(ide, /dock-resizer" data-drag="right"/);
+  assert.match(ide, /dockResizer\.addEventListener\("pointerdown", startPanelDrag\)/);
+  assert.match(ide, /id="aiDockMax"/);
+  assert.match(ide, /setChatMax\(!state\.chatMax\)/);
+  assert.match(html, /id="i-maximize"/);
+  assert.match(html, /data-layout="maximize"/);
+
+  assert.match(css, /\.dock-resizer\s*\{[^}]*left:\s*-3px[^}]*cursor:\s*ew-resize/);
+  assert.match(css, /body\.chat-max \.app > \.ai-dock\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0/);
+  assert.match(css, /body\.chat-max \.ai-dock \.chat-column\s*\{[^}]*max-width:\s*none/);
+});
+
+test("the sidebar, bottom panel and assistant share one resize path", () => {
+  const app = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const ide = fs.readFileSync(path.join(__dirname, "..", "ide.js"), "utf8");
+  assert.match(app, /side === "right" \|\| side === "left" \? event\.clientX/);
+  assert.match(app, /side === "left"\s*\?\s*moveEvent\.clientX - start/);
+  assert.match(ide, /handle\.dataset\.drag = "left"/);
+  assert.match(ide, /handle\.addEventListener\("pointerdown", startPanelDrag\)/);
 });

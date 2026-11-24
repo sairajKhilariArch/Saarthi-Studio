@@ -1119,6 +1119,10 @@ const state = {
      column, so it has its own switch too. */
   uiShow: { activity: true, status: true },
   chatCenter: false,
+  /* Full-screen assistant: the dock covers the whole workbench until the user
+     restores it. Independent of chatCenter so closing maximize returns to the
+     placement the user had before. */
+  chatMax: false,
   model: "auto",
   /* thinking: "" means "model default" (no reasoning parameter). The choice is
      per message and sticky for the session; the server resolves
@@ -2800,11 +2804,20 @@ function loadChatCenter(storedPanelShow) {
   return !(storedPanelShow && storedPanelShow.right === false);
 }
 
+function loadChatMax() {
+  try {
+    return localStorage.getItem("freeai-chat-max") === "true";
+  } catch {
+    return false;
+  }
+}
+
 function saveLayout() {
   try {
     localStorage.setItem("freeai-panel-show", JSON.stringify(state.panelShow));
     localStorage.setItem("freeai-ui-show", JSON.stringify(state.uiShow));
     localStorage.setItem("freeai-chat-center", String(state.chatCenter));
+    localStorage.setItem("freeai-chat-max", String(state.chatMax));
   } catch { /* private mode */ }
 }
 
@@ -2816,6 +2829,8 @@ function syncLayoutControls() {
       if (!key) continue;
       input.checked = key === "center"
         ? state.chatCenter
+        : key === "maximize"
+          ? state.chatMax
         : key in state.panelShow
           ? state.panelShow[key]
           : Boolean(state.uiShow[key]);
@@ -2832,12 +2847,14 @@ function applyPanels() {
   // A centered thread has no meaning without the dock; the legacy shell keeps
   // its own centered chat view and never gets this class.
   if (dock && state.chatCenter && !state.panelShow.right) state.panelShow.right = true;
+  if (dock && state.chatMax && !state.panelShow.right) state.panelShow.right = true;
   document.body.classList.toggle("no-left", !state.panelShow.left);
   document.body.classList.toggle("no-right", !state.panelShow.right);
   document.body.classList.toggle("no-bottom", !state.panelShow.bottom);
   document.body.classList.toggle("no-activity", !state.uiShow.activity);
   document.body.classList.toggle("no-status", !state.uiShow.status);
   document.body.classList.toggle("chat-center", Boolean(dock) && state.chatCenter);
+  document.body.classList.toggle("chat-max", Boolean(dock) && state.chatMax && state.panelShow.right);
   for (const name of ["left", "right", "bottom"]) {
     const button = $(`${name}PanelToggle`);
     if (!button) continue;
@@ -2854,6 +2871,13 @@ function applyPanels() {
     centerButton.title = centered ? "Dock the thread on the right" : "Center the thread";
     centerButton.setAttribute("aria-label", centerButton.title);
   }
+  const maxButton = $("aiDockMax");
+  if (maxButton) {
+    const maximized = Boolean(dock) && state.chatMax;
+    maxButton.setAttribute("aria-pressed", String(maximized));
+    maxButton.title = maximized ? "Restore the assistant size" : "Full-screen assistant";
+    maxButton.setAttribute("aria-label", maxButton.title);
+  }
   syncLayoutControls();
 }
 
@@ -2862,6 +2886,7 @@ function setPanel(name, on) {
   // Closing the assistant while centered would leave the editor hidden and the
   // conversation gone; closing it returns to the editor instead.
   if (name === "right" && !state.panelShow.right) state.chatCenter = false;
+  if (name === "right" && !state.panelShow.right) state.chatMax = false;
   saveLayout();
   applyPanels();
   if (name === "bottom" && state.panelShow.bottom) showTerminalPanel();
@@ -2873,11 +2898,20 @@ function togglePanel(name) {
 }
 
 function setChatCenter(on) {
+  if (on) state.chatMax = false;
   state.chatCenter = Boolean(on);
   if (state.chatCenter) state.panelShow.right = true;
   saveLayout();
   applyPanels();
   if (state.chatCenter && $("prompt")) $("prompt").focus();
+}
+
+function setChatMax(on) {
+  state.chatMax = Boolean(on);
+  if (state.chatMax) state.panelShow.right = true;
+  saveLayout();
+  applyPanels();
+  if (state.chatMax && $("prompt")) $("prompt").focus();
 }
 
 function toggleUi(name) {
@@ -2887,25 +2921,44 @@ function toggleUi(name) {
 }
 
 function resetLayout() {
+  state.panelSize = {};
   state.panelShow = { left: true, right: Boolean($("aiDock")), bottom: false };
   state.uiShow = { activity: true, status: true };
   state.chatCenter = true;
+  state.chatMax = false;
+  try {
+    localStorage.removeItem("freeai-panel-size");
+    localStorage.removeItem("freeai-sidebar-w");
+  } catch { /* private mode */ }
+  writePanelVars();
   saveLayout();
   applyPanels();
 }
 
 function startPanelDrag(event) {
   const side = event.currentTarget.dataset.drag;
-  const prop = side === "right" ? "width" : "height";
-  const start = side === "right" ? event.clientX : event.clientY;
+  const start = side === "right" || side === "left" ? event.clientX : event.clientY;
+  // Let the assistant grow well past its old 640 px cap. The fixed ceiling was
+  // why a wide monitor could not give the thread more room by dragging.
+  const max = side === "right"
+    ? Math.max(PANEL_MAX.right, Math.min(1600, Math.round(window.innerWidth * 0.85)))
+    : side === "left"
+      ? Math.max(PANEL_MAX.left, Math.min(800, Math.round(window.innerWidth * 0.45)))
+    : side === "bottom"
+      ? Math.max(PANEL_MAX.bottom, Math.min(1200, Math.round(window.innerHeight * 0.8)))
+      : PANEL_MAX[side];
   let currentPx = getComputedStyle(document.documentElement).getPropertyValue(PANEL_VAR[side]).trim();
-  let value = Math.max(PANEL_MIN[side], Math.min(PANEL_MAX[side], parseFloat(currentPx) || PANEL_DEFAULT_W[side]));
+  let value = Math.max(PANEL_MIN[side], Math.min(max, parseFloat(currentPx) || PANEL_DEFAULT_W[side]));
   event.currentTarget.setPointerCapture(event.pointerId);
 
   const onMove = (moveEvent) => {
     moveEvent.preventDefault();
-    const delta = side === "right" ? start - moveEvent.clientX : start - moveEvent.clientY;
-    value = Math.max(PANEL_MIN[side], Math.min(PANEL_MAX[side], Math.round(value + delta)));
+    const delta = side === "right"
+      ? start - moveEvent.clientX
+      : side === "left"
+        ? moveEvent.clientX - start
+        : start - moveEvent.clientY;
+    value = Math.max(PANEL_MIN[side], Math.min(max, Math.round(value + delta)));
     state.panelSize[side] = value;
     document.documentElement.style.setProperty(PANEL_VAR[side], `${value}px`);
     if (side === "bottom" && terminalFit) terminalFit();
@@ -8964,6 +9017,7 @@ function bindEvents() {
   state.panelShow = defaultPanelShow(storedPanelShow, Boolean(document.getElementById("aiDock")));
   state.uiShow = loadUiShow();
   state.chatCenter = loadChatCenter(storedPanelShow);
+  state.chatMax = loadChatMax();
   PANEL_MIN = { left: 212, right: 240, bottom: 120 };
   PANEL_MAX = { left: 560, right: 640, bottom: 520 };
   writePanelVars();
@@ -8989,6 +9043,7 @@ function bindEvents() {
       const key = input && input.dataset ? input.dataset.layout : "";
       if (!key) return;
       if (key === "center") setChatCenter(Boolean(input.checked));
+      else if (key === "maximize") setChatMax(Boolean(input.checked));
       else if (key in state.uiShow) { state.uiShow[key] = Boolean(input.checked); saveLayout(); applyPanels(); }
       else if (key in state.panelShow) setPanel(key, Boolean(input.checked));
     });

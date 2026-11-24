@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.87.0
+
+### Added
+
+The assistant panel can be resized and opened full-screen on demand, and all
+three workbench panels share the same resizing behaviour.
+
+- The assistant dock has a draggable left edge at normal desktop widths. Its
+  width is saved with the sidebar and bottom panel sizes and can now grow well
+  past the old fixed 640 px ceiling (up to 85% of the window).
+- A full-screen button in the dock header and a **Full-screen assistant** item
+  in the Layout menu expand the assistant over the whole window. The chat
+  column is no longer capped at 840 px in this mode; the same button, the
+  Layout menu, or Escape restores the previous centered or docked placement.
+- The sidebar now uses the shared panel-drag path instead of a second drag
+  implementation. Sidebar width, bottom height and assistant width all persist
+  under one key; **Reset layout** also restores their default sizes.
+- The assistant resize handle is hidden when the panel is centered, full
+  screen, or an overlay on a narrow window, where it has no independent width.
+
+Also verified: the frontend suite passes 114/114, both scripts pass
+`node --check`, and a live headless browser run at 1280x800 and 455x900 resized
+all three panels, persisted the assistant width, expanded it to the full
+viewport, and restored it with the button and layout control.
+
 ## 3.86.1
 
 ### Fixed

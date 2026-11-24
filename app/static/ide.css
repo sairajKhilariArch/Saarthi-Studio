@@ -66,6 +66,7 @@ body.chat-center.no-activity .activity-bar { display: none; }
 body.chat-center .app > .ai-dock {
   grid-column: 2; border-left: 0; padding-right: var(--activity-w);
 }
+body.chat-center .dock-resizer { display: none; }
 body.chat-center .app > .bottom-panel,
 body.chat-center .app > .status-bar { grid-column: 1 / -1; }
 body.chat-center .ai-dock .chat-column {
@@ -79,6 +80,30 @@ body.chat-center .ai-dock .suggestions { grid-template-columns: 1fr 1fr; gap: 9p
 body.chat-center .ai-dock .suggestion { padding: 13px 14px; }
 body.chat-center .ai-dock .composer-shell { padding: 8px 28px 18px; }
 body.chat-center .ai-dock .msg { font-size: 13.5px; }
+
+/* Full-screen assistant: the dock owns the whole window and the chat column is
+   not capped. It comes after the centered rules so maximize wins from either
+   placement; restoring returns to the placement that was active before. */
+body.chat-max .app { grid-template-columns: minmax(0, 1fr); }
+body.chat-max .main,
+body.chat-max .sidebar,
+body.chat-max .activity-bar,
+body.chat-max .bottom-panel,
+body.chat-max .status-bar { display: none; }
+body.chat-max .app > .ai-dock {
+  position: fixed; inset: 0; z-index: 60; width: auto; height: auto;
+  grid-column: 1 / -1; border-left: 0; padding-right: 0; box-shadow: none;
+}
+body.chat-max .dock-resizer { display: none; }
+body.chat-max .ai-dock .chat-column {
+  max-width: none; margin: 0; padding: 26px clamp(18px, 5vw, 72px) 8px;
+}
+body.chat-max .ai-dock .composer-shell { padding: 8px clamp(18px, 5vw, 72px) 18px; }
+body.chat-max .ai-dock .welcome { padding: 54px 0 34px; }
+body.chat-max .ai-dock .suggestions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 700px) {
+  body.chat-max .ai-dock .suggestions { grid-template-columns: 1fr; }
+}
 
 /* ---------- activity bar ---------- */
 .activity-bar {
@@ -159,7 +184,13 @@ body.chat-center .ai-dock .msg { font-size: 13.5px; }
 .ai-dock {
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--panel); border-left: 1px solid var(--line);
+  position: relative;
 }
+.dock-resizer {
+  position: absolute; top: 0; bottom: 0; left: -3px; width: 7px;
+  cursor: ew-resize; z-index: 7; touch-action: none;
+}
+.dock-resizer:hover, .dock-resizer:active { background: var(--accent-shadow); }
 .ai-dock.hidden { display: none; }
 .ai-dock-head {
   display: flex; align-items: center; gap: 8px; flex: none;
@@ -385,6 +416,7 @@ body.chat-center .ai-dock .msg { font-size: 13.5px; }
     width: min(400px, 94vw); z-index: 40; box-shadow: var(--shadow-2);
   }
   body.no-right .app > .ai-dock { display: none; }
+  .dock-resizer { display: none; }
   /* A centered thread stays in the grid on narrow windows instead of becoming
      the 400 px overlay; it is already the only column left. */
   body.chat-center .app { grid-template-columns: var(--activity-w) minmax(0, 1fr); }

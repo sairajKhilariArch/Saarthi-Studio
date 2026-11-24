@@ -924,6 +924,7 @@ kbd {
      out (or after it has slid out). Only the open drawer accepts input. */
   body:not(.nav-open) .app > .sidebar { pointer-events: none; }
   body.nav-open .app > .sidebar { pointer-events: auto; }
+  .sidebar-resizer { display: none; }
   .rail-toggle { display: grid; }
   .chat-column, .composer-shell { padding-left: 16px; padding-right: 16px; }
   .kbd-hint { display: none; }

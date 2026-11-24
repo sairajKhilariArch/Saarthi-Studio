@@ -648,3 +648,33 @@ test("a centered thread opens the assistant and closing it returns the editor", 
   assert.equal(has("chat-center"), false);
   assert.equal(has("no-right"), true);
 });
+
+test("the assistant can fill the screen and restore its previous placement", () => {
+  const ui = loadApp();
+  const has = (name) => evaluate(ui, `document.body.classList.contains('${name}')`);
+
+  evaluate(ui, `state.chatCenter = false; state.chatMax = false; state.panelShow.right = false; setChatMax(true);`);
+  assert.equal(evaluate(ui, "state.chatMax"), true, "maximize opens the assistant");
+  assert.equal(evaluate(ui, "state.panelShow.right"), true);
+  assert.equal(has("chat-max"), true);
+  assert.equal(has("no-right"), false);
+
+  evaluate(ui, `setChatCenter(true)`);
+  assert.equal(evaluate(ui, "state.chatMax"), false, "centering leaves full-screen mode");
+  assert.equal(has("chat-max"), false);
+  assert.equal(has("chat-center"), true);
+
+  evaluate(ui, `setChatMax(true); setPanel("right", false);`);
+  assert.equal(evaluate(ui, "state.chatMax"), false, "closing the assistant leaves full-screen mode");
+  assert.equal(has("chat-max"), false);
+  assert.equal(has("no-right"), true);
+});
+
+test("reset layout restores the default size of every panel", () => {
+  const ui = loadApp();
+  evaluate(ui, `state.panelSize = { left: 500, right: 500, bottom: 400 }; writePanelVars(); resetLayout();`);
+  assert.equal(evaluate(ui, `document.documentElement.style.getPropertyValue("--sidebar-w")`), "286px");
+  assert.equal(evaluate(ui, `document.documentElement.style.getPropertyValue("--right-w")`), "300px");
+  assert.equal(evaluate(ui, `document.documentElement.style.getPropertyValue("--bottom-h")`), "240px");
+  assert.equal(evaluate(ui, `localStorage.getItem("freeai-panel-size")`), null);
+});
