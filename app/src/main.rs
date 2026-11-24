@@ -5026,6 +5026,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     let upgrade = ensure_setup(&state)?;
+    // Header values in an older `mcp.json` are moved to the OS credential
+    // store now, so a boot never leaves a bearer token in plaintext when the
+    // user has not opened the MCP panel since upgrading.
+    mcp::migrate_header_secrets(&state);
     // A folder restored from the last session is watched from boot, so changes
     // made before the first paint are indexed too. No folder means no watcher.
     if let Some(root) = state.workspace.current_root() {

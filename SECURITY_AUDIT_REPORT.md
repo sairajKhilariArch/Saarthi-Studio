@@ -2,8 +2,10 @@
 
 **Date:** 2026-11-24  
 **Branch:** `audit/full-application-2026-11-24`  
-**Version:** `3.88.1`  
+**Version:** `3.88.1` audit, remediated in `3.88.2`<br>
 **References used:** OWASP Top 10 (2021), OWASP ASVS 5.0 themes, desktop/local-web threat modeling, existing project ADRs and `docs/KNOWN-ISSUES.md`.
+
+> **Remediation update (3.88.2, 2026-11-24):** SEC-03 and the header half of SEC-05 are fixed in source with regression tests; SEC-07 is closed by a real `cargo-audit` scan (0 vulnerabilities); the dependency advisories found by that scan are fixed. The original findings and reproduction text are retained below, with each section marked with its final disposition. See `SECURITY_REMEDIATION_REPORT.md`, `VERIFIED_FIXES.md` and `REMAINING_ISSUES.md`.
 
 ## Scope and threat model
 
@@ -26,11 +28,11 @@ Out of scope: a hostile process running as the same OS user (it can read the app
 |---|---|---|---|---|
 | SEC-01 | **High / P1** | Core UI routes were outside the loopback `Host`/`Origin` guard, enabling DNS-rebinding read/write access | `app/src/main.rs` core routes | **Fixed** |
 | SEC-02 | **Medium / P2** | Recent-folder path interpolated into `innerHTML` | `app/static/app.js` project menu | **Fixed** |
-| SEC-03 | **Medium** | Remote MCP may use plain `http://` off loopback, exposing configured headers or bearer tokens in transit | `app/src/mcp.rs` `valid_url` | Open, documented |
+| SEC-03 | **Medium / P2** | Remote MCP may use plain `http://` off loopback, exposing configured headers or bearer tokens in transit | `app/src/mcp.rs`, `mcp_oauth.rs` | **Fixed 3.88.2** |
 | SEC-04 | **Medium** | Windows/macOS packages are unsigned; update checksums come from the same release origin | packaging/update | Accepted external gap |
-| SEC-05 | **Low** | MCP OAuth tokens and saved headers are not in an OS keychain | `mcp_oauth.rs`, `mcp.rs` | Accepted, 0600/file permissions |
+| SEC-05 | **Medium / P2** | Saved MCP header values were plaintext in `mcp.json`; desktop OAuth tokens were already in the OS keychain | `app/src/mcp.rs` | **Fixed 3.88.2** (headers); VS Code server remains 0600 |
 | SEC-06 | **Low** | 3 moderate npm advisories in the VS Code packaging toolchain (dev-only, fix requires a major upgrade) | `vscode-extension` dev dependencies | Accepted, no production exposure |
-| SEC-07 | **Low** | No Rust advisory scanner (`cargo-audit`/`cargo-deny`) available on this host | dependency supply chain | Verification gap |
+| SEC-07 | **Low** | No Rust advisory scanner (`cargo-audit`/`cargo-deny`) had been run | dependency supply chain | **Fixed**: 0 vulnerabilities, 5 warnings |
 | SEC-08 | **Process** | Windows/macOS/Android runtime security and signed-installer behavior were not observable here | cross-platform | Blocked |
 
 No SQL injection, command injection, arbitrary file read/write outside the workspace, authentication bypass of the Host API, or Wasm sandbox escape was reproduced.
@@ -81,7 +83,7 @@ This is deliberately one enforcement point rather than another route list. Exist
   - foreign `Host: evil.example:$port` on `/api/config` → **403**, body says loopback only;
   - foreign `Origin: http://evil.example` on `/api/capabilities` → **403**, body says cross-site;
   - normal loopback requests continue to return 200.
-- The complete 51-check suite passes against both debug and optimized release binaries.
+- The complete 53-check suite passes against both debug and optimized release binaries.
 - Manual before/after reproduction is recorded above; a foreign `Origin` is separately refused on `/api/capabilities`.
 
 ### Remaining risk
@@ -124,13 +126,26 @@ Frontend result: **115/115**.
 ## SEC-03 — Remote MCP plain HTTP
 
 **Severity:** Medium, configuration-dependent.  
-**Component:** `app/src/mcp.rs`, `valid_url`.
+**Component:** `app/src/mcp.rs`, `app/src/mcp_oauth.rs`.<br>
+**Status:** **Fixed in 3.88.2.**
 
-`valid_url` accepts both `http://` and `https://` for remote MCP transports. Unlike the provider editor and extension network policy, it does not require HTTPS for a non-loopback host. A user who configures `http://mcp.example.com` and supplies an `Authorization` header (or completes OAuth) would send that credential over cleartext.
+### Root cause
 
-**Why it was not changed in this patch:** it can invalidate existing local-network configurations and needs an explicit compatibility decision (for example, require HTTPS when headers/OAuth exist while allowing plain HTTP for loopback). The safe operational guidance is: use `https://` for every remote MCP server, and `http://` only for a server on this machine.
+`valid_url` accepted both schemes for any host and was applied only by the save handler. Connection setup read an existing registry file directly, and OAuth discovery/registration/token/authorize URLs were trusted as returned by metadata. A remote cleartext endpoint could therefore receive a configured bearer header or OAuth token even if the panel advised HTTPS.
 
-**Residual risk:** network attacker can read/modify MCP traffic for a deliberately plain-HTTP remote endpoint.
+### Fix
+
+One shared policy (`is_loopback_host` / `remote_url_error` / `require_remote_url`): HTTPS anywhere, HTTP only for `localhost`, `127.*`, `::1` or `0.0.0.0`. It is enforced when a server is saved, before `Connection::open` contacts a server, before a legacy-SSE announced endpoint is opened, for every OAuth URL (discovery, registration, token, authorization), and for every redirect hop through `safe_redirect_policy`. The parser is the same `reqwest::Url` used by the client, and the host check parses an IP address rather than prefix-matching a string.
+
+### Verification
+
+- `plain_http_is_only_for_this_machine`
+- `opening_an_insecure_remote_server_is_refused_before_connect`
+- `metadata_and_token_endpoints_never_use_cleartext_off_loopback`
+- `a_redirect_to_cleartext_off_loopback_is_refused`
+- e2e: remote HTTP save → **400**; loopback HTTP save/remove → **200**.
+
+**Residual:** HTTPS to a host that resolves to a local service remains allowed by design; TLS validation still applies. Existing remote HTTP configurations now fail with an actionable HTTPS message, which is the intended compatibility change.
 
 ## SEC-04 — Unsigned packages and checksum trust
 
@@ -140,7 +155,20 @@ No change was made in this audit. Code signing requires external certificates/ac
 
 ## SEC-05 — MCP credential storage
 
-MCP OAuth access/refresh tokens are stored in a 0600 JSON file beside the conversation store; saved custom headers live in `mcp.json`. This is documented in `docs/KNOWN-ISSUES.md` #44. The OS keychain is used for provider keys but not for these MCP secrets. Risk is limited to a same-user or filesystem compromise; file permissions are enforced, but a keychain migration would be stronger.
+**Status:** **Header storage fixed in 3.88.2.** The report’s claim that desktop MCP OAuth tokens were a 0600 file was stale: `mcp_oauth.rs` already uses `crate::keychain`. The real gap was saved custom headers in `mcp.json`.
+
+### Fix
+
+- Header values are written to the OS credential store under `mcp_headers/<server>`.
+- `mcp.json` keeps only header names; `read_servers` hydrates values only for names the file still declares.
+- Startup migrates legacy plaintext values. If the store is unavailable, the value remains in the permission-restricted file rather than being lost.
+- Removing a server deletes its vault entry.
+
+### Verification
+
+`header_values_live_in_the_keychain_not_the_registry` asserts the raw file value is empty, the read path hydrates it, and removal clears the entry. The test uses the project’s hermetic mock keychain, not a developer vault. A live Secret Service test remains a verification gap.
+
+**Residual:** the VS Code embedded Node server stores its OAuth session in a 0600 file (no VS Code `SecretStorage` bridge). Same-user filesystem access remains outside the boundary by design.
 
 ## SEC-06 — VS Code dev-tool advisories
 
@@ -150,9 +178,17 @@ MCP OAuth access/refresh tokens are stored in a 0600 JSON file beside the conver
 
 No blind major upgrade was made. The packaging tool is not shipped in the extension runtime.
 
-## SEC-07 — Rust advisory scan unavailable
+## SEC-07 — Rust advisory scan
 
-`cargo-audit` and `cargo-deny` were not installed and no network installation was performed. `Cargo.lock` was inspected and `cargo tree` reported 530 locked packages, but this is not equivalent to a vulnerability database scan. Run `cargo audit` in CI before treating the dependency surface as verified.
+**Status:** **Fixed in 3.88.2.** `cargo-audit 0.23.0` was installed and run against the final lock. The scan found vulnerabilities in the locked dependency set, including critical `RUSTSEC-2026-0369` for `zip 2.6.1`; those dependencies were upgraded and the final scan reports **0 vulnerabilities**.
+
+```text
+Scanning Cargo.lock for vulnerabilities (523 crate dependencies)
+warning: 5 allowed warnings found
+exit 0
+```
+
+The five warnings are `chrono`, `paste`, `proc-macro-error`, `rustls-pemfile` (unmaintained, no fixed upgrade) and `glib 0.18.5` (unsound; requires a newer Tauri/GTK line). They are documented, not ignored.
 
 ## Controls verified as effective
 
@@ -195,14 +231,15 @@ No blind major upgrade was made. The packaging tool is not shipped in the extens
 
 ## Recommendations, in priority order
 
-1. Decide and implement the remote MCP HTTPS policy (SEC-03), with a migration message for existing HTTP configurations.
-2. Add `cargo audit`/`cargo deny` to CI and fix or explicitly accept advisories.
-3. Move MCP OAuth tokens and saved headers to the OS keychain, matching provider keys.
+1. ~~Implement the remote MCP HTTPS policy (SEC-03)~~ — done in 3.88.2.
+2. ~~Run `cargo audit` and fix advisories~~ — done; 0 vulnerabilities, 5 documented warnings.
+3. ~~Move saved MCP headers to the OS keychain~~ — done on desktop; VS Code OAuth session remains 0600.
 4. Obtain Windows code-signing and macOS notarization credentials; sign the 11-asset release set.
 5. Add a real signed-package install/uninstall/upgrade test on Windows and macOS.
 6. Add a browser layout/accessibility check and a timed slow-stream stop test.
-7. Keep the new foreign-Host/Origin e2e checks as release-blocking.
+7. Keep the foreign-Host/Origin and MCP TLS e2e checks release-blocking.
+8. Add `cargo audit` to CI (or a scheduled job) so the clean scan cannot silently regress.
 
 ## Verdict
 
-The high-severity request-boundary defect is closed. The tested Linux build now enforces the same loopback origin policy on every local route, keeps secrets out of config responses, contains filesystem access, gates agent/tool actions, and preserves a strong default-deny Wasm sandbox. Remaining findings are configuration choices, external signing/platform gaps, or verification gaps, not unrepaired high-severity code defects found in this pass.
+The high-severity request-boundary defect is closed, the MCP cleartext and header-storage gaps are closed, and the locked Rust dependency set has no known vulnerabilities after the 3.88.2 upgrades. The tested Linux build enforces the loopback origin policy on every local route, keeps secrets out of config responses, contains filesystem access, gates agent/tool actions, and preserves a strong default-deny Wasm sandbox. Remaining findings are external signing/platform gaps, five advisory-database warnings, a real-keychain verification gap, and product/test breadth—not unrepaired high-severity code defects found in this pass.

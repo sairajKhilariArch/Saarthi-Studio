@@ -1,14 +1,14 @@
 # Sarthi Studio — Release Readiness Report
 
 **Date:** 2026-11-24  
-**Candidate:** 3.88.1  
-**Branch:** `audit/full-application-2026-11-24`  
-**Baseline:** 3.88.0 at `55d1218`  
+**Candidate:** 3.88.2<br>
+**Branch:** `remediation/security-2026-11-24`<br>
+**Baseline:** audit commit `9721a53`; `main` at `55d1218` untouched<br>
 **Host:** Linux x86_64 (local); no Windows, macOS, Android, signed-installer or tagged-release runner available.
 
 ## Recommendation
 
-**Release 3.88.1 as a Linux patch candidate after the normal GitHub checks and a tagged 11-asset build are green.** The code-level security issue found in this audit is fixed and regression-tested, and the Linux debug/release binaries pass the expanded 51-check end-to-end suite.
+**Release 3.88.2 as a Linux patch candidate after the normal GitHub checks and a tagged 11-asset build are green.** The two code-level security gaps found in remediation are fixed and regression-tested, `cargo audit` reports 0 vulnerabilities, and the Linux debug/release binaries pass the expanded 53-check end-to-end suite.
 
 **Not a full cross-platform production sign-off.** Windows/macOS installed-package behavior, Android, code signing/notarization, a real tagged release run and real third-party provider/MCP peers were not observable on this host.
 
@@ -16,14 +16,14 @@
 
 | Item | Status | Evidence |
 |---|---|---|
-| Debug build (`--locked`) | **Pass** | Build succeeds; 241 MB binary |
-| Production build (`--release --locked`) | **Pass** | 20 MB binary built in 3m06s |
-| Release binary boot | **Pass** | 3.88.1 `/api/health` ready in **174 ms** |
+| Debug build (`--locked`) | **Pass** | Build succeeds; 228 MB binary |
+| Production build (`--release --locked`) | **Pass** | 20 MB binary built in 2m17s (final incremental build) |
+| Release binary boot | **Pass** | 3.88.2 reaches readiness in both real-binary e2e runs |
 | Release binary RSS | **Observed** | 87.5 MiB at idle; ~88–94 MiB after a live UI session |
 | Live response headers | **Pass** | CSP, XFO DENY, nosniff, no-referrer, no-store; foreign Host 403 |
 | Linux desktop metadata | **Pass** | 9/9 |
 | Version consistency | **Pass** | 26/26 |
-| Release contract | **Pass** | 11 assets, all built/gated |
+| Release contract | **Pass** | 11 asset names defined and gated; actual platform packages not built here |
 | Offline release gate | **Pass** | 27/27 |
 | Artifact verification | **Pass** | 12/12 |
 | macOS bundle fixture | **Pass** | 13/13 |
@@ -33,19 +33,19 @@
 | Actual Windows/macOS packages | **Not run** | No Windows/macOS host |
 | Tagged GitHub release | **Not run** | No release authorization/tag in this audit |
 
-The release contract for 3.88.1 is:
+The release contract for 3.88.2 is:
 
 ```text
 free-ai-studio-android.aab
 free-ai-studio-android.apk
 free-ai-studio-vscode.vsix
-free-ai-studio_3.88.1-1_amd64.deb
-sarthi-studio_3.88.1_linux-x86_64.tar.gz
-sarthi-studio_3.88.1_macos-universal.app.zip
-sarthi-studio_3.88.1_macos-universal.tar.gz
-sarthi-studio_3.88.1_windows-x86_64.msi
-sarthi-studio_3.88.1_windows-x86_64.zip
-sarthi-studio_3.88.1_x86_64.AppImage
+free-ai-studio_3.88.2-1_amd64.deb
+sarthi-studio_3.88.2_linux-x86_64.tar.gz
+sarthi-studio_3.88.2_macos-universal.app.zip
+sarthi-studio_3.88.2_macos-universal.tar.gz
+sarthi-studio_3.88.2_windows-x86_64.msi
+sarthi-studio_3.88.2_windows-x86_64.zip
+sarthi-studio_3.88.2_x86_64.AppImage
 SHA256SUMS.txt
 ```
 
@@ -53,21 +53,21 @@ SHA256SUMS.txt
 
 | Suite | Result |
 |---|---|
-| Rust (`cargo test --locked`, lld) | **704 passed, 0 failed, 1 ignored** |
+| Rust (`cargo test --locked`, lld) | **709 passed, 0 failed, 1 ignored** |
 | Rust clippy (`--all-targets -- -D warnings`) | **Pass** |
 | rustfmt (`--check`) | **Pass** |
 | Frontend (`node --test`) | **115 passed, 0 failed** |
-| Real-binary e2e — debug | **51 passed, 0 failed** |
-| Real-binary e2e — release | **51 passed, 0 failed** |
+| Real-binary e2e — debug | **53 passed, 0 failed** |
+| Real-binary e2e — release | **53 passed, 0 failed** |
 | VS Code extension | **45 passed, 0 failed** |
 | Website build | **37 pages** |
 | npm production audit (VS Code) | **0 vulnerabilities** |
-| npm full audit (VS Code) | 3 moderate, dev-only `@vscode/vsce`/glob/minimatch; major-version fix only |
+| npm full audit (VS Code) | 3 moderate, dev-only `@vscode/vsce`/glob/minimatch; attempted 4.1.1 upgrade left 2 and required Node 22, so reverted |
 | npm full audit (website) | **0 vulnerabilities** |
-| Rust advisory scan | **Blocked** — no cargo-audit/cargo-deny |
+| Rust advisory scan | **0 vulnerabilities**; 5 warnings (exit 0) |
 | Android tests | **Blocked** — no JDK/SDK/Gradle/device |
 
-### What the 51 e2e checks cover
+### What the 53 e2e checks cover
 
 Real binary, real SQLite, real filesystem, real PTY, real process kill/restart, mock OpenAI-compatible provider:
 
@@ -77,6 +77,7 @@ Real binary, real SQLite, real filesystem, real PTY, real process kill/restart, 
 - config secret redaction;
 - project/memory/workflow CRUD;
 - skill catalogue;
+- remote cleartext MCP save refused (400); loopback HTTP save/remove accepted;
 - workspace open and file create/save/read/rename/delete;
 - path traversal refusal;
 - interactive terminal command;
@@ -102,12 +103,12 @@ The same checks were run against the optimized release binary, not only the debu
 | Wasm extension sandbox | Rust/ADR tests; no hostile third-party extension installed |
 | CSP/security headers | Live response verified |
 | Update checksum/zip-slip | Rust tests; no live update |
-| Remote MCP HTTPS-only | **Open** (documented residual; use HTTPS) |
-| MCP tokens in OS keychain | **Open** (0600 file documented) |
+| Remote MCP HTTPS-only | **Fixed and verified** (SEC-03; Rust + e2e) |
+| MCP saved headers in OS keychain | **Fixed and verified** (SEC-05; mock keychain) |
 | Signed packages | **Open/blocked** |
-| Rust advisory scan | **Blocked** |
+| Rust advisory scan | **0 vulnerabilities**; 5 warnings |
 
-No P0 or unmitigated P1 issue remains from this audit. The fixed P1 is regression-tested in the release-blocking e2e suite.
+No P0 or unmitigated P1 issue remains. The loopback-boundary and dependency P1s are fixed and covered by the release-blocking tests.
 
 ## Known limitations and blockers
 
@@ -119,8 +120,9 @@ No P0 or unmitigated P1 issue remains from this audit. The fixed P1 is regressio
 4. **No tagged 11-asset release run.** The contract and offline gate pass; the actual GitHub jobs did not run.
 5. **No code signing certificates/notarization.**
 6. **No real third-party provider, search, MCP, language-server, debugger or speech peer.**
-7. **No Rust advisory scan.**
-8. **No browser layout/pixel/accessibility suite.** Live smoke covers load/theme/nav/chat only.
+7. **No browser layout/pixel/accessibility suite.** Live smoke covers load/theme/nav/chat only.
+8. **Real OS keychain not exercised**; the header migration test uses the hermetic mock backend.
+9. **Five RustSec warnings remain** (four unmaintained crates and glib 0.18.5 unsound); no vulnerabilities.
 
 ### Product/verification limitations that do not block a Linux patch
 
@@ -129,7 +131,7 @@ No P0 or unmitigated P1 issue remains from this audit. The fixed P1 is regressio
 - No long-session memory leak/soak profile.
 - No real Secret Service/keychain integration exercised.
 - Database upgrade from every historical release was not replayed; the suite includes pre-projects migration and backup-before-migration tests.
-- MCP plain HTTP remains allowed for compatibility (SEC-03).
+- The VS Code embedded server stores its OAuth session in a 0600 file (no SecretStorage bridge).
 
 ## Rollout plan
 
@@ -139,7 +141,7 @@ No P0 or unmitigated P1 issue remains from this audit. The fixed P1 is regressio
 4. Let `verify-release` refuse a missing/renamed asset and `release-audit.yml` recheck it.
 5. Smoke the actual `.deb`/AppImage/tarball and, on their own hosts, the MSI and macOS `.app`.
 6. Publish only after the signed/notarized policy decision is made; if unsigned, keep the documented Gatekeeper/SmartScreen warning.
-7. Keep the new foreign-Host/Origin checks and all 51 e2e checks release-blocking.
+7. Keep the foreign-Host/Origin and MCP TLS checks and all 53 e2e checks release-blocking.
 
 ## Rollback plan
 
@@ -152,7 +154,7 @@ No P0 or unmitigated P1 issue remains from this audit. The fixed P1 is regressio
 
 | Question | Answer |
 |---|---|
-| Is the tested Linux build shippable? | **Yes, as 3.88.1 after CI/tagged build** |
+| Is the tested Linux build shippable? | **Yes, as 3.88.2 after CI/tagged build** |
 | Is the security P1 closed? | **Yes** |
 | Are regression tests in place? | **Yes, including release-binary e2e** |
 | Is cross-platform runtime verified here? | **No** |
@@ -160,4 +162,4 @@ No P0 or unmitigated P1 issue remains from this audit. The fixed P1 is regressio
 | Should this be described as a complete cross-platform production release? | **No** |
 | Should the code be pushed/deployed by this audit? | **No — not requested; branch left local** |
 
-**Release readiness: CONDITIONAL PASS for Linux 3.88.1.** The remaining conditions are execution of the normal CI/tagged-release pipeline and external platform/signing validation, not an unresolved defect found in this audit.
+**Release readiness: CONDITIONAL PASS for Linux 3.88.2.** The remaining conditions are execution of the normal CI/tagged-release pipeline and external platform/signing validation, not an unresolved code defect found in this remediation.

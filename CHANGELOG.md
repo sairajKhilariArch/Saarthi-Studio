@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.88.2
+
+### Security
+
+- Remote MCP servers must use `https://` unless the host is loopback (localhost,
+  `127.0.0.1`, `::1` or `0.0.0.0`). The rule is enforced when a server is saved,
+  again before a connection opens, for the OAuth discovery, registration,
+  token and legacy-SSE message endpoints, and for every redirect hop. An old
+  `mcp.json` with a cleartext
+  remote URL is refused with a message naming HTTPS instead of sending its
+  configured headers or bearer token over the network in the clear.
+- Saved MCP header values move to the OS credential store. `mcp.json` keeps
+  only the header names, startup migrates values written by older builds, and a
+  store failure falls back to the permission-restricted file rather than
+  losing the value.
+- `cargo audit` now reports **0 known vulnerabilities**. Updated `zip` 2.6.1 →
+  9.8.2 (fixes the critical archive-extraction advisories),
+  `rusqlite` 0.32.1 → 0.43.0 with bundled `libsqlite3-sys` 0.40.0, `tokio`
+  1.43.0 → 1.54.1, `url` 2.5.8 → 2.5.9 and `cookie` 0.18.2 → 0.18.3. The
+  remaining audit output is five unmaintained/unsound warnings (chrono, paste,
+  proc-macro-error, rustls-pemfile and the Tauri/GTK glib line) with no safe
+  in-line upgrade; none is a known vulnerability.
+
+### Tests
+
+- The real-binary suite now has **53 checks**, including rejection of a remote
+  cleartext MCP URL and acceptance/removal of a loopback HTTP server.
+- Header-secret migration, OAuth cleartext-endpoint refusal and offline URL
+  policy have Rust unit coverage. The complete Rust suite is **709 passed**
+  (1 ignored), frontend **115 passed** and VS Code **45 passed**.
+
 ## 3.88.1
 
 ### Fixed

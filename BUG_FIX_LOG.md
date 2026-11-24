@@ -1,9 +1,9 @@
 # Sarthi Studio — Bug Fix Log
 
 **Audit date:** 2026-11-24  
-**Branch:** `audit/full-application-2026-11-24`  
+**Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** `55d1218` (3.88.0)  
-**Fixed release:** 3.88.1  
+**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes<br>
 **Rule followed:** reproduce first, fix the cause, add a regression test, rerun the affected suite. No test was skipped or weakened to obtain a green result.
 
 ## Summary
@@ -13,6 +13,8 @@
 | BUG-01 | P1 / High | DNS rebinding reached core local routes | Fixed | 2 e2e checks + full suite |
 | BUG-02 | P2 / Medium | Recent-folder name injected into `innerHTML` | Fixed | frontend unit test + frontend suite |
 | BUG-03 | P3 | Stream metadata hid memory/retrieval unless a skill matched | Fixed | new e2e memory-stream check |
+| BUG-04 | P2 / Medium | Remote MCP accepted cleartext HTTP off loopback | Fixed in 3.88.2 | 3 Rust tests + 2 e2e checks |
+| BUG-05 | P2 / Medium | Saved MCP header values were plaintext in `mcp.json` | Fixed in 3.88.2 | header-keychain Rust test |
 
 ## BUG-01 — Core UI routes were outside the loopback origin guard
 
@@ -80,8 +82,8 @@ Added to `scripts/ci/test-e2e.sh`:
 
 Before the fix, the same live checks returned 200. After the fix:
 
-- Debug binary e2e: **51 passed, 0 failed**
-- Optimized release e2e: **51 passed, 0 failed**
+- Debug binary e2e: **53 passed, 0 failed**
+- Optimized release e2e: **53 passed, 0 failed**
 - Foreign Host/Origin checks both 403
 - Normal loopback UI and mock-provider chat still 200
 
@@ -187,7 +189,7 @@ Moved both checks out of the `auto_skills` block in both places. Each field is n
 4. Asserts the SSE body contains `"memory_used"`.
 5. Deletes the conversation and the memory record.
 
-This test would fail under the old nesting. Result: **51/51 e2e checks pass** on debug and release.
+This test would fail under the old nesting. Result: **53/53 e2e checks pass** on debug and release.
 
 ### Files modified
 
@@ -195,9 +197,69 @@ This test would fail under the old nesting. Result: **51/51 e2e checks pass** on
 - `scripts/ci/test-e2e.sh`
 - `CHANGELOG.md`
 
+## BUG-04 — Remote MCP could use cleartext HTTP
+
+### Description
+
+The desktop MCP URL check accepted `http://` for any host. A remote server with a configured `Authorization` header, or one completed over OAuth, could send the credential in the clear. The panel hint recommended HTTPS, but the server did not enforce it. An existing `mcp.json` was not rechecked when a connection opened, and OAuth metadata controlled discovery/token/authorize URLs.
+
+### Root cause
+
+`valid_url` was a syntax check only, applied only on save. Connection setup and every OAuth endpoint trusted their own URL input.
+
+### Fix
+
+Added one shared policy (`is_loopback_host` / `remote_url_error` / `require_remote_url`): HTTPS anywhere; HTTP only for `localhost`, `127.*`, `::1` or `0.0.0.0`. Enforced at save, `Connection::open`, the legacy-SSE announced endpoint, OAuth discovery/registration/token/authorize, and every redirect hop (`safe_redirect_policy`). The panel hint now says remote servers require HTTPS.
+
+### Regression test
+
+- `plain_http_is_only_for_this_machine`
+- `opening_an_insecure_remote_server_is_refused_before_connect`
+- `metadata_and_token_endpoints_never_use_cleartext_off_loopback`
+- `a_redirect_to_cleartext_off_loopback_is_refused`
+- e2e: remote HTTP save → 400; loopback HTTP save/remove → 200.
+
+Result: **709 Rust tests pass**; **53/53 e2e** on debug and release.
+
+### Files modified
+
+- `app/src/mcp.rs`
+- `app/src/mcp_oauth.rs`
+- `app/static/index.html`
+- `scripts/ci/test-e2e.sh`
+- `CHANGELOG.md`
+
+## BUG-05 — MCP header values were plaintext at rest
+
+### Description
+
+Provider keys and desktop MCP OAuth tokens already used the OS credential store, but custom MCP headers were written verbatim into `mcp.json`. Header values are commonly bearer tokens.
+
+### Root cause
+
+The registry serializer had no secret split; all fields were ordinary JSON. The keychain helper existed but was not called for headers.
+
+### Fix
+
+- Store the header map under `mcp_headers/<server>` in the OS credential store.
+- Blank values in `mcp.json`, hydrate on read only for names still declared.
+- Migrate legacy values at startup; leave the permission-restricted plaintext fallback if the store refuses the write.
+- Delete the vault entry when a server is removed.
+
+### Regression test
+
+`header_values_live_in_the_keychain_not_the_registry` asserts the raw file is blank, the read path hydrates, and removal clears the entry. It uses the project’s hermetic mock keychain. Result: pass in the **709 passed / 1 ignored** Rust run.
+
+### Files modified
+
+- `app/src/mcp.rs`
+- `app/src/main.rs`
+- `CHANGELOG.md`
+- `docs/KNOWN-ISSUES.md`
+
 ## Test-suite changes made for coverage (not bug fixes)
 
-The real-binary suite grew from 34 to 51 checks. New coverage:
+The real-binary suite grew from 34 to 53 checks. New coverage:
 
 - foreign `Host` and `Origin` refusal;
 - streaming chat produced a delta/done frame and stored one reply;
@@ -207,6 +269,7 @@ The real-binary suite grew from 34 to 51 checks. New coverage:
 - memory create/list/delete and streaming recall metadata;
 - workflow save/export/delete;
 - skill catalogue;
+- remote cleartext MCP save refusal, and loopback HTTP save/remove;
 - workspace file create/save/read/rename/delete;
 - workspace path traversal refusal;
 - interactive terminal PTY command that writes a file;
@@ -218,10 +281,10 @@ These are permanent tests, use scratch homes/databases, clean up after themselve
 
 | Check | Result |
 |---|---|
-| Rust suite | 704 passed, 0 failed, 1 ignored |
+| Rust suite | 709 passed, 0 failed, 1 ignored |
 | Frontend suite | 115 passed, 0 failed |
-| Real-binary e2e (debug) | 51 passed, 0 failed |
-| Real-binary e2e (release) | 51 passed, 0 failed |
+| Real-binary e2e (debug) | 53 passed, 0 failed |
+| Real-binary e2e (release) | 53 passed, 0 failed |
 | VS Code extension | 45 passed, 0 failed |
 | Clippy (`-D warnings`) | Pass |
 | rustfmt check | Pass |
@@ -232,4 +295,5 @@ These are permanent tests, use scratch homes/databases, clean up after themselve
 
 - **No per-message edit/delete/regenerate**: absent by product design, not a regression; reported in the matrix.
 - **Bodyless POST to the conversation delete route** showed a 405 in one early harness iteration while the same route answered with an explicit `{}` body. The e2e now sends the client-shaped `{}` request; the route was not re-tested bodyless afterwards, and no application defect was reproduced.
-- **Remote MCP HTTP** remains permitted for compatibility; reported as SEC-03 rather than silently changing configuration semantics.
+- **Five RustSec warnings** remain (chrono/paste/proc-macro-error/rustls-pemfile unmaintained; glib 0.18.5 unsound). No vulnerability remains; `cargo audit` exits 0.
+- **VS Code dev advisories**: 3 moderate via `@vscode/vsce`; production dependencies 0. A tested major upgrade left 2 moderate and required Node 22, so it was reverted.

@@ -1,14 +1,14 @@
 # Sarthi Studio — Restoration Report
 
 **Date:** 2026-11-24  
-**Branch:** `audit/full-application-2026-11-24`  
+**Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** 3.88.0 (`55d1218`)  
-**Final:** 3.88.1  
+**Final:** 3.88.2<br>
 **Approach:** restore the intended integration/behavior without reverting commits, replacing implementations, duplicating features or removing capabilities.
 
 ## Result in one paragraph
 
-No shipped feature had been removed or replaced, so no Git revert was needed. Three behaviors were **disconnected from their intended implementation**: the loopback origin guard was not applied to the core router, recent-folder rendering bypassed the safe DOM path, and streaming metadata lost two independent context fields behind a skill condition. Each was restored at its original integration point and verified with real tests. All existing product surfaces remain; no file format, database schema, config key or route was removed.
+No shipped feature had been removed or replaced, so no Git revert was needed. Three behaviors were **disconnected from their intended implementation**: the loopback origin guard was not applied to the core router, recent-folder rendering bypassed the safe DOM path, and streaming metadata lost two independent context fields behind a skill condition. The remediation pass then restored two security integrations that existed elsewhere but were missing from the MCP path: the HTTPS-off-loopback policy and OS-keychain storage for saved header values. Each was restored at its original integration point and verified with real tests. All existing product surfaces remain; no file format, database schema, config key or route was removed.
 
 ## Restored items
 
@@ -32,7 +32,7 @@ No shipped feature had been removed or replaced, so no Git revert was needed. Th
 - Foreign `Host` on `/api/config`: 403.
 - Foreign `Origin` on `/api/capabilities`: 403.
 - Normal loopback config/chat/workflow/file/terminal requests: 200 and functional.
-- 51/51 real-binary e2e checks pass on debug and release.
+- 53/53 real-binary e2e checks pass on debug and release.
 
 **Backward compatibility:** loopback browser, Tauri webview and VS Code embed all use a loopback Host; no supported client lost access. The only behavior change is that a foreign Host/Origin is now refused, which is the documented security boundary.
 
@@ -61,17 +61,37 @@ No shipped feature had been removed or replaced, so no Git revert was needed. Th
 
 **Restoration method:** un-nested the two checks in both the deep-search and normal streaming branches; no other metadata behavior changed.
 
-**Verification:** new e2e creates a memory, streams a related message in a separate conversation, asserts `"memory_used"` in the SSE done frame, then deletes both. 51/51 pass. The pre-fix behavior would fail this test.
+**Verification:** new e2e creates a memory, streams a related message in a separate conversation, asserts `"memory_used"` in the SSE done frame, then deletes both. 53/53 pass. The pre-fix behavior would fail this test.
 
-**Backward compatibility:** additive metadata; no consumer is required to handle it, and existing fields are unchanged.
+### R-04 — Remote MCP transport policy
+
+**Original intended behavior:** remote integrations use TLS; plain HTTP is only for a server on this machine. The provider editor, extension network policy and VS Code MCP client already enforced this shape.
+
+**What was disconnected:** the desktop MCP `valid_url` accepted HTTP for any host, and OAuth/SSE endpoints were not rechecked. The rule existed in the product elsewhere but was not applied at the MCP boundary.
+
+**Restoration method:** one shared policy at save, connect, legacy-SSE endpoint, and OAuth discovery/registration/token/authorize. No new transport was introduced.
+
+**Verification:** three Rust tests and two e2e checks; 53/53 on debug and release. Existing remote HTTP configurations now fail with an HTTPS message, which is the intended compatibility change.
+
+### R-05 — MCP header secret storage
+
+**Original intended behavior:** credentials use the OS credential store, as provider keys and desktop MCP OAuth tokens already did.
+
+**What was disconnected:** saved custom header values were serialized into `mcp.json`; only OAuth material used the keychain.
+
+**Restoration method:** write header values to the keychain, blank them in the registry, hydrate on read, migrate old values at startup, and keep the 0600 fallback if the store is unavailable. No header value is exposed through the API.
+
+**Verification:** `header_values_live_in_the_keychain_not_the_registry`; full Rust suite 709 passed, 1 ignored. The test uses the project’s hermetic mock keychain; a live Secret Service round trip remains unverified.
+
+**Backward compatibility:** existing servers keep working. On first launch their plaintext header values are migrated; if the credential store is unavailable, the 0600 file fallback preserves the value. The public server view still lists header names only.
 
 ## What was deliberately not restored
 
 | Item | Why |
 |---|---|
 | Per-message edit/delete/regenerate | No prior implementation or documented route found in the current tree. Adding it would be a new feature with history/prompt semantics, not a restoration. |
-| Remote MCP HTTPS-only policy | Present code intentionally accepts local HTTP; changing it can invalidate existing user configurations and requires a compatibility decision. It is reported as a residual security risk, not silently altered. |
-| `cargo-audit` scanning | Tool unavailable; no dependency upgrade or suppression was invented. |
+| ~~Remote MCP HTTPS-only policy~~ | Restored in 3.88.2 (R-04). |
+| ~~`cargo-audit` scanning~~ | Run in 3.88.2; 0 vulnerabilities, 5 documented warnings. |
 | Windows/macOS/Android runtime validation | No hosts/devices/SDKs available. The source and CI definitions remain intact. |
 | Signed installers | Requires external certificates/accounts and platform runners; not a source restoration. |
 | Browser layout suite | No browser-layout test ever existed; adding a real one is new verification infrastructure, not restoration. |
@@ -80,11 +100,12 @@ No commit was reverted. No working implementation was overwritten. No duplicate 
 
 ## Data and configuration preservation
 
-- No database schema migration was added by this audit, and no schema version was changed.
+- No new database schema migration was added by this work, and no schema version was changed for the remediation.
 - No existing table, column, config key or data path was renamed or removed.
-- No real user database, config file, workspace or credential was modified.
 - All tests used `mktemp`/scratch `FREE_AI_STUDIO_HOME` roots and cleaned up (or were kept only with explicit `E2E_KEEP=1`).
-- The audit did not run uninstall, swap, rollback or other destructive operations against real data.
+- No test intentionally used the real user database, config, workspace or credentials.
+- One verification command (`target/debug/free-ai-studio --version`) accidentally started the app against the real home because the binary has no version flag. It was stopped by the command timeout. `config.json` kept its 2026-11-22 mtime; the SQLite file was opened and its mtime changed. No user action was performed. The e2e and Rust suites are unaffected because they always use scratch homes.
+- No uninstall, swap, rollback or other destructive operation was run against real data.
 
 ## Verification that no functionality was lost
 
@@ -101,10 +122,10 @@ No commit was reverted. No working implementation was overwritten. No duplicate 
 | Terminal | Real PTY command wrote a file |
 | Agent | Approval, write, verification, restart, interruption |
 | Security headers | Present on live response |
-| Release binary | Same 51 e2e checks pass |
+| Release binary | Same 53 e2e checks pass |
 | Frontend | 115/115 |
-| Rust | 704/704 (1 ignored) |
+| Rust | 709 passed, 1 ignored |
 
 ## Final statement
 
-The audit **restored the intended security and reporting connections** without redesigning the application. The feature set at 3.88.1 is a superset of 3.88.0's tested behavior, with no intentional capability removed. Remaining gaps are external, documented product scope, or verification limitations, not silently deleted features.
+The remediation **restored the intended security and reporting connections** without redesigning the application. The feature set at 3.88.2 is a superset of 3.88.0's tested behavior, with no intentional capability removed. Remaining gaps are external, documented product scope, or verification limitations, not silently deleted features.

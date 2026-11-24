@@ -448,6 +448,24 @@ else
   die "skills endpoint failed ($(head -c 300 "$work/body"))"
 fi
 
+# A remote MCP server must use TLS. The panel can warn, but the server is the
+# authority: plain http is accepted only for a loopback endpoint, and an old
+# mcp.json is refused when a connection is opened.
+code="$(http POST "$base/api/mcp/servers" '{"name":"e2e-remote","transport":"http","url":"http://example.com/mcp"}')"
+if [ "$code" = "400" ] && grep -q 'Use https://' "$work/body"; then
+  pass "a remote MCP server without TLS is refused"
+else
+  die "remote cleartext MCP was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+code="$(http POST "$base/api/mcp/servers" "{\"name\":\"e2e-loopback\",\"transport\":\"http\",\"url\":\"http://127.0.0.1:$mock_port/mcp\"}")"
+remove_code="$(http POST "$base/api/mcp/servers/remove" '{"name":"e2e-loopback"}')"
+if [ "$code" = "200" ] && [ "$remove_code" = "200" ] && [ "$(field removed)" = "1" ]; then
+  pass "loopback MCP over http is allowed and removable"
+else
+  die "loopback MCP save/remove failed (save=$code remove=$remove_code: $(cat "$work/body"))"
+fi
+
 # Every user action leaves a process-log line; the boot is one of them, so this
 # also proves the log file was created beside the database in the scratch home.
 if [ "$(http GET "$base/api/diagnostics/log")" = "200" ]; then

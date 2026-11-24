@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-24  
 **Branch:** `audit/full-application-2026-11-24`  
-**Version:** `3.88.1`  
+**Version:** `3.88.2`<br>
 **Legend:** **Pass** = exercised against the real binary or real persistence; **Pass (test)** = covered by the Rust/frontend/extension suite, not re-driven through the UI; **Partial** = present but a stated behavior is unverified or limited; **Missing** = no implementation found; **Blocked** = environment or external service unavailable; **Fixed** = broken at baseline, repaired and re-tested.
 
 All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STUDIO_HOME`, the real debug/release binary, a real SQLite database and `scripts/mock-router.py` as the provider fixture. No real user data was touched.
@@ -56,7 +56,7 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Step log | `GET /api/runs/:id` | Pass | Pass | e2e `write, verify, done` |
 | Persistence across restart | kill/start | Pass | Pass | e2e run + steps survive |
 | Cancellation/interruption | kill mid-run; restart | Pass | Pass | e2e interrupted state and log |
-| Queue/concurrency | admission tests | Pass (test) | Pass (test) | 704-test suite |
+| Queue/concurrency | admission tests | Pass (test) | Pass (test) | 709-test suite |
 | Multi-agent/crew | crew templates/runtime tests | Pass (test) | Pass (test) | Rust tests; no UI crew run in this pass |
 | Permissions | allow/ask/deny rules | Pass (test) | Pass (test) | Rust permission/approval tests |
 | Execution monitoring | `/api/events`, runs panel | Pass | Pass | EventSource 200; runs routes covered by e2e/Rust tests |
@@ -156,7 +156,9 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Update checksum | Rust tests | Pass (test) | Pass (test) | tamper refused |
 | Archive traversal | installer tests | Pass (test) | Pass (test) | zip/tar guards |
 | Dependency audit | npm prod/full | Pass / partial | Partial | 0 prod; 3 moderate dev-only VSCode advisories |
-| Rust advisory scan | `cargo-audit` | Blocked | Blocked | tool not installed |
+| Rust advisory scan | `cargo-audit` | Blocked | **Fixed** | 0 vulnerabilities, 5 unmaintained/unsound warnings |
+| Remote MCP cleartext | URL policy at save/connect/OAuth/SSE | **Broken** | **Fixed** | Rust tests + e2e 400 for remote HTTP; loopback allowed |
+| MCP saved headers | keychain migration | **Plaintext** | **Fixed** | header-keychain Rust test; 0600 fallback |
 | Windows | CI/source only | Blocked | Blocked | no host |
 | macOS | CI/source only | Blocked | Blocked | no host |
 | Android | no SDK/device | Blocked | Blocked | no JDK/SDK/Gradle |
@@ -165,14 +167,15 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 ## Command evidence
 
 ```text
-cargo test --locked (with lld):        704 passed, 0 failed, 1 ignored
+cargo test --locked (with lld):        709 passed, 0 failed, 1 ignored
 node --test frontend:                  115 passed
-bash scripts/ci/test-e2e.sh (debug):    51 passed, 0 failed
-bash scripts/ci/test-e2e.sh (release):  51 passed, 0 failed
+bash scripts/ci/test-e2e.sh (debug):    53 passed, 0 failed
+bash scripts/ci/test-e2e.sh (release):  53 passed, 0 failed
 vscode-extension npm test:              45 passed
 website npm run build:                  37 pages
 test-version.sh:                        26 passed
 test-linux-metadata.sh:                 9 passed
+cargo audit:                            0 vulnerabilities (5 warnings)
 test-release.sh:                        27 passed
 test-artifacts.sh:                      12 passed
 test-bundle.sh:                         13 passed

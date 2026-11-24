@@ -99,21 +99,92 @@ fn registry_path(state: &AppState) -> PathBuf {
     state.config_path.with_file_name("mcp.json")
 }
 
+/// Header values are bearer tokens as often as not. Keep them in the same OS
+/// credential store as provider keys; the registry file keeps only the names.
+fn header_secret_name(server_name: &str) -> String {
+    format!("mcp_headers/{server_name}")
+}
+
+fn header_location(path: &FsPath) -> String {
+    crate::keychain_location(path)
+}
+
+/// Put any stored header value back into the in-memory server. A missing entry
+/// leaves the file's value alone, which is the legacy fallback when the store
+/// is disabled or unavailable.
+fn hydrate_header_secrets(path: &FsPath, servers: &mut [Server]) {
+    let location = header_location(path);
+    for server in servers {
+        if server.headers.is_empty() {
+            continue;
+        }
+        let Ok(Some(json)) =
+            crate::keychain::read_secret(&location, &header_secret_name(&server.name))
+        else {
+            continue;
+        };
+        let Ok(stored) = serde_json::from_str::<BTreeMap<String, String>>(&json) else {
+            continue;
+        };
+        for (key, value) in stored {
+            // Only keys the current file still declares: a header removed in
+            // the panel must not be resurrected from an old vault entry.
+            if server.headers.contains_key(&key) {
+                server.headers.insert(key, value);
+            }
+        }
+    }
+}
+
+/// Move plaintext header values out of the registry before it is written. If
+/// the store refuses the write, the value stays in the permission-restricted
+/// file instead of being lost, matching the config-key fallback.
+fn stash_header_secrets(path: &FsPath, servers: &mut [Server]) {
+    let location = header_location(path);
+    for server in servers {
+        let account = header_secret_name(&server.name);
+        if server.headers.is_empty() {
+            let _ = crate::keychain::delete_secret(&location, &account);
+            continue;
+        }
+        if server.headers.values().all(String::is_empty) {
+            continue;
+        }
+        let Ok(json) = serde_json::to_string(&server.headers) else {
+            continue;
+        };
+        if crate::keychain::write_secret(&location, &account, &json).is_ok() {
+            for value in server.headers.values_mut() {
+                value.clear();
+            }
+        }
+    }
+}
+
+fn forget_header_secret(path: &FsPath, server_name: &str) {
+    let _ =
+        crate::keychain::delete_secret(&header_location(path), &header_secret_name(server_name));
+}
+
 /// Servers from disk. A file that cannot be parsed reads as an empty registry:
 /// no tools is the safe failure, and the panel can rewrite it.
 pub(crate) fn read_servers(path: &FsPath) -> Vec<Server> {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<RegistryFile>(&bytes).ok())
-        .map(|file| file.servers)
+        .map(|file| {
+            let mut servers = file.servers;
+            hydrate_header_secrets(path, &mut servers);
+            servers
+        })
         .unwrap_or_default()
 }
 
 fn write_servers(path: &FsPath, servers: &[Server]) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(&RegistryFile {
-        servers: servers.to_vec(),
-    })
-    .map_err(|e| e.to_string())?;
+    let mut stored = servers.to_vec();
+    stash_header_secrets(path, &mut stored);
+    let bytes =
+        serde_json::to_vec_pretty(&RegistryFile { servers: stored }).map_err(|e| e.to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -122,6 +193,30 @@ fn write_servers(path: &FsPath, servers: &[Server]) -> Result<(), String> {
     crate::set_private_permissions(&temp, false).map_err(|e| e.to_string())?;
     fs::rename(&temp, path).map_err(|e| e.to_string())?;
     crate::set_private_permissions(path, false).map_err(|e| e.to_string())
+}
+
+/// Move header values from an `mcp.json` written by an older build into the
+/// credential store. Best effort: a store failure leaves the file untouched,
+/// so this can never make a working server unreadable at boot.
+pub(crate) fn migrate_header_secrets(state: &AppState) {
+    let path = registry_path(state);
+    // Inspect the file itself, not the hydrated view: after the first
+    // migration every value is blank on disk, and re-writing it on every boot
+    // would be needless churn.
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(file) = serde_json::from_str::<RegistryFile>(&raw) else {
+        return;
+    };
+    if file
+        .servers
+        .iter()
+        .any(|server| server.headers.values().any(|value| !value.is_empty()))
+    {
+        let servers = read_servers(&path);
+        let _ = write_servers(&path, &servers);
+    }
 }
 
 /// A server name becomes half of every permission target, so it stays boring:
@@ -144,20 +239,81 @@ fn valid_transport(transport: &str) -> bool {
     matches!(transport, "stdio" | "http" | "sse")
 }
 
-/// A shape check, not a URL parser: the scheme must be http(s), the rest must
-/// be non-empty, and neither whitespace nor control characters may appear.
-fn valid_url(url: &str) -> bool {
+/// A URL that names this machine. Plain HTTP is allowed only here; a remote
+/// server must be HTTPS so a configured bearer header or OAuth token never
+/// crosses a network in the clear.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    if host == "localhost" {
+        return true;
+    }
+    // Parse the address instead of prefix-matching: `127.evil.com` and
+    // `127.0.0.1.evil.com` are DNS names, not loopback addresses, and a
+    // prefix test would hand them the cleartext exception.
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback(),
+        Err(_) => false,
+    }
+}
+
+/// The reason a remote URL is unusable, or `None` when it is safe. The parser
+/// is the same URL implementation the HTTP client uses, so a value accepted
+/// here cannot be reinterpreted into a different scheme or host later.
+fn remote_url_error(url: &str) -> Option<&'static str> {
     if url.is_empty() || url.len() > 2048 {
-        return false;
+        return Some("A remote server needs a valid http:// or https:// URL.");
     }
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return false;
+        return Some("A remote server needs a valid http:// or https:// URL.");
     }
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or("");
-    !rest.is_empty()
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return Some("A remote server needs a valid http:// or https:// URL.");
+    };
+    let Some(host) = parsed.host_str() else {
+        return Some("A remote server needs a valid http:// or https:// URL.");
+    };
+    match parsed.scheme() {
+        "https" => None,
+        "http" if is_loopback_host(host) => None,
+        "http" => {
+            Some("Use https:// for a remote MCP server; plain http:// is only for this machine.")
+        }
+        _ => Some("A remote server needs a valid http:// or https:// URL."),
+    }
+}
+
+#[cfg(test)]
+fn valid_url(url: &str) -> bool {
+    remote_url_error(url).is_none()
+}
+
+/// Called wherever a remote connection is opened, so an old `mcp.json` written
+/// before this policy cannot keep using plain HTTP. Saving uses the same rule
+/// and returns the same sentence to the panel.
+pub(crate) fn require_remote_url(url: &str) -> Result<(), String> {
+    match remote_url_error(url) {
+        Some(error) => Err(error.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// A redirect is another connection, so it gets the same policy as the first
+/// URL. Without this, a remote HTTPS endpoint could redirect the client to a
+/// cleartext host after the initial check and leak a configured header.
+pub(crate) fn safe_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        match remote_url_error(attempt.url().as_str()) {
+            None => attempt.follow(),
+            Some(error) => attempt.error(format!("Refusing redirect: {error}")),
+        }
+    })
 }
 
 /// Enabled servers only: a disabled server never runs for a route or a run.
@@ -493,6 +649,9 @@ impl Connection {
     /// Open the transport the registry names. A remote server is a URL and a
     /// few headers; a stdio server is a child process.
     async fn open(server: &Server) -> Result<Connection, String> {
+        if server.transport != "stdio" {
+            require_remote_url(&server.url).map_err(|error| format!("{}: {error}", server.name))?;
+        }
         match server.transport.as_str() {
             "http" => Ok(Connection::Http(HttpSession::start(server)?)),
             "sse" => Ok(Connection::Sse(SseSession::start(server).await?)),
@@ -569,6 +728,7 @@ impl HttpSession {
     fn start(server: &Server) -> Result<HttpSession, String> {
         let client = reqwest::Client::builder()
             .timeout(OPERATION_TIMEOUT)
+            .redirect(safe_redirect_policy())
             .build()
             .map_err(|e| format!("Could not build an HTTP client: {e}"))?;
         Ok(HttpSession {
@@ -702,6 +862,7 @@ impl SseSession {
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
+            .redirect(safe_redirect_policy())
             .build()
             .map_err(|e| format!("Could not build an HTTP client: {e}"))?;
         let mut request = client
@@ -770,6 +931,11 @@ impl SseSession {
             .map_err(|_| {
                 "The MCP server closed its event stream before announcing an endpoint.".to_string()
             })?;
+        if let Err(error) = require_remote_url(&endpoint) {
+            return Err(format!(
+                "The MCP server announced an unsafe message endpoint: {error}"
+            ));
+        }
         Ok(SseSession {
             client,
             endpoint,
@@ -2019,6 +2185,9 @@ async fn oauth_start(
         )
         .into_response();
     }
+    if let Err(error) = require_remote_url(&server.url) {
+        return crate::json_error(StatusCode::BAD_REQUEST, error).into_response();
+    }
     if server.headers.contains_key("authorization") {
         return crate::json_error(
             StatusCode::BAD_REQUEST,
@@ -2247,12 +2416,10 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
         .unwrap_or("")
         .trim()
         .to_string();
-    if transport != "stdio" && !valid_url(&url) {
-        return crate::json_error(
-            StatusCode::BAD_REQUEST,
-            "A remote server needs an http:// or https:// URL.",
-        )
-        .into_response();
+    if transport != "stdio" {
+        if let Some(error) = remote_url_error(&url) {
+            return crate::json_error(StatusCode::BAD_REQUEST, error).into_response();
+        }
     }
     let args = match clean_args(input.get("args")) {
         Ok(args) => args,
@@ -2318,10 +2485,18 @@ async fn remove_server(State(state): State<AppState>, Json(input): Json<Value>) 
     let path = registry_path(&state);
     let mut servers = read_servers(&path);
     let before = servers.len();
+    let removed_names = servers
+        .iter()
+        .filter(|server| server.name == name)
+        .map(|server| server.name.clone())
+        .collect::<Vec<_>>();
     servers.retain(|server| server.name != name);
     let removed = before - servers.len();
     if let Err(error) = write_servers(&path, &servers) {
         return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    for removed_name in removed_names {
+        forget_header_secret(&path, &removed_name);
     }
     forget_pooled(name);
     Json(json!({ "ok": true, "removed": removed })).into_response()
@@ -2565,6 +2740,36 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         dir.join("mcp.json")
+    }
+
+    #[test]
+    fn header_values_live_in_the_keychain_not_the_registry() {
+        let path = scratch("header-secrets");
+        let mut entry = server("headers");
+        entry.headers.insert(
+            "authorization".to_string(),
+            "Bearer super-secret-token".to_string(),
+        );
+        write_servers(&path, &[entry.clone()]).expect("write registry");
+
+        let raw = fs::read_to_string(&path).expect("read registry");
+        assert!(
+            !raw.contains("super-secret-token"),
+            "the token left the file"
+        );
+        assert!(
+            raw.contains("authorization"),
+            "the name stays for the panel"
+        );
+
+        let loaded = read_servers(&path);
+        assert_eq!(
+            loaded[0].headers.get("authorization").map(String::as_str),
+            Some("Bearer super-secret-token")
+        );
+
+        forget_header_secret(&path, "headers");
+        let _ = fs::remove_dir_all(path.parent().expect("scratch parent"));
     }
 
     #[test]
@@ -2975,7 +3180,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_urls_must_be_http_and_free_of_whitespace() {
+    fn remote_urls_are_http_and_free_of_whitespace() {
         assert!(valid_url("http://127.0.0.1:8821/mcp"));
         assert!(valid_url("https://example.com/mcp"));
         assert!(!valid_url("ftp://example.com/mcp"));
@@ -2986,6 +3191,93 @@ mod tests {
             "https://example.com/{}",
             "x".repeat(2048)
         )));
+    }
+
+    #[test]
+    fn plain_http_is_only_for_this_machine() {
+        for local in [
+            "http://localhost:8821/mcp",
+            "http://127.0.0.1:8821/mcp",
+            "http://127.5.6.7/mcp",
+            "http://[::1]:8821/mcp",
+            "http://0.0.0.0:8821/mcp",
+        ] {
+            assert!(valid_url(local), "{local} is local");
+        }
+        for remote in [
+            "http://example.com/mcp",
+            "http://192.168.1.20:8821/mcp",
+            "http://mcp.internal/mcp",
+            "http://127.evil.com/mcp",
+            "http://127.0.0.1.evil.com/mcp",
+        ] {
+            assert!(!valid_url(remote), "{remote} must not be cleartext");
+            assert_eq!(
+                remote_url_error(remote),
+                Some(
+                    "Use https:// for a remote MCP server; plain http:// is only for this machine."
+                )
+            );
+        }
+        assert!(valid_url("https://192.168.1.20:8821/mcp"), "TLS is fine");
+    }
+
+    #[tokio::test]
+    async fn opening_an_insecure_remote_server_is_refused_before_connect() {
+        let server = Server {
+            name: "remote".to_string(),
+            transport: "http".to_string(),
+            command: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            url: "http://example.com/mcp".to_string(),
+            headers: BTreeMap::new(),
+            enabled: true,
+        };
+        let error = match Connection::open(&server).await {
+            Ok(_) => panic!("a cleartext remote server must not open"),
+            Err(error) => error,
+        };
+        assert!(error.contains("https://"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_cleartext_off_loopback_is_refused() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept fixture request");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://example.com/mcp\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        });
+
+        let client = reqwest::Client::builder()
+            .redirect(safe_redirect_policy())
+            .build()
+            .expect("client");
+        let error = client
+            .get(format!("http://{address}/mcp"))
+            .send()
+            .await
+            .expect_err("a redirect to a remote cleartext host must be refused");
+        let mut detail = error.to_string();
+        let mut source = std::error::Error::source(&error);
+        while let Some(inner) = source {
+            detail.push_str(": ");
+            detail.push_str(&inner.to_string());
+            source = std::error::Error::source(inner);
+        }
+        assert!(detail.contains("https://"), "{detail}");
+        server.await.expect("fixture task");
     }
 
     #[test]
