@@ -1,9 +1,9 @@
 //! Extensions: installed folders with a `manifest.json`.
 //!
 //! A manifest is discovered, validated and reported here; execution goes through
-//! [`crate::extension_run`], a wasmi sandbox with no host functions (ADR 0001).
-//! This module only decides whether a manifest may run at all, and refuses by name
-//! any capability the runner does not provide.
+//! [`crate::extension_run`], a wasmi sandbox whose host surface is explicit and
+//! permission-gated (ADR 0001). This module decides whether a manifest may run at
+//! all, and refuses by name any capability the runner does not provide.
 //!
 //! Layout, under the app's data directory:
 //!
@@ -71,14 +71,13 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_FILES: usize = 500;
 const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 /// The capabilities the runner actually provides (ADR 0001): the workspace
-/// functions plus the broker-gated network and terminal functions. `mcp.call`
-/// still installs but is refused at run by name, instead of running under a
-/// narrower sandbox than the manifest asked for.
-const V1_PERMISSIONS: [&str; 4] = [
+/// functions plus the broker-gated network, terminal and MCP functions.
+const V1_PERMISSIONS: [&str; 5] = [
     "workspace.read",
     "workspace.write",
     "terminal.run",
     "network",
+    "mcp.call",
 ];
 /// The manifest schema this build understands. Only 1 exists, so any other
 /// declared number is a folder written for a different build.
@@ -1782,6 +1781,7 @@ fn host_grant(
     declared: &[String],
     project: &str,
 ) -> crate::extension_run::HostGrant {
+    let mcp = declared.iter().any(|permission| permission == "mcp.call");
     crate::extension_run::HostGrant {
         root: state.workspace.root().unwrap_or_default(),
         // Its own folder is the only place an extension can persist anything;
@@ -1799,11 +1799,65 @@ fn host_grant(
         terminal: declared
             .iter()
             .any(|permission| permission == "terminal.run"),
+        mcp,
+        // The broker runs the call on the async runtime; the host function is
+        // synchronous inside wasmi, so a std channel joins the two without
+        // nesting a runtime. Routes always have a runtime; a direct test that
+        // does not gets a refusal rather than a panic.
+        mcp_call: if mcp {
+            tokio::runtime::Handle::try_current().ok().map(|runtime| {
+                Arc::new(LiveMcpCall {
+                    state: state.clone(),
+                    runtime,
+                }) as Arc<dyn crate::extension_run::McpCall>
+            })
+        } else {
+            None
+        },
+    }
+}
+
+struct LiveMcpCall {
+    state: AppState,
+    runtime: tokio::runtime::Handle,
+}
+
+impl crate::extension_run::McpCall for LiveMcpCall {
+    fn call(&self, server: &str, tool: &str, arguments: &Value) -> Result<Value, String> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let state = self.state.clone();
+        let server = server.to_string();
+        let tool = tool.to_string();
+        let arguments = arguments.clone();
+        let target = crate::mcp::tool_target(&server, &tool);
+        self.runtime.spawn(async move {
+            let result = crate::mcp::invoke(&state, &server, &tool, &arguments)
+                .await
+                .map_err(|failure| failure.message().to_string());
+            let _ = sender.send(result);
+        });
+        match receiver.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "mcp.call to \"{target}\" did not answer within 30 seconds."
+            )),
+        }
     }
 }
 
 /// Every host call is audited with the extension id. Refusals and asks also
 /// reach the permission audit table, where the agent's own refusals live.
+fn host_action(capability: &str) -> Option<crate::permissions::Action> {
+    Some(match capability {
+        "workspace.read" | "data.read" => crate::permissions::Action::FsRead,
+        "workspace.write" | "data.write" => crate::permissions::Action::FsWrite,
+        "network.fetch" => crate::permissions::Action::Network,
+        "terminal.run" => crate::permissions::Action::Command,
+        "mcp.call" => crate::permissions::Action::McpTool,
+        _ => return None,
+    })
+}
+
 fn audit_calls(state: &AppState, id: &str, project: &str, outcome: &crate::extension_run::Outcome) {
     for call in &outcome.audit {
         crate::oplog::record(
@@ -1820,20 +1874,17 @@ fn audit_calls(state: &AppState, id: &str, project: &str, outcome: &crate::exten
             ),
         );
         if call.decision != crate::permissions::Decision::Allow {
-            let action = if call.capability == "workspace.write" {
-                crate::permissions::Action::FsWrite
-            } else {
-                crate::permissions::Action::FsRead
-            };
-            crate::permissions::record(
-                state,
-                action,
-                &call.path,
-                call.decision,
-                call.scope,
-                project,
-                &format!("extension {id} host call"),
-            );
+            if let Some(action) = host_action(call.capability) {
+                crate::permissions::record(
+                    state,
+                    action,
+                    &call.path,
+                    call.decision,
+                    call.scope,
+                    project,
+                    &format!("extension {id} host call"),
+                );
+            }
         }
     }
 }
@@ -2266,11 +2317,7 @@ mod tests {
         assert!(run_block(&manifest(None, vec![]))
             .unwrap_or_default()
             .contains("No runtime"));
-        assert!(
-            run_block(&manifest(Some("wasm"), vec!["workspace.read", "mcp.call"]))
-                .unwrap_or_default()
-                .contains("mcp.call")
-        );
+        assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read", "mcp.call"])).is_none());
         assert!(run_block(&manifest(Some("wasm"), vec!["network"])).is_none());
         assert!(run_block(&manifest(Some("wasm"), vec!["terminal.run"])).is_none());
         assert!(run_block(&manifest(Some("wasm"), vec!["workspace.read"])).is_none());
@@ -3116,6 +3163,173 @@ mod tests {
         assert_eq!(presets[0]["extensionName"], "Gateway Pack");
         assert_eq!(presets[0]["extensionVersion"], "1.2.0");
         assert_eq!(presets[0]["baseUrl"], "https://gateway.example/v1");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_refused_host_call_is_audited_under_its_own_action() {
+        use crate::permissions::Action;
+        assert_eq!(host_action("workspace.read"), Some(Action::FsRead));
+        assert_eq!(host_action("data.write"), Some(Action::FsWrite));
+        assert_eq!(host_action("network.fetch"), Some(Action::Network));
+        assert_eq!(host_action("terminal.run"), Some(Action::Command));
+        assert_eq!(host_action("mcp.call"), Some(Action::McpTool));
+        assert_eq!(host_action("unknown.capability"), None);
+    }
+
+    /// The broker seam is exercised against a real HTTP MCP fixture: the module
+    /// runs in a blocking thread (as the route does it), the host function waits
+    /// for a task on the async runtime, and a saved allow rule is the only thing
+    /// that lets the call through.
+    #[tokio::test]
+    async fn a_granted_mcp_call_reaches_the_registry_server() {
+        use axum::routing::post;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hits = calls.clone();
+        let app = axum::Router::new().route(
+            "/",
+            post(move |Json(body): Json<Value>| {
+                let hits = hits.clone();
+                async move {
+                    let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+                    let id = body.get("id").cloned().unwrap_or(Value::Null);
+                    match method {
+                        "initialize" => Json(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2024-11-05",
+                                "serverInfo": { "name": "fixture", "version": "1.0.0" },
+                                "capabilities": {}
+                            }
+                        }))
+                        .into_response(),
+                        "tools/list" => Json(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "tools": [{
+                                    "name": "echo",
+                                    "description": "Echo text",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": { "text": { "type": "string" } },
+                                        "required": ["text"]
+                                    }
+                                }]
+                            }
+                        }))
+                        .into_response(),
+                        "tools/call" => {
+                            hits.fetch_add(1, Ordering::SeqCst);
+                            Json(json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [
+                                        { "type": "text", "text": "hello from mcp" }
+                                    ],
+                                    "isError": false
+                                }
+                            }))
+                            .into_response()
+                        }
+                        _ => StatusCode::ACCEPTED.into_response(),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let root = scratch("mcp-bridge");
+        let state = crate::AppState {
+            config_path: root.join("config.json"),
+            database_path: root.join("studio.db"),
+            static_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"),
+            workspace: crate::workspace::WorkspaceStore::load(root.join("workspace.json")),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .expect("client"),
+            terminal: crate::terminal::hub(),
+            events: crate::events::Hub::new(),
+            models_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        };
+        crate::ensure_setup(&state).expect("schema");
+        fs::write(
+            root.join("mcp.json"),
+            json!({
+                "servers": [{
+                    "name": "mcp-bridge-fixture",
+                    "transport": "http",
+                    "url": format!("http://{address}"),
+                    "enabled": true
+                }]
+            })
+            .to_string(),
+        )
+        .expect("mcp registry");
+        crate::permissions::grant(
+            &state,
+            crate::permissions::Rule {
+                action: crate::permissions::Action::McpTool,
+                target: "mcp-bridge-fixture.echo".to_string(),
+                decision: crate::permissions::Decision::Allow,
+                scope: crate::permissions::Scope::Always,
+                project: String::new(),
+                created_at: 0.0,
+            },
+        )
+        .expect("allow rule");
+
+        let request = r#"{"server":"mcp-bridge-fixture","tool":"echo","arguments":{"text":"hi"}}"#;
+        let escaped = request.replace('\\', "\\\\").replace('"', "\\\"");
+        let module = root.join("echo.wasm");
+        fs::write(
+            &module,
+            wat::parse_str(format!(
+                r#"(module
+                     (import "env" "mcp_call" (func $mcp (param i32 i32 i32 i32) (result i32)))
+                     (memory (export "memory") 1)
+                     (data (i32.const 0) "{escaped}")
+                     (func (export "run") (result i32)
+                       (call $mcp (i32.const 0) (i32.const {}) (i32.const 512) (i32.const 1024))))"#,
+                request.len()
+            ))
+            .expect("wat"),
+        )
+        .expect("module");
+        let grant = host_grant(
+            &state,
+            &root.join("extensions"),
+            "mcp-fixture",
+            &["mcp.call".to_string()],
+            "",
+        );
+        let run = tokio::task::spawn_blocking(move || {
+            crate::extension_run::run_file_with(
+                &module,
+                Some(grant),
+                crate::extension_run::RunOptions::default(),
+            )
+        })
+        .await
+        .expect("join")
+        .expect("run");
+        assert!(run.exit_code > 0, "the MCP answer was written");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one tools/call");
+        assert_eq!(run.audit[0].capability, "mcp.call");
+        assert_eq!(run.audit[0].path, "mcp-bridge-fixture.echo");
+        assert_eq!(run.audit[0].decision, crate::permissions::Decision::Allow);
+        server.abort();
         let _ = fs::remove_dir_all(&root);
     }
 }

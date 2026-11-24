@@ -1,5 +1,37 @@
 # Changelog
 
+## 3.88.0
+
+### Added
+
+The extension sandbox gained its last declared capability: `mcp.call`.
+
+- A wasm extension that declares `mcp.call` can import `env.mcp_call` and send
+  one bounded JSON request (`server`, `tool`, `arguments`) per call. The call
+  uses the same `server.tool` target as the MCP panel and agent loop, and needs
+  a saved `mcp_tool` allow rule; the default `ask` is a refusal because
+  unattended extension code cannot answer a prompt.
+- The broker owns the configured MCP entry, transport session, headers and
+  OAuth token. Only the JSON result crosses into the sandbox, within the same
+  64-call/1 MiB host budget and a 30-second wait.
+- `mcp.call` now counts as runnable at discovery, so a manifest that requests it
+  is no longer installable-but-refused-at-run with “the v1 runner does not
+  provide”.
+
+### Fixed
+
+- A refused network or terminal host call was written to the permission audit
+  as `fs_read`. Each sandbox capability now records its own action
+  (`network.fetch` as `network`, `terminal.run` as `command`, `mcp.call` as
+  `mcp_tool`), so Settings shows the rule that actually decided.
+
+Also verified: the full Rust suite passes 704/704 (1 ignored), the frontend
+suite 114/114, the version suite 26/26, and the Linux metadata suite 9/9. The
+extension runner tests include a real HTTP MCP fixture: a wasm module in a
+blocking thread called `env.mcp_call`, the broker reached the server through the
+saved `mcp_tool` allow rule, and the result crossed back into the sandbox. The
+debug build succeeds at 3.88.0. No live third-party MCP server was available.
+
 ## 3.87.0
 
 ### Added

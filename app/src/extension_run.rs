@@ -17,6 +17,7 @@
 //! env.last_error(ptr, cap) -> i32                         message bytes written
 //! env.fetch(req_ptr, req_len, out_ptr, out_cap) -> i32    response bytes written
 //! env.command(cmd_ptr, cmd_len, out_ptr, out_cap) -> i32  output bytes written
+//! env.mcp_call(req_ptr, req_len, out_ptr, out_cap) -> i32 result bytes written
 //! ```
 //!
 //! `arguments`/`result` are the tool ABI: a call hands the module the JSON
@@ -37,6 +38,11 @@
 //! manifest permission (`network`, `terminal.run`) *and* a saved allow rule for
 //! the target; an `ask` is a refusal because unattended code has no one to ask.
 //! Neither exists unless the manifest declares it.
+//!
+//! `mcp_call` takes `{server, tool, arguments}`, needs the manifest permission
+//! `mcp.call` and a saved `mcp_tool` allow rule for `server.tool`, and answers
+//! the same JSON object the MCP route returns. The extension never sees a
+//! server's command, URL, headers or OAuth token; the broker owns the session.
 //!
 //! Error codes: `-1` refused, `-2` invalid path, `-3` missing, `-4` too large,
 //! `-5` not UTF-8 text, `-6` I/O failure. A host function is linked only when
@@ -118,8 +124,8 @@ pub(crate) struct HostCall {
 
 /// What an extension was granted for this run: the open folder, its own data
 /// folder, the project the rules are resolved against, the rules themselves, and
-/// which of the two workspace capabilities its manifest declared.
-#[derive(Debug, Clone)]
+/// which capabilities its manifest declared.
+#[derive(Clone)]
 pub(crate) struct HostGrant {
     pub root: PathBuf,
     /// `<extensions>/<id>/data`, the only place an extension may persist.
@@ -130,6 +136,10 @@ pub(crate) struct HostGrant {
     pub write: bool,
     pub network: bool,
     pub terminal: bool,
+    pub mcp: bool,
+    /// The live broker when `mcp.call` was granted. Kept as a trait object so
+    /// this module never depends on `AppState`, the async runtime or MCP state.
+    pub mcp_call: Option<Arc<dyn McpCall>>,
 }
 
 struct Limits {
@@ -293,6 +303,12 @@ pub(crate) fn run_file_with(
     run_bytes(&bytes, grant, options)
 }
 
+/// Broker seam for `env.mcp_call`: the sandbox stays free of `AppState` and the
+/// async runtime, and tests can prove the gate without starting an MCP server.
+pub(crate) trait McpCall: Send + Sync {
+    fn call(&self, server: &str, tool: &str, arguments: &Value) -> Result<Value, String>;
+}
+
 fn run_bytes(
     bytes: &[u8],
     grant: Option<HostGrant>,
@@ -317,6 +333,7 @@ fn run_bytes(
             }
             ("env", "fetch") => grant.as_ref().map(|grant| grant.network).unwrap_or(false),
             ("env", "command") => grant.as_ref().map(|grant| grant.terminal).unwrap_or(false),
+            ("env", "mcp_call") => grant.as_ref().map(|grant| grant.mcp).unwrap_or(false),
             // The tool ABI is the shape of a call, not access to anything, so
             // it needs no permission: a module that imports it without a tool
             // declared simply reads empty arguments.
@@ -458,6 +475,20 @@ fn run_bytes(
              out_cap: i32|
              -> i32 {
                 host_command(&mut caller, command_ptr, command_len, out_ptr, out_cap)
+            },
+        )
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap(
+            "env",
+            "mcp_call",
+            |mut caller: wasmi::Caller<'_, HostState>,
+             request_ptr: i32,
+             request_len: i32,
+             out_ptr: i32,
+             out_cap: i32|
+             -> i32 {
+                host_mcp_call(&mut caller, request_ptr, request_len, out_ptr, out_cap)
             },
         )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
@@ -997,6 +1028,94 @@ fn host_command(
     }
 }
 
+/// `mcp.call`: one configured MCP tool. The permission target is the same
+/// `server.tool` rule the agent and the MCP panel use. The broker owns the
+/// server's command, URL, headers and OAuth token; only its JSON answer crosses
+/// into the sandbox.
+fn host_mcp_call(
+    caller: &mut wasmi::Caller<'_, HostState>,
+    request_ptr: i32,
+    request_len: i32,
+    out_ptr: i32,
+    out_cap: i32,
+) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let Some(bytes) = guest_bytes(caller, request_ptr, request_len, MAX_REQUEST_BYTES) else {
+        return caller.data_mut().fail(
+            -4,
+            format!("An mcp.call request must be at most {MAX_REQUEST_BYTES} bytes."),
+        );
+    };
+    let request: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return caller
+                .data_mut()
+                .fail(-2, "The mcp.call request is not valid JSON.")
+        }
+    };
+    let server = request
+        .get("server")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let tool = request
+        .get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if server.is_empty() || tool.is_empty() {
+        return caller
+            .data_mut()
+            .fail(-2, "The mcp.call request needs a server and a tool.");
+    }
+    if server.len() > 64 || tool.len() > 128 {
+        return caller
+            .data_mut()
+            .fail(-2, "The MCP server or tool name is too long.");
+    }
+    let arguments = match request.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(Value::Object(_)) => request["arguments"].clone(),
+        Some(_) => {
+            return caller
+                .data_mut()
+                .fail(-2, "MCP arguments must be a JSON object.")
+        }
+    };
+    let target = crate::mcp::tool_target(server, tool);
+    if let Err(code) = caller
+        .data_mut()
+        .decide(Action::McpTool, &target, "mcp.call")
+    {
+        return code;
+    }
+    let Some(call) = caller
+        .data()
+        .grant
+        .as_ref()
+        .and_then(|grant| grant.mcp_call.clone())
+    else {
+        return caller
+            .data_mut()
+            .fail(-1, "MCP calls are not available in this run.");
+    };
+    match call.call(server, tool, &arguments) {
+        Ok(payload) => {
+            let answer = payload.to_string();
+            write_out(caller, answer.as_bytes(), out_ptr, out_cap)
+        }
+        Err(error) => caller
+            .data_mut()
+            .fail(-6, format!("mcp.call on \"{target}\" failed: {error}")),
+    }
+}
+
 fn run_shell(root: &Path, command: &str) -> Result<String, (i32, String)> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1240,6 +1359,8 @@ mod tests {
             write,
             network: false,
             terminal: false,
+            mcp: false,
+            mcp_call: None,
         }
     }
 
@@ -1344,8 +1465,12 @@ mod tests {
     }
 
     #[test]
-    fn network_and_terminal_imports_need_their_manifest_permission() {
-        for (name, import) in [("fetch", "fetch"), ("command", "command")] {
+    fn broker_imports_need_their_manifest_permission() {
+        for (name, import) in [
+            ("fetch", "fetch"),
+            ("command", "command"),
+            ("mcp", "mcp_call"),
+        ] {
             let root = workspace(&format!("gate-{name}"));
             let path = module_file(
                 &format!("gate-{name}"),
@@ -1431,6 +1556,69 @@ mod tests {
         let outcome = run_file(&path, Some(host)).expect("run");
         assert_eq!(outcome.exit_code, 9, "exit 0 plus the two output bytes");
         assert_eq!(outcome.audit[0].capability, "terminal.run");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    struct RecordingMcp {
+        calls: Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
+        answer: Result<Value, String>,
+    }
+
+    impl McpCall for RecordingMcp {
+        fn call(&self, server: &str, tool: &str, arguments: &Value) -> Result<Value, String> {
+            self.calls.lock().expect("recording").push((
+                server.to_string(),
+                tool.to_string(),
+                arguments.clone(),
+            ));
+            self.answer.clone()
+        }
+    }
+
+    #[test]
+    fn an_mcp_call_needs_a_saved_rule_and_goes_through_the_broker() {
+        let root = workspace("mcp");
+        let request = r#"{"server":"demo","tool":"echo","arguments":{"text":"hi"}}"#;
+        let escaped = request.replace('\\', "\\\\").replace('"', "\\\"");
+        let path = module_file(
+            "mcp",
+            &format!(
+                r#"(module
+                     (import "env" "mcp_call" (func $mcp (param i32 i32 i32 i32) (result i32)))
+                     (memory (export "memory") 1)
+                     (data (i32.const 0) "{escaped}")
+                     (func (export "run") (result i32)
+                       (call $mcp (i32.const 0) (i32.const {}) (i32.const 512) (i32.const 1024))))"#,
+                request.len()
+            ),
+        );
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut host = grant(&root, false, false);
+        host.mcp = true;
+        host.mcp_call = Some(Arc::new(RecordingMcp {
+            calls: calls.clone(),
+            answer: Ok(json!({ "ok": true, "text": "42" })),
+        }));
+        // The default MCP policy is ask, which unattended code cannot answer.
+        let refused = run_file(&path, Some(host.clone())).expect("run");
+        assert_eq!(refused.exit_code, -1);
+        assert!(calls.lock().expect("calls").is_empty());
+        assert_eq!(refused.audit[0].capability, "mcp.call");
+        assert_eq!(refused.audit[0].path, "demo.echo");
+        assert_eq!(refused.audit[0].decision, Decision::Ask);
+
+        host.rules = vec![rule(Action::McpTool, "demo.echo", Decision::Allow)];
+        let outcome = run_file(&path, Some(host)).expect("run");
+        assert!(outcome.exit_code > 0, "the broker answer was written");
+        let calls = calls.lock().expect("calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "demo");
+        assert_eq!(calls[0].1, "echo");
+        assert_eq!(calls[0].2, json!({ "text": "hi" }));
+        drop(calls);
+        assert_eq!(outcome.audit[0].capability, "mcp.call");
+        assert_eq!(outcome.audit[0].decision, Decision::Allow);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir_all(&root);
     }

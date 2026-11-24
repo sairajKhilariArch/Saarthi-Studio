@@ -1,6 +1,6 @@
 # ADR 0001 — Extension execution is WASM-first and capability-brokered
 
-- **Status:** accepted; implementation started — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0, run history in 2.24.0, broker-gated network and terminal host functions in 3.84.0 (see the implementation notes below)
+- **Status:** accepted; implementation complete for the v1 surface — compute-only runner in 2.20.0, workspace host functions in 2.21.0, per-extension data in 2.22.0, run control in 2.23.0, run history in 2.24.0, broker-gated network and terminal host functions in 3.84.0, MCP host function in 3.88.0 (see the implementation notes below)
 - **Date:** 2026-11-09
 - **Deciders:** project maintainers
 - **Supersedes:** none
@@ -64,13 +64,13 @@ once. This ADR exists so that decision is made before a loader, not after.
    | `workspace.write` | as read, plus the permission rules; writes are atomic and size-capped |
    | `network` | host function (`env.fetch`), one HTTP request; redirects disabled; needs a saved allow rule for the host |
    | `terminal.run` | host function (`env.command`), one shell command in the open folder; 10 s cap, bounded output; needs a saved allow rule |
-   | `mcp.call` | **no host function**; refused at run |
+   | `mcp.call` | host function (`env.mcp_call`), one configured MCP tool; needs a saved allow rule for `server.tool`; the broker owns the session and credentials |
 
    Nothing in the runner surface can reach config, the database or provider
-   keys directly. The terminal and network are reachable only through the two
-   host functions above, each behind both the manifest permission and a saved
-   allow rule; the default `ask` is a refusal because no one is present to
-   answer it.
+   keys directly. The terminal, network and MCP servers are reachable only
+   through the host functions above, each behind both the manifest permission
+   and a saved allow rule; the default `ask` is a refusal because no one is
+   present to answer it.
 
 6. **Resource limits are part of the boundary.** Each run has a fuel budget and
    a wall-clock cap, a fixed memory ceiling, a bounded output and a bounded
@@ -105,9 +105,9 @@ the ADR says.
    executable memory is generated. Binary size grows; that was the ADR's
    accepted cost and it still holds.
 
-### Network and terminal (3.84.0)
+### Network, terminal and MCP (3.84.0, 3.88.0)
 
-Both were added as host functions rather than by widening the ambient sandbox.
+The first two were added as host functions rather than by widening the ambient sandbox.
 `env.fetch` accepts a bounded JSON envelope, refuses credentials in the URL,
 uses GET/POST/PUT/PATCH/DELETE/HEAD, disables redirects (so the approved host is
 the host that answers), and caps the response at 1 MiB. Its permission target is
@@ -115,7 +115,16 @@ the URL host. `env.command` runs one `sh -c` (or `cmd /C`) command in the open
 folder with a 10-second cap, captures both streams into bounded temporary files,
 and reports `exit N` before the output. Its permission target is the workspace
 root. Both need their manifest permission, a saved allow rule, and still count
-against the 64-call host budget. `mcp.call` remains refused.
+against the 64-call host budget.
+
+`env.mcp_call` arrived in 3.88.0. It accepts a bounded JSON envelope
+(`server`, `tool`, `arguments`), requires the manifest's `mcp.call` permission
+and a saved `mcp_tool` allow rule for `server.tool` (the same target the MCP
+panel and agent loop use), and hands the call to the same broker. The broker
+owns the server registry entry, transport session, headers and OAuth token; the
+module receives only the JSON result. Calls count against the 64-call/1 MiB host
+budget, and the blocking host function waits at most 30 seconds. `ask` remains a
+refusal for unattended code.
 
 ### First slice
 
@@ -313,9 +322,8 @@ A loader is not merged until all of these exist and are tested:
 
 - Trust and signing: should an extension need a signature, or is a local folder
   the user chose sufficient for v1?
-- Does `network` ever ship, and if so as a host-mediated allowlist or not at all?
-- Can `terminal.run` be mediated safely enough to exist, or should extensions
-  never have it?
+- Do the broker-gated `network`, `terminal.run` and `mcp.call` functions hold up
+  against real third-party peers and unattended-use testing?
 - Is there a second OS-level layer worth adding under Wasmtime?
 - When a sandboxed JS runtime becomes available, does `main.js` get a
   compatibility window or a hard cutover?

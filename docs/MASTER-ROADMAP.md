@@ -84,7 +84,7 @@ state were corrected in that pass.
 | 5 — Run queue | No workstream remains open. Cross-process admission closed in 3.50.0: promotion claims its slot inside one conditional UPDATE, so the live count and the promotion cannot be separated by another process. An abandoned checkout closed in 3.51.0: `POST /api/runs/:id/discard` removes a finished run's worktree and its `run/<short>` branch without touching the workspace. The editor half closed in 3.52.0: a save is recorded in the ledger, so a live run that never read the file refuses the write by name instead of silently replacing the person's change. The outside-program half closed in 3.84.0: the index watcher records each changed text path (up to 256 per flush, 1 MiB each) in the same ledger, so a formatter, checkout or another editor is no longer invisible. Binary and over-cap paths still rely on the read/write fingerprint check. |
 | 9 — Developer environment | No named requirement. Highlighting through the workbench layer (3.27.0), completion (3.25.0), definition (3.28.0), the file outline (3.29.0), references (3.30.0), formatting (3.23.0), unsaved-buffer recovery (3.33.0), language-server diagnostics (3.49.0) and the debugger (3.55.0) are done. The editor still has no document engine of its own and `ide.js` has no harness; those are recorded as product choices, not missing routes. |
 | 14 — Cross-platform | Android router management and local execution remain. VS Code parity is complete: the local contract (3.20.0) drives UI gating (3.22.0), the embedded server asks for a reasoning level (3.47.0), runs stdio MCP servers (3.48.0), and the current tree also has HTTP/SSE transports with custom headers, MCP OAuth, per-run thinking levels and MCP tools in agent prompts. |
-| 15 — Extensions | Custom tools, UI panels (3.70.0), declarative provider presets (3.71.0), and broker-gated `network`/`terminal.run` host functions (3.84.0). Remaining: `mcp.call`, which still installs but is refused at run. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
+| 15 — Extensions | Custom tools, UI panels (3.70.0), declarative provider presets (3.71.0), and broker-gated `network`/`terminal.run` (3.84.0) and `mcp.call` (3.88.0) host functions. Every contribution type and every declared capability now has a runner surface; the remaining caveats are sandbox policy (an `ask` is a refusal because no one can answer) and observability, not a missing kind. (Dependency cycles since 3.9.0; a dependency's own compatibility and re-judging a folder after an upgrade since 3.14.0.) |
 | 18 — Installers | Code signing/notarization, a macOS `.dmg`, and a per-machine MSI choice. |
 
 ### Smaller named gaps
@@ -962,9 +962,13 @@ the failing field. The prompt lists each tool's required argument names, and the
 route checks the saved permission rule before the arguments, so a denied call
 stays denied.
 
-What remains in this phase: the sandbox offers no network, terminal or MCP host
-functions, and an update path that re-checks a folder after the app is upgraded
-is still missing.
+The sandbox surface is complete as of 3.88.0: network (3.84.0), `terminal.run`
+(3.84.0) and `mcp.call` (3.88.0) are host functions, each behind both the
+manifest permission and a saved allow rule. `mcp.call` takes
+`{server, tool, arguments}`, gates on `mcp_tool` for `server.tool`, and lets the
+broker own the configured session, headers and OAuth token; only the JSON answer
+crosses into the module. An update path that re-checks a folder after the app is
+upgraded is still missing.
 
 ## Phase 16 — Testing
 
@@ -1196,7 +1200,7 @@ Measured against the implementation, not the plan. Detail and evidence per row:
 | 12 Agent monitoring | Working | — |
 | 13 Workflows | Working | automated browser coverage; child agent cancellation |
 | 14 Cross-platform | Partial | Android/VS Code subsets; contract-driven UI gating in 3.22.0 |
-| 15 Extensions | Partial | sandbox surface beyond workspace + own data (no network, terminal or MCP host functions); declarative provider presets and UI panels shipped in 3.70.0–3.71.0 |
+| 15 Extensions | Working | workspace, data, network, terminal and MCP host functions are broker-gated; provider presets and UI panels shipped in 3.70.0–3.71.0; remaining notes are policy and observability limits |
 | 16 Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 Observability | Working | — |
 | 18 Install and update | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |

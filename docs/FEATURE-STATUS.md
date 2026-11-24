@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.84.5
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.88.0
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -16,6 +16,15 @@ implementation), **Broken** (exists and fails).
 | Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
+
+**Revision 3.88.0 (2026-11-24):** Phase 15's last missing capability closes:
+`mcp.call` is now a host function (`env.mcp_call`) instead of a run-time
+refusal. A module sends `{server, tool, arguments}`; the manifest must declare
+`mcp.call`, a saved `mcp_tool` allow rule must cover `server.tool` (the same
+target the MCP panel and agent use), and the broker runs the configured server
+session with its own headers and OAuth token. Only the JSON result crosses into
+the sandbox. The call counts against the same 64-call/1 MiB host budget and is
+audited; an `ask` is a refusal because unattended code cannot answer a prompt.
 
 **Revision 3.84.5 (2026-11-23):** Stabilization pass. The mandatory
 `main`-branch gates are green on `c7a5b9d`: Desktop CI run `45223311666` passed
@@ -858,7 +867,7 @@ below carry the evidence.
 | 12 | Live monitoring | Working | — |
 | 13 | Workflow builder | Working | browser layout test only; rendering and the drag gesture are harness-tested (3.16.0), a workflow cancel stops the child agent runs it started (3.15.0) |
 | 14 | Cross-platform | Partial | Android/VS Code subsets; contract-driven UI gating shipped in 3.22.0 |
-| 15 | Extension ecosystem | Partial | sandbox surface beyond workspace + own data (no network, terminal or MCP host functions) |
+| 15 | Extension ecosystem | Working | workspace, own data, network, terminal and MCP host functions are broker-gated; remaining notes are policy and observability limits |
 | 16 | Testing and quality | Working | browser layout, privileged ENOSPC |
 | 17 | Observability | Working | — |
 | 18 | Installation and updates | Partial | signing/notarization, macOS `.dmg`, per-machine MSI |
@@ -1102,7 +1111,8 @@ Manifests are discovered and validated as of 2.15.0, listed in Settings as of
 wasmi sandbox (ADR 0001). Since 2.21.0 that sandbox provides workspace
 read/write host functions, scoped to the open folder and checked per call
 against saved rules, and since 2.22.0 a per-extension data folder through
-data_read/data_write; network and terminal host functions arrived in 3.84.0, while MCP remains unprovided.
+data_read/data_write; network and terminal host functions arrived in 3.84.0 and
+the MCP host function in 3.88.0.
 Since 2.25.0 a manifest also declares the builds it works on and the extensions
 it needs, and both are enforced rather than displayed.
 
@@ -1111,7 +1121,7 @@ it needs, and both are enforced rather than displayed.
 | Manifest (id, name, version, description, author, entry, permissions) | Working (2.15.0) | `GET /api/extensions` scans `<data>/extensions/*/manifest.json`; the id must equal the folder, the version must be `1.2.3`, `entry` must stay inside the folder and exist, and permissions are a closed list |
 | Management UI | Working (2.16.0) | Settings → Extensions shows the directory, each folder's validity, description or error, and a Refresh action |
 | Install / uninstall | Working (2.17.0) | install copies a folder through staging with validation and rollback, symlink refusal and a 500-file/16 MiB cap; uninstall moves the folder to `.removed/` after a canonical containment check |
-| Execution and sandboxing | Working, workspace + own data (2.22.0) | ADR 0001: no in-process execution. `app/src/extension_run.rs` runs a module in a wasmi 0.31.2 interpreter with no WASI: `run() -> i32`, 50,000,000 fuel, 64 MiB memory, 100,000 table elements, 8 MiB module cap. The whole host surface is `env.read`/`env.write` (open folder), `env.data_read`/`env.data_write` (`<extensions>/<id>/data`) and `env.last_error`, linked only when the manifest declares `workspace.read`/`workspace.write`. Paths use `workspace::resolve_inside` and writes `write_text_file`; saved rules apply per call (`ask` refuses because nothing can answer) and every call is audited. Since 3.84.0 `env.fetch` and `env.command` are linked only when the manifest declares `network`/`terminal.run`; each call also needs a saved allow rule, with redirects disabled, a 15 s/64 KiB network cap and a 10 s/limited-output command cap. MCP and config access remain unavailable |
+| Execution and sandboxing | Working, all declared capabilities (2.22.0; MCP 3.88.0) | ADR 0001: no in-process execution. `app/src/extension_run.rs` runs a module in a wasmi 0.31.2 interpreter with no WASI: `run() -> i32`, 50,000,000 fuel, 64 MiB memory, 100,000 table elements, 8 MiB module cap. The host surface is `env.read`/`env.write` (open folder), `env.data_read`/`env.data_write` (`<extensions>/<id>/data`), the tool ABI, `env.last_error`, `env.fetch`, `env.command` and `env.mcp_call`. Workspace/data calls need the matching manifest permission; paths use `workspace::resolve_inside` and writes `write_text_file`. Since 3.84.0 `env.fetch`/`env.command` need `network`/`terminal.run` plus a saved allow rule, with redirects disabled, a 15 s network cap and a 10 s command cap. Since 3.88.0 `env.mcp_call` takes `{server, tool, arguments}`, needs `mcp.call` plus an `mcp_tool` allow rule for `server.tool`, and goes through the shared broker so the configured command/URL, headers and OAuth token never enter the sandbox; only the JSON answer does, within a 30 s wait. Every call is audited; `ask` refuses because nothing can answer. Config, database and provider-key access remain unavailable |
 | Runtime gating | Working (2.19.0, host functions 2.21.0) | `runtime: "wasm"` requires a `.wasm` entry; discovery exposes `runnable`/`blockedReason`; `POST /api/extensions/:id/run` refuses a capability with no host function behind it and otherwise runs the module, answering `{exitCode, fuelUsed, elapsedMs, hostCalls}` |
 | Run control | Working (2.23.0) | One run per extension (409 while one is open); `POST /api/extensions/:id/cancel` stops it at the next host call (a pure-compute loop still ends at the fuel limit); a 5-second wall-clock budget is checked at each host boundary; uninstall cancels first; Settings shows `Running…` and `Cancel` |
 | Run history | Working (2.24.0) | `extension_runs` records extension, project, start, duration, exit code, fuel, host calls and error for every run that reached the sandbox, including loader failures and cancellations; `GET /api/extension-runs` returns the newest 50 and Settings lists them |
@@ -1183,9 +1193,10 @@ brief, with the 3.84.5 tree and the observed `c7a5b9d` CI:
    VS Code parity remain; capability negotiation shipped in 3.22.0. The Android
    release gate is red on the old PR tip, and the diagnostic fix is not pushed.
 4. **Phase 15 — extensions.** Provider adapters (3.71.0), UI extensions
-   (3.70.0) and the network/terminal host functions (3.84.0) have shipped.
-   Remaining: the MCP host function, which installs but is refused at run, and
-   real network/terminal peers beyond the test doubles.
+   (3.70.0), the network/terminal host functions (3.84.0) and the MCP host
+   function (3.88.0) have shipped. Remaining: real network/terminal/MCP peers
+   beyond the test doubles and the policy/observability limits in
+   `KNOWN-ISSUES.md`.
 5. **Phase 18 — packaging.** Code signing/notarization, a macOS `.dmg`, and a
    per-machine MSI choice.
 6. **Smaller:** Phase 3's remaining native context limits, Phase 6 per-skill
