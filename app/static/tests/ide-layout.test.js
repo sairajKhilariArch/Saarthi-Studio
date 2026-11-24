@@ -14,6 +14,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const css = fs.readFileSync(path.join(__dirname, "..", "ide.css"), "utf8");
+const baseCss = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
 /** The body of one @media block, found by brace depth so nested rules and
  * comments inside it cannot truncate the read. */
@@ -66,12 +67,15 @@ test("the layout menu exposes every chrome region", () => {
   assert.match(html, /id="layoutReset"/, "the layout can be reset");
 });
 
-test("a centered thread fills the viewport and centers its content", () => {
+test("a centered thread centers its content without hiding navigation", () => {
   assert.match(css, /body\.no-activity\s*\{\s*--activity-w:\s*0px;?\s*\}/);
   assert.match(css, /body\.no-status\s*\{\s*--status-h:\s*0px;?\s*\}/);
-  assert.match(css, /body\.chat-center \.main,\s*body\.chat-center \.activity-bar,\s*body\.chat-center \.sidebar\s*\{\s*display:\s*none;?\s*\}/);
-  assert.match(css, /body\.chat-center \.app\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);?\s*\}/);
-  assert.match(css, /body\.chat-center \.app > \.ai-dock\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/);
+  assert.match(css, /body\.chat-center \.main,\s*body\.chat-center \.sidebar\s*\{\s*display:\s*none;?\s*\}/);
+  assert.match(css, /body\.chat-center \.activity-bar\s*\{\s*display:\s*flex;?\s*\}/);
+  assert.match(css, /body\.chat-center\.no-activity \.activity-bar\s*\{\s*display:\s*none;?\s*\}/);
+  assert.match(css, /body\.chat-center \.app\s*\{\s*grid-template-columns:\s*var\(--activity-w\)\s+minmax\(0,\s*1fr\);?\s*\}/);
+  assert.match(css, /body\.chat-center \.app > \.ai-dock\s*\{[^}]*grid-column:\s*2/);
+  assert.match(css, /body\.chat-center \.app > \.ai-dock\s*\{[^}]*padding-right:\s*var\(--activity-w\)/);
   assert.match(css, /body\.chat-center \.ai-dock \.chat-column\s*\{[^}]*max-width:\s*840px/);
   assert.match(css, /body\.chat-center \.ai-dock \.composer-shell\s*\{[^}]*padding:\s*8px 28px 18px/);
 
@@ -81,4 +85,27 @@ test("a centered thread fills the viewport and centers its content", () => {
     /body\.chat-center \.app > \.ai-dock\s*\{[^}]*position:\s*static/,
     "the narrow layout keeps a centered thread in the grid",
   );
+});
+
+test("a narrow window gives pages the width the drawer used to reserve", () => {
+  const block = mediaBlock("@media (max-width: 980px)");
+  assert.match(block, /\.app\s*\{\s*grid-template-columns:\s*var\(--activity-w\)\s+minmax\(0,\s*1fr\);?\s*\}/);
+  assert.match(block, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+0\s+var\(--status-h\)/);
+  assert.match(block, /\.app > \.main\s*\{\s*grid-column:\s*2;?\s*\}/);
+
+  // styles.css owns the fixed drawer; its selector must beat ide.css's later
+  // `.sidebar { position: relative }` or the drawer covers the activity rail.
+  const start = baseCss.indexOf("@media (max-width: 980px)");
+  assert.ok(start >= 0);
+  const narrow = baseCss.slice(start, start + 1400);
+  assert.match(narrow, /\.app > \.sidebar\s*\{[^}]*position:\s*fixed/);
+  assert.match(narrow, /body:not\(\.nav-open\) \.app > \.sidebar\s*\{\s*pointer-events:\s*none/);
+});
+
+test("activity navigation exits the centered and overlay layouts", () => {
+  const ide = fs.readFileSync(path.join(__dirname, "..", "ide.js"), "utf8");
+  assert.match(ide, /\(activity\.pane \|\| activity\.view\) && typeof setChatCenter === "function"/);
+  assert.match(ide, /matchMedia\("\(max-width: 1100px\)"\)/);
+  assert.match(ide, /setPanel\("right", false\)/);
+  assert.match(ide, /document\.body\.classList\.add\("nav-open"\)/);
 });

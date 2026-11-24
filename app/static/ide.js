@@ -127,9 +127,31 @@
     });
     const activity = ACTIVITIES.find((item) => item.id === id);
     if (!activity) return;
+    // The centered layout hides the workbench so the chat can sit in the
+    // middle of the window. Any activity click asks for a workbench surface,
+    // so leave the focused layout first instead of silently doing nothing.
+    if ((activity.pane || activity.view) && typeof setChatCenter === "function") {
+      setChatCenter(false);
+    }
+    // Below 1100 px the dock is a fixed overlay, not a column. Leaving it open
+    // would cover the page the activity just asked for, so navigation takes
+    // the whole narrow screen and the AI panel can be reopened on demand.
+    if ((activity.pane || activity.view)
+      && window.matchMedia("(max-width: 1100px)").matches
+      && state.panelShow && state.panelShow.right
+      && typeof setPanel === "function") {
+      setPanel("right", false);
+    }
     if (activity.pane) {
       showSidebar(activity.pane);
-      if ($("sidebar") && $("sidebar").classList.contains("no-left")) togglePanel("left");
+      if (document.body.classList.contains("no-left")) setPanel("left", true);
+      // At narrow widths the sidebar is a fixed overlay driven by nav-open,
+      // not by the no-left panel flag. Opening a pane from the rail must also
+      // reveal that overlay, or the click appears to do nothing.
+      if (window.matchMedia("(max-width: 980px)").matches) {
+        document.body.classList.add("nav-open");
+        if ($("scrim")) $("scrim").classList.remove("hidden");
+      }
       if (activity.pane === "search") $("searchInput").focus();
       if (activity.pane === "scm") refreshScm();
     }

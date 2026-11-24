@@ -11,8 +11,22 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { loadApp, evaluate } = require("./harness");
 
 const read = (name) => fs.readFileSync(path.join(__dirname, "..", name), "utf8");
+const ui = loadApp();
+
+test("skill failures and descriptions read the fields the server sends", () => {
+  assert.equal(evaluate(ui, "skillError({ error: 'Could not read SKILL.md' })"), "Could not read SKILL.md");
+  assert.equal(evaluate(ui, "skillError({ last_error: 'legacy failure' })"), "legacy failure");
+  assert.equal(evaluate(ui, "skillDescription({ description: 'Review a file' })"), "Review a file");
+  assert.equal(evaluate(ui, "skillDescription({ summary: 'legacy summary' })"), "legacy summary");
+
+  const app = read("app.js");
+  assert.match(app, /card\.querySelector\("small"\)\.textContent = skillCompatibilityNote\(skill\) \|\| skillDescription\(skill\)/);
+  assert.match(app, /err\.textContent = error;/);
+  assert.match(app, /const usable = state\.skills\.filter\(\(skill\) => !skillError\(skill\) && skill\.enabled !== false && skill\.compatible !== false\)/);
+});
 
 test("the skills pane has a Git import form, wired to the import route", () => {
   const html = read("index.html");

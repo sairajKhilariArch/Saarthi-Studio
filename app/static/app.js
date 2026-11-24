@@ -756,6 +756,17 @@ function skillCompatibilityNote(skill) {
   return `Needs Studio ${skill.requires} or newer`;
 }
 
+// The skills API names a load failure `error` and a description `description`.
+// Older callers/tests used `last_error`/`summary`; accept both so a broken skill
+// is never rendered as an ordinary one and every description is shown once.
+function skillError(skill) {
+  return (skill && (skill.error || skill.last_error)) || "";
+}
+
+function skillDescription(skill) {
+  return (skill && (skill.description || skill.summary)) || "";
+}
+
 function renderSkills() {
   const box = $("skillList");
   if (state.openSkillId) {
@@ -775,11 +786,11 @@ function renderSkills() {
   state.skills.forEach((skill) => {
     const card = document.createElement("button");
     card.type = "button";
-    card.className = "skill-card" + (skill.enabled && skill.compatible !== false ? "" : " off") + (skill.last_error ? " broken" : "");
+    card.className = "skill-card" + (skill.enabled && skill.compatible !== false ? "" : " off") + (skillError(skill) ? " broken" : "");
     card.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-cube"/></svg>' +
       '<span class="skill-card-text"><strong></strong><small></small></span>';
     card.querySelector("strong").textContent = skill.name || skill.id;
-    card.querySelector("small").textContent = skillCompatibilityNote(skill) || skill.summary || (skill.last_error ? "Load error" : "SKILL.md");
+    card.querySelector("small").textContent = skillCompatibilityNote(skill) || skillDescription(skill) || (skillError(skill) ? "Load error" : "SKILL.md");
     card.title = skill.path || skill.id;
     card.addEventListener("click", () => openSkillDetail(skill.id));
     box.appendChild(card);
@@ -819,10 +830,11 @@ function renderSkillDetail() {
   $("skillDetailName").textContent = skill.name || skill.id;
   const body = $("skillDetailBody");
   body.replaceChildren();
-  if (skill.last_error) {
+  const error = skillError(skill);
+  if (error) {
     const err = document.createElement("p");
     err.className = "state error";
-    err.textContent = skill.last_error;
+    err.textContent = error;
     body.appendChild(err);
   }
   const meta = document.createElement("p");
@@ -846,10 +858,10 @@ function renderSkillDetail() {
     declared.textContent = `Expects ${skill.permissions.join(", ")}. A skill is instructions, not code, so this declares what the run may need; the run's own permissions still decide what it can do.`;
     body.appendChild(declared);
   }
-  if (!skill.writable || skill.last_error) {
+  if (!skill.writable || error) {
     const note = document.createElement("p");
     note.className = "muted";
-    note.textContent = skill.last_error
+    note.textContent = error
       ? "This skill could not be loaded, so there is nothing to edit."
       : "This skill is not in your user skills folder, so it is read-only here; edit its SKILL.md where it lives.";
     body.appendChild(note);
@@ -1031,14 +1043,14 @@ function renderSkillsOverview() {
   }
   state.skills.forEach((skill) => {
     const row = document.createElement("div");
-    row.className = "skill-row" + (skill.enabled && skill.compatible !== false ? "" : " off") + (skill.last_error ? " broken" : "");
+    row.className = "skill-row" + (skill.enabled && skill.compatible !== false ? "" : " off") + (skillError(skill) ? " broken" : "");
     const main = document.createElement("div");
     main.className = "skill-main";
     const strong = document.createElement("strong");
     strong.textContent = skill.name || skill.id;
     main.appendChild(strong);
     const desc = document.createElement("p");
-    desc.textContent = skill.last_error || skill.summary || skill.description || "No description in SKILL.md.";
+    desc.textContent = skillError(skill) || skillDescription(skill) || "No description in SKILL.md.";
     main.appendChild(desc);
     const path = document.createElement("small");
     path.className = "skill-path";
@@ -1059,7 +1071,7 @@ function renderSkillsOverview() {
     row.appendChild(main);
     const side = document.createElement("div");
     side.className = "skill-side";
-    if (!skill.last_error) {
+    if (!skillError(skill)) {
       const badge = document.createElement("span");
       badge.className = "badge" + (skill.enabled ? " on" : "");
       badge.textContent = skill.enabled ? "Enabled" : "Disabled";
@@ -1070,7 +1082,7 @@ function renderSkillsOverview() {
       badge.textContent = "Failed to load";
       side.appendChild(badge);
     }
-    if (!skill.last_error) {
+    if (!skillError(skill)) {
       const toggle = document.createElement("button");
       toggle.className = "btn btn-quiet btn-small";
       toggle.textContent = skill.enabled ? "Disable" : "Enable";
@@ -6642,7 +6654,7 @@ function renderAgents() {
   const host = $("agentsList");
   if (!host) return;
   host.replaceChildren();
-  const usable = state.skills.filter((skill) => !skill.error && skill.enabled !== false);
+  const usable = state.skills.filter((skill) => !skillError(skill) && skill.enabled !== false && skill.compatible !== false);
 
   // Controls: search box + per-page count, above the list, survive page and
   // query changes for this session via state.agentsQuery.
@@ -6693,7 +6705,7 @@ function renderAgents() {
 
   const filtered = usable.filter((skill) => {
     if (!state.agentsQuery.query) return true;
-    const haystack = `${skill.id} ${skill.name || ""} ${skill.summary || ""} ${skill.description || ""}`.toLowerCase();
+    const haystack = `${skill.id} ${skill.name || ""} ${skillDescription(skill)}`.toLowerCase();
     return haystack.includes(state.agentsQuery.query);
   });
   const pages = Math.ceil(filtered.length / state.agentsQuery.perPage) || 1;
@@ -6725,7 +6737,7 @@ function renderAgents() {
     strong.textContent = (skill.name || skill.id) + (effectiveSkillId() === skill.id ? " — attached" : "");
     main.appendChild(strong);
     const desc = document.createElement("p");
-    desc.textContent = skill.summary || skill.description || "No description in SKILL.md.";
+    desc.textContent = skillDescription(skill) || "No description in SKILL.md.";
     main.appendChild(desc);
     const path = document.createElement("small");
     path.className = "skill-path";
@@ -6744,6 +6756,9 @@ function renderAgents() {
         renderAgents();
         toast(state.activeSkillId ? `${skill.name || skill.id} attached to your next message.` : "Skill detached.");
         setView("chat");
+        // On narrow screens navigation closes the dock overlay; attaching an
+        // agent is an explicit request for the chat, so bring it back.
+        if (typeof setPanel === "function") setPanel("right", true);
       },
     ));
     row.appendChild(actions);

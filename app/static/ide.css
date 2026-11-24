@@ -53,15 +53,19 @@ body.no-activity { --activity-w: 0px; }
 body.no-status { --status-h: 0px; }
 body.no-activity .activity-bar, body.no-status .status-bar { display: none; }
 
-/* A centered conversation is the whole surface: the editor, activity rail and
-   sidebar yield to it, so the thread is centered in the viewport rather than
-   in the space left of the editor. The dock keeps its header — Router, the
-   Dock button and Close stay reachable. */
-body.chat-center .app { grid-template-columns: minmax(0, 1fr); }
+/* A centered conversation yields the editor and sidebar, but keeps the
+   activity rail: Skills, Agents, Runs and Settings stay one click away. Any
+   activity click leaves this focused layout (see openActivity), and the dock
+   mirrors the rail's width on the right so the thread's centre is still the
+   window's centre. */
+body.chat-center .app { grid-template-columns: var(--activity-w) minmax(0, 1fr); }
 body.chat-center .main,
-body.chat-center .activity-bar,
 body.chat-center .sidebar { display: none; }
-body.chat-center .app > .ai-dock { grid-column: 1 / -1; border-left: 0; }
+body.chat-center .activity-bar { display: flex; }
+body.chat-center.no-activity .activity-bar { display: none; }
+body.chat-center .app > .ai-dock {
+  grid-column: 2; border-left: 0; padding-right: var(--activity-w);
+}
 body.chat-center .app > .bottom-panel,
 body.chat-center .app > .status-bar { grid-column: 1 / -1; }
 body.chat-center .ai-dock .chat-column {
@@ -383,15 +387,32 @@ body.chat-center .ai-dock .msg { font-size: 13.5px; }
   body.no-right .app > .ai-dock { display: none; }
   /* A centered thread stays in the grid on narrow windows instead of becoming
      the 400 px overlay; it is already the only column left. */
-  body.chat-center .app { grid-template-columns: minmax(0, 1fr); }
-  body.chat-center .activity-bar, body.chat-center .sidebar { display: none; }
+  body.chat-center .app { grid-template-columns: var(--activity-w) minmax(0, 1fr); }
+  body.chat-center .sidebar { display: none; }
   body.chat-center .app > .ai-dock {
     display: flex; position: static; width: auto; z-index: auto;
-    grid-column: 1 / -1; box-shadow: none;
+    grid-column: 2; box-shadow: none;
   }
   body.chat-center .app > .bottom-panel,
   body.chat-center .app > .status-bar { grid-column: 1 / -1; }
   .app > .bottom-panel { grid-column: 3 / 4; }
+}
+
+/* The narrow sidebar is a fixed drawer (styles.css), so it no longer owns a
+   grid column. Without this, the empty drawer column stayed reserved and left
+   pages only 121 px wide even after the chat overlay was closed. */
+@media (max-width: 980px) {
+  .app {
+    grid-template-columns: var(--activity-w) minmax(0, 1fr);
+    /* styles.css hides the bottom panel at this width; keep its row at zero so
+       the chat gets the full height instead of a blank 240 px strip. */
+    grid-template-rows: minmax(0, 1fr) 0 var(--status-h);
+  }
+  .app > .main { grid-column: 2; }
+  .app > .bottom-panel { grid-column: 2; }
+  .app > .status-bar { grid-column: 1 / -1; }
+  body.chat-center .app { grid-template-columns: var(--activity-w) minmax(0, 1fr); }
+  body.chat-center .app > .ai-dock { grid-column: 2; }
 }
 
 /* ---------- Debug pane (Phase 9) -----------------------------------------

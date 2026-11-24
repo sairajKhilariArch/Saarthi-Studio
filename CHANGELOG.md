@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.86.1
+
+### Fixed
+
+Skills, Agents and every other activity are reachable and usable again,
+especially in narrow windows.
+
+- The activity rail stays visible in the centered chat layout, and clicking any
+  activity leaves the focused chat so the requested page is actually shown.
+- At 980 px and narrower the sidebar is a fixed drawer instead of an empty
+  286 px grid column. It no longer covers the activity rail, and pages get the
+  full width back; the bottom panel, which is hidden at that width, no longer
+  reserves a blank 240 px strip under the content.
+- Navigating to Skills, Agents, Runs, Settings or another page closes the AI
+  overlay that used to cover it on narrow screens; choosing a file pane opens
+  the drawer, and attaching an agent brings the chat back.
+- Skill cards show the description from SKILL.md instead of the literal text
+  `SKILL.md`, and a skill that fails to load is marked and explains the API's
+  `error` instead of looking healthy. Incompatible skills no longer appear as
+  runnable agents.
+- Reopening a hidden left panel from the activity rail now checks the body's
+  `no-left` state rather than looking for the class on the sidebar.
+
+Verified: the frontend suite passes 110/110 (including new navigation, narrow
+drawer coverage and skill-field tests), `node --check` passes for both scripts,
+and a live headless run opened every activity at 1280x800 and exercised the
+narrow navigation, skill descriptions and toggle, and agent attach at 455x900.
+At 1280x800 the centered thread measured 640 px on a 640 px viewport centre.
+
 ## 3.86.0
 
 ### Fixed

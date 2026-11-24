@@ -912,11 +912,18 @@ kbd {
   .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .app > .right-panel, .app > .bottom-panel { display: none; }
   .right-panel, .bottom-panel { display: none; }
-  .sidebar {
+  /* Keep the narrow-window sidebar as a fixed overlay. ide.css later sets
+     `.sidebar { position: relative }` at the same specificity, which used to
+     win here and leave the translated panel covering the activity rail. */
+  .app > .sidebar {
     position: fixed; z-index: 30; top: 0; bottom: 0; left: 0; width: var(--sidebar-w);
     transform: translateX(-102%); transition: transform .2s ease; box-shadow: var(--shadow-2);
   }
   body.nav-open .sidebar { transform: none; }
+  /* A closed overlay must not swallow activity-rail clicks while it slides
+     out (or after it has slid out). Only the open drawer accepts input. */
+  body:not(.nav-open) .app > .sidebar { pointer-events: none; }
+  body.nav-open .app > .sidebar { pointer-events: auto; }
   .rail-toggle { display: grid; }
   .chat-column, .composer-shell { padding-left: 16px; padding-right: 16px; }
   .kbd-hint { display: none; }
