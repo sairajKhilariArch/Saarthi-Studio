@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.88.1
+
+### Fixed
+
+- The core local UI routes now sit behind the same loopback `Host`/`Origin`
+  guard as the workspace, terminal and agent routers. A foreign `Host` could
+  reach `/api/config`, chat, projects, workflows, extensions and the
+  update/uninstall routes through DNS rebinding; the guard now wraps the whole
+  router once, after every module is merged.
+- A recent-folder name is rendered as text instead of being interpolated into
+  the project menu's `innerHTML`. A folder named like an HTML fragment can no
+  longer inject markup into the app origin.
+- Streaming chat metadata no longer hides `memory_used` and `retrieved` behind
+  an auto-matched skill. Both fields are now reported independently, so the
+  reply says when project memory or code retrieval shaped it.
+
+### Tests
+
+- The real-binary end-to-end suite grew from 34 to 51 checks: hostile
+  `Host`/`Origin` refusals, streaming chat, conversation deletion, config
+  redaction, project/memory/workflow CRUD, workspace file create/save/read/
+  rename/delete, a path-traversal refusal, an interactive PTY command, and the
+  streaming-memory metadata case. The same 51 checks pass against the release
+  binary.
+- The frontend harness now covers a hostile recent-folder name.
+
+Verified at 3.88.1: 704 Rust tests (1 ignored), 115 frontend tests, 51 release
+end-to-end checks, 45 VS Code extension tests, 26 version checks, 9 Linux
+metadata checks and all offline release/install gates. The optimized 3.88.1
+binary reached `/api/health` in 174 ms and used 87.5 MiB RSS in the headless
+smoke; its response carries CSP, `X-Frame-Options: DENY`, nosniff,
+`no-referrer` and `no-store`, and a foreign `Host` gets 403.
+
 ## 3.88.0
 
 ### Added

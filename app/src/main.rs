@@ -4681,12 +4681,12 @@ async fn chat_stream(
             held["model"] = json!(&chosen_model);
             if !auto_skills.is_empty() {
                 held["auto_skills"] = json!(&auto_skills);
-                if !memory_used.is_empty() {
-                    held["memory_used"] = json!(&memory_used);
-                    if !retrieved.is_empty() {
-                        held["retrieved"] = json!(&retrieved);
-                    }
-                }
+            }
+            if !memory_used.is_empty() {
+                held["memory_used"] = json!(&memory_used);
+            }
+            if !retrieved.is_empty() {
+                held["retrieved"] = json!(&retrieved);
             }
             held["deepsearch"] = json!(true);
         }
@@ -4848,12 +4848,12 @@ async fn chat_stream(
         held["model"] = json!(&chosen_model);
         if !auto_skills.is_empty() {
             held["auto_skills"] = json!(&auto_skills);
-            if !memory_used.is_empty() {
-                held["memory_used"] = json!(&memory_used);
-                if !retrieved.is_empty() {
-                    held["retrieved"] = json!(&retrieved);
-                }
-            }
+        }
+        if !memory_used.is_empty() {
+            held["memory_used"] = json!(&memory_used);
+        }
+        if !retrieved.is_empty() {
+            held["retrieved"] = json!(&retrieved);
         }
         held["thinking"] = thinking_json(thinking);
         held["model_scope"] = json!(model_scope_label);
@@ -5260,6 +5260,14 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         )))
         .merge(router_console::router(port))
         .merge(router_api)
+        // One guard for the whole local UI, including the core chat, config,
+        // project, workflow, extension and update routes that are registered
+        // above rather than in a module router. Without this outer layer a
+        // foreign Host reaches those routes through DNS rebinding.
+        .route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        ))
         .layer(middleware::from_fn(local_security_headers))
         // Outermost layer: every route, including the guards inside it, runs
         // with the request's id in scope.

@@ -119,6 +119,17 @@ test("dragging a card moves it live, follows its edge and commits the position",
   assert.ok(clamped.y > 0, "and the height is free so a downward drag is kept");
 });
 
+test("a recent folder name is rendered as text, never as markup", () => {
+  const ui = loadApp();
+  const call = (expression) => evaluate(ui, expression);
+  const hostile = '<img src=x onerror="alert(1)">';
+
+  const recent = call(`recentFolderRow(${JSON.stringify(hostile)})`);
+  const small = walk(recent).find((node) => node.tag === "small");
+  assert.equal(small.textContent, hostile, "the path stays text");
+  assert.equal(small.innerHTML, "", "no folder path is parsed as HTML");
+});
+
 test("a press without movement selects the card and writes no position", () => {
   const ui = loadApp();
   const call = (expression) => evaluate(ui, expression);

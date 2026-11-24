@@ -6693,12 +6693,24 @@ async function renderWorkspaces() {
   openFolderRow.appendChild(openActions);
   openHost.appendChild(openFolderRow);
   state.recentFolders.slice(0, 5).forEach((path) => {
-    const row = document.createElement("div");
-    row.className = "project-menu-item";
-    row.innerHTML = `<span class="project-menu-main"><small title="${path}">${path}</small></span>`;
-    row.appendChild(rowButton("Open", () => openWorkspacePath(path)));
-    openHost.appendChild(row);
+    openHost.appendChild(recentFolderRow(path));
   });
+}
+
+/* A recent path comes from the filesystem, so it is assigned as text instead of
+   interpolated into markup: a folder name is not an HTML fragment. */
+function recentFolderRow(path) {
+  const row = document.createElement("div");
+  row.className = "project-menu-item";
+  const main = document.createElement("span");
+  main.className = "project-menu-main";
+  const small = document.createElement("small");
+  small.title = path;
+  small.textContent = path;
+  main.appendChild(small);
+  row.appendChild(main);
+  row.appendChild(rowButton("Open", () => openWorkspacePath(path)));
+  return row;
 }
 
 /* Agents: the enabled skills as runnable agents. Attaching flips the same

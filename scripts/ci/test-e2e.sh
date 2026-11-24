@@ -55,10 +55,12 @@ EOF
 work="$(mktemp -d)"
 studio_pid=""
 router_pid=""
+term_stream=""
 
 cleanup() {
   stop_studio
   if [ -n "$router_pid" ]; then kill "$router_pid" 2>/dev/null || true; fi
+  if [ -n "$term_stream" ]; then kill "$term_stream" 2>/dev/null || true; fi
   if [ "${E2E_KEEP:-0}" = "1" ]; then
     printf '\nkept %s\n' "$work"
   else
@@ -271,6 +273,26 @@ else
   die "readiness did not report ready ($(cat "$work/body"))"
 fi
 
+# DNS rebinding makes an attacker's hostname resolve to this loopback listener.
+# A foreign Host must not reach the core routes that are registered directly in
+# main.rs, not only the module routers that carry their own guard.
+code="$(curl -sS -o "$work/body" -w '%{http_code}' \
+  -H "Host: evil.example:$port" "$base/api/config" 2>/dev/null)"
+if [ "$code" = "403" ] && grep -q 'loopback' "$work/body"; then
+  pass "a foreign Host cannot read the core config route"
+else
+  die "a foreign Host reached /api/config (HTTP $code: $(cat "$work/body"))"
+fi
+
+code="$(curl -sS -o "$work/body" -w '%{http_code}' \
+  -H "Host: 127.0.0.1:$port" -H 'Origin: http://evil.example' \
+  "$base/api/capabilities" 2>/dev/null)"
+if [ "$code" = "403" ] && grep -q 'Cross-site' "$work/body"; then
+  pass "a foreign Origin cannot read the core capabilities route"
+else
+  die "a foreign Origin reached /api/capabilities (HTTP $code: $(cat "$work/body"))"
+fi
+
 # A conversation, then a turn through the mock provider.
 code="$(http POST "$base/api/conversations" '{"title":"e2e run"}')"
 cid="$(field id)"
@@ -304,6 +326,128 @@ else
   die "messages endpoint failed for $cid"
 fi
 
+# The streaming route is a separate body machine from /api/chat and has its own
+# partial-reply recorder. A router that answers plain JSON (the mock does) must
+# still become one delta plus a done frame, and the reply must be stored once.
+code="$(http POST "$base/api/chat/stream" "{\"conversation_id\":\"$cid\",\"message\":\"stream this turn\"}")"
+if [ "$code" = "200" ] && grep -q '"delta"' "$work/body" && grep -q '"done":true' "$work/body"; then
+  pass "streaming chat emits a delta and a done frame"
+else
+  die "streaming chat failed (HTTP $code: $(head -c 300 "$work/body"))"
+fi
+
+if [ "$(http GET "$base/api/conversations/$cid/messages")" = "200" ]; then
+  count="$("$py" -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$work/body")"
+  if [ "$count" = "4" ]; then
+    pass "the streamed turn is stored exactly once"
+  else
+    die "expected 4 stored messages after streaming, found $count"
+  fi
+else
+  die "messages endpoint failed after streaming for $cid"
+fi
+
+if [ "$(http POST "$base/api/conversations/$cid/update" '{"token_budget":5000}')" = "200" ] &&
+   [ "$(field token_budget)" = "5000" ]; then
+  pass "a conversation token budget is accepted and returned"
+else
+  die "conversation budget update failed ($(cat "$work/body"))"
+fi
+
+# Deleting a thread removes its messages. A second thread is used so the
+# restart checks below still have the original history to find.
+code="$(http POST "$base/api/conversations" '{"title":"delete me"}')"
+doomed="$(field id)"
+delete_code="$(http POST "$base/api/conversations/$doomed/delete" '{}')"
+messages_code="$(http GET "$base/api/conversations/$doomed/messages")"
+if [ "$code" = "201" ] && [ -n "$doomed" ] &&
+   [ "$delete_code" = "200" ] && [ "$messages_code" = "404" ]; then
+  pass "a deleted conversation and its messages are gone"
+else
+  die "conversation deletion did not cascade for $doomed (create=$code delete=$delete_code messages=$messages_code: $(cat "$work/body"))"
+fi
+
+# Config is read back without its secrets: the UI only needs to know whether a
+# key exists, and a raw key must never be serialized to the browser again.
+if [ "$(http GET "$base/api/config")" = "200" ] &&
+   [ "$(field has_api_key)" = "True" ] &&
+   ! grep -q 'e2e-not-a-real-key' "$work/body"; then
+  pass "the config endpoint reports a saved key without returning it"
+else
+  die "config redaction failed ($(cat "$work/body"))"
+fi
+
+# Project CRUD is the scope every conversation and memory record depends on.
+code="$(http POST "$base/api/projects" '{"name":"e2e project"}')"
+project_id="$(field id)"
+rename_code="$(http POST "$base/api/projects/$project_id/update" '{"name":"e2e renamed"}')"
+list_code="$(http GET "$base/api/projects")"
+if [ "$code" = "201" ] && [ -n "$project_id" ] && [ "$rename_code" = "200" ] &&
+   [ "$list_code" = "200" ] && grep -q 'e2e renamed' "$work/body" &&
+   [ "$(http POST "$base/api/projects/$project_id/delete" '{}')" = "200" ] &&
+   [ "$(http GET "$base/api/projects")" = "200" ] && ! grep -q 'e2e renamed' "$work/body"; then
+  pass "a project can be created, renamed, listed and deleted"
+else
+  die "project CRUD failed (create=$code rename=$rename_code list=$list_code: $(cat "$work/body"))"
+fi
+
+# Memory is real SQLite storage, not an in-memory hint list.
+code="$(http POST "$base/api/memory" '{"kind":"fact","title":"e2e memory","body":"the audit marker"}')"
+memory_id="$(field record.id)"
+if [ "$code" = "200" ] && [ -n "$memory_id" ] &&
+   [ "$(http GET "$base/api/memory")" = "200" ] && grep -q 'e2e memory' "$work/body"; then
+  pass "a memory record is created and listed"
+else
+  die "memory create/list failed (create=$code id=$memory_id: $(cat "$work/body"))"
+fi
+
+# Recall reaches the streaming meta even when no skill auto-matched: the two
+# fields are independent, and the reply must say it used the memory.
+code="$(http POST "$base/api/conversations" '{"title":"memory stream"}')"
+memory_conv="$(field id)"
+stream_code="$(http POST "$base/api/chat/stream" "{\"conversation_id\":\"$memory_conv\",\"message\":\"what does the e2e memory say?\"}")"
+if [ "$code" = "201" ] && [ -n "$memory_conv" ] && [ "$stream_code" = "200" ] &&
+   grep -q '"memory_used"' "$work/body"; then
+  pass "streaming metadata reports the memory that was used"
+else
+  die "streaming memory metadata missing (conversation=$code stream=$stream_code: $(head -c 400 "$work/body"))"
+fi
+http POST "$base/api/conversations/$memory_conv/delete" '{}' >/dev/null
+
+if [ "$(http POST "$base/api/memory/$memory_id/delete" '{}')" = "200" ] &&
+   [ "$(http GET "$base/api/memory")" = "200" ] && ! grep -q 'e2e memory' "$work/body"; then
+  pass "a deleted memory record leaves the list"
+else
+  die "memory deletion failed (id=$memory_id: $(cat "$work/body"))"
+fi
+
+# A workflow is stored in a file, exported as the documented document, and
+# removed without leaving a schedule claim or a ghost entry behind.
+code="$(http POST "$base/api/workflows" '{"name":"e2e workflow","prompt":"say hello"}')"
+workflow_id="$(field id)"
+export_code="$(http GET "$base/api/workflows/$workflow_id/export")"
+if [ "$code" = "200" ] && [ -n "$workflow_id" ] && [ "$export_code" = "200" ] &&
+   grep -q 'sarthi.workflow' "$work/body" &&
+   [ "$(http POST "$base/api/workflows/$workflow_id/delete" '{}')" = "200" ] &&
+   [ "$(http GET "$base/api/workflows")" = "200" ] && ! grep -q 'e2e workflow' "$work/body"; then
+  pass "a workflow is saved, exported and deleted"
+else
+  die "workflow CRUD failed (create=$code id=$workflow_id export=$export_code: $(cat "$work/body"))"
+fi
+
+# The built-in skill catalogue is served by the same router as user skills.
+if [ "$(http GET "$base/api/skills")" = "200" ] &&
+   "$py" - "$work/body" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if isinstance(payload.get("skills"), list) else 1)
+PY
+then
+  pass "the skill catalogue is readable"
+else
+  die "skills endpoint failed ($(head -c 300 "$work/body"))"
+fi
+
 # Every user action leaves a process-log line; the boot is one of them, so this
 # also proves the log file was created beside the database in the scratch home.
 if [ "$(http GET "$base/api/diagnostics/log")" = "200" ]; then
@@ -335,6 +479,72 @@ else
   die "could not open a workspace folder (HTTP $code: $(cat "$work/body"))"
   exit 1
 fi
+
+# The editor's file lifecycle: create, save, read, rename, delete. Paths are
+# resolved inside the open folder, so an escape is refused before I/O.
+if [ "$(http POST "$base/api/workspace/create" '{"path":"notes.txt"}')" = "200" ] &&
+   [ "$(http PUT "$base/api/workspace/file" '{"path":"notes.txt","content":"first line\\n"}')" = "200" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=notes.txt")" = "200" ] &&
+   grep -q 'first line' "$work/body"; then
+  pass "a workspace file is created, saved and read back"
+else
+  die "workspace file lifecycle failed ($(cat "$work/body"))"
+fi
+
+if [ "$(http POST "$base/api/workspace/rename" '{"from":"notes.txt","to":"renamed.txt"}')" = "200" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=notes.txt")" = "404" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=renamed.txt")" = "200" ] &&
+   [ "$(http POST "$base/api/workspace/delete" '{"path":"renamed.txt"}')" = "200" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=renamed.txt")" = "404" ]; then
+  pass "a workspace file is renamed and deleted"
+else
+  die "workspace rename/delete failed ($(cat "$work/body"))"
+fi
+
+code="$(http GET "$base/api/workspace/file?path=..%2Foutside.txt")"
+if [ "$code" = "400" ] && ! grep -q 'outside.txt' "$work/body"; then
+  pass "a path outside the open folder is refused"
+else
+  die "path traversal was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+# Interactive terminal: a real PTY, a command entered over HTTP, and a file on
+# disk proving the command ran rather than merely being echoed by the shell.
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW* | MSYS* | CYGWIN*)
+    skip "the interactive terminal smoke is POSIX-only (PowerShell redirection differs)"
+    ;;
+  *)
+    code="$(http POST "$base/api/terminal/open" "{\"cwd\":\"$ws_native\",\"cols\":80,\"rows\":24}")"
+    term_id="$(field id)"
+    if [ "$code" = "200" ] && [ -n "$term_id" ]; then
+      curl -sS -N --max-time 8 "$base/api/terminal/$term_id/stream" >"$work/terminal.sse" 2>/dev/null &
+      term_stream=$!
+      sleep 0.4
+      payload="$("$py" -c 'import json,sys; print(json.dumps({"data": sys.argv[1] + "\r"}))' 'echo e2e-terminal > terminal-proof.txt')"
+      input_code="$(http POST "$base/api/terminal/$term_id/input" "$payload")"
+      seen=0
+      for _ in $(seq 1 40); do
+        if [ -f "$ws/terminal-proof.txt" ] && grep -q 'e2e-terminal' "$ws/terminal-proof.txt"; then
+          seen=1
+          break
+        fi
+        sleep 0.25
+      done
+      http POST "$base/api/terminal/$term_id/close" '{}' >/dev/null
+      kill "$term_stream" 2>/dev/null || true
+      wait "$term_stream" 2>/dev/null || true
+      term_stream=""
+      if [ "$input_code" = "200" ] && [ "$seen" = "1" ]; then
+        pass "a terminal command runs through a real PTY"
+      else
+        die "terminal did not run the command (open=$code input=$input_code seen=$seen)"
+      fi
+    else
+      die "terminal session did not open (HTTP $code: $(cat "$work/body"))"
+    fi
+    ;;
+esac
 
 code="$(http POST "$base/api/runs" '{"goal":"e2e-agent: write the marker file","allowWrites":true,"profile":"coding","maxSteps":6}')"
 run_id="$(field run.id)"
@@ -402,10 +612,10 @@ fi
 
 if [ "$(http GET "$base/api/conversations/$cid/messages")" = "200" ]; then
   count="$("$py" -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$work/body")"
-  if [ "$count" = "2" ]; then
+  if [ "$count" = "4" ]; then
     pass "the conversation survived the restart"
   else
-    die "expected 2 messages after restart, found $count"
+    die "expected 4 messages after restart, found $count"
   fi
 else
   die "the conversation is gone after the restart"
