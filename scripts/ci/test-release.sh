@@ -387,10 +387,12 @@ else
   die "the workflow and the release contract disagree"
 fi
 count="$(wc -l <"$assets_list" | tr -d ' ')"
-if [ "$count" = "11" ]; then
-  pass "the contract names the 11 release assets"
+if [ "$count" = "14" ] && grep -q '^sbom.cdx.json$' "$assets_list" \
+  && grep -q '^release-manifest.json$' "$assets_list" \
+  && grep -q '^RELEASE_NOTES.md$' "$assets_list"; then
+  pass "the contract names the 14 release assets, including SBOM, manifest and notes"
 else
-  die "the contract names $count assets, not 11"
+  die "the contract names $count assets or is missing release metadata"
 fi
 
 # A rename in one job only: the contract still demands the old name and nothing

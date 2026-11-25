@@ -32,6 +32,10 @@ if [ "$(printf '%s' "$version" | tr -d '[:cntrl:]')" != "$version" ]; then
   exit 2
 fi
 
+version_at_least() { # value minimum
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+}
+
 cat <<EOF
 free-ai-studio-android.aab
 free-ai-studio-android.apk
@@ -45,3 +49,13 @@ sarthi-studio_${version}_windows-x86_64.zip
 sarthi-studio_${version}_x86_64.AppImage
 SHA256SUMS.txt
 EOF
+
+# Metadata generated after all platform builds, by the finalize job. Releases
+# before 3.88.15 never carried it, so historical audits must not require it.
+if version_at_least "$version" 3.88.15; then
+  cat <<EOF
+RELEASE_NOTES.md
+release-manifest.json
+sbom.cdx.json
+EOF
+fi

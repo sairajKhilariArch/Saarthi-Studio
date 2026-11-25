@@ -6,19 +6,26 @@ A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The ba
 
 ## Install a release (downloaded artifacts)
 
-Pushing a `v*` tag (e.g. `v2.0.0`) to GitHub Actions attaches every release file to that tag's release page:
+A `v*` tag or a manual workflow dispatch builds and verifies every artifact. A tag alone does **not** publish: a public GitHub release is created only by a dispatch with `publish=true` and an existing tag, and the publish gate still refuses unsigned bundles. The release names are:
 
 | Platform | Artifact | Install & run |
 | --- | --- | --- |
-| Linux (deb) | `SAARTHI-STUDIO_<version>_amd64.deb` | `sudo dpkg -i SAARTHI-STUDIO_*_amd64.deb`, then launch **Sarthi Studio** from the menu or run `SAARTHI-STUDIO` |
-| Linux (AppImage) | `SAARTHI-STUDIO_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
-| Linux (portable) | `SAARTHI-STUDIO_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./SAARTHI-STUDIO` (run `./install-and-run.sh` for the full source-build install instead) |
-| Windows | `SAARTHI-STUDIO_<version>_windows-x86_64.zip` | Extract, run `SAARTHI-STUDIO.exe` (WebView2 ships with Windows 10/11) |
-| macOS (arm64) | `SAARTHI-STUDIO_<version>_macos-arm64.tar.gz` | Extract and run `./SAARTHI-STUDIO`. **Unsigned build**: on first launch right-click the binary → Open (Gatekeeper otherwise blocks it). No notarization yet. |
-| Android | `SAARTHI-STUDIO_<version>_android-release-unsigned.apk` | Enable **Install unknown apps** for your file manager, open the APK; an AAB is also attached for Play-style signing |
-| VS Code | `SAARTHI-STUDIO-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension SAARTHI-STUDIO-vscode.vsix` |
+| Linux (deb) | `free-ai-studio_<version>-1_amd64.deb` | `sudo dpkg -i free-ai-studio_*_amd64.deb`, then launch **Sarthi Studio** from the menu or run `free-ai-studio` |
+| Linux (AppImage) | `sarthi-studio_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
+| Linux (portable) | `sarthi-studio_<version>_linux-x86_64.tar.gz` | Extract and run `./free-ai-studio` (use `./install-and-run.sh` for the full source-build install instead) |
+| Windows (zip) | `sarthi-studio_<version>_windows-x86_64.zip` | Extract and run `free-ai-studio.exe` (WebView2 ships with Windows 10/11) |
+| Windows (MSI) | `sarthi-studio_<version>_windows-x86_64.msi` | Run the installer; it is currently **unsigned** |
+| macOS (universal) | `sarthi-studio_<version>_macos-universal.app.zip` or `..._macos-universal.tar.gz` | Unzip and open the app. **Unsigned and not notarized**: right-click → Open on first launch. |
+| Android | `free-ai-studio-android.apk` (AAB: `free-ai-studio-android.aab`) | **Unsigned diagnostic build**: sign it with the release keystore before installing or distributing |
+| VS Code | `free-ai-studio-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension free-ai-studio-vscode.vsix` |
 
-Every artifact ships a `SHA256SUMS.txt`; verify before installing. All creatives talk to your router on `127.0.0.1` only — nothing is uploaded anywhere except the request you send.
+Every release ships one global `SHA256SUMS.txt`, a CycloneDX `sbom.cdx.json`, `release-manifest.json` (version, source commit, workflow run and every artifact hash) and `RELEASE_NOTES.md`. Verify before installing:
+
+```sh
+sha256sum -c SHA256SUMS.txt
+```
+
+All creatives talk to your router on `127.0.0.1` only — nothing is uploaded anywhere except the request you send.
 
 ## One-command install (from source)
 

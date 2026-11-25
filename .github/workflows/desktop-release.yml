@@ -4,29 +4,32 @@ name: Desktop Release
 # via cargo-deb, AppImage), Windows x86_64 (portable zip and MSI installer),
 # macOS universal
 # arm64+x86_64 (portable tarball, unsigned, headless-smoked), the unsigned
-# Android release APK/AAB, and the VS Code extension .vsix. A `v*` tag push, a
-# published GitHub release, or a workflow_dispatch with a tag builds and
-# attaches all of them. A dispatch with no tag builds artifacts only.
+# Android release APK/AAB, and the VS Code extension .vsix. Build jobs upload
+# private artifacts only; the finalize job adds the global checksums, SBOM,
+# manifest, notes and provenance. A tag push or dispatch never publishes. A
+# PUBLIC release is created only by a dispatch with publish=true and an
+# existing tag, after every artifact and metadata gate passes.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag to build and attach (must match app/Cargo.toml); leave blank to build artifacts only'
+        description: 'Existing release tag to build (must match app/Cargo.toml); leave blank to build artifacts only'
         required: false
         type: string
+      publish:
+        description: 'Explicitly publish a PUBLIC GitHub release. Requires tag and authorization; default false.'
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - 'v*'
-  release:
-    # Catch a release created through the API or UI without a tag-push event.
-    # Releases made by this workflow's own GITHUB_TOKEN do not re-trigger it.
-    types: [published]
 
 permissions:
-  contents: write
+  contents: read
 
-# Two tag pushes must never build the same release at once: assets are keyed by
-# filename on a single release, so an overlapping run races the attachment.
+# Two tag pushes must never build the same release at once: they share the
+# finalize/publish stages and would race the release creation.
 concurrency:
   group: desktop-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
@@ -152,9 +155,8 @@ jobs:
       - name: Smoke the installed package (unpack, boot, report version)
         run: bash scripts/ci/smoke-package.sh dist/*.deb
 
-      # Reject control characters/spaces in names, require the package this job
-      # promised, and verify checksums before anything is handed to
-      # upload-artifact or the release API.
+      # Reject control characters/spaces in names and require the package this
+      # job promised. The finalize job verifies the complete set and checksums.
       - name: Validate artifact names
         run: bash scripts/ci/verify-artifacts.sh dist "free-ai-studio_${{ needs.preflight.outputs.version }}-1_amd64.deb"
 
@@ -165,13 +167,6 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
           retention-days: 30
-
-      - name: Attach .deb to GitHub release
-        if: needs.preflight.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: dist/*.deb
 
   release:
     name: Build Linux release packages
@@ -298,19 +293,11 @@ jobs:
       - name: Smoke the AppImage (extract, boot, report version)
         run: bash scripts/ci/smoke-package.sh dist/*.AppImage
 
-      - name: Generate checksums
-        run: |
-          set -eu
-          cd dist
-          sha256sum ./* > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      - name: Validate artifact names and checksums
+      - name: Validate artifact names
         run: |
           bash scripts/ci/verify-artifacts.sh dist \
             "sarthi-studio_${{ steps.meta.outputs.version }}_linux-x86_64.tar.gz" \
-            "sarthi-studio_${{ steps.meta.outputs.version }}_x86_64.AppImage" \
-            SHA256SUMS.txt
+            "sarthi-studio_${{ steps.meta.outputs.version }}_x86_64.AppImage"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -320,13 +307,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach artifacts to GitHub release
-        if: needs.preflight.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: dist/*
-          generate_release_notes: true
 
   windows:
     name: Build Windows release package
@@ -423,14 +403,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach Windows artifact to GitHub release
-        if: needs.preflight.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: |
-            dist/*.zip
-            dist/*.msi
 
   macos:
     # macOS ships a portable, UNSIGNED universal (arm64 + x86_64) tarball:
@@ -567,14 +539,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach macOS artifact to GitHub release
-        if: needs.preflight.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: |
-            dist/*.tar.gz
-            dist/*.app.zip
 
   vscode-extension:
     name: Build VS Code extension (.vsix)
@@ -620,15 +584,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach extension to GitHub release
-        if: needs.preflight.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: dist/free-ai-studio-vscode.vsix
 
   android:
-    name: Build Android release APK and AAB (signed)
+    name: Build Android release APK and AAB (unsigned; signing is blocked)
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -657,9 +615,11 @@ jobs:
       - name: Install Android SDK components
         run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      # Releases sign with the Android Gradle plugin's auto-created debug
-      # keystore so the APK installs on a device without committing a secret.
-      - name: Assemble release APK and AAB (R8, debug-signed)
+      # Gradle produces an UNSIGNED release now (the debug-key signing was
+      # removed in 3.88.10). No release keystore is present, so this job
+      # validates the package structure and records the signing blocker; it
+      # must never be described as a signed production APK.
+      - name: Assemble release APK and AAB (R8, unsigned)
         working-directory: android
         run: gradle --no-daemon --stacktrace assembleRelease bundleRelease
 
@@ -667,13 +627,25 @@ jobs:
         run: |
           set -eu
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release*.apk dist/free-ai-studio-android.apk
-          cp android/app/build/outputs/bundle/release/app-release*.aab dist/free-ai-studio-android.aab
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk dist/free-ai-studio-android.apk
+          cp android/app/build/outputs/bundle/release/app-release.aab dist/free-ai-studio-android.aab
 
-      # Both artifacts, as packaged: manifest, dex, resources, signature, the
-      # native libraries React Native loads and its JavaScript bundle.
-      - name: Smoke the packaged APK and AAB
+      # Validate manifest, dex and resources. SMOKE_ALLOW_UNSIGNED is deliberate:
+      # the artifact is known unsigned, and the release manifest records that
+      # signing is blocked. It must not be reported as installable production.
+      - name: Smoke the packaged APK and AAB (unsigned diagnostic)
+        env:
+          SMOKE_ALLOW_UNSIGNED: '1'
         run: bash scripts/ci/smoke-apk.sh dist/free-ai-studio-android.apk dist/free-ai-studio-android.aab
+
+      - name: Record Android signing status
+        run: |
+          echo "::warning::Android APK/AAB are UNSIGNED. Configure the release keystore before distribution; see CODE_SIGNING_REPORT.md."
+          {
+            echo "### Android signing: BLOCKED"
+            echo ""
+            echo "No release keystore is configured. The APK/AAB are unsigned diagnostics and must be signed before distribution."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate the Android artifacts
         run: bash scripts/ci/verify-artifacts.sh dist free-ai-studio-android.apk free-ai-studio-android.aab
@@ -688,22 +660,143 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Attach Android artifacts to GitHub release
-        if: needs.preflight.outputs.release == 'true'
+
+  finalize:
+    # All platform jobs only upload private workflow artifacts. This is the one
+    # place that builds the global checksum file, SBOM, provenance and notes,
+    # and validates the complete set before a release can exist.
+    name: Finalize release metadata and verify the complete set
+    needs: [preflight, deb, release, windows, macos, vscode-extension, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download every platform artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SBOM, notes, manifest and global checksums
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -eu
+          bash scripts/ci/generate-sbom.sh dist/sbom.cdx.json
+          bash scripts/ci/release-notes.sh "$VERSION" > dist/RELEASE_NOTES.md
+          bash scripts/ci/generate-release-manifest.sh dist "$VERSION" "$TAG"
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -exec basename {} \; \
+              | sort \
+              | xargs sha256sum > SHA256SUMS.txt
+            cat SHA256SUMS.txt
+          )
+
+      - name: Verify the complete release set and metadata
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -eu
+          bash scripts/ci/verify-artifacts.sh dist \
+            free-ai-studio-android.aab \
+            free-ai-studio-android.apk \
+            free-ai-studio-vscode.vsix \
+            "free-ai-studio_${{ needs.preflight.outputs.version }}-1_amd64.deb" \
+            "sarthi-studio_${{ needs.preflight.outputs.version }}_linux-x86_64.tar.gz" \
+            "sarthi-studio_${{ needs.preflight.outputs.version }}_macos-universal.app.zip" \
+            "sarthi-studio_${{ needs.preflight.outputs.version }}_macos-universal.tar.gz" \
+            "sarthi-studio_${{ needs.preflight.outputs.version }}_windows-x86_64.msi" \
+            "sarthi-studio_${{ needs.preflight.outputs.version }}_windows-x86_64.zip" \
+            "sarthi-studio_${{ needs.preflight.outputs.version }}_x86_64.AppImage" \
+            SHA256SUMS.txt RELEASE_NOTES.md release-manifest.json sbom.cdx.json
+          bash scripts/ci/verify-checksums.sh dist
+          bash scripts/ci/validate-release-metadata.sh dist "$VERSION"
+
+      - name: Upload the finalized release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarthi-studio-release-${{ needs.preflight.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attest artifact provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+
+  publish:
+    # A separate, explicitly authorized action. A tag push or branch dispatch
+    # never publishes: the operator must run the workflow with publish=true and
+    # supply the existing tag. This is the only job with write permission.
+    name: Publish the authorized GitHub release
+    needs: [preflight, finalize]
+    if: needs.preflight.outputs.release == 'true' && inputs.publish == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download the finalized bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: sarthi-studio-release-${{ needs.preflight.outputs.version }}
+          path: dist
+
+      # Unsigned Windows/macOS/Android artifacts are built for testing, not
+      # distribution. This gate exits 3 (BLOCKED) until credentials exist and
+      # the manifest records verified signatures.
+      - name: Enforce publication gates
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: bash scripts/ci/check-publish-gates.sh dist "$VERSION"
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "ERROR: release $TAG already exists; refusing to overwrite it" >&2
+            exit 1
+          fi
+
+      - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
-          files: |
-            dist/free-ai-studio-android.apk
-            dist/free-ai-studio-android.aab
+          name: Sarthi Studio v${{ needs.preflight.outputs.version }}
+          body_path: dist/RELEASE_NOTES.md
+          files: dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: false
 
   verify-release:
-    # A green build is not a shipped release until the assets are actually on
-    # the tag. This catches the failure mode that produced v1.62.0-v1.71.0:
-    # releases with zero assets because no build was ever attached.
-    name: Verify release assets
-    needs: [preflight, deb, release, windows, macos, vscode-extension, android]
-    if: always() && needs.preflight.outputs.release == 'true'
+    # A green build is not a shipped release until every promised asset is on
+    # the tag. Runs only after the explicitly authorized publish job.
+    name: Verify published release assets
+    needs: [preflight, publish]
+    if: needs.preflight.outputs.release == 'true' && inputs.publish == true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

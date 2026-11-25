@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.88.15
+
+### Release engineering
+
+- The release pipeline now builds every platform in isolated jobs, downloads
+  the artifacts into one finalize stage, and generates a single global
+  `SHA256SUMS.txt` instead of a Linux-only checksum file.
+- Releases carry a CycloneDX 1.5 SBOM, a `release-manifest.json` binding every
+  artifact hash to the source commit and workflow run, and curated
+  `RELEASE_NOTES.md` generated from this changelog section.
+- Publication is a separate, explicitly authorized job. A tag push or branch
+  dispatch builds and verifies artifacts without creating a public release.
+- The Android release job now reflects the real unsigned Gradle output instead
+  of claiming a debug-signed APK; signing status is recorded as blocked in the
+  manifest until credentials exist.
+- Added offline tests for SBOM shape, release notes, manifest, global checksums,
+  tamper rejection and historical-contract versioning.
+
 ## 3.88.14
 
 ### Documentation

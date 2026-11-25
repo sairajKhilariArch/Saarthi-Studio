@@ -74,6 +74,7 @@ for artifact in "$@"; do
   }
   printf '\n== %s ==\n' "$(basename "$artifact")"
   "$py" - "$artifact" "$work" "$project_version" "$project_namespace" <<'PY' || status=1
+import os
 import re
 import sys
 import zipfile
@@ -179,10 +180,10 @@ if libs:
 else:
     pass_("no native libraries shipped (none required by the native Java app)")
 
-# 6. An APK must be signed or `adb install` refuses it. The release job signs
-# with the Android Gradle plugin's debug keystore. At minSdk 26 AGP writes an
-# APK Signature Scheme v2/v3 block and no META-INF v1 entries; older targets
-# still get a v1 JAR signature. Accept either, and name which one.
+# 6. An APK must be signed or `adb install` refuses it. CI builds an unsigned
+# diagnostic release because no production keystore exists; SMOKE_ALLOW_UNSIGNED=1
+# validates its structure while explicitly reporting that it is not installable
+# as a production artifact. Signed builds still require a v1 or v2/v3 block.
 if not bundle:
     signatures = [
         name
@@ -208,6 +209,8 @@ if not bundle:
                     pos += 8 + plen
         if schemes:
             pass_(f"signed (APK Signature Scheme {', '.join(schemes)})")
+        elif os.environ.get("SMOKE_ALLOW_UNSIGNED") == "1":
+            pass_("UNSIGNED diagnostic build (allowed by SMOKE_ALLOW_UNSIGNED; not installable as production)")
         else:
             die("no META-INF signature block and no v2/v3 signing block, so the APK is unsigned and will not install")
 else:

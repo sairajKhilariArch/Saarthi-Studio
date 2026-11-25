@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  checks: write
 
 concurrency:
   group: desktop-ci-${{ github.workflow }}-${{ github.ref }}
@@ -90,6 +91,16 @@ jobs:
       - name: Check the release contract
         run: bash scripts/ci/verify-release-contract.sh .github/workflows/desktop-release.yml
 
+      # Desktop, Android, VS Code and website have independent release lines;
+      # each must still be internally consistent and documented.
+      - name: Verify every version line
+        run: bash scripts/ci/version-matrix.sh --check
+
+      # SBOM, manifest, notes and the global checksum file are release gates,
+      # not build-time decoration. Their fixtures run on every push.
+      - name: Test release metadata and checksum verification
+        run: bash scripts/ci/test-release-metadata.sh
+
       # The static UI has no build step, so nothing else catches a broken pure
       # helper: these run the real app.js in a browser-free harness.
       - name: Run frontend tests
@@ -130,6 +141,13 @@ jobs:
       - name: Run clippy
         working-directory: app
         run: cargo clippy --locked --all-targets -- -D warnings
+
+      # 0 vulnerabilities are required; the five known unmaintained/unsound
+      # warnings are reviewed in PLATFORM_SECURITY_REPORT.md.
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # Process-level: the real binary, a scratch home, the mock provider, and a
       # restart. Reuses the debug binary built above.
@@ -219,3 +237,35 @@ jobs:
       - name: Run clippy (macOS)
         working-directory: app
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  website:
+    # The public site deploys separately, but its production build must be
+    # proven on every pull request rather than first on a main push.
+    name: Website production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Type-check every page
+        run: npm run check
+
+      - name: Build the production site
+        run: npm run build
+
+      - name: Verify the production output
+        run: npm run check:build
