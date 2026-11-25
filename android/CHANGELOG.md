@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.51.1 — cross-platform hardening
+
+### Fixed
+- Release artifacts are unsigned again and match the documented distribution
+  step and CI's `app-release-unsigned.apk`; the debug keystore is no longer
+  used as a release identity.
+- Plain HTTP is allowed only on localhost/private LAN hosts. The prior
+  network-security-config used CIDR values under `<domain>`, which Android
+  never matches, so the documented LAN setup was blocked. `CleartextPolicy`
+  now enforces the boundary before connecting.
+- Android 15 edge-to-edge layouts receive status/navigation bar and cutout
+  padding, keeping the header and composer reachable.
+- Version `1.51.1`, version code `61`.
+
 ## 1.21.1 — installable signed APK
 
 ### Fixed

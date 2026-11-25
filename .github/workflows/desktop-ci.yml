@@ -95,6 +95,11 @@ jobs:
       - name: Run frontend tests
         run: bash scripts/ci/test-frontend.sh
 
+      # A package that omits a UI file boots to broken pages. This guards the
+      # cargo-deb asset list against new files under app/static.
+      - name: Verify the .deb ships every runtime UI file
+        run: bash scripts/ci/test-deb-assets.sh
+
       # The source installer is what a Linux user runs before Rust exists, so
       # its dependency preflight is tested against a fake PATH: a complete
       # toolchain passes, a missing mold is named with its apt package, and

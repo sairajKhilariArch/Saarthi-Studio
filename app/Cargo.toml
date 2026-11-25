@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "3.88.9"
+version = "3.88.10"
 edition = "2021"
 rust-version = "1.80"
 description = "Sarthi Studio — local-first AI chat and coding workspace for FreeLLMAPI"
@@ -84,9 +84,27 @@ endpoint. Upgrades replace only the binaries and UI under /usr; conversations,
 projects, settings and credentials in the user's home are preserved."""
 assets = [
     ["target/release/free-ai-studio", "usr/bin/free-ai-studio", "755"],
+    # Every runtime file the UI loads must be listed here. A .deb that shipped
+    # only index/app/styles booted to a page whose IDE layer, syntax
+    # highlighter and brand assets were 404s. scripts/ci/test-deb-assets.sh
+    # fails if a new static runtime file is not added below.
     ["static/index.html", "usr/share/sarthi-studio/static/index.html", "644"],
     ["static/app.js", "usr/share/sarthi-studio/static/app.js", "644"],
+    ["static/ide.js", "usr/share/sarthi-studio/static/ide.js", "644"],
+    ["static/highlight.js", "usr/share/sarthi-studio/static/highlight.js", "644"],
+    ["static/replace.js", "usr/share/sarthi-studio/static/replace.js", "644"],
     ["static/styles.css", "usr/share/sarthi-studio/static/styles.css", "644"],
+    ["static/ide.css", "usr/share/sarthi-studio/static/ide.css", "644"],
+    ["static/brand/app-icon.svg", "usr/share/sarthi-studio/static/brand/app-icon.svg", "644"],
+    ["static/brand/favicon.svg", "usr/share/sarthi-studio/static/brand/favicon.svg", "644"],
+    ["static/brand/logo.svg", "usr/share/sarthi-studio/static/brand/logo.svg", "644"],
+    ["static/brand/logo-mono-black.svg", "usr/share/sarthi-studio/static/brand/logo-mono-black.svg", "644"],
+    ["static/brand/logo-mono-white.svg", "usr/share/sarthi-studio/static/brand/logo-mono-white.svg", "644"],
+    ["static/brand/splash.svg", "usr/share/sarthi-studio/static/brand/splash.svg", "644"],
+    ["static/brand/tardigrade.svg", "usr/share/sarthi-studio/static/brand/tardigrade.svg", "644"],
+    ["static/brand/tardigrade-mark.svg", "usr/share/sarthi-studio/static/brand/tardigrade-mark.svg", "644"],
+    ["static/brand/tardigrade-mono-black.svg", "usr/share/sarthi-studio/static/brand/tardigrade-mono-black.svg", "644"],
+    ["static/brand/tardigrade-mono-white.svg", "usr/share/sarthi-studio/static/brand/tardigrade-mono-white.svg", "644"],
     ["static/skills/code-review/SKILL.md", "usr/share/sarthi-studio/static/skills/code-review/SKILL.md", "644"],
     ["static/skills/debug/SKILL.md", "usr/share/sarthi-studio/static/skills/debug/SKILL.md", "644"],
     ["static/skills/tests/SKILL.md", "usr/share/sarthi-studio/static/skills/tests/SKILL.md", "644"],

@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.88.10
+
+### Cross-platform packaging
+
+- The Linux `.deb` now ships the complete runtime UI: `ide.js`, `ide.css`,
+  `highlight.js`, `replace.js` and every brand asset and bundled skill. The
+  previous manifest omitted the IDE layer, so an installed package booted to a
+  page that could not render the workbench. `scripts/ci/test-deb-assets.sh`
+  fails when a runtime file under `app/static` is not in the package manifest.
+- Android release builds are unsigned again, matching `BUILDING.md`, CI's
+  `app-release-unsigned.apk` artifact and the documented signing step. The
+  release build no longer claims the debug keystore as its identity.
+- Android plaintext HTTP is enforced in code: `CleartextPolicy` allows it only
+  for localhost and private/link-local LAN addresses and refuses public hosts.
+  The network-security-config previously listed CIDR ranges under `<domain>`,
+  which never matched a LAN address and contradicted the documented setup.
+- Android 15 edge-to-edge content is padded by the live status/navigation bar
+  and display-cutout insets, so the header and composer stay reachable.
+- Android version `1.51.1` (version code `61`).
+
 ## 3.88.9
 
 ### Interface

@@ -9,23 +9,24 @@ android {
         applicationId = "com.saarthi.studio"
         minSdk = 26
         targetSdk = 35
-        versionCode = 60
-        versionName = "1.51.0"
+        versionCode = 61
+        versionName = "1.51.1"
     }
 
     buildTypes {
         release {
-            // Distributable builds must be signed or Android refuses to
-            // install them ("App not installed"). Sign releases with the
-            // Android Gradle plugin's auto-generated debug keystore so the
-            // release artifacts work without committing any secret.
+            // R8 minifies and shrinks the distributable, but this build does
+            // not sign it. The previous debug-keystore signing produced
+            // app-release.apk while CI and BUILDING.md expect the unsigned
+            // app-release-unsigned.apk, and shipping a debug key is not a
+            // release identity. Sign the artifact with the project's release
+            // keystore at distribution time (see android/BUILDING.md).
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
