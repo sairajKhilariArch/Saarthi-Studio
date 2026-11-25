@@ -227,6 +227,11 @@ body.chat-max .ai-dock .suggestions { grid-template-columns: repeat(2, minmax(0,
 .ai-dock .suggestions { display: grid; grid-template-columns: 1fr; gap: 6px; }
 .ai-dock .suggestion { padding: 8px 9px; }
 .ai-dock .composer-shell { padding: 6px 10px 10px; }
+/* The dock header cannot fit the model pill, two tabs and three action
+   buttons at its default width; the model is already shown in the composer
+   chip and the status bar, so keep the header readable instead of clipping
+   the pill to "au". */
+.ai-dock-head .status-pill { display: none; }
 .ai-dock .composer-bar { flex-wrap: wrap; row-gap: 6px; }
 .ai-dock .composer-left, .ai-dock .composer-right { flex-wrap: wrap; row-gap: 6px; }
 .ai-dock .kbd-hint { display: none; }
@@ -433,6 +438,13 @@ body.chat-max .ai-dock .suggestions { grid-template-columns: repeat(2, minmax(0,
 /* The narrow sidebar is a fixed drawer (styles.css), so it no longer owns a
    grid column. Without this, the empty drawer column stayed reserved and left
    pages only 121 px wide even after the chat overlay was closed. */
+/* On a phone the 94vw dock would start left of the 48 px activity rail and
+   cover its buttons. Keep the rail clear: the dock spans the rest of the
+   viewport instead of nearly all of it. */
+@media (max-width: 480px) {
+  .app > .ai-dock { width: calc(100vw - var(--activity-w)); }
+}
+
 @media (max-width: 980px) {
   .app {
     grid-template-columns: var(--activity-w) minmax(0, 1fr);

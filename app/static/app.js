@@ -1704,9 +1704,13 @@ function inlineMarkdown(text) {
 }
 
 function codeBlockHtml(code, language) {
-  return `<div class="code-block"><div class="code-head"><span>${escapeHtml(language || "code")}</span>` +
-    `<button class="code-copy" data-copy-code>Copy</button></div>` +
-    `<pre><code>${escapeHtml(code)}</code></pre></div>`;
+  const label = language || "code";
+  // The same tested tokenizer the editor uses. It escapes before wrapping, and
+  // returns escaped plain text for an unknown language or an oversized buffer.
+  const painted = typeof highlightCode === "function" ? highlightCode(code, language) : escapeHtml(code);
+  return `<div class="code-block"><div class="code-head"><span>${escapeHtml(label)}</span>` +
+    `<button type="button" class="code-copy" data-copy-code aria-label="Copy ${escapeHtml(label)} code">Copy</button></div>` +
+    `<pre><code class="hljs language-${escapeHtml(label)}">${painted}</code></pre></div>`;
 }
 
 function renderMarkdown(source) {
@@ -2043,6 +2047,7 @@ function setBusy(value) {
   $("sendBtn").disabled = value;
   $("attachContextBtn").disabled = value;
   $("mediaAttachBtn").disabled = value;
+  $("messages").setAttribute("aria-busy", String(Boolean(value)));
   $("thinking").classList.toggle("hidden", !value);
   if (value) scrollChat();
 }
@@ -2103,6 +2108,17 @@ function relativeTime(epoch, now = Date.now() / 1000) {
   return new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/// A thread matches when its title or project contains the filter. Pure so the
+/// rule can be tested without a DOM, and case-insensitive so typing "auth"
+/// finds "Fix Auth flow".
+function filterConversations(conversations, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return conversations;
+  return conversations.filter((conversation) =>
+    `${conversation.title || ""} ${conversation.project || ""}`.toLowerCase().includes(needle)
+  );
+}
+
 function renderConversations() {
   const box = $("conversationList");
   box.replaceChildren();
@@ -2113,7 +2129,16 @@ function renderConversations() {
     box.appendChild(note);
     return;
   }
-  state.conversations.forEach((conversation) => {
+  const filterInput = $("threadFilter");
+  const conversations = filterConversations(state.conversations, filterInput ? filterInput.value : "");
+  if (!conversations.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No threads match that filter.";
+    box.appendChild(note);
+    return;
+  }
+  conversations.forEach((conversation) => {
     const item = document.createElement("div");
     const isOpen = conversation.id === state.currentId;
     item.className = "thread-item" + (isOpen ? " active" : "");
@@ -4534,14 +4559,51 @@ function attachFromComposer() {
 /* dialogs                                                             */
 /* ------------------------------------------------------------------ */
 
+function modalFocusables(element) {
+  const nodes = Array.from(element.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ));
+  return nodes.filter((node) => {
+    const hidden = node.classList && node.classList.contains("hidden");
+    return !node.disabled && !hidden && !(node.closest && node.closest(".hidden"));
+  });
+}
+
+function trapModalFocus(element, event) {
+  if (event.key !== "Tab") return;
+  const items = modalFocusables(element);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function showModal(element) {
+  // Remember the control that opened the dialog so keyboard users land back
+  // where they were, not at the top of the page.
+  element._returnFocus = document.activeElement;
   element.classList.remove("hidden");
+  if (!element._focusTrap) {
+    element._focusTrap = (event) => trapModalFocus(element, event);
+    element.addEventListener("keydown", element._focusTrap);
+  }
   const focusable = element.querySelector("input, button");
   if (focusable) setTimeout(() => focusable.focus(), 20);
 }
 
 function hideModal(element) {
   element.classList.add("hidden");
+  const back = element._returnFocus;
+  element._returnFocus = null;
+  if (back && typeof back.focus === "function") {
+    try { back.focus(); } catch { /* the opener went away */ }
+  }
 }
 
 let nameResolver = null;
@@ -9063,6 +9125,15 @@ function bindEvents() {
     try { localStorage.setItem("freeai-thread-scope", state.threadScope); } catch { /* private mode */ }
     await loadConversations();
   });
+  if ($("threadFilter")) {
+    $("threadFilter").addEventListener("input", renderConversations);
+    // Escape clears the filter without leaving the keyboard behind.
+    $("threadFilter").addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      $("threadFilter").value = "";
+      renderConversations();
+    });
+  }
   $("projectSwitcher").addEventListener("click", (event) => {
     event.stopPropagation();
     if ($("projectMenu").classList.contains("hidden")) openProjectMenu();

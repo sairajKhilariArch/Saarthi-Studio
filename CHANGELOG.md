@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.88.9
+
+### Interface
+
+- Restored the workbench home on first load: the main column now shows the
+  project state and real Open folder / New thread / Search actions instead of a
+  blank surface, and returns there when leaving a page view.
+- Chat code blocks use the editor's tested syntax highlighter, keep the language
+  label, and expose a labelled Copy button. Threads can be filtered by title or
+  project, with Escape clearing the filter.
+- Added a terminal empty state and let the no-folder hint use two lines instead
+  of truncating in the explorer.
+- Dialogs trap Tab inside the open panel and return focus to their opener;
+  streaming exposes `aria-busy` and a polite status region, and the phone-width
+  assistant dock no longer covers the activity rail.
+
+### Testing
+
+- Frontend suite covers the workbench home, chat highlighting, thread filtering,
+  dialog focus, theme persistence, accessible status semantics and the phone
+  dock rule (124 tests).
+
 ## 3.88.6
 
 ### Performance

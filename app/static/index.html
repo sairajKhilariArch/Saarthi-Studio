@@ -86,6 +86,10 @@
         <p class="pane-label" id="threadPaneLabel">Recent</p>
         <button id="threadScopeBtn" class="tiny-toggle" title="Show recent threads from every project">All projects</button>
       </div>
+      <label class="thread-filter">
+        <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="threadFilter" type="search" placeholder="Filter threads…" autocomplete="off" aria-label="Filter conversations by title">
+      </label>
       <div id="conversationList" class="thread-list">
         <p class="empty-note">Loading history…</p>
       </div>
@@ -300,8 +304,8 @@
               </button>
             </div>
           </div>
-          <div id="messages" class="messages" aria-live="polite"></div>
-          <div id="thinking" class="thinking hidden"><span class="spinner"></span><span>Thinking with your router…</span></div>
+          <div id="messages" class="messages" aria-live="polite" aria-busy="false"></div>
+          <div id="thinking" class="thinking hidden" role="status" aria-live="polite"><span class="spinner"></span><span>Thinking with your router…</span></div>
           <div id="streamIndicator" class="thinking hidden"><button id="stopStream" class="btn btn-quiet btn-small danger">
             <svg class="icon"><use href="#i-stop"/></svg><span>Stop</span>
           </button></div>
@@ -324,7 +328,7 @@
               <svg class="icon"><use href="#i-close"/></svg>
             </button>
           </div>
-          <textarea id="prompt" rows="2" placeholder="Ask anything — paste an error, describe a change, or reference an open file…"></textarea>
+          <textarea id="prompt" rows="2" placeholder="Ask anything — paste an error or reference a file…"></textarea>
           <div class="composer-bar">
             <div class="composer-left">
               <button id="attachContextBtn" class="btn btn-quiet btn-small" title="Attach the active file as context">
@@ -1549,7 +1553,9 @@
         <svg class="icon"><use href="#i-arrow"/></svg>
       </button>
     </header>
-    <div id="terminalHost" class="terminal-host"></div>
+    <div id="terminalHost" class="terminal-host">
+      <p class="pane-empty terminal-empty">Open a project folder to start a terminal in it. The shell always starts inside that folder.</p>
+    </div>
   </section>
 </div>
 

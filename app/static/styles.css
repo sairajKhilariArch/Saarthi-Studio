@@ -287,6 +287,7 @@ body.no-bottom { --bottom-h: 0px; }
 .panel-recent-item { display: flex; gap: 6px; align-items: baseline; justify-content: space-between; }
 .panel-recent-item small { color: var(--mute); flex: none; }
 .terminal-host { flex: 1; min-height: 0; padding: 6px 8px 4px; background: var(--bg); cursor: text; }
+.terminal-host .terminal-empty { max-width: 480px; padding: 14px 6px; }
 .terminal-host .terminal.xterm { width: 100%; height: 100%; }
 
 /* ---------- sidebar ---------- */
@@ -321,6 +322,20 @@ body.no-bottom { --bottom-h: 0px; }
   font-size: 11px; font-weight: 600;
   color: var(--mute); margin: 16px 4px 8px;
 }
+.thread-filter {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  margin: 0 0 8px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface); color: var(--mute);
+}
+.thread-filter:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.thread-filter .icon { width: 13px; height: 13px; flex: none; }
+.thread-filter input {
+  flex: 1; min-width: 0; border: 0; outline: none;
+  background: transparent; color: var(--text); font: inherit; font-size: 12px;
+}
+.thread-filter input::placeholder { color: var(--placeholder); }
+
 .thread-list { flex: 1; overflow-y: auto; min-height: 60px; padding-right: 2px; }
 .thread-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
@@ -779,6 +794,12 @@ kbd {
 .ws-title-text span {
   display: block; font-family: var(--mono); font-size: 11px; color: var(--mute);
   margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* A hint is prose, not a path: let it use two lines instead of cutting it to
+   "Open a folder to browse and edi…" in the narrow explorer. */
+#wsPath {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  white-space: normal; overflow-wrap: anywhere;
 }
 .ws-actions { display: flex; gap: 6px; margin-top: 9px; }
 .ws-actions .btn { flex: 1; }
