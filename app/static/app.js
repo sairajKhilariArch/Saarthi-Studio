@@ -5721,7 +5721,7 @@ async function loadSettings() {
     : "Paste an OpenAI Platform key";
   $("openaiKeyStatus").textContent = result.data.has_openai_key
     ? `A platform key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it.`
-    : `No platform key saved. Needed for openai: models. A saved key goes to ${keychainStoreName(keychain)}.`;
+    : `No platform key saved. Needed for openai: models. A saved key goes ${keychainStoreName(keychain)}.`;
   $("thinkingLevel").value = result.data.thinking_level || "";
   $("runThinkingLevel").value = result.data.run_thinking_level || "";
   $("agentModel").value = result.data.agent_model || "";
@@ -5735,14 +5735,14 @@ async function loadSettings() {
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
   $("searchKeyStatus").textContent = result.data.has_search_key
     ? `A search key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it.`
-    : `Needed for Deep search with Exa or Tavily. A saved key goes to ${keychainStoreName(keychain)}.`;
+    : `Needed for Deep search with Exa or Tavily. A saved key goes ${keychainStoreName(keychain)}.`;
   updateContextMeter();
   $("modelChip").textContent = state.model;
   $("apiKey").value = "";
   $("apiKey").placeholder = result.data.has_api_key ? "Saved key (leave blank to keep it)" : "Paste your router API key";
   $("keyStatus").textContent = result.data.has_api_key
     ? `A key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it, or enter a new key to replace it.`
-    : `No key saved yet. A saved key goes to ${keychainStoreName(keychain)}.`;
+    : `No key saved yet. A saved key goes ${keychainStoreName(keychain)}.`;
   renderBackendPresets();
   void loadPermissions();
 }

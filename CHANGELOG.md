@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.88.17
+
+### Phase 10 acceptance fixes
+
+- The macOS watcher test now waits for an index sentinel instead of a fixed
+  150 ms sleep, removing a real FSEvents registration race on shared CI runners.
+- An unreadable `config.json` is copied to `config.json.corrupt-<timestamp>`
+  before defaults replace it, so a truncated settings file no longer disappears
+  without a recovery path.
+- The saved-key help text no longer reads "goes to in the OS credential store".
+- README runtime commands now use the real `free-ai-studio` binary and
+  `FREE_AI_STUDIO_*` environment variables.
+- Added the Phase 10 production-acceptance reports.
+
 ## 3.88.16
 
 ### CI

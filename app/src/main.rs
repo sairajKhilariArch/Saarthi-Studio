@@ -929,7 +929,9 @@ fn ensure_setup(state: &AppState) -> Result<SchemaUpgrade, Box<dyn std::error::E
         })?;
         set_private_permissions(parent, true)?;
     }
-    if !state.config_path.exists() {
+    if state.config_path.exists() {
+        preserve_unreadable_config(&state.config_path);
+    } else {
         save_config_file(&state.config_path, &Config::defaults())?;
     }
     let upgrade = initialize_database(&state.database_path)?;
@@ -940,6 +942,34 @@ fn ensure_setup(state: &AppState) -> Result<SchemaUpgrade, Box<dyn std::error::E
     // credential store once, and the empty skipped runs cost one file read.
     migrate_secrets_to_keychain(state);
     Ok(upgrade)
+}
+
+/// Keep a copy of a config.json that cannot be parsed before the active-project
+/// pointer rewrites it with defaults. Without this a truncated or hand-edited
+/// file would be replaced silently and its settings lost with no recovery path.
+fn preserve_unreadable_config(path: &FsPath) -> Option<PathBuf> {
+    let bytes = fs::read(path).ok()?;
+    if serde_json::from_slice::<Config>(&bytes).is_ok() {
+        return None;
+    }
+    let backup = path.with_file_name(format!("config.json.corrupt-{}", now_seconds() as u64));
+    match fs::copy(path, &backup) {
+        Ok(_) => {
+            eprintln!(
+                "Settings at {} could not be read; kept a copy at {} and started with defaults.",
+                path.display(),
+                backup.display()
+            );
+            Some(backup)
+        }
+        Err(error) => {
+            eprintln!(
+                "Settings at {} could not be read ({error}); could not keep a backup.",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// True when a plaintext secret is still sitting in the config file.
@@ -5543,6 +5573,33 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn an_unreadable_config_is_backed_up_before_defaults_replace_it() {
+        let dir = scratch("bad-config");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{not valid json").expect("write config");
+        let backup = preserve_unreadable_config(&path).expect("backup");
+        assert_eq!(
+            std::fs::read_to_string(&backup).expect("backup readable"),
+            "{not valid json"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_valid_config_is_not_backed_up() {
+        let dir = scratch("good-config");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        let valid = serde_json::to_vec(&Config::defaults()).expect("serialize config");
+        std::fs::write(&path, valid).expect("write config");
+        assert!(preserve_unreadable_config(&path).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
