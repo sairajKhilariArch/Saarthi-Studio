@@ -503,6 +503,7 @@ async function loadSkills() {
   }
   const payload = result.data.skills || result.data;
   state.skills = Array.isArray(payload) ? payload : [];
+  fillRunSkillOptions();
   renderSkills();
   renderSkillsOverview();
   if ($("skillMenu") && !$("skillMenu").classList.contains("hidden")) renderSkillMenu();
@@ -7219,6 +7220,24 @@ function fillSkillOptions(selectedId) {
   });
 }
 
+function fillRunSkillOptions() {
+  const select = $("runSkill");
+  if (!select) return;
+  const selected = select.value;
+  select.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "No skill";
+  select.appendChild(blank);
+  state.skills.filter((skill) => !skill.error && skill.enabled !== false && skill.compatible !== false).forEach((skill) => {
+    const option = document.createElement("option");
+    option.value = skill.id;
+    option.textContent = skill.name || skill.id;
+    if (skill.id === selected) option.selected = true;
+    select.appendChild(option);
+  });
+}
+
 function editWorkflow(workflow, override = {}) {
   $("workflowName").value = workflow.name || "";
   $("workflowPrompt").value = workflow.prompt || "";
@@ -10414,6 +10433,7 @@ async function submitRun(event) {
   for (const el of [crewRoster, stageBudget, stagePolicy, crewChips]) { if (el) el.classList.toggle("hidden", crewOnly); }
   const payload = {
     goal,
+    skill: $("runSkill") ? $("runSkill").value : "",
     profile: $("runProfile").value,
     mode: $("runMode").value,
     allowWrites: $("runAllowWrites").checked,
@@ -10448,6 +10468,7 @@ async function submitRun(event) {
     return;
   }
   $("runGoal").value = "";
+  if ($("runSkill")) $("runSkill").value = "";
   const queued = result.data.run && result.data.run.status === "queued";
   toast(queued
     ? `Run queued${result.data.run.queuePosition ? ` (position ${result.data.run.queuePosition})` : ""} — it starts when a slot frees.`

@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.88.4
+
+### Fixed
+
+- A non-stream chat turn now stores the model that answered it, and the
+  conversation list returns that model, so reopening a thread restores the
+  choice instead of falling back to the current default.
+- A workflow's attached skill now reaches every agent node, including resumed
+  and scheduled runs. A missing, disabled, broken or incompatible skill is
+  refused with a specific error instead of being silently ignored.
+- Workflow child agent runs inherit the configured token ceiling instead of
+  using the column default of 0 (no limit).
+- Direct agent runs can attach a skill from the Runs form; the instructions are
+  validated and stored with the run goal.
+
+### Testing
+
+- Real-binary e2e grows from 61 to 75 checks: model round-trip, direct and
+  workflow skill delivery, missing-skill refusals, denied write approval, and a
+  two-agent dependent workflow.
+- Four new Rust tests cover skill resolution and workflow child-run budgeting.
+- The release-mode e2e run was refused by this host before execution; the 3.88.4
+  release binary builds and reports its version.
+
 ## 3.88.3
 
 ### Fixed

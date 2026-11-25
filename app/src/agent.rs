@@ -34,6 +34,9 @@ use crate::AppState;
 
 pub(crate) const DEFAULT_MAX_STEPS: i64 = 12;
 pub(crate) const HARD_MAX_STEPS: i64 = 30;
+/// A run's goal is capped at 5,000 characters; an attached skill adds bounded
+/// instructions in front of it and the stored goal keeps room for both.
+const MAX_SKILLED_GOAL_CHARS: usize = 9_000;
 /// One model step's captured output never exceeds this, in characters.
 const STEP_OUTPUT_CAP: usize = 4_000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
@@ -3812,6 +3815,17 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     if goal.chars().count() > 5_000 {
         return error_response(StatusCode::BAD_REQUEST, "Goal is too long.");
     }
+    // A skill is prompt text the person attached to this run. It is resolved
+    // against the installed catalogue and refused before a run row exists when
+    // it is missing, broken, incompatible or switched off.
+    let skill = match crate::skills::resolve_attached(
+        &state,
+        input.get("skill").and_then(Value::as_str).unwrap_or(""),
+    ) {
+        Ok(skill) => skill,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
+    let goal = crate::skills::with_instructions(skill.as_ref(), &goal, MAX_SKILLED_GOAL_CHARS);
     let allow_writes = input
         .get("allowWrites")
         .and_then(Value::as_bool)

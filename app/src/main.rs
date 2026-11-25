@@ -3219,14 +3219,15 @@ async fn list_conversations(
         let sql = if all_scope {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
-             COALESCE(p.name, 'No project') AS project, COALESCE(v.token_budget,0)
+             COALESCE(p.name, 'No project') AS project, COALESCE(v.token_budget,0),
+             COALESCE(v.model,'') AS model
              FROM conversations v LEFT JOIN projects p ON p.id=v.project_id
              ORDER BY v.updated_at DESC LIMIT 100"
         } else {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
              (SELECT COALESCE(name, 'No project') FROM projects p WHERE p.id=v.project_id) AS project,
-             COALESCE(v.token_budget,0)
+             COALESCE(v.token_budget,0), COALESCE(v.model,'') AS model
              FROM conversations v WHERE v.project_id=?1 ORDER BY v.updated_at DESC"
         };
         let mut stmt = conn.prepare(sql)?;
@@ -3237,7 +3238,8 @@ async fn list_conversations(
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                     "last_message": row.get::<_, Option<String>>(4)?,
                     "project": row.get::<_, String>(5)?,
-                    "token_budget": row.get::<_, i64>(6)?
+                    "token_budget": row.get::<_, i64>(6)?,
+                    "model": row.get::<_, String>(7)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -3249,7 +3251,8 @@ async fn list_conversations(
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                     "last_message": row.get::<_, Option<String>>(4)?,
                     "project": row.get::<_, String>(5)?,
-                    "token_budget": row.get::<_, i64>(6)?
+                    "token_budget": row.get::<_, i64>(6)?,
+                    "model": row.get::<_, String>(7)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -4146,8 +4149,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                 params![now, cid, cfg.model],
             )?;
             conn.execute(
-                "UPDATE conversations SET updated_at=?1 WHERE id=?2",
-                params![now, cid],
+                "UPDATE conversations SET updated_at=?1, model=?3 WHERE id=?2",
+                params![now, cid, cfg.model],
             )?;
             Ok(())
         })();
@@ -4205,8 +4208,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                         params![now, cid, model_name, started.elapsed().as_millis() as i64, completion],
                     )?;
                     conn.execute(
-                        "UPDATE conversations SET updated_at=?1 WHERE id=?2",
-                        params![now, cid],
+                        "UPDATE conversations SET updated_at=?1, model=?3 WHERE id=?2",
+                        params![now, cid, model_name],
                     )?;
                     Ok(())
                 })();
@@ -4274,8 +4277,12 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                     params![now, cid, meta.get("model").and_then(Value::as_str).unwrap_or("auto"), meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"), meta.get("latency_ms").and_then(Value::as_i64), meta.get("prompt_tokens").and_then(Value::as_i64), meta.get("completion_tokens").and_then(Value::as_i64), meta.get("total_tokens").and_then(Value::as_i64), meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or(""), cost_usd, cost_basis],
                 )?;
                 conn.execute(
-                    "UPDATE conversations SET updated_at=?1 WHERE id=?2",
-                    params![now, cid],
+                    "UPDATE conversations SET updated_at=?1, model=?3 WHERE id=?2",
+                    params![
+                        now,
+                        cid,
+                        meta.get("model").and_then(Value::as_str).unwrap_or("")
+                    ],
                 )?;
                 Ok(())
             })();
@@ -5916,8 +5923,8 @@ mod tests {
             })
             .expect("the default project");
         conn.execute(
-            "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget)
-             VALUES('c1','Thread',1.0,1.0,?1,7)",
+            "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget,model)
+             VALUES('c1','Thread',1.0,1.0,?1,7,'mock-model')",
             [&project],
         )
         .expect("conversation");
@@ -5931,6 +5938,9 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(value[0]["project"], project_name);
         assert_eq!(value[0]["token_budget"], 7);
+        // The UI restores `match.model` when a thread is reopened; the list has
+        // to carry the persisted model or that restore silently never happens.
+        assert_eq!(value[0]["model"], "mock-model");
     }
 
     /// A router that answers with the scripted statuses in order (then 200 with

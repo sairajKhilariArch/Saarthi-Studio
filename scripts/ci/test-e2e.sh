@@ -357,6 +357,25 @@ else
   die "messages endpoint failed for $cid"
 fi
 
+# Reopening a thread restores the model it was using. The list route has to
+# return the value the reply recorder persisted, not just the id and title.
+if [ "$(http GET "$base/api/conversations")" = "200" ]; then
+  listed_model="$("$py" - "$work/body" "$cid" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))
+row = next((row for row in rows if row.get("id") == sys.argv[2]), {})
+print(row.get("model", ""))
+PY
+)"
+  if [ "$listed_model" = "mock-model" ]; then
+    pass "the conversation list returns the model the turn used"
+  else
+    die "conversation model round-trip failed: got '$listed_model' for $cid"
+  fi
+else
+  die "conversation list failed while checking the model"
+fi
+
 # The streaming route is a separate body machine from /api/chat and has its own
 # partial-reply recorder. A router that answers plain JSON (the mock does) must
 # still become one delta plus a done frame, and the reply must be stored once.
@@ -729,6 +748,150 @@ case "$actions" in
   *write*verify*done*) pass "the run log keeps write, verify and done steps" ;;
   *) die "run steps are not write, verify, done: $actions" ;;
 esac
+
+# The Runs form can attach a skill too. The child goal the route stores is the
+# same shape chat and workflows use, so the skill travels with the run.
+code="$(http POST "$base/api/runs" '{"goal":"e2e-skill-run: report on the workspace","skill":"debug","allowWrites":false,"profile":"coding","maxSteps":4}')"
+skill_agent="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$skill_agent" ]; then
+  pass "an agent run is created with an attached skill"
+else
+  die "could not create the skill run (HTTP $code: $(cat "$work/body"))"
+fi
+if wait_run_state "$skill_agent" succeeded 80; then
+  pass "the direct skill run finishes"
+else
+  die "direct skill run ended $(run_state "$skill_agent"): $(cat "$work/body")"
+fi
+http GET "$base/api/runs/$skill_agent" >/dev/null
+if "$py" - "$work/body" <<'PY'
+import json, sys
+run = json.load(open(sys.argv[1], encoding="utf-8"))
+goal = run.get("goal", "")
+checks = [
+    'Follow the skill "debug"' in goal,
+    "Debug the reported failure." in goal,
+    "e2e-skill-run" in goal,
+]
+raise SystemExit(0 if all(checks) else 1)
+PY
+then
+  pass "the direct run's stored goal carries the skill instructions"
+else
+  die "the direct run did not carry its skill: $(cat "$work/body")"
+fi
+
+code="$(http POST "$base/api/runs" '{"goal":"never runs","skill":"no-such-skill"}')"
+if [ "$code" = "400" ] && grep -qi 'No skill' "$work/body"; then
+  pass "an agent run with a missing skill is refused before it starts"
+else
+  die "missing-skill agent run was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+# Denying the write approval must stop the run and leave the file uncreated.
+code="$(http POST "$base/api/runs" '{"goal":"e2e-agent-deny: write the forbidden file","allowWrites":true,"profile":"coding","maxSteps":4}')"
+deny_run="$(field run.id)"
+if [ "$code" = "200" ] && wait_run_state "$deny_run" awaiting_approval 80; then
+  pass "the denied-write run waits for approval"
+else
+  die "denied-write run never asked for approval (HTTP $code: $(cat "$work/body"))"
+fi
+if [ "$(http POST "$base/api/runs/$deny_run/approve" '{"approve":false}')" = "200" ]; then
+  pass "the write approval was denied"
+else
+  die "denying the write failed (HTTP $(cat "$work/body"))"
+fi
+wait_run_state "$deny_run" failed 40 >/dev/null
+state="$(run_state "$deny_run")"
+if [ "$state" = "failed" ] && [ ! -e "$ws/e2e-denied.txt" ]; then
+  pass "the denied write is blocked and no file is created"
+else
+  die "denied write was not blocked (state '$state', file exists: $([ -e "$ws/e2e-denied.txt" ] && echo yes || echo no))"
+fi
+
+# A workflow attaches a skill through its own field. Attaching one is only
+# real if the child agent run actually receives those instructions; the mock
+# only finishes when the goal carries the skill, so a dropped attachment fails.
+code="$(http POST "$base/api/workflows" '{"name":"e2e skill workflow","skill":"debug","nodes":[{"id":"debug-it","kind":"agent","prompt":"e2e-workflow-skill: inspect the workspace and report","profile":"coding","maxSteps":4},{"id":"report-it","kind":"agent","prompt":"e2e-workflow-skill: report the findings","profile":"coding","maxSteps":4,"dependsOn":["debug-it"]}]}')"
+skill_wf="$(field id)"
+if [ "$code" = "200" ] && [ -n "$skill_wf" ]; then
+  pass "a workflow is saved with an attached skill"
+else
+  die "could not create the skill workflow (HTTP $code: $(cat "$work/body"))"
+fi
+
+code="$(http POST "$base/api/workflows/$skill_wf/run" '{}')"
+skill_run="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$skill_run" ]; then
+  pass "the skill workflow starts a run ($skill_run)"
+else
+  die "could not start the skill workflow (HTTP $code: $(cat "$work/body"))"
+fi
+
+tries=0
+skill_state=""
+while [ "$tries" -lt 160 ]; do
+  http GET "$base/api/workflow-runs/$skill_run" >/dev/null
+  skill_state="$(field run.status)"
+  case "$skill_state" in
+    succeeded | failed | cancelled | interrupted) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+if [ "$skill_state" = "succeeded" ]; then
+  pass "the workflow's dependent agent step finishes"
+else
+  die "skill workflow ended '$skill_state': $(cat "$work/body")"
+fi
+
+http GET "$base/api/workflow-runs/$skill_run" >/dev/null
+child_run="$(field run.stepList.0.agentRunId)"
+if [ -n "$child_run" ] && [ "$(http GET "$base/api/runs/$child_run")" = "200" ]; then
+  if "$py" - "$work/body" <<'PY'
+import json, sys
+run = json.load(open(sys.argv[1], encoding="utf-8"))
+goal = run.get("goal", "")
+checks = [
+    run.get("status") == "succeeded",
+    'Follow the skill "debug"' in goal,
+    "Debug the reported failure." in goal,
+    "e2e-workflow-skill" in goal,
+]
+raise SystemExit(0 if all(checks) else 1)
+PY
+  then
+    pass "the workflow skill's instructions reached the child agent run"
+  else
+    die "the child agent run did not carry the workflow skill: $(cat "$work/body")"
+  fi
+else
+  die "could not read the workflow's child agent run '$child_run'"
+fi
+
+if [ "$(http GET "$base/api/workflow-runs/$skill_run")" = "200" ] &&
+   [ "$(field run.steps)" = "2" ] &&
+   [ "$(field run.succeededSteps)" = "2" ] &&
+   [ -n "$(field run.stepList.0.agentRunId)" ] &&
+   [ -n "$(field run.stepList.1.agentRunId)" ]; then
+  pass "both dependent workflow agent steps ran and finished"
+else
+  die "the dependent workflow steps did not both finish: $(cat "$work/body")"
+fi
+
+# A missing skill is a configuration error: starting the run is refused with a
+# useful message instead of executing the graph as if nothing were attached.
+code="$(http POST "$base/api/workflows" '{"name":"e2e missing skill","skill":"no-such-skill","nodes":[{"id":"step","kind":"agent","prompt":"never runs"}]}')"
+missing_wf="$(field id)"
+code="$(http POST "$base/api/workflows/$missing_wf/run" '{}')"
+if [ "$code" = "400" ] && grep -qi 'no skill' "$work/body"; then
+  pass "a workflow with a missing skill is refused before it starts"
+else
+  die "missing-skill workflow was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+http POST "$base/api/workflows/$skill_wf/delete" '{}' >/dev/null
+http POST "$base/api/workflows/$missing_wf/delete" '{}' >/dev/null
 
 # A setting saved through the route the Settings panel calls must come back
 # from disk after the restart below, not from an in-memory copy.

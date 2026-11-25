@@ -612,6 +612,11 @@
             <textarea id="runGoal" rows="3" placeholder="Create hello.txt containing Hi, then verify it exists by listing the folder." required></textarea>
           </label>
           <label class="field">
+            <span>Skill (optional)</span>
+            <select id="runSkill"><option value="">No skill</option></select>
+            <small>The skill's instructions are added to this run's goal. A missing, disabled or incompatible skill is refused before the run starts.</small>
+          </label>
+          <label class="field">
             <span>Token budget (optional)</span>
             <input id="runTokenBudget" type="number" min="0" step="1000" placeholder="Blank uses the agent setting">
             <small>The run stops between steps once its own model calls reach this total. 0 means no limit.</small>

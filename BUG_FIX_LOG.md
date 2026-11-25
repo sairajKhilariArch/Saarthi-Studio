@@ -3,7 +3,7 @@
 **Audit date:** 2026-11-24  
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** `55d1218` (3.88.0)  
-**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes; 3.88.3 verification/startup fixes<br>
+**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes; 3.88.3 verification/startup fixes; 3.88.4 integration fixes<br>
 **Rule followed:** reproduce first, fix the cause, add a regression test, rerun the affected suite. No test was skipped or weakened to obtain a green result.
 
 ## Summary
@@ -16,6 +16,9 @@
 | BUG-04 | P2 / Medium | Remote MCP accepted cleartext HTTP off loopback | Fixed in 3.88.2 | 3 Rust tests + 2 e2e checks |
 | BUG-05 | P2 / Medium | Saved MCP header values were plaintext in `mcp.json` | Fixed in 3.88.2 | header-keychain Rust test |
 | BUG-06 | P4 / Usability | `--version`/`--help` were ignored and booted the app against the real home | Fixed in 3.88.3 | 3 built-binary CLI tests + e2e |
+| BUG-07 | P2 / Medium | Non-stream chat never persisted `conversations.model`, and the thread list omitted it | Fixed in 3.88.4 | Rust list test + e2e model round-trip |
+| BUG-08 | P2 / Medium | A workflow's attached skill was saved and displayed but never applied to its agents | Fixed in 3.88.4 | 4 Rust tests + two-agent e2e + missing-skill 400 |
+| BUG-09 | P3 | Workflow child agent runs bypassed the configured token ceiling | Fixed in 3.88.4 | Rust child-run budget test |
 
 ## BUG-06 — A version/help probe started the whole application
 
@@ -282,6 +285,78 @@ The registry serializer had no secret split; all fields were ordinary JSON. The 
 - `CHANGELOG.md`
 - `docs/KNOWN-ISSUES.md`
 
+## BUG-07 — Reopening a thread lost the model a non-stream turn used
+
+### Description
+
+After a normal (non-stream) chat turn, the thread's model was not restored when the conversation was reopened. The sidebar list answered `200` but had no `model` field, and the stored `conversations.model` value was empty even after the turn.
+
+### Root cause
+
+Two gaps on the same path. The non-stream `/api/chat` branches (deep search, local runtime, router) inserted the assistant message and updated `updated_at` directly; only the streaming `ReplyRecorder` wrote `model`. The conversation-list SQL also omitted `model` from both the project-filtered and all-project queries, so even a stored value could not reach the UI's `match.model` restore.
+
+### Fix
+
+- Every non-stream save path now writes `model` in the same `UPDATE conversations` statement as `updated_at`.
+- Both list queries select `COALESCE(v.model,'') AS model`; the JSON row carries `"model"`.
+- The existing Rust project-filtered list test now inserts and asserts `model`.
+
+### Verification
+
+- Rust: `the_project_filtered_thread_list_reads_project_and_budget` asserts `mock-model`.
+- e2e: after the chat turn, `GET /api/conversations` returns `mock-model` for that conversation (`the conversation list returns the model the turn used`).
+- The restart checks continue to pass.
+
+## BUG-08 — A workflow's skill was silently ignored
+
+### Description
+
+The workflow editor exposed a skill picker; save, export and import all carried `skill`, and the stored workflow showed it. Execution never resolved the skill, so attaching one changed nothing. A user who attached a review or debug skill got the same run as one who attached nothing.
+
+### Root cause
+
+`Workflow.skill` existed but `execute_agent` built the child goal from `node.prompt` alone; `ValidNode` had no skill field and no execution path read the workflow-level value. There was also no validation that the named skill still existed, was enabled, or was compatible with this build.
+
+### Fix
+
+- One shared resolver in `skills.rs`: `select_attached` checks existence, load error, minimum version and the disabled list; `resolve_attached` reads the same catalogue the Skills page shows; `with_instructions` bounds the body and keeps the task intact.
+- The workflow resolves its skill in `run`, `resume` and the scheduler before a run can start, and refuses with a specific 400/oplog error when it cannot.
+- The resolved instructions are passed through `spawn`/`execute` to every agent node and prefixed to that node's goal. The goal is stored, so a resumed run keeps the instructions after a restart.
+
+### Verification
+
+- Rust: missing, disabled, broken and incompatible skills are each refused; the prefix keeps a maximum-length task at the end; the body is trimmed to the ceiling.
+- e2e: a two-node workflow (`debug-it` → `report-it`) with `skill: "debug"` finishes 2/2; the first child agent's stored goal contains `Follow the skill "debug"` and the skill body.
+- e2e: a workflow naming `no-such-skill` is refused with `400` before a run row exists.
+
+## BUG-09 — Workflow child runs bypassed the configured token ceiling
+
+### Description
+
+A manually started agent run inherited `run_token_budget`, but a child run created by a workflow left `agent_runs.token_budget` at its default `0` (no limit). A scheduled workflow could therefore spend past the ceiling the user configured for agent work.
+
+### Root cause
+
+`workflow::insert_agent_run` used a column list that omitted `thinking` and `token_budget`; the schema defaults filled them with `0`.
+
+### Fix
+
+The workflow child insert now goes through a testable helper that writes the configured budget and the empty thinking value ("agent scope from config"), matching `agent::create_run`.
+
+### Verification
+
+- Rust: `a_workflow_child_run_inherits_the_configured_token_ceiling` inserts a child row and asserts `token_budget = 4321` and `thinking = ""`.
+
+## INT-04 — Direct agent runs had no skill attachment (gap, not a regression)
+
+Chat and workflows could attach skills, but `POST /api/runs` had no skill field. Phase 4 closed the integration gap:
+
+- `create_run` resolves and validates an optional `skill` before inserting a row; a missing/disabled/broken/incompatible skill returns `400` with the reason.
+- The stored goal carries the bounded instructions, capped at 9,000 characters so the 5,000-character task remains intact.
+- The Runs form has a skill picker populated from the same catalogue and sends the selected id.
+
+Evidence: e2e direct run finishes with the skill in its stored goal; missing skill is refused; Rust resolver tests cover the failure modes.
+
 ## Test-suite changes made for coverage (not bug fixes)
 
 The real-binary suite grew from 34 to 53 checks. New coverage:
@@ -316,6 +391,21 @@ These are permanent tests, use scratch homes/databases, clean up after themselve
 | rustfmt check | Pass |
 | Website build | 37 pages |
 | Offline release/install gates | Pass (MSI skipped, no WiX) |
+
+## Phase 4 regression status (3.88.4)
+
+| Check | Result |
+|---|---|
+| Rust suite | 712 passed + 3 CLI, 0 failed, 1 ignored |
+| Frontend suite | 115 passed, 0 failed |
+| Real-binary e2e (debug, 75 checks) | 75 passed, 0 failed |
+| Real-binary e2e (release) | **Not run:** environment refused the command before execution |
+| Release build | Pass; binary reports `Sarthi Studio 3.88.4` |
+| VS Code extension | 45 passed, 0 failed |
+| Clippy (`-D warnings`) / rustfmt | Pass / Pass |
+| Version + Linux metadata | 26 + 9 passed |
+| Offline release/artifact/bundle gates | 27 + 12 + 13 passed; installer 0 + 1 skipped |
+| `cargo audit` | exit 0; 5 allowed unmaintained/unsound warnings |
 
 ## Not a code bug / not fixed
 

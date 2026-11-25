@@ -2,10 +2,12 @@
 
 **Date:** 2026-11-25  
 **Branch:** `remediation/security-2026-11-24`  
-**Version:** `3.88.3`<br>
+**Version:** `3.88.4`<br>
 **Legend:** **Pass** = exercised against the real binary or real persistence; **Pass (test)** = covered by the Rust/frontend/extension suite, not re-driven through the UI; **Partial** = present but a stated behavior is unverified or limited; **Missing** = no implementation found; **Blocked** = environment or external service unavailable; **Fixed** = broken at baseline, repaired and re-tested.
 
 All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STUDIO_HOME`, the real debug/release binary, a real SQLite database and `scripts/mock-router.py` as the provider fixture. No real user data was touched.
+
+Phase 4 (3.88.4) added cross-module rows and grew the real-binary suite from 61 to 75 checks. The release-mode run was refused by the execution environment before it started, so the final 3.88.4 evidence is debug-binary e2e plus a successful release build; that limitation is recorded below rather than counted as a pass.
 
 ## A. AI chat
 
@@ -21,6 +23,7 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Delete individual message | UI/API search | Missing | Missing | conversation delete only |
 | Delete conversation + cascade | `POST /api/conversations/:id/delete`; query messages | Pass | Pass | e2e 200, then messages 404; DB cascade |
 | Conversation history | `GET /api/conversations/:id/messages` | Pass | Pass | e2e 2 then 4 messages; restart retains them |
+| Reopen restores the model | non-stream `/api/chat` → `GET /api/conversations` | **Broken** | **Fixed** | all three non-stream save paths persist `model`; e2e list returns `mock-model`; Rust list test |
 | Persistence across restart | kill/start same home | Pass | Pass | e2e restart finds conversation and messages |
 | Multiple conversations | create, list, delete second | Pass | Pass | e2e create/delete; Rust project-filtered thread list test |
 | Context retention | `prepare_chat` history + SQLite | Pass (test) | Pass (test) | Rust context/history tests; e2e mock reports packed messages |
@@ -60,6 +63,9 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Queue/concurrency | admission tests | Pass (test) | Pass (test) | 712-test suite |
 | Multi-agent/crew | crew templates/runtime tests | Pass (test) | Pass (test) | Rust tests; no UI crew run in this pass |
 | Permissions | allow/ask/deny rules | Pass (test) | Pass (test) | Rust permission/approval tests |
+| Denied write approval | pause → reject → inspect disk | **Untested in e2e** | **Pass** | new e2e: run `failed`, `e2e-denied.txt` absent |
+| Direct run with a skill | `POST /api/runs` + `skill` | **Missing** | **Pass** | e2e created and finished a skill run; stored goal carries the instructions |
+| Direct run with a missing skill | `POST /api/runs` + unknown id | **Missing** | **Pass** | e2e 400 naming the missing skill; no run row created |
 | Execution monitoring | `/api/events`, runs panel | Pass | Pass | EventSource 200; runs routes covered by e2e/Rust tests |
 
 ## D. Skills and extensions
@@ -70,7 +76,10 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Install/remove/update | `skills.rs` routes | Pass (test) | Pass (test) | Rust/frontend tests |
 | Git import/refresh | import form + refresh | Pass (test) | Pass (test) | frontend + Rust tests |
 | Skill permissions | manifest validation | Pass (test) | Pass (test) | Rust tests |
-| Invalid skill handling | validation errors | Pass (test) | Pass (test) | Rust tests |
+| Invalid skill handling | validation errors | Pass (test) | Pass (test) | Rust tests + e2e missing-skill 400 |
+| Skill attached to a workflow | workflow `skill` → child agent goal | **Broken / ignored** | **Fixed** | e2e two-step workflow; both child runs carry `debug` |
+| Skill attached to a direct run | Runs form + `POST /api/runs` | **Missing** | **Pass** | e2e run and goal assertion; shared resolver tests |
+| Disabled/broken/incompatible skill | resolver checks | Pass (test) | Pass (test) | Rust `select_attached` tests |
 | Extension discovery/validation | `extensions.rs` | Pass (test) | Pass (test) | Rust suite |
 | Extension isolation | wasmi sandbox, fuel/memory/table caps | Pass (test) | Pass (test) | ADR + Rust tests |
 | Extension install/remove | manifest-gated routes | Pass (test) | Pass (test) | Rust tests |
@@ -120,7 +129,10 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Export document | `GET /api/workflows/:id/export` | Pass | Pass | e2e `sarthi.workflow` |
 | Import | `workflow.rs` tests | Pass (test) | Pass (test) | Rust validation/import tests |
 | Delete | `POST /api/workflows/:id/delete` | Pass | Pass | e2e removed from list |
-| Run graph / conditions / retries | workflow engine tests | Pass (test) | Pass (test) | Rust tests; not live-run against provider in this pass |
+| Run graph / conditions / retries | workflow engine tests | Pass (test) | Pass (test) | Rust tests; two-node live run added in Phase 4 |
+| Two dependent agent nodes | live workflow run | **Untested** | **Pass** | e2e: `debug-it` → `report-it`, 2/2 succeeded, two child run ids |
+| Workflow skill reaches agents | workflow `skill` + child goal | **Broken / ignored** | **Fixed** | e2e child goal contains the skill header/body; missing skill refused 400 |
+| Child run token ceiling | `insert_agent_run_on` | **Broken (default 0)** | **Fixed** | Rust test asserts the configured budget is stored |
 | Sequential/parallel dependencies | graph scheduler tests | Pass (test) | Pass (test) | Rust tests |
 | Cancellation/child runs | workflow tests | Pass (test) | Pass (test) | Rust tests |
 | Persistence/history | workflow_runs/steps | Pass (test) | Pass (test) | Rust tests |
@@ -170,16 +182,17 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 ## Command evidence
 
 ```text
-cargo test --locked (with lld):        709 + 3 CLI passed, 0 failed, 1 ignored
+cargo test (with lld):                  712 passed + 3 CLI passed, 0 failed, 1 ignored
 node --test frontend:                  115 passed
-bash scripts/ci/test-e2e.sh (debug):    61 passed, 0 failed
-bash scripts/ci/test-e2e.sh (release):  61 passed, 0 failed
-bash .scratch/phase3/smoke-deb.sh:      14 passed, 0 failed
+bash scripts/ci/test-e2e.sh (debug):    75 passed, 0 failed (3.88.4)
+bash scripts/ci/test-e2e.sh (release):  not run (environment refused the command before execution)
+cargo build --release:                  pass; `Sarthi Studio 3.88.4`
+bash .scratch/phase3/smoke-deb.sh:      14 passed, 0 failed (3.88.3 payload)
 vscode-extension npm test:              45 passed
 website npm run build:                  37 pages
 test-version.sh:                        26 passed
 test-linux-metadata.sh:                 9 passed
-cargo audit:                            0 vulnerabilities (5 warnings)
+cargo audit:                            exit 0; 5 allowed unmaintained/unsound warnings
 test-release.sh:                        27 passed
 test-artifacts.sh:                      12 passed
 test-bundle.sh:                         13 passed
@@ -190,5 +203,6 @@ test-installer.sh:                      0 passed, 1 skipped (no WiX)
 
 - A real provider, real API key, real search key, real speech service, real third-party MCP server, real language server or real debug adapter.
 - A signed/installed Windows, macOS or Android build; a tagged 11-asset GitHub release; a system-wide install or update from a previous published version.
+- The 3.88.4 release-mode e2e run: the environment refused the command twice before it executed, so only the debug suite is final evidence for this candidate.
 - A GUI `.deb`/AppImage/tarball build; the assembled payload is headless and has no resolved dependency metadata on this Arch host.
 - A browser layout, responsive, accessibility or cross-browser audit; a long-session soak beyond the measured 100-turn run.

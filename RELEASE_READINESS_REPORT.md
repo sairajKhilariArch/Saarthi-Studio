@@ -1,12 +1,34 @@
 # Sarthi Studio — Release Readiness Report
 
 **Date:** 2026-11-25  
-**Candidate:** 3.88.3<br>
+**Candidate:** 3.88.4 (Phase 4 integration); 3.88.3 audited baseline<br>
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** audit commit `9721a53`; `main` at `55d1218` untouched<br>
 **Host:** Linux x86_64 (local); no Windows, macOS, Android, signed-installer or tagged-release runner available.
 
-## Recommendation
+## Phase 4 integration update (3.88.4)
+
+**Status: CONDITIONAL PASS for Linux 3.88.4.** Three cross-module wiring defects were found and fixed, with regression coverage: non-stream chat now persists and returns the conversation model; a workflow's attached skill now reaches every agent node (and a missing/disabled/incompatible skill is refused); workflow child runs now inherit the configured token ceiling. Direct agent runs can also attach a skill, closing the last skill integration path.
+
+| Check | 3.88.4 result |
+|---|---|
+| Rust suite | 712 passed + 3 CLI, 0 failed, 1 ignored |
+| Frontend | 115 passed |
+| Real-binary e2e (debug) | **75 passed, 0 failed** (was 61) |
+| Real-binary e2e (release) | **Not run:** the environment refused the command twice before execution; not counted as a pass |
+| Release build | Pass, 2m07s; `Sarthi Studio 3.88.4` |
+| Clippy / rustfmt | Pass / Pass |
+| Version / Linux metadata | 26 / 9 passed |
+| Release contract / artifacts / bundle | 27 / 12 / 13 passed |
+| Installer | 0 passed, 1 skipped (no WiX) |
+| VS Code / website | 45 passed / 37 pages |
+| `cargo audit` | exit 0; 5 allowed unmaintained/unsound warnings |
+
+New e2e coverage: conversation-model round-trip, direct agent skill creation and stored goal, missing-skill refusals (run and workflow), denied write approval, a two-agent dependent workflow with a skill, and both child run ids. The denied-write case leaves the target file absent; the workflow case ends with 2/2 succeeded steps.
+
+**Conditions unchanged:** the normal CI/tagged 11-asset build, Windows/macOS/Android execution, signing/notarization and the dependency-resolved `.deb` were not produced here. The 3.88.3 sections below remain the historical baseline; their 61-check counts are superseded by the 75-check 3.88.4 run.
+
+## Recommendation (3.88.3 baseline, superseded by the 3.88.4 update above)
 
 **Release 3.88.3 as a Linux patch candidate after the normal GitHub checks and a tagged 11-asset build are green.** The two code-level security gaps found in remediation are fixed and regression-tested, `cargo audit` reports 0 vulnerabilities, the Linux debug/release binaries pass the expanded 61-check end-to-end suite, and a `.deb` payload boots and preserves data across payload replacement. The assembled `.deb` is not shippable as-is because this host cannot resolve `$auto` dependencies.
 
@@ -160,12 +182,12 @@ No P0 or unmitigated P1 issue remains. The loopback-boundary and dependency P1s 
 
 | Question | Answer |
 |---|---|
-| Is the tested Linux build shippable? | **Yes, as 3.88.3 after CI/tagged build produces the dependency-resolved packages** |
+| Is the tested Linux build shippable? | **Yes, as 3.88.4 after CI/tagged build produces the dependency-resolved packages** |
 | Is the security P1 closed? | **Yes** |
-| Are regression tests in place? | **Yes, including release-binary e2e** |
+| Are regression tests in place? | **Yes; 3.88.4 has debug-binary e2e (75 checks). Release-binary e2e last ran at 3.88.3.** |
 | Is cross-platform runtime verified here? | **No** |
 | Are installers signed? | **No** |
 | Should this be described as a complete cross-platform production release? | **No** |
 | Should the code be pushed/deployed by this audit? | **No — not requested; branch left local** |
 
-**Release readiness: CONDITIONAL PASS for Linux 3.88.3.** The remaining conditions are execution of the normal CI/tagged-release pipeline and external platform/signing validation, not an unresolved code defect found in this remediation.
+**Release readiness: CONDITIONAL PASS for Linux 3.88.4.** The Phase 4 integration fixes pass the 75-check debug e2e suite, Rust/frontend/extension suites, clippy, fmt and the offline release gates, and the 3.88.4 release binary builds. The release-mode e2e run was refused by the environment before execution, so release-binary runtime behavior is not re-asserted for this candidate. The remaining conditions are execution of the normal CI/tagged-release pipeline and external platform/signing validation, not an unresolved code defect found in this remediation.

@@ -244,7 +244,38 @@ class Handler(BaseHTTPRequestHandler):
             transcript = "\n".join(str(m.get("content", "")) for m in messages)
             # Only the e2e goal is scripted; every other turn keeps the plain
             # reply the UI and console smokes expect.
-            if "e2e-agent" in transcript:
+            if "e2e-agent-deny" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: the denied write never happened."
+                elif "EXACTLY ONE JSON object" in system:
+                    content = json.dumps({
+                        "action": "write",
+                        "path": "e2e-denied.txt",
+                        "content": "this must never be written\n",
+                    })
+                else:
+                    content = "Mock router reply."
+            elif "e2e-skill-run" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: the skill-shaped agent run finished."
+                elif "EXACTLY ONE JSON object" in system:
+                    content = json.dumps({
+                        "action": "done",
+                        "summary": "the direct skill run finished",
+                    })
+                else:
+                    content = "Mock router reply."
+            elif "e2e-workflow-skill" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: the skill-shaped workflow step finished."
+                elif "EXACTLY ONE JSON object" in system:
+                    content = json.dumps({
+                        "action": "done",
+                        "summary": "the workflow skill step finished",
+                    })
+                else:
+                    content = "Mock router reply."
+            elif "e2e-agent" in transcript:
                 if "reviewing one finished agent run" in system:
                     content = "APPROVE: e2e-agent.txt exists with the requested marker."
                 elif "EXACTLY ONE JSON object" in system:
