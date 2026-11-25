@@ -10,7 +10,7 @@ use axum::{
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use reqwest::{Client, Url};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -413,6 +413,15 @@ pub(crate) fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
+/// Start a transaction that will write. A deferred transaction that reads first
+/// and writes later cannot wait for another writer: SQLite reports `SQLITE_BUSY`
+/// on the upgrade without running the busy handler, which turned concurrent
+/// chats into "database is locked". Taking the write lock up front lets
+/// `busy_timeout` do its job instead.
+pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
+}
+
 /// What an upgrade did, so the boot log can say it happened instead of leaving a
 /// schema change invisible.
 #[derive(Debug)]
@@ -485,6 +494,14 @@ fn initialize_database(path: &FsPath) -> Result<SchemaUpgrade, String> {
     } else {
         None
     };
+
+    // WAL lets a read (the thread list, the message view) run while a chat turn
+    // commits, instead of serializing every reader behind every writer. The mode
+    // is persistent, so the first boot pays for it and later connections inherit
+    // it. A filesystem that refuses WAL still runs in its existing mode. This is
+    // after the version check: a database written by a newer build must be left
+    // byte-for-byte untouched, and changing its journal mode would rewrite it.
+    let _ = conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()));
 
     if let Err(error) = apply_schema(&conn) {
         drop(conn);
@@ -564,7 +581,19 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     dap::initialize(conn).map_err(|error| format!("debugger breakpoints: {error}"))?;
     agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
-    migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))
+    migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))?;
+    migrate_message_index(conn).map_err(|error| format!("message index: {error}"))
+}
+
+/// Every thread read filters `messages` by conversation and orders by id; the
+/// thread list also asks each conversation for its last message. Without this
+/// index both paths scan the whole table (measured at ~680 ms for a 100-thread
+/// list over 200k messages). The primary key already provides the order, so the
+/// composite index serves the filter and the `ORDER BY id` together.
+fn migrate_message_index(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, id);",
+    )
 }
 
 /// Give an existing messages table its `attachments` column (JSON of {kind,ref}
@@ -877,11 +906,21 @@ fn record_project_folder(state: &AppState, folder: &str) {
 
 fn ensure_setup(state: &AppState) -> Result<SchemaUpgrade, Box<dyn std::error::Error>> {
     if let Some(parent) = state.config_path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create the settings directory {}: {error}",
+                parent.display()
+            )
+        })?;
         set_private_permissions(parent, true)?;
     }
     if let Some(parent) = state.database_path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create the data directory {}: {error}",
+                parent.display()
+            )
+        })?;
         set_private_permissions(parent, true)?;
     }
     if !state.config_path.exists() {
@@ -3869,7 +3908,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             .clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES) as i64;
     let history_result = (|| -> rusqlite::Result<Option<Vec<(String, String)>>> {
         let mut conn = open_db(&state.database_path)?;
-        let tx = conn.transaction()?;
+        let tx = begin_write(&mut conn)?;
         let title = tx
             .query_row("SELECT title FROM conversations WHERE id=?1", [&cid], |r| {
                 r.get::<_, String>(0)
@@ -5906,6 +5945,95 @@ mod tests {
         };
         ensure_setup(&state).expect("ensure_setup");
         state
+    }
+
+    /// Thread reads filter by conversation and order by id; the list also asks
+    /// for each thread's newest message. The composite index must be present on
+    /// a fresh schema and after re-applying it (migrations run every boot).
+    #[test]
+    fn message_lookups_use_the_conversation_index() {
+        let conn = Connection::open_in_memory().expect("db");
+        apply_schema(&conn).expect("schema");
+        apply_schema(&conn).expect("schema is idempotent");
+        let plan: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "EXPLAIN QUERY PLAN SELECT id, role, content FROM messages \
+                     WHERE conversation_id=?1 ORDER BY id",
+                )
+                .expect("plan");
+            let rows = stmt
+                .query_map(["c1"], |row| row.get::<_, String>("detail"))
+                .expect("plan rows");
+            rows.collect::<rusqlite::Result<Vec<_>>>().expect("details")
+        };
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("messages_conversation")),
+            "the thread read must use the conversation index: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.starts_with("SCAN messages")),
+            "the thread read must not scan the whole message table: {plan:?}"
+        );
+    }
+
+    /// Concurrent chat turns each save the user message in a transaction that
+    /// reads the thread first. A deferred transaction fails its read-to-write
+    /// upgrade immediately when another turn is writing; the write must instead
+    /// wait for its turn. This holds the lock long enough for every other writer
+    /// to contend, then checks all eight messages landed.
+    #[test]
+    fn concurrent_chat_writes_wait_instead_of_failing() {
+        let state = fixture("concurrent-chat-writes");
+        let path = state.database_path.clone();
+        let project = active_project_id(&state);
+        {
+            let conn = open_db(&path).expect("database");
+            conn.execute(
+                "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget,model)
+                 VALUES('c1','Concurrent',1.0,1.0,?1,0,'')",
+                [&project],
+            )
+            .expect("conversation");
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for worker in 0..8 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || -> Result<(), String> {
+                let mut conn = open_db(&path).map_err(|error| error.to_string())?;
+                barrier.wait();
+                let tx = begin_write(&mut conn).map_err(|error| error.to_string())?;
+                let _: String = tx
+                    .query_row("SELECT title FROM conversations WHERE id='c1'", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(|error| error.to_string())?;
+                // Keep the write lock held so the other workers must wait.
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                tx.execute(
+                    "INSERT INTO messages(conversation_id,role,content,created_at)
+                     VALUES('c1','user',?1,1.0)",
+                    [format!("worker {worker}")],
+                )
+                .map_err(|error| error.to_string())?;
+                tx.commit().map_err(|error| error.to_string())
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("worker panicked").expect("write");
+        }
+        let conn = open_db(&path).expect("database");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id='c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 8, "every concurrent turn must be saved");
     }
 
     /// The default (project-filtered) thread list used to read the project name
