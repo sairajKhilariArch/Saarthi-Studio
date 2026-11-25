@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.88.13
+
+### Documentation
+
+- Phase 8 cross-platform audit, compatibility matrix, Linux/Windows/macOS/
+  Android/web validation, platform security, installer/update validation and
+  completion reports. Records verified, CI-tested, payload-tested and blocked
+  states separately; no untested platform is claimed as supported.
+
 ## 3.88.12
 
 ### Security
