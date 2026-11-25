@@ -43,7 +43,7 @@ To inspect the dependencies without changing the machine, run `./install.sh --ch
 
 The installer reuses `~/freellmapi` if it exists. It preserves FreeLLMAPI's existing `.env`, database, provider configuration, and the AI Studio's existing local settings/history outside the application folder. It does not remove or reset provider settings.
 
-After that, launch **Free AI Suite (Rust)** from the Ubuntu Applications menu, or run `~/.local/bin/SAARTHI-STUDIO`.
+After that, launch **Free AI Suite (Rust)** from the Ubuntu Applications menu, or run `~/.local/bin/sarthi-studio`.
 
 ## First-time setup
 
@@ -97,29 +97,29 @@ The **Android companion app** connects to this machine through the desktop Host 
 - **Router console**: the FreeLLMAPI dashboard's providers, model catalog, routing strategy, analytics, logs and free-tier budget, served from inside the app over loopback
 - **Docker lifecycle**: Studio starts the router only when it is stopped, and stops it on exit only if Studio started it
 - **Native window**: the UI opens in an application window (Tauri 2 + the system webview), not a browser tab; `--browser` keeps the browser flow if you prefer it
-- Binds to `127.0.0.1` only; key is stored on the server side in a `0600` configuration file
+- Binds to `127.0.0.1` only; keys are stored server-side in the OS credential store, with a permission-restricted `0600` config file as fallback
 - One-click launcher for the Rust app and FreeLLMAPI Docker service
 
-The editor edits text; it does not execute code or open a terminal. Workspace access is confined to the folder you explicitly open: paths are canonicalised, `..`/absolute escapes and symlinks leaving that folder are rejected, binary and files over 1 MB are refused, and workspace routes reject non-loopback hosts/foreign origins. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
+The editor edits text; it does not execute code. A separate Terminal panel runs a real PTY on the desktop host. Workspace access is confined to the folder you explicitly open: paths are canonicalised, `..`/absolute escapes and symlinks leaving that folder are rejected, binary and files over 1 MB are refused, and workspace routes reject non-loopback hosts/foreign origins. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
 
 ## Runs as an application window, not a browser tab
 
 The desktop binary links Tauri 2 and loads the same local UI in the system webview (WebKitGTK on Linux, WebView2 on Windows). That keeps the download small — no bundled Chromium — and closing the window shuts down the local server, then stops the router if this run started it.
 
 ```bash
-SAARTHI-STUDIO              # application window
-SAARTHI-STUDIO --browser    # open in your default browser instead
-SAARTHI-STUDIO --no-gui     # headless server (used by tests and the extension)
+free-ai-studio              # application window
+free-ai-studio --browser    # open in your default browser instead
+free-ai-studio --no-gui     # headless server (used by tests and the extension)
 ```
 
-Windows users run `SAARTHI-STUDIO.exe` from the release zip; WebView2 ships with Windows 10/11.
+Windows users run `free-ai-studio.exe` from the release zip; WebView2 ships with Windows 10/11.
 
 ## Router console and Docker lifecycle
 
-Studio reads where FreeLLMAPI is installed from `~/.config/SAARTHI-STUDIO/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/SAARTHI-STUDIO/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
+Studio reads where FreeLLMAPI is installed from `~/.config/sarthi-studio/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/free-ai-studio/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
 
 ```bash
-SAARTHI-STUDIO router status|start|stop
+free-ai-studio router status|start|stop
 ```
 
 The console signs in with FreeLLMAPI's loopback desktop session (`POST /api/auth/desktop-session`); a server install can sign in once with its dashboard email/password and the session token is cached in a `0600` file. Everything the console does goes through Studio's local bridge — provider keys are typed into the router, never stored by Studio.
@@ -138,27 +138,27 @@ The built-in server now implements the desktop API surface the UI uses — strea
 
 - AI Studio: `http://127.0.0.1:8765`
 - FreeLLMAPI dashboard: `http://127.0.0.1:3001` by default
-- Settings: `~/.config/SAARTHI-STUDIO/config.json`
-- Last opened folder: `~/.config/SAARTHI-STUDIO/workspace.json`
-- Chat history: `~/.local/share/SAARTHI-STUDIO/history.sqlite3`
-- App log: `~/.local/state/SAARTHI-STUDIO/studio.log`
+- Settings: `~/.config/free-ai-studio/config.json`
+- Last opened folder: `~/.config/free-ai-studio/workspace.json`
+- Chat history: `~/.local/share/free-ai-studio/history.sqlite3`
+- App log (structured log beside the database): `~/.local/share/free-ai-studio/studio.log`; the source installer also redirects stdout to `~/.local/state/sarthi-studio/studio.log`
 
 ## Troubleshooting
 
 ```bash
 cd ~/freellmapi && sudo docker compose ps
 cd ~/freellmapi && sudo docker compose logs --tail=100 freellmapi
-cat ~/.local/state/SAARTHI-STUDIO/studio.log
+cat ~/.local/share/free-ai-studio/studio.log
 ```
 
-If the Rust build fails, run `cargo build --release` inside `~/.local/share/SAARTHI-STUDIO/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
+If the Rust build fails, run `cargo build --release` inside `~/.local/share/sarthi-studio/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
 
 FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi — its dashboard (`http://127.0.0.1:3001` by default) is where provider keys and fallback chains are configured.
 
 ## Other GitHub projects this app uses
 
 - **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Sarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
-- **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local `0600` config file.
+- **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local OS credential store (or the `0600` config fallback).
 
 ## Contacts
 

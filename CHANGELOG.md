@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.88.18
+
+### Phase 10 acceptance evidence
+
+- Added the 12 final acceptance reports: feature inventory, security audit,
+  performance, reliability, platform, UI, release, technical debt, readiness
+  scorecard, acceptance decision, user guide and installation/upgrade guide.
+- Desktop CI run 45704212041 passed all five jobs (Linux, Windows, macOS,
+  website, security audit); the macOS watcher regression test passed natively.
+- Corrected README runtime binary names, environment variables and user-data
+  paths to match the shipped application.
+
 ## 3.88.17
 
 ### Phase 10 acceptance fixes
