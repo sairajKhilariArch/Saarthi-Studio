@@ -4,6 +4,7 @@ import static com.saarthi.studio.ChatDatabase.*;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.Context;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -30,10 +31,12 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ScrollView;
@@ -78,16 +81,21 @@ import android.security.keystore.KeyProperties;
 import android.util.Base64;
 
 public class MainActivity extends Activity {
-    private static final int BG = Color.rgb(6, 17, 17);
-    private static final int PANEL = Color.rgb(7, 19, 18);
-    private static final int PANEL_ALT = Color.rgb(12, 27, 26);
-    private static final int TEXT = Color.rgb(239, 237, 228);
-    private static final int MUTED = Color.rgb(126, 138, 132);
-    private static final int GREEN = Color.rgb(52, 211, 153);
-    private static final int ACCENT = Color.rgb(107, 127, 255);
-    private static final int LINE = Color.rgb(29, 50, 48);
-    private static final int DANGER = Color.rgb(255, 123, 114);
-    private static final int USER_BUBBLE = Color.rgb(16, 33, 32);
+    // Theme tokens are intentionally mutable: the whole programmatic UI reads
+    // them, so changing them and recreating the activity repaints every screen
+    // without a second layout system.
+    private static int BG = Color.rgb(6, 17, 17);
+    private static int PANEL = Color.rgb(9, 18, 18);
+    private static int PANEL_ALT = Color.rgb(14, 28, 27);
+    private static int TEXT = Color.rgb(241, 239, 232);
+    private static int MUTED = Color.rgb(140, 154, 148);
+    private static int GREEN = Color.rgb(61, 220, 151);
+    private static int ACCENT = Color.rgb(124, 140, 255);
+    private static int LINE = Color.rgb(30, 48, 46);
+    private static int DANGER = Color.rgb(255, 123, 114);
+    private static int USER_BUBBLE = Color.rgb(19, 36, 35);
+    private static final String THEME_PREFS = "sarthi_theme";
+    private static final String DARK_THEME_KEY = "dark_theme";
     private static final String SYSTEM_PROMPT = "You are a concise, helpful coding assistant. Be accurate and safe; never claim to run code unless you did.";
     private static final String KEY_ALIAS = "SarthiStudioSettingsKeyV1";
 
@@ -96,10 +104,13 @@ public class MainActivity extends Activity {
     private ChatDatabase store;
     private SecureSettings secureSettings;
     private Config config;
-    private LinearLayout root, messageList;
+    private LinearLayout root, messageList, bottomNav;
     private ScrollView scroll;
+    private FrameLayout chatFrame;
     private EditText promptInput, codeInput;
     private Button sendButton, codeButton, historyButton, newChatButton, usageButton, settingsButton;
+    private Button modelChip, jumpButton;
+    private boolean darkTheme = true;
     private volatile HttpURLConnection activeConnection;
     private volatile boolean stopRequested = false;
     private TextView streamingTextView;
@@ -135,7 +146,10 @@ public class MainActivity extends Activity {
     private String pendingExportContent;
 
     @Override public void onCreate(Bundle state) {
+        darkTheme = getSharedPreferences(THEME_PREFS, MODE_PRIVATE).getBoolean(DARK_THEME_KEY, true);
+        setTheme(darkTheme ? R.style.AppTheme : R.style.AppTheme_Light);
         super.onCreate(state);
+        applyTheme(darkTheme);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         store = new ChatDatabase(this);
@@ -144,6 +158,7 @@ public class MainActivity extends Activity {
         speechOutput = new SpeechOutputController(this);
         restoreCurrentConversation();
         buildUi();
+        renderModelChip();
         renderConversationTitle();
         renderHistory();
         if (config.connectionMode == ConnectionMode.DESKTOP_HOST) {
@@ -225,21 +240,22 @@ public class MainActivity extends Activity {
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.ic_logo);
         logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        logo.setBackground(rounded(PANEL_ALT, 12, LINE));
-        header.addView(logo, new LinearLayout.LayoutParams(dp(40), dp(40)));
+        logo.setBackground(rounded(PANEL_ALT, 14, LINE));
+        header.addView(logo, new LinearLayout.LayoutParams(dp(38), dp(38)));
         LinearLayout brand = new LinearLayout(this);
         brand.setOrientation(LinearLayout.VERTICAL);
         brand.setPadding(dp(11), 0, 0, 0);
-        brand.addView(label("Sarthi Studio", 19, TEXT, true));
-        TextView tagline = label("local coding agent", 11, MUTED, false);
+        brand.addView(label("Sarthi Studio", 18, TEXT, true));
+        TextView tagline = label("LOCAL AI WORKSPACE", 9, MUTED, true);
+        tagline.setLetterSpacing(0.12f);
         brand.addView(tagline);
         header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
-        historyButton = smallButton("Chats");
+        historyButton = iconButton("☰", "Conversation history");
         historyButton.setOnClickListener(v -> openConversationHistory());
         header.addView(historyButton);
-        settingsButton = smallButton("Settings");
+        settingsButton = iconButton("⚙", "Settings");
         settingsButton.setOnClickListener(v -> openSettings());
-        LinearLayout.LayoutParams settingsLp = new LinearLayout.LayoutParams(-2, -2);
+        LinearLayout.LayoutParams settingsLp = new LinearLayout.LayoutParams(dp(42), dp(42));
         settingsLp.leftMargin = dp(6);
         header.addView(settingsButton, settingsLp);
         root.addView(header);
@@ -247,7 +263,7 @@ public class MainActivity extends Activity {
         LinearLayout chatBar = row();
         chatBar.setGravity(Gravity.CENTER_VERTICAL);
         chatBar.setPadding(dp(2), dp(9), dp(2), dp(5));
-        currentChatText = label("New chat", 14, TEXT, true);
+        currentChatText = label("New chat", 15, TEXT, true);
         currentChatText.setSingleLine(true);
         currentChatText.setEllipsize(android.text.TextUtils.TruncateAt.END);
         chatBar.addView(currentChatText, new LinearLayout.LayoutParams(0, -2, 1));
@@ -261,22 +277,44 @@ public class MainActivity extends Activity {
         chatBar.addView(newChatButton, newChatLp);
         root.addView(chatBar);
 
-        statusText = label("Not connected", 12, MUTED, false);
-        statusText.setPadding(dp(4), dp(5), dp(4), dp(8));
-        root.addView(statusText);
+        LinearLayout statusRow = row();
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        statusRow.setPadding(dp(2), dp(2), dp(2), dp(7));
+        statusText = label("Not connected", 11, MUTED, false);
+        statusText.setSingleLine(true);
+        statusText.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        statusRow.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
+        modelChip = smallButton("model · auto");
+        modelChip.setTextColor(ACCENT);
+        modelChip.setContentDescription("Choose model");
+        modelChip.setOnClickListener(v -> openModelPicker());
+        statusRow.addView(modelChip);
+        root.addView(statusRow);
         View line = new View(this); line.setBackgroundColor(LINE);
         root.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
 
+        chatFrame = new FrameLayout(this);
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
-        scroll.setPadding(0, dp(12), 0, dp(12));
+        scroll.setPadding(0, dp(10), 0, dp(18));
         messageList = new LinearLayout(this);
         messageList.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(messageList, new ScrollView.LayoutParams(-1, -2));
+        chatFrame.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        jumpButton = iconButton("↓", "Scroll to latest message");
+        jumpButton.setTextColor(BG);
+        jumpButton.setBackground(round(ACCENT, 22));
+        jumpButton.setVisibility(View.GONE);
+        jumpButton.setOnClickListener(v -> scrollToBottom());
+        FrameLayout.LayoutParams jumpLp = new FrameLayout.LayoutParams(dp(44), dp(44));
+        jumpLp.gravity = Gravity.BOTTOM | Gravity.END;
+        jumpLp.rightMargin = dp(10); jumpLp.bottomMargin = dp(10);
+        chatFrame.addView(jumpButton, jumpLp);
+        scroll.setOnScrollChangeListener((v, sx, sy, oldSx, oldSy) -> updateJumpButton());
         LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(-1, 0, 1);
-        scrollLp.topMargin = dp(3); scrollLp.bottomMargin = dp(8);
-        root.addView(scroll, scrollLp);
+        scrollLp.topMargin = dp(3); scrollLp.bottomMargin = dp(4);
+        root.addView(chatFrame, scrollLp);
 
         codeInput = new EditText(this);
         codeInput.setTextColor(TEXT); codeInput.setHintTextColor(MUTED);
@@ -312,6 +350,11 @@ public class MainActivity extends Activity {
 
         LinearLayout composer = row();
         composer.setGravity(Gravity.BOTTOM);
+        Button attachButton = iconButton("＋", "Attach a file, image or tool");
+        attachButton.setOnClickListener(v -> showToolsMenu());
+        LinearLayout.LayoutParams attachLp = new LinearLayout.LayoutParams(dp(42), dp(46));
+        attachLp.rightMargin = dp(7);
+        composer.addView(attachButton, attachLp);
         promptInput = new EditText(this);
         promptInput.setTextColor(TEXT); promptInput.setHintTextColor(MUTED);
         promptInput.setHint("Message Sarthi…"); promptInput.setTextSize(15);
@@ -328,6 +371,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(dp(78), dp(46));
         sendLp.leftMargin = dp(8); composer.addView(sendButton, sendLp);
         root.addView(composer);
+        root.addView(buildBottomNav());
         sendButton.setOnClickListener(v -> {
             if (sending) stopGeneration();
             else sendMessage();
@@ -336,6 +380,20 @@ public class MainActivity extends Activity {
             if (actionId == EditorInfo.IME_ACTION_SEND) { sendMessage(); return true; }
             return false;
         });
+    }
+
+    private Button quickPrompt(String labelText, String promptText) {
+        Button action = smallButton(labelText + "  →");
+        action.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        action.setTextColor(TEXT);
+        action.setBackground(rounded(PANEL_ALT, 12, LINE));
+        action.setOnClickListener(v -> {
+            promptInput.setText(promptText);
+            promptInput.setSelection(promptText.length());
+            promptInput.requestFocus();
+            ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(promptInput, InputMethodManager.SHOW_IMPLICIT);
+        });
+        return action;
     }
 
     private void renderHistory() { renderHistory(0); }
@@ -352,14 +410,26 @@ public class MainActivity extends Activity {
         if (history.isEmpty()) {
             LinearLayout welcome = new LinearLayout(this);
             welcome.setOrientation(LinearLayout.VERTICAL);
-            welcome.setPadding(dp(18), dp(18), dp(18), dp(18));
-            welcome.setBackground(round(PANEL, 18));
-            TextView title = label("Welcome to Sarthi Studio", 20, TEXT, true);
+            welcome.setPadding(dp(18), dp(18), dp(18), dp(16));
+            welcome.setBackground(rounded(PANEL, 20, LINE));
+            TextView eyebrow = label("NEW CONVERSATION", 9, ACCENT, true);
+            eyebrow.setLetterSpacing(0.14f);
+            welcome.addView(eyebrow);
+            TextView title = label("How can I help?", 23, TEXT, true);
+            title.setPadding(0, dp(5), 0, 0);
             welcome.addView(title);
-            TextView body = label("This is a separate conversation. Connect FreeLLMAPI in Settings, then ask questions, debug code, or explore ideas. Your chats stay on this phone.", 14, MUTED, false);
-            body.setPadding(0, dp(9), 0, 0); welcome.addView(body);
-            TextView steps = label("Quick start\n1. Run FreeLLMAPI on your Ubuntu computer or server.\n2. Enter its network URL and unified API key in Settings.\n3. Tap Test connection, then start chatting.\n\nUse Chats to switch between saved conversations, or + New chat to start another.", 13, TEXT, false);
-            steps.setPadding(0, dp(15), 0, 0); welcome.addView(steps);
+            TextView body = label("Ask about your code, debug a failure, plan a feature, or reason through an idea. Responses stream from your configured model and this conversation stays on your phone.", 13, MUTED, false);
+            body.setPadding(0, dp(8), 0, 0); welcome.addView(body);
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.VERTICAL);
+            actions.setPadding(0, dp(14), 0, 0);
+            actions.addView(quickPrompt("Explain a code path", "Explain this code and point out the most important edge cases:\n\n"), new LinearLayout.LayoutParams(-1, dp(42)));
+            actions.addView(quickPrompt("Debug a failure", "Help me debug this failure. Start with the most likely cause, then give a minimal fix:\n\n"), new LinearLayout.LayoutParams(-1, dp(42)));
+            actions.addView(quickPrompt("Plan a feature", "Plan a small, shippable implementation for this feature. Include the files to touch and the checks to run:\n\n"), new LinearLayout.LayoutParams(-1, dp(42)));
+            welcome.addView(actions);
+            TextView hint = label("Connect a model in Settings, then send your first message.", 10, MUTED, false);
+            hint.setPadding(0, dp(8), 0, 0);
+            welcome.addView(hint);
             messageList.addView(welcome, new LinearLayout.LayoutParams(-1, -2));
         } else {
             if (showHistoryControl) {
@@ -429,12 +499,20 @@ public class MainActivity extends Activity {
                 wrap.addView(actions, actionLp);
             }
         } else {
-            addAssistantMarkdown(wrap, content);
+            LinearLayout bubble = new LinearLayout(this);
+            bubble.setOrientation(LinearLayout.VERTICAL);
+            bubble.setPadding(dp(13), dp(11), dp(13), dp(10));
+            bubble.setBackground(rounded(PANEL, 16, LINE));
+            addAssistantMarkdown(bubble, content);
+            LinearLayout.LayoutParams bubbleLp = new LinearLayout.LayoutParams(-1, -2);
+            bubbleLp.rightMargin = dp(22);
+            wrap.addView(bubble, bubbleLp);
             if (messageId > 0) {
-                Button actions = smallButton("Message options");
+                Button actions = smallButton("•••  Message actions");
                 actions.setOnClickListener(v -> showMessageActions(messageId, role, content));
                 LinearLayout.LayoutParams actionLp = new LinearLayout.LayoutParams(-2, dp(34));
-                actionLp.topMargin = dp(2);
+                actionLp.topMargin = dp(4);
+                actionLp.leftMargin = dp(2);
                 wrap.addView(actions, actionLp);
             }
         }
@@ -854,12 +932,12 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(-1, -2);
         wrapLp.bottomMargin = dp(13);
         messageList.addView(wrap, wrapLp);
-        TextView who = label("SARTHI · STREAMING", 10, MUTED, true);
+        TextView who = label("SARTHI · THINKING", 10, MUTED, true);
         who.setPadding(dp(4), 0, dp(4), dp(5));
         wrap.addView(who);
-        streamingTextView = label("", 15, TEXT, false);
-        streamingTextView.setPadding(dp(13), dp(11), dp(13), dp(11));
-        streamingTextView.setBackground(round(PANEL, 16));
+        streamingTextView = label("●   ●   ●", 15, MUTED, false);
+        streamingTextView.setPadding(dp(13), dp(12), dp(13), dp(12));
+        streamingTextView.setBackground(rounded(PANEL, 16, LINE));
         wrap.addView(streamingTextView, new LinearLayout.LayoutParams(-1, -2));
         scrollToBottom();
     }
@@ -912,8 +990,9 @@ public class MainActivity extends Activity {
     private void publishStreamText(String snapshot) {
         main.post(() -> {
             if (streamingTextView != null) {
-                streamingTextView.setText(snapshot);
-                scrollToBottom();
+                streamingTextView.setTextColor(TEXT);
+                streamingTextView.setText(snapshot.isEmpty() ? "●   ●   ●" : snapshot + "▍");
+                updateJumpButton();
             }
         });
     }
@@ -1272,6 +1351,761 @@ public class MainActivity extends Activity {
     private String hostToken() { return hostTransport().credential(config.apiKey, config.desktopHostToken); }
 
     private String hostOperation(String operation) { return hostTransport().endpoint(config.desktopHostUrl, operation); }
+
+    // ---------------------------------------------------------------------
+    // Theme, navigation and the mobile-only desktop feature screens.
+    // ---------------------------------------------------------------------
+
+    private void applyTheme(boolean dark) {
+        darkTheme = dark;
+        if (dark) {
+            BG = Color.rgb(6, 17, 17); PANEL = Color.rgb(9, 18, 18); PANEL_ALT = Color.rgb(14, 28, 27);
+            TEXT = Color.rgb(241, 239, 232); MUTED = Color.rgb(140, 154, 148); GREEN = Color.rgb(61, 220, 151);
+            ACCENT = Color.rgb(124, 140, 255); LINE = Color.rgb(30, 48, 46); DANGER = Color.rgb(255, 123, 114);
+            USER_BUBBLE = Color.rgb(19, 36, 35);
+        } else {
+            BG = Color.rgb(247, 244, 237); PANEL = Color.rgb(255, 253, 249); PANEL_ALT = Color.rgb(239, 235, 226);
+            TEXT = Color.rgb(18, 30, 28); MUTED = Color.rgb(88, 104, 99); GREEN = Color.rgb(10, 132, 94);
+            ACCENT = Color.rgb(67, 84, 214); LINE = Color.rgb(218, 211, 199); DANGER = Color.rgb(181, 46, 38);
+            USER_BUBBLE = Color.rgb(232, 235, 255);
+        }
+        if (getWindow() != null) {
+            getWindow().setStatusBarColor(BG);
+            getWindow().setNavigationBarColor(BG);
+            int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+            if (!dark) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+    }
+
+    private void renderModelChip() {
+        if (modelChip == null) return;
+        String model = config.model == null || config.model.trim().isEmpty() ? "auto" : config.model.trim();
+        if (model.length() > 26) model = model.substring(0, 25) + "…";
+        modelChip.setText(model);
+        modelChip.setContentDescription("Model " + model + ". Choose model");
+    }
+
+    private void toggleTheme() {
+        boolean next = !darkTheme;
+        getSharedPreferences(THEME_PREFS, MODE_PRIVATE).edit().putBoolean(DARK_THEME_KEY, next).apply();
+        applyTheme(next);
+        recreate();
+    }
+
+    private Button iconButton(String glyph, String description) {
+        Button b = new Button(this);
+        b.setText(glyph);
+        b.setContentDescription(description);
+        b.setTextSize(18);
+        b.setTextColor(TEXT);
+        b.setAllCaps(false);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(0, 0, 0, 0);
+        b.setMinWidth(0); b.setMinimumWidth(0);
+        b.setMinHeight(0); b.setMinimumHeight(0);
+        b.setBackground(rounded(PANEL_ALT, 12, LINE));
+        return b;
+    }
+
+    private LinearLayout buildBottomNav() {
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        View line = new View(this); line.setBackgroundColor(LINE);
+        shell.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
+        bottomNav = row();
+        bottomNav.setGravity(Gravity.CENTER);
+        bottomNav.setPadding(dp(2), dp(5), dp(2), dp(5));
+        bottomNav.setBackgroundColor(PANEL);
+        bottomNav.addView(navItem("◍", "Chat", true, this::scrollToBottom), new LinearLayout.LayoutParams(0, dp(50), 1));
+        bottomNav.addView(navItem("☰", "Chats", false, this::openConversationHistory), new LinearLayout.LayoutParams(0, dp(50), 1));
+        bottomNav.addView(navItem("▦", "Projects", false, this::openProjects), new LinearLayout.LayoutParams(0, dp(50), 1));
+        bottomNav.addView(navItem("⬡", "Agents", false, this::openAgentRuns), new LinearLayout.LayoutParams(0, dp(50), 1));
+        bottomNav.addView(navItem("•••", "More", false, this::showMoreMenu), new LinearLayout.LayoutParams(0, dp(50), 1));
+        shell.addView(bottomNav);
+        return shell;
+    }
+
+    private LinearLayout navItem(String glyph, String text, boolean selected, Runnable action) {
+        LinearLayout item = new LinearLayout(this);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.setGravity(Gravity.CENTER);
+        item.setContentDescription(text);
+        item.setClickable(true);
+        item.setFocusable(true);
+        TextView icon = label(glyph, 17, selected ? ACCENT : MUTED, false);
+        icon.setGravity(Gravity.CENTER);
+        item.addView(icon);
+        TextView caption = label(text, 9, selected ? TEXT : MUTED, selected);
+        caption.setGravity(Gravity.CENTER);
+        caption.setLetterSpacing(0.04f);
+        item.addView(caption);
+        item.setOnClickListener(v -> action.run());
+        return item;
+    }
+
+    private void showMoreMenu() {
+        String[] items = {"Projects", "Skills", "Workflows", "Extensions", "Memory", "Models", "Appearance", "Settings",
+                "Prompt presets", "Agent runs", "Backup and export", "Usage diagnostics", "About"};
+        new AlertDialog.Builder(this).setTitle("More").setItems(items, (dialog, which) -> {
+            switch (which) {
+                case 0: openProjects(); break;
+                case 1: openSkills(); break;
+                case 2: openWorkflows(); break;
+                case 3: openExtensions(); break;
+                case 4: openMemory(); break;
+                case 5: openModelPicker(); break;
+                case 6: toggleTheme(); break;
+                case 7: openSettings(); break;
+                case 8: showPromptPresets(); break;
+                case 9: openAgentRuns(); break;
+                case 10: showBackupMenu(); break;
+                case 11: showUsageDiagnostics(); break;
+                default: showAbout();
+            }
+        }).setNegativeButton("Close", null).show();
+    }
+
+    private void showAbout() {
+        String version;
+        try { version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (Exception e) { version = "unknown"; }
+        new AlertDialog.Builder(this).setTitle("Sarthi Studio")
+                .setMessage("Version " + version + "\n\nA local-first AI workspace. Chat, agents and workflows run on your own desktop host; this Android app is the companion client.\n\nTheme: " + (darkTheme ? "Dark" : "Light") + "\nConnection: " + config.connectionMode.name().replace('_', ' '))
+                .setPositiveButton("Close", null).show();
+    }
+
+    private void updateJumpButton() {
+        if (jumpButton == null || scroll == null || scroll.getChildCount() == 0) return;
+        View child = scroll.getChildAt(0);
+        int distance = child.getBottom() - (scroll.getHeight() + scroll.getScrollY());
+        jumpButton.setVisibility(distance > dp(180) ? View.VISIBLE : View.GONE);
+    }
+
+    private void scrollToBottom() {
+        if (scroll != null) scroll.post(() -> { scroll.fullScroll(View.FOCUS_DOWN); if (jumpButton != null) jumpButton.setVisibility(View.GONE); });
+    }
+
+    private void openModelPicker() {
+        if (!connectionConfigured()) { openSettings(); toast(connectionSetupMessage()); return; }
+        toast("Loading models…");
+        executor.execute(() -> {
+            try {
+                boolean host = config.connectionMode == ConnectionMode.DESKTOP_HOST;
+                String url = host ? hostOperation("models") : endpoint(config.baseUrl, "models");
+                String token = host ? hostToken() : config.apiKey;
+                HttpResult response = request("GET", url, token, null);
+                JSONObject json = parseJson(response.body);
+                if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                JSONArray data = json.optJSONArray("data");
+                if (data == null) data = json.optJSONArray("models");
+                LinkedHashSet<String> ids = new LinkedHashSet<>();
+                ids.add("auto");
+                if (data != null) for (int i = 0; i < data.length(); i++) {
+                    Object item = data.opt(i);
+                    String id = item instanceof JSONObject
+                            ? ((JSONObject) item).optString("id", ((JSONObject) item).optString("name", ""))
+                            : String.valueOf(item);
+                    if (!id.trim().isEmpty()) ids.add(id.trim());
+                }
+                String[] models = ids.toArray(new String[0]);
+                main.post(() -> {
+                    String current = config.model == null ? "auto" : config.model;
+                    int checked = 0;
+                    for (int i = 0; i < models.length; i++) if (models[i].equals(current)) checked = i;
+                    AlertDialog dialog = new AlertDialog.Builder(this)
+                            .setTitle("Choose model")
+                            .setSingleChoiceItems(models, checked, null)
+                            .setNegativeButton("Cancel", null)
+                            .create();
+                    dialog.setOnShowListener(v -> dialog.getListView().setOnItemClickListener((parent, view, position, id) -> {
+                        config.model = models[position];
+                        try { secureSettings.save(config); }
+                        catch (Exception saveFailure) { toast("Model selected for this session; saving it failed: " + saveFailure.getMessage()); }
+                        renderModelChip();
+                        statusText.setText("Model set to " + config.model);
+                        dialog.dismiss();
+                    }));
+                    dialog.show();
+                });
+            } catch (Exception e) {
+                main.post(() -> toast("Could not load models: " + friendlyError(e.getMessage())));
+            }
+        });
+    }
+
+    private Dialog fullScreenPanel(String title, String subtitle, LinearLayout content) {
+        Dialog dialog = new Dialog(this);
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(BG);
+        final int baseLeft = dp(16), baseTop = dp(12), baseRight = dp(16), baseBottom = dp(10);
+        shell.setPadding(baseLeft, baseTop, baseRight, baseBottom);
+        shell.setOnApplyWindowInsetsListener((view, insets) -> {
+            int left = 0, top = 0, right = 0, bottom = 0;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(baseLeft + left, baseTop + top, baseRight + right, baseBottom + bottom);
+            return insets;
+        });
+        shell.requestApplyInsets();
+        LinearLayout header = row();
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        Button close = iconButton("←", "Back");
+        close.setOnClickListener(v -> dialog.dismiss());
+        header.addView(close, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setPadding(dp(12), 0, 0, 0);
+        titles.addView(label(title, 21, TEXT, true));
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView sub = label(subtitle, 11, MUTED, false);
+            sub.setPadding(0, dp(2), 0, 0);
+            titles.addView(sub);
+        }
+        header.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
+        shell.addView(header);
+        View line = new View(this); line.setBackgroundColor(LINE);
+        LinearLayout.LayoutParams lineLp = new LinearLayout.LayoutParams(-1, dp(1));
+        lineLp.topMargin = dp(10);
+        shell.addView(line, lineLp);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setClipToPadding(false);
+        scroll.setPadding(0, dp(10), 0, dp(20));
+        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
+        shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        dialog.setContentView(shell);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(round(BG, 0));
+            dialog.getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+            dialog.getWindow().setStatusBarColor(BG);
+            dialog.getWindow().setNavigationBarColor(BG);
+            dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        }
+        dialog.show();
+        if (dialog.getWindow() != null) dialog.getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+        return dialog;
+    }
+
+    private boolean requireHost(String feature) {
+        if (config.connectionMode == ConnectionMode.DESKTOP_HOST && !config.desktopHostUrl.isEmpty() && !config.desktopHostToken.isEmpty()) return true;
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.addView(label(feature + " lives on your desktop host.", 16, TEXT, true));
+        TextView note = label("Connect Sarthi Studio Desktop in Settings → Desktop Host, then open this screen again. The phone deliberately does not invent local data when no host is connected.", 13, MUTED, false);
+        note.setPadding(0, dp(8), 0, dp(14));
+        body.addView(note);
+        Button settings = smallButton("Open Desktop Host settings");
+        settings.setBackground(round(ACCENT, 12));
+        settings.setTextColor(BG);
+        settings.setOnClickListener(v -> openSettings());
+        body.addView(settings, new LinearLayout.LayoutParams(-1, dp(44)));
+        fullScreenPanel(feature, "Desktop connection required", body);
+        return false;
+    }
+
+    private HttpResult hostRequest(String method, String path, String body) throws Exception {
+        return request(method, hostOperation(path), hostToken(), body);
+    }
+
+    private LinearLayout pageBody() {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        return body;
+    }
+
+    private LinearLayout card(String title, String meta, String bodyText) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(rounded(PANEL, 14, LINE));
+        LinearLayout heading = row();
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        heading.addView(label(title, 15, TEXT, true), new LinearLayout.LayoutParams(0, -2, 1));
+        if (meta != null && !meta.isEmpty()) heading.addView(label(meta, 10, MUTED, false));
+        card.addView(heading);
+        if (bodyText != null && !bodyText.isEmpty()) {
+            TextView detail = label(bodyText, 12, MUTED, false);
+            detail.setPadding(0, dp(5), 0, 0);
+            card.addView(detail);
+        }
+        return card;
+    }
+
+    private void addCard(LinearLayout parent, LinearLayout card) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = dp(9);
+        parent.addView(card, lp);
+    }
+
+    private TextView sectionLabel(String text) {
+        TextView t = label(text, 10, MUTED, true);
+        t.setLetterSpacing(0.12f);
+        t.setPadding(dp(2), dp(4), 0, dp(8));
+        return t;
+    }
+
+    private void openProjects() {
+        if (!requireHost("Projects")) return;
+        LinearLayout body = pageBody();
+        LinearLayout actions = row();
+        Button create = smallButton("+ New project");
+        create.setBackground(round(ACCENT, 11));
+        create.setTextColor(BG);
+        Button refresh = smallButton("↻ Refresh");
+        LinearLayout.LayoutParams createLp = new LinearLayout.LayoutParams(0, dp(40), 1);
+        createLp.rightMargin = dp(8);
+        actions.addView(create, createLp);
+        actions.addView(refresh, new LinearLayout.LayoutParams(0, dp(40), 1));
+        body.addView(actions, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout list = pageBody();
+        list.setPadding(0, dp(12), 0, 0);
+        body.addView(list);
+        fullScreenPanel("Projects", "Workspaces shared with the desktop host", body);
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.removeAllViews();
+            list.addView(label("Loading projects…", 12, MUTED, false));
+            executor.execute(() -> {
+                try {
+                    HttpResult response = hostRequest("GET", "projects", null);
+                    JSONObject json = parseJson(response.body);
+                    if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                    JSONArray projects = json.optJSONArray("projects");
+                    String active = json.optString("active", "");
+                    main.post(() -> {
+                        list.removeAllViews();
+                        if (projects == null || projects.length() == 0) {
+                            list.addView(label("No projects yet. Create one to separate chats, memory and workspace settings.", 13, MUTED, false));
+                            return;
+                        }
+                        for (int i = 0; i < projects.length(); i++) {
+                            JSONObject p = projects.optJSONObject(i);
+                            if (p == null) continue;
+                            String id = p.optString("id");
+                            String name = p.optString("name", "Project");
+                            String folder = p.optString("folder", "");
+                            String model = p.optString("model", "");
+                            boolean isActive = id.equals(active);
+                            String meta = isActive ? "ACTIVE" : "";
+                            String detail = folder.isEmpty() ? (model.isEmpty() ? "No workspace folder" : "Model · " + model) : folder;
+                            LinearLayout c = card(name, meta, detail);
+                            c.setClickable(!isActive);
+                            if (!isActive) c.setOnClickListener(v -> {
+                                toast("Activating " + name + "…");
+                                executor.execute(() -> {
+                                    try {
+                                        HttpResult r = hostRequest("POST", "projects/" + Uri.encode(id) + "/activate", "{}");
+                                        JSONObject j = parseJson(r.body);
+                                        if (r.status < 200 || r.status >= 300) throw new Exception(errorText(j, r.body, r.status));
+                                        main.post(() -> { toast(name + " is now active."); load[0].run(); });
+                                    } catch (Exception e) { main.post(() -> toast("Could not activate project: " + friendlyError(e.getMessage()))); }
+                                });
+                            });
+                            addCard(list, c);
+                        }
+                    });
+                } catch (Exception e) {
+                    main.post(() -> { list.removeAllViews(); list.addView(label("Could not load projects. " + friendlyError(e.getMessage()), 12, DANGER, false)); });
+                }
+            });
+        };
+        refresh.setOnClickListener(v -> load[0].run());
+        create.setOnClickListener(v -> showCreateProjectDialog(load[0]));
+        load[0].run();
+    }
+
+    private void showCreateProjectDialog(Runnable reload) {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(18), dp(6), dp(18), 0);
+        EditText name = field("Project name", "", InputType.TYPE_CLASS_TEXT);
+        EditText folder = field("Workspace folder (optional absolute path)", "", InputType.TYPE_CLASS_TEXT);
+        form.addView(name, fieldLp());
+        form.addView(folder, fieldLp());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("New project").setView(form)
+                .setPositiveButton("Create", null).setNegativeButton("Cancel", null).create();
+        dialog.setOnShowListener(v -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w -> {
+            String projectName = name.getText().toString().trim();
+            if (projectName.isEmpty()) { name.setError("A project needs a name."); return; }
+            String projectFolder = folder.getText().toString().trim();
+            executor.execute(() -> {
+                try {
+                    JSONObject payload = new JSONObject().put("name", projectName).put("folder", projectFolder);
+                    HttpResult response = hostRequest("POST", "projects", payload.toString());
+                    JSONObject json = parseJson(response.body);
+                    if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                    main.post(() -> {
+                        dialog.dismiss();
+                        toast("Project created.");
+                        if (reload != null) reload.run();
+                    });
+                } catch (Exception e) { main.post(() -> toast("Could not create project: " + friendlyError(e.getMessage()))); }
+            });
+        }));
+        dialog.show();
+    }
+
+    private void openSkills() {
+        if (!requireHost("Skills")) return;
+        LinearLayout body = pageBody();
+        Button refresh = smallButton("↻ Refresh skills");
+        body.addView(refresh, new LinearLayout.LayoutParams(-1, dp(40)));
+        LinearLayout list = pageBody();
+        list.setPadding(0, dp(12), 0, 0);
+        body.addView(list);
+        fullScreenPanel("Skills", "Instruction packs your agents can use", body);
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.removeAllViews();
+            list.addView(label("Discovering skills…", 12, MUTED, false));
+            executor.execute(() -> {
+                try {
+                    HttpResult response = hostRequest("GET", "skills", null);
+                    JSONObject json = parseJson(response.body);
+                    if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                    JSONArray skills = json.optJSONArray("skills");
+                    main.post(() -> {
+                        list.removeAllViews();
+                        if (skills == null || skills.length() == 0) {
+                            list.addView(label("No skills installed on the desktop yet.", 13, MUTED, false));
+                            return;
+                        }
+                        list.addView(sectionLabel(skills.length() + " SKILLS"));
+                        for (int i = 0; i < skills.length(); i++) {
+                            JSONObject s = skills.optJSONObject(i);
+                            if (s == null) continue;
+                            String id = s.optString("id");
+                            String name = s.optString("name", id);
+                            boolean enabled = s.optBoolean("enabled", true);
+                            boolean compatible = s.optBoolean("compatible", true);
+                            String version = s.optString("version", "");
+                            String source = s.optString("source", "");
+                            String meta = (enabled ? "ON" : "OFF") + (version.isEmpty() ? "" : " · v" + version);
+                            LinearLayout c = card(name, meta, s.optString("description", ""));
+                            TextView state = label(enabled ? "Enabled · tap to disable" : "Disabled · tap to enable", 10, enabled ? GREEN : MUTED, true);
+                            state.setPadding(0, dp(8), 0, 0);
+                            c.addView(state);
+                            if (!compatible) {
+                                String requires = s.optString("requires", "");
+                                TextView warn = label("Needs desktop version " + requires, 10, DANGER, false);
+                                warn.setPadding(0, dp(5), 0, 0);
+                                c.addView(warn);
+                            }
+                            c.setOnClickListener(v -> {
+                                toast((enabled ? "Disabling " : "Enabling ") + name + "…");
+                                executor.execute(() -> {
+                                    try {
+                                        JSONObject payload = new JSONObject().put("enabled", !enabled);
+                                        HttpResult r = hostRequest("POST", "skills/" + Uri.encode(id) + "/state", payload.toString());
+                                        JSONObject j = parseJson(r.body);
+                                        if (r.status < 200 || r.status >= 300) throw new Exception(errorText(j, r.body, r.status));
+                                        main.post(() -> { toast(name + (enabled ? " disabled." : " enabled.")); load[0].run(); });
+                                    } catch (Exception e) { main.post(() -> toast("Could not change skill: " + friendlyError(e.getMessage()))); }
+                                });
+                            });
+                            addCard(list, c);
+                        }
+                    });
+                } catch (Exception e) {
+                    main.post(() -> { list.removeAllViews(); list.addView(label("Could not load skills. " + friendlyError(e.getMessage()), 12, DANGER, false)); });
+                }
+            });
+        };
+        refresh.setOnClickListener(v -> load[0].run());
+        load[0].run();
+    }
+
+    private void openWorkflows() {
+        if (!requireHost("Workflows")) return;
+        LinearLayout body = pageBody();
+        Button refresh = smallButton("↻ Refresh workflows");
+        body.addView(refresh, new LinearLayout.LayoutParams(-1, dp(40)));
+        LinearLayout list = pageBody();
+        list.setPadding(0, dp(12), 0, 0);
+        body.addView(list);
+        fullScreenPanel("Workflows", "Multi-step graphs with live run status", body);
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.removeAllViews();
+            list.addView(label("Loading workflows and recent runs…", 12, MUTED, false));
+            executor.execute(() -> {
+                try {
+                    HttpResult wr = hostRequest("GET", "workflows", null);
+                    JSONObject wj = parseJson(wr.body);
+                    if (wr.status < 200 || wr.status >= 300) throw new Exception(errorText(wj, wr.body, wr.status));
+                    HttpResult rr = hostRequest("GET", "workflow-runs?limit=20", null);
+                    JSONObject rj = parseJson(rr.body);
+                    JSONArray workflows = wj.optJSONArray("workflows");
+                    JSONArray runs = rj.optJSONArray("runs");
+                    main.post(() -> {
+                        list.removeAllViews();
+                        if (workflows == null || workflows.length() == 0) {
+                            list.addView(label("No workflows on the desktop yet.", 13, MUTED, false));
+                        } else {
+                            list.addView(sectionLabel(workflows.length() + " WORKFLOWS"));
+                            for (int i = 0; i < workflows.length(); i++) {
+                                JSONObject w = workflows.optJSONObject(i);
+                                if (w == null) continue;
+                                String id = w.optString("id");
+                                String name = w.optString("name", "Workflow");
+                                JSONArray nodes = w.optJSONArray("nodes");
+                                int every = w.optInt("everyMinutes", w.optInt("every_minutes", 0));
+                                String folder = w.optString("skill", "");
+                                String meta = nodes == null ? "" : nodes.length() + " STEP" + (nodes.length() == 1 ? "" : "S");
+                                String detail = (every > 0 ? "Every " + every + " min · " : "Manual · ")
+                                        + (folder.isEmpty() ? "No skill attached" : "Skill · " + folder);
+                                LinearLayout c = card(name, meta, detail);
+                                Button run = smallButton("▶ Run workflow");
+                                run.setBackground(round(ACCENT, 10));
+                                run.setTextColor(BG);
+                                LinearLayout.LayoutParams runLp = new LinearLayout.LayoutParams(-1, dp(38));
+                                runLp.topMargin = dp(9);
+                                c.addView(run, runLp);
+                                run.setOnClickListener(v -> {
+                                    toast("Starting " + name + "…");
+                                    executor.execute(() -> {
+                                        try {
+                                            HttpResult r = hostRequest("POST", "workflows/" + Uri.encode(id) + "/run", "{}");
+                                            JSONObject j = parseJson(r.body);
+                                            if (r.status < 200 || r.status >= 300) throw new Exception(errorText(j, r.body, r.status));
+                                            main.post(() -> { toast("Workflow started."); load[0].run(); });
+                                        } catch (Exception e) { main.post(() -> toast("Could not run workflow: " + friendlyError(e.getMessage()))); }
+                                    });
+                                });
+                                addCard(list, c);
+                            }
+                        }
+                        if (runs != null && runs.length() > 0) {
+                            list.addView(sectionLabel("RECENT RUNS"));
+                            for (int i = 0; i < runs.length(); i++) {
+                                JSONObject run = runs.optJSONObject(i);
+                                if (run == null) continue;
+                                String runId = run.optString("id");
+                                String status = run.optString("status", "unknown");
+                                int steps = run.optInt("steps", 0);
+                                int done = run.optInt("succeededSteps", 0);
+                                String error = run.optString("error", "");
+                                LinearLayout c = card(run.optString("name", "Run"), status.toUpperCase(),
+                                        done + "/" + steps + " steps complete" + (error.isEmpty() ? "" : " · " + error));
+                                boolean live = "running".equals(status) || "waiting".equals(status);
+                                Button cancel = smallButton(live ? "Cancel run" : "Logs");
+                                LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(-1, dp(36));
+                                cancelLp.topMargin = dp(8);
+                                c.addView(cancel, cancelLp);
+                                cancel.setOnClickListener(v -> {
+                                    if (live) {
+                                        executor.execute(() -> {
+                                            try {
+                                                HttpResult r = hostRequest("POST", "workflow-runs/" + Uri.encode(runId) + "/cancel", "{}");
+                                                JSONObject j = parseJson(r.body);
+                                                if (r.status < 200 || r.status >= 300) throw new Exception(errorText(j, r.body, r.status));
+                                                main.post(() -> { toast("Run cancelled."); load[0].run(); });
+                                            } catch (Exception e) { main.post(() -> toast("Could not cancel: " + friendlyError(e.getMessage()))); }
+                                        });
+                                    } else showWorkflowRunDetail(runId);
+                                });
+                                addCard(list, c);
+                            }
+                        }
+                    });
+                } catch (Exception e) {
+                    main.post(() -> { list.removeAllViews(); list.addView(label("Could not load workflows. " + friendlyError(e.getMessage()), 12, DANGER, false)); });
+                }
+            });
+        };
+        refresh.setOnClickListener(v -> load[0].run());
+        load[0].run();
+    }
+
+    private void showWorkflowRunDetail(String runId) {
+        LinearLayout body = pageBody();
+        body.addView(label("Loading run details…", 12, MUTED, false));
+        fullScreenPanel("Run details", "Steps, status and output", body);
+        executor.execute(() -> {
+            try {
+                HttpResult response = hostRequest("GET", "workflow-runs/" + Uri.encode(runId), null);
+                JSONObject json = parseJson(response.body);
+                if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                JSONObject run = json.optJSONObject("run");
+                final JSONArray steps = json.optJSONArray("stepList") != null
+                        ? json.optJSONArray("stepList") : json.optJSONArray("steps");
+                main.post(() -> {
+                    body.removeAllViews();
+                    if (run == null) { body.addView(label("Run not found.", 13, MUTED, false)); return; }
+                    body.addView(card(run.optString("name", "Run"), run.optString("status", "").toUpperCase(), run.optString("error", "")));
+                    body.addView(sectionLabel("STEPS"));
+                    if (steps == null || steps.length() == 0) {
+                        body.addView(label("This run has no recorded steps yet.", 12, MUTED, false));
+                    } else for (int i = 0; i < steps.length(); i++) {
+                        JSONObject step = steps.optJSONObject(i);
+                        if (step == null) continue;
+                        addCard(body, card(step.optString("title", step.optString("node_id", "Step")),
+                                step.optString("status", "").toUpperCase(), step.optString("output", "")));
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> { body.removeAllViews(); body.addView(label("Could not load run: " + friendlyError(e.getMessage()), 12, DANGER, false)); });
+            }
+        });
+    }
+
+    private void openExtensions() {
+        if (!requireHost("Extensions")) return;
+        LinearLayout body = pageBody();
+        Button refresh = smallButton("↻ Refresh extensions");
+        body.addView(refresh, new LinearLayout.LayoutParams(-1, dp(40)));
+        LinearLayout list = pageBody();
+        list.setPadding(0, dp(12), 0, 0);
+        body.addView(list);
+        fullScreenPanel("Extensions", "Plugins and provider presets installed on the desktop", body);
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.removeAllViews();
+            list.addView(label("Inspecting desktop extensions…", 12, MUTED, false));
+            executor.execute(() -> {
+                try {
+                    HttpResult response = hostRequest("GET", "extensions", null);
+                    JSONObject json = parseJson(response.body);
+                    if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                    JSONArray extensions = json.optJSONArray("extensions");
+                    main.post(() -> {
+                        list.removeAllViews();
+                        if (extensions == null || extensions.length() == 0) {
+                            list.addView(label("No extensions installed on the desktop. Install and manage extensions on the desktop app; the phone reads the same inventory.", 13, MUTED, false));
+                            return;
+                        }
+                        list.addView(sectionLabel(extensions.length() + " EXTENSIONS"));
+                        for (int i = 0; i < extensions.length(); i++) {
+                            JSONObject extension = extensions.optJSONObject(i);
+                            if (extension == null) continue;
+                            boolean valid = extension.optBoolean("valid", false);
+                            boolean compatible = extension.optBoolean("compatible", false);
+                            String version = extension.optString("version", "");
+                            String runtime = extension.optString("runtime", "");
+                            String meta = (valid && compatible ? "READY" : "BLOCKED")
+                                    + (version.isEmpty() ? "" : " · v" + version)
+                                    + (runtime.isEmpty() ? "" : " · " + runtime);
+                            String description = extension.optString("description", "");
+                            if (!extension.optString("error", "").isEmpty()) description = extension.optString("error");
+                            LinearLayout c = card(extension.optString("name", extension.optString("id", "Extension")), meta, description);
+                            c.setContentDescription("Extension " + extension.optString("name", "") + ", " + meta);
+                            addCard(list, c);
+                        }
+                    });
+                } catch (Exception e) {
+                    main.post(() -> { list.removeAllViews(); list.addView(label("Could not load extensions. " + friendlyError(e.getMessage()), 12, DANGER, false)); });
+                }
+            });
+        };
+        refresh.setOnClickListener(v -> load[0].run());
+        load[0].run();
+    }
+
+    private void openMemory() {
+        if (!requireHost("Memory")) return;
+        LinearLayout body = pageBody();
+        LinearLayout actions = row();
+        Button add = smallButton("+ Add memory");
+        add.setBackground(round(ACCENT, 11));
+        add.setTextColor(BG);
+        Button refresh = smallButton("↻ Refresh");
+        LinearLayout.LayoutParams addLp = new LinearLayout.LayoutParams(0, dp(40), 1);
+        addLp.rightMargin = dp(8);
+        actions.addView(add, addLp);
+        actions.addView(refresh, new LinearLayout.LayoutParams(0, dp(40), 1));
+        body.addView(actions);
+        LinearLayout list = pageBody();
+        list.setPadding(0, dp(12), 0, 0);
+        body.addView(list);
+        fullScreenPanel("Memory", "Project facts and preferences recalled during chats", body);
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.removeAllViews();
+            list.addView(label("Loading memory…", 12, MUTED, false));
+            executor.execute(() -> {
+                try {
+                    HttpResult response = hostRequest("GET", "memory", null);
+                    JSONObject json = parseJson(response.body);
+                    if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                    JSONArray records = json.optJSONArray("records");
+                    main.post(() -> {
+                        list.removeAllViews();
+                        if (records == null || records.length() == 0) {
+                            list.addView(label("No memories in this project yet. Add a decision, fact or preference.", 13, MUTED, false));
+                            return;
+                        }
+                        list.addView(sectionLabel(records.length() + " MEMORIES"));
+                        for (int i = 0; i < records.length(); i++) {
+                            JSONObject record = records.optJSONObject(i);
+                            if (record == null) continue;
+                            String id = record.optString("id");
+                            String title = record.optString("title", "Memory");
+                            String kind = record.optString("kind", "fact");
+                            String bodyText = record.optString("body", "");
+                            LinearLayout c = card(title, kind.toUpperCase() + (record.optBoolean("global", false) ? " · GLOBAL" : ""), bodyText);
+                            Button delete = smallButton("Delete memory");
+                            delete.setTextColor(DANGER);
+                            LinearLayout.LayoutParams delLp = new LinearLayout.LayoutParams(-1, dp(34));
+                            delLp.topMargin = dp(8);
+                            c.addView(delete, delLp);
+                            delete.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Delete memory?")
+                                    .setMessage(title).setPositiveButton("Delete", (d, w) -> executor.execute(() -> {
+                                        try {
+                                            HttpResult r = hostRequest("POST", "memory/" + Uri.encode(id) + "/delete", "{}");
+                                            JSONObject j = parseJson(r.body);
+                                            if (r.status < 200 || r.status >= 300) throw new Exception(errorText(j, r.body, r.status));
+                                            main.post(() -> { toast("Memory deleted."); load[0].run(); });
+                                        } catch (Exception e) { main.post(() -> toast("Could not delete: " + friendlyError(e.getMessage()))); }
+                                    })).setNegativeButton("Cancel", null).show());
+                            addCard(list, c);
+                        }
+                    });
+                } catch (Exception e) {
+                    main.post(() -> { list.removeAllViews(); list.addView(label("Could not load memory. " + friendlyError(e.getMessage()), 12, DANGER, false)); });
+                }
+            });
+        };
+        refresh.setOnClickListener(v -> load[0].run());
+        add.setOnClickListener(v -> showAddMemoryDialog(load[0]));
+        load[0].run();
+    }
+
+    private void showAddMemoryDialog(Runnable reload) {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(18), dp(6), dp(18), 0);
+        EditText kind = field("Kind (decision, fact, preference)", "fact", InputType.TYPE_CLASS_TEXT);
+        EditText title = field("Title", "", InputType.TYPE_CLASS_TEXT);
+        EditText body = field("Details (optional)", "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        body.setSingleLine(false); body.setMinLines(3);
+        form.addView(kind, fieldLp()); form.addView(title, fieldLp()); form.addView(body, fieldLp());
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Add memory").setView(form)
+                .setPositiveButton("Save", null).setNegativeButton("Cancel", null).create();
+        dialog.setOnShowListener(v -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w -> {
+            String memoryTitle = title.getText().toString().trim();
+            if (memoryTitle.isEmpty()) { title.setError("A memory needs a title."); return; }
+            String memoryKind = kind.getText().toString().trim();
+            String memoryBody = body.getText().toString().trim();
+            executor.execute(() -> {
+                try {
+                    JSONObject payload = new JSONObject().put("kind", memoryKind)
+                            .put("title", memoryTitle).put("body", memoryBody);
+                    HttpResult response = hostRequest("POST", "memory", payload.toString());
+                    JSONObject json = parseJson(response.body);
+                    if (response.status < 200 || response.status >= 300) throw new Exception(errorText(json, response.body, response.status));
+                    main.post(() -> { dialog.dismiss(); toast("Memory saved."); if (reload != null) reload.run(); });
+                } catch (Exception e) { main.post(() -> toast("Could not save memory: " + friendlyError(e.getMessage()))); }
+            });
+        }));
+        dialog.show();
+    }
 
     private void showAgentRunsList() {
         LinearLayout dialogContent = new LinearLayout(this);
@@ -2419,6 +3253,12 @@ public class MainActivity extends Activity {
         hostSection.setOrientation(LinearLayout.VERTICAL);
         TextView help = label("Choose how Sarthi connects. Direct Router sends requests to your configured OpenAI-compatible router. Desktop Host uses the authenticated HTTPS API on your Sarthi desktop.", 13, MUTED, false);
         help.setPadding(0, 0, 0, dp(12)); form.addView(help);
+        Button appearance = smallButton("Appearance: " + (darkTheme ? "Dark" : "Light") + "  ·  Switch theme");
+        appearance.setTextColor(ACCENT);
+        LinearLayout.LayoutParams appearanceLp = new LinearLayout.LayoutParams(-1, dp(42));
+        appearanceLp.bottomMargin = dp(10);
+        form.addView(appearance, appearanceLp);
+        appearance.setOnClickListener(v -> toggleTheme());
         form.addView(modeButton);
         form.addView(directSection);
         EditText base = field("Base URL, e.g. http://192.168.1.10:3001/v1", config.baseUrl, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -2943,7 +3783,6 @@ public class MainActivity extends Activity {
         return message;
     }
 
-    private void scrollToBottom() { if (scroll != null) scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN)); }
     private TextView label(String text, int sp, int color, boolean bold) {
         TextView t = new TextView(this); t.setText(text); t.setTextSize(sp); t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); t.setLineSpacing(dp(2), 1f); return t;

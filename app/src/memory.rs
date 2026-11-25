@@ -284,7 +284,7 @@ pub(crate) fn prompt_block(records: &[Record]) -> Option<String> {
     ))
 }
 
-async fn list_records(State(state): State<AppState>) -> Json<Value> {
+pub(crate) async fn list_records(State(state): State<AppState>) -> Json<Value> {
     let project = active_project_id(&state);
     let records = list_at(&state.database_path, &project);
     Json(json!({
@@ -295,7 +295,7 @@ async fn list_records(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-async fn save_record(
+pub(crate) async fn save_record(
     State(state): State<AppState>,
     Json(mut input): Json<Value>,
 ) -> Response<Body> {
@@ -311,7 +311,7 @@ async fn save_record(
     }
 }
 
-async fn delete_record(
+pub(crate) async fn delete_record(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
 ) -> Response<Body> {

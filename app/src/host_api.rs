@@ -50,6 +50,37 @@ pub(super) fn build_router(state: AppState, token_store: HostTokenStore) -> Rout
             get(list_host_messages),
         )
         .route("/api/host/v1/chat", post(host_chat))
+        // Projects, skills, workflows and memory reuse the desktop handlers.
+        // The host bearer wall and body limit still cover every merged route.
+        .route(
+            "/api/host/v1/projects",
+            get(super::list_projects).post(super::create_project),
+        )
+        .route("/api/host/v1/projects/:id/activate", post(super::activate_project))
+        .route("/api/host/v1/skills", get(crate::skills::get_skills))
+        .route(
+            "/api/host/v1/skills/:id/state",
+            post(crate::skills::set_skill_enabled),
+        )
+        .route("/api/host/v1/workflows", get(crate::workflow::list))
+        .route("/api/host/v1/workflows/:id/run", post(crate::workflow::run))
+        .route("/api/host/v1/workflow-runs", get(crate::workflow::runs))
+        .route(
+            "/api/host/v1/workflow-runs/:id",
+            get(crate::workflow::run_detail),
+        )
+        .route(
+            "/api/host/v1/workflow-runs/:id/cancel",
+            post(crate::workflow::cancel),
+        )
+                .route("/api/host/v1/extensions", get(crate::extensions::list))
+        .route("/api/host/v1/memory",
+            get(crate::memory::list_records).post(crate::memory::save_record),
+        )
+        .route(
+            "/api/host/v1/memory/:id/delete",
+            post(crate::memory::delete_record),
+        )
         // Agent runs share the desktop runtime; the host bearer wall covers
         // them the same as every other v1 route.
         .merge(crate::agent::host_router())
@@ -228,6 +259,11 @@ async fn host_capabilities() -> Json<Value> {
             "model_list": true,
             "streaming": true,
             "agent_runs": true,
+            "projects": true,
+            "skills": true,
+            "workflows": true,
+            "extensions": true,
+            "memory": true,
             "attachments": false,
             "conversation_delete": false,
             "usage_diagnostics": false
@@ -1204,7 +1240,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capabilities_match_the_v1_contract_and_do_not_enable_deferred_features() {
+    async fn capabilities_match_the_v1_contract() {
         let fixture = Fixture::new();
         let response = fixture
             .send(
@@ -1221,6 +1257,11 @@ mod tests {
         assert_eq!(data["features"]["streaming"], true);
         assert_eq!(data["features"]["agent_runs"], true);
         assert_eq!(data["features"]["model_list"], true);
+        assert_eq!(data["features"]["projects"], true);
+        assert_eq!(data["features"]["skills"], true);
+        assert_eq!(data["features"]["workflows"], true);
+        assert_eq!(data["features"]["extensions"], true);
+        assert_eq!(data["features"]["memory"], true);
         assert_eq!(data["features"]["attachments"], false);
         assert_eq!(data["features"]["conversation_delete"], false);
         assert_eq!(data["features"]["usage_diagnostics"], false);
@@ -1567,6 +1608,35 @@ mod tests {
             Fixture::response_json(missing).await["error"]["code"],
             "not_found"
         );
+    }
+
+    #[tokio::test]
+    async fn workspace_surfaces_require_the_host_token_and_are_reachable() {
+        let fixture = Fixture::new();
+        for path in [
+            "/api/host/v1/projects",
+            "/api/host/v1/skills",
+            "/api/host/v1/workflows",
+            "/api/host/v1/workflow-runs",
+            "/api/host/v1/extensions",
+            "/api/host/v1/memory",
+        ] {
+            let unauthorised = fixture.send(Method::GET, path, None, None).await;
+            assert_eq!(unauthorised.status(), StatusCode::UNAUTHORIZED, "{path}");
+            let response = fixture.send(Method::GET, path, Some(&fixture.token), None).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+        }
+        let projects = fixture
+            .send(
+                Method::GET,
+                "/api/host/v1/projects",
+                Some(&fixture.token),
+                None,
+            )
+            .await;
+        let data = Fixture::response_json(projects).await;
+        assert_eq!(data["ok"], true);
+        assert!(data["projects"].is_array());
     }
 
     #[tokio::test]
