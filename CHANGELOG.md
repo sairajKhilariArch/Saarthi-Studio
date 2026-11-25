@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.88.11
+
+### CI
+
+- The installer dependency test now hides a host-installed `mold` behind a
+  private symlink farm. The desktop workflow installs `mold` before the test,
+  so the old fake PATH found the real binary and reported the deliberately
+  missing case as present; the test failed on every runner with mold.
+
 ## 3.88.10
 
 ### Cross-platform packaging
