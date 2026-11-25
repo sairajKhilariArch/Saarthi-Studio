@@ -940,6 +940,20 @@ else
   die "no database at the documented path"
 fi
 
+# The parent is 0700, but the database itself holds conversation text and must
+# stay owner-only even if that directory mode is later relaxed. Git Bash on
+# Windows has no POSIX mode to read, so it skips this check.
+if command -v stat >/dev/null 2>&1 && stat -c '%a' "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3" >/dev/null 2>&1; then
+  mode="$(stat -c '%a' "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3")"
+  if [ "$mode" = "600" ]; then
+    pass "the database file is owner-only"
+  else
+    die "the database file mode is $mode, expected 600"
+  fi
+else
+  skip "database file mode (no POSIX stat on this platform)"
+fi
+
 # The run is the harder half of persistence: its row, its steps and its
 # approval outcome all have to come back from the database, not from memory.
 if [ "$(http GET "$base/api/runs/$run_id")" = "200" ] && [ "$(field status)" = "succeeded" ]; then

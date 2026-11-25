@@ -409,6 +409,12 @@ fn set_private_permissions(path: &FsPath, dir: bool) -> io::Result<()> {
 
 pub(crate) fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
+    // SQLite creates the file with the process umask (0644 under the usual
+    // 022). The 0700 parent keeps other users out, but the database itself
+    // holds conversation text and should not become readable if the parent's
+    // mode is ever relaxed. chmod is a no-op on Windows, where the profile
+    // ACL already restricts the file.
+    let _ = set_private_permissions(path, false);
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 10000;")?;
     Ok(conn)
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.88.12
+
+### Security
+
+- The SQLite database is chmod 0600 when opened on Unix. It was created 0644
+  under the usual umask; the 0700 data directory protected it, but the file
+  itself contains conversation text and should stay owner-only if that parent
+  mode is ever relaxed. `test-e2e.sh` now checks the file mode.
+
 ## 3.88.11
 
 ### CI
