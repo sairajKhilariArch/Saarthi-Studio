@@ -27,7 +27,7 @@ use axum::{Json, Router};
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::permissions::{self, Action as PolicyAction, Decision as PolicyDecision};
@@ -50,6 +50,11 @@ const DESCRIPTION_CAP: usize = 2_000;
 
 /// A tool description in an agent prompt is a hint, not documentation.
 const PROMPT_DESCRIPTION_CAP: usize = 200;
+
+/// The largest single JSON-RPC message this client will hold. A malicious or
+/// broken server that never sends a newline (stdio) or streams an endless body
+/// (HTTP/SSE) must be cut off instead of growing the process without bound.
+const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Registry: the servers the user has written down
@@ -467,8 +472,87 @@ pub(crate) fn health_rows(state: &AppState) -> Vec<Value> {
 struct Session {
     child: Child,
     stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
+    lines: JsonLines<ChildStdout>,
     next_id: u64,
+}
+
+/// Newline-delimited JSON with a per-message ceiling. `BufReader::lines` grows
+/// one line without limit while it waits for a newline, so a server can exhaust
+/// memory by never finishing a message. This reads incrementally and refuses a
+/// frame past [`MAX_MESSAGE_BYTES`].
+struct JsonLines<R> {
+    reader: BufReader<R>,
+    pending: Vec<u8>,
+}
+
+impl<R: AsyncRead + Unpin> JsonLines<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader: BufReader::new(reader),
+            pending: Vec::new(),
+        }
+    }
+
+    async fn next_line(&mut self) -> Result<Option<String>, String> {
+        self.next_line_with_limit(MAX_MESSAGE_BYTES).await
+    }
+
+    async fn next_line_with_limit(&mut self, limit: usize) -> Result<Option<String>, String> {
+        loop {
+            let available = self
+                .reader
+                .fill_buf()
+                .await
+                .map_err(|e| format!("Reading from the MCP server failed: {e}"))?;
+            if available.is_empty() {
+                if self.pending.is_empty() {
+                    return Ok(None);
+                }
+                let line = String::from_utf8_lossy(&self.pending).to_string();
+                self.pending.clear();
+                return Ok(Some(line));
+            }
+            let newline = available.iter().position(|byte| *byte == b'\n');
+            let take = newline.unwrap_or(available.len());
+            if self.pending.len() + take > limit {
+                return Err(format!(
+                    "The MCP server sent a message larger than {limit} bytes."
+                ));
+            }
+            self.pending.extend_from_slice(&available[..take]);
+            self.reader.consume(take + usize::from(newline.is_some()));
+            if newline.is_some() {
+                let line = String::from_utf8_lossy(&self.pending).to_string();
+                self.pending.clear();
+                return Ok(Some(line));
+            }
+        }
+    }
+}
+
+/// Read an HTTP answer with the same ceiling. `Response::text` buffers the
+/// whole body first, which is exactly what a hostile server wants.
+async fn bounded_body(response: reqwest::Response) -> Result<String, String> {
+    use futures_util::StreamExt;
+    if let Some(length) = response.content_length() {
+        if length > MAX_MESSAGE_BYTES as u64 {
+            return Err(format!(
+                "The MCP server's answer is larger than {MAX_MESSAGE_BYTES} bytes."
+            ));
+        }
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Reading the MCP server's answer failed: {e}"))?;
+        if body.len() + chunk.len() > MAX_MESSAGE_BYTES {
+            return Err(format!(
+                "The MCP server's answer is larger than {MAX_MESSAGE_BYTES} bytes."
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| "The MCP server's answer was not UTF-8.".to_string())
 }
 
 /// One JSON-RPC message per line. MCP's stdio transport is exactly this.
@@ -541,7 +625,7 @@ impl Session {
         Ok(Session {
             child,
             stdin,
-            lines: BufReader::new(stdout).lines(),
+            lines: JsonLines::new(stdout),
             next_id: 1,
         })
     }
@@ -568,14 +652,9 @@ impl Session {
         self.send(method, params, Some(id)).await?;
         let answer = async {
             loop {
-                let line = self
-                    .lines
-                    .next_line()
-                    .await
-                    .map_err(|e| format!("Reading from the MCP server failed: {e}"))?
-                    .ok_or_else(|| {
-                        "The MCP server closed its output before answering.".to_string()
-                    })?;
+                let line = self.lines.next_line().await?.ok_or_else(|| {
+                    "The MCP server closed its output before answering.".to_string()
+                })?;
                 if let Some(answer) = reply_for(&line, id) {
                     return answer;
                 }
@@ -604,12 +683,7 @@ impl Session {
         }
         let reply = async {
             loop {
-                match self
-                    .lines
-                    .next_line()
-                    .await
-                    .map_err(|e| format!("Reading from the MCP server failed: {e}"))?
-                {
+                match self.lines.next_line().await? {
                     None => {
                         return Err("The MCP server closed its output before answering.".to_string())
                     }
@@ -822,10 +896,7 @@ impl HttpSession {
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.contains("text/event-stream"));
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Reading the MCP server's answer failed: {e}"))?;
+        let body = bounded_body(response).await?;
         let answers = if is_sse {
             sse_messages(&body)
         } else {
@@ -891,10 +962,14 @@ impl SseSession {
             let mut buffer = String::new();
             let mut event = String::new();
             let mut data: Vec<String> = Vec::new();
+            let mut data_bytes = 0usize;
             let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
+            'stream: while let Some(chunk) = stream.next().await {
                 let Ok(bytes) = chunk else { break };
                 buffer.push_str(&String::from_utf8_lossy(&bytes));
+                if buffer.len() > MAX_MESSAGE_BYTES {
+                    break;
+                }
                 while let Some(index) = buffer.find('\n') {
                     let mut line = buffer[..index].to_string();
                     buffer.drain(..=index);
@@ -915,11 +990,16 @@ impl SseSession {
                         }
                         event.clear();
                         data.clear();
+                        data_bytes = 0;
                         continue;
                     }
                     if let Some(value) = line.strip_prefix("event:") {
                         event = value.trim().to_string();
                     } else if let Some(value) = line.strip_prefix("data:") {
+                        data_bytes += value.len();
+                        if data_bytes > MAX_MESSAGE_BYTES {
+                            break 'stream;
+                        }
                         data.push(value.trim_start().to_string());
                     }
                 }
@@ -2770,6 +2850,32 @@ mod tests {
 
         forget_header_secret(&path, "headers");
         let _ = fs::remove_dir_all(path.parent().expect("scratch parent"));
+    }
+
+    #[tokio::test]
+    async fn an_overlong_mcp_frame_is_refused_before_it_fills_memory() {
+        let input = [b'x'; 64];
+        let mut reader = JsonLines::new(&input[..]);
+        let error = reader
+            .next_line_with_limit(32)
+            .await
+            .expect_err("a frame past the limit must be refused");
+        assert!(error.contains("larger than"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn mcp_frames_split_across_reads_are_joined() {
+        let input = b"{\"id\":1}\n{\"id\":2}\n";
+        let mut reader = JsonLines::new(&input[..]);
+        assert_eq!(
+            reader.next_line().await.unwrap().as_deref(),
+            Some("{\"id\":1}")
+        );
+        assert_eq!(
+            reader.next_line().await.unwrap().as_deref(),
+            Some("{\"id\":2}")
+        );
+        assert!(reader.next_line().await.unwrap().is_none());
     }
 
     #[test]
