@@ -3,7 +3,7 @@
 **Date:** 2026-11-24  
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** 3.88.0 (`55d1218`)  
-**Final:** 3.88.2<br>
+**Final:** 3.88.3<br>
 **Approach:** restore the intended integration/behavior without reverting commits, replacing implementations, duplicating features or removing capabilities.
 
 ## Result in one paragraph
@@ -32,7 +32,7 @@ No shipped feature had been removed or replaced, so no Git revert was needed. Th
 - Foreign `Host` on `/api/config`: 403.
 - Foreign `Origin` on `/api/capabilities`: 403.
 - Normal loopback config/chat/workflow/file/terminal requests: 200 and functional.
-- 53/53 real-binary e2e checks pass on debug and release.
+- 61/61 real-binary e2e checks pass on debug and release.
 
 **Backward compatibility:** loopback browser, Tauri webview and VS Code embed all use a loopback Host; no supported client lost access. The only behavior change is that a foreign Host/Origin is now refused, which is the documented security boundary.
 
@@ -61,7 +61,7 @@ No shipped feature had been removed or replaced, so no Git revert was needed. Th
 
 **Restoration method:** un-nested the two checks in both the deep-search and normal streaming branches; no other metadata behavior changed.
 
-**Verification:** new e2e creates a memory, streams a related message in a separate conversation, asserts `"memory_used"` in the SSE done frame, then deletes both. 53/53 pass. The pre-fix behavior would fail this test.
+**Verification:** new e2e creates a memory, streams a related message in a separate conversation, asserts `"memory_used"` in the SSE done frame, then deletes both. 61/61 pass. The pre-fix behavior would fail this test.
 
 ### R-04 — Remote MCP transport policy
 
@@ -71,7 +71,7 @@ No shipped feature had been removed or replaced, so no Git revert was needed. Th
 
 **Restoration method:** one shared policy at save, connect, legacy-SSE endpoint, and OAuth discovery/registration/token/authorize. No new transport was introduced.
 
-**Verification:** three Rust tests and two e2e checks; 53/53 on debug and release. Existing remote HTTP configurations now fail with an HTTPS message, which is the intended compatibility change.
+**Verification:** three Rust tests and two e2e checks; 61/61 on debug and release. Existing remote HTTP configurations now fail with an HTTPS message, which is the intended compatibility change.
 
 ### R-05 — MCP header secret storage
 
@@ -81,7 +81,7 @@ No shipped feature had been removed or replaced, so no Git revert was needed. Th
 
 **Restoration method:** write header values to the keychain, blank them in the registry, hydrate on read, migrate old values at startup, and keep the 0600 fallback if the store is unavailable. No header value is exposed through the API.
 
-**Verification:** `header_values_live_in_the_keychain_not_the_registry`; full Rust suite 709 passed, 1 ignored. The test uses the project’s hermetic mock keychain; a live Secret Service round trip remains unverified.
+**Verification:** `header_values_live_in_the_keychain_not_the_registry`; full Rust suite 712 passed, 1 ignored. The test uses the project’s hermetic mock keychain; a live Secret Service round trip remains unverified.
 
 **Backward compatibility:** existing servers keep working. On first launch their plaintext header values are migrated; if the credential store is unavailable, the 0600 file fallback preserves the value. The public server view still lists header names only.
 
@@ -104,7 +104,7 @@ No commit was reverted. No working implementation was overwritten. No duplicate 
 - No existing table, column, config key or data path was renamed or removed.
 - All tests used `mktemp`/scratch `FREE_AI_STUDIO_HOME` roots and cleaned up (or were kept only with explicit `E2E_KEEP=1`).
 - No test intentionally used the real user database, config, workspace or credentials.
-- One verification command (`target/debug/free-ai-studio --version`) accidentally started the app against the real home because the binary has no version flag. It was stopped by the command timeout. `config.json` kept its 2026-11-22 mtime; the SQLite file was opened and its mtime changed. No user action was performed. The e2e and Rust suites are unaffected because they always use scratch homes.
+- One earlier verification command (`target/debug/free-ai-studio --version`) accidentally started the app against the real home because the binary had no version flag. It was stopped by the command timeout; `config.json` kept its 2026-11-22 mtime. **3.88.3 fixes the cause:** `--version`/`--help` now print and exit before any path is resolved, with built-binary tests and a package-payload check that asserts no home is created.
 - No uninstall, swap, rollback or other destructive operation was run against real data.
 
 ## Verification that no functionality was lost
@@ -113,7 +113,9 @@ No commit was reverted. No working implementation was overwritten. No duplicate 
 |---|---|
 | UI load | Live Chromium: 200, all startup fetches 200, no console errors |
 | Chat | Live UI turn through mock provider returned `Mock router reply…`; conversation stored |
-| Streaming | e2e delta + done + one stored reply |
+| Streaming | Real six-delta SSE, one stored reply; one-shot fallback also covered |
+| Stop generation | Timed abort keeps one partial reply; studio answers afterwards |
+| Settings persistence | Saved through `/api/config`, read back after restart |
 | Conversations | Create/list/messages/delete/restart persistence |
 | Projects | Create/rename/list/delete |
 | Memory | Create/list/recall/delete |
@@ -122,10 +124,11 @@ No commit was reverted. No working implementation was overwritten. No duplicate 
 | Terminal | Real PTY command wrote a file |
 | Agent | Approval, write, verification, restart, interruption |
 | Security headers | Present on live response |
-| Release binary | Same 53 e2e checks pass |
+| Release binary | Same 61 e2e checks pass |
+| Package payload | `.deb` unpacked, booted and replaced with data preserved (14/14) |
 | Frontend | 115/115 |
-| Rust | 709 passed, 1 ignored |
+| Rust | 712 passed, 1 ignored |
 
 ## Final statement
 
-The remediation **restored the intended security and reporting connections** without redesigning the application. The feature set at 3.88.2 is a superset of 3.88.0's tested behavior, with no intentional capability removed. Remaining gaps are external, documented product scope, or verification limitations, not silently deleted features.
+The remediation **restored the intended security and reporting connections** without redesigning the application. The feature set at 3.88.3 is a superset of 3.88.0's tested behavior, with no intentional capability removed. Phase 3 added real-SSE, stop-generation, settings-persistence, startup-CLI and package-payload verification rather than changing product behavior. Remaining gaps are external, documented product scope, or verification breadth, not silently deleted features.

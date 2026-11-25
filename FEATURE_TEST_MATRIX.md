@@ -1,8 +1,8 @@
 # Sarthi Studio — Feature Test Matrix
 
-**Date:** 2026-11-24  
-**Branch:** `audit/full-application-2026-11-24`  
-**Version:** `3.88.2`<br>
+**Date:** 2026-11-25  
+**Branch:** `remediation/security-2026-11-24`  
+**Version:** `3.88.3`<br>
 **Legend:** **Pass** = exercised against the real binary or real persistence; **Pass (test)** = covered by the Rust/frontend/extension suite, not re-driven through the UI; **Partial** = present but a stated behavior is unverified or limited; **Missing** = no implementation found; **Blocked** = environment or external service unavailable; **Fixed** = broken at baseline, repaired and re-tested.
 
 All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STUDIO_HOME`, the real debug/release binary, a real SQLite database and `scripts/mock-router.py` as the provider fixture. No real user data was touched.
@@ -13,8 +13,9 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 |---|---|---|---|---|
 | Create conversation | `POST /api/conversations`; UI "New thread" | Pass | Pass | e2e 201 + UUID; live UI created `hello from the audit UI` |
 | Send message / non-stream reply | `POST /api/chat` through mock router | Pass | Pass | e2e answer `Mock router reply…`; UI stream turn |
-| Streaming response | `POST /api/chat/stream`; inspect SSE frames | Pass (baseline not in e2e) | Pass | e2e delta + done; reply stored exactly once |
-| Stop generation | UI `AbortController`; recorder saves partial reply | Partial | Partial | code path inspected; fast mock gave no timed window to observe an abort |
+| Streaming response (JSON fallback) | `POST /api/chat/stream` against a router that ignores `stream` | Pass (baseline not in e2e) | Pass | e2e delta + done; reply stored exactly once |
+| Streaming response (real SSE) | Mock answers `text/event-stream` with six deltas | **Untested** | Pass | e2e: six deltas, one done frame, 2 messages / 1 reply |
+| Stop generation | curl aborts after the first delta while the mock holds the stream open | Partial | **Pass** | e2e: partial reply stored exactly once; next turn answered |
 | Regenerate reply | UI/API search | Missing | Missing | no regenerate route or action; "Resend" resends a user message |
 | Edit previous message | UI/API search | Missing | Missing | no message `PUT` route or edit action |
 | Delete individual message | UI/API search | Missing | Missing | conversation delete only |
@@ -56,7 +57,7 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Step log | `GET /api/runs/:id` | Pass | Pass | e2e `write, verify, done` |
 | Persistence across restart | kill/start | Pass | Pass | e2e run + steps survive |
 | Cancellation/interruption | kill mid-run; restart | Pass | Pass | e2e interrupted state and log |
-| Queue/concurrency | admission tests | Pass (test) | Pass (test) | 709-test suite |
+| Queue/concurrency | admission tests | Pass (test) | Pass (test) | 712-test suite |
 | Multi-agent/crew | crew templates/runtime tests | Pass (test) | Pass (test) | Rust tests; no UI crew run in this pass |
 | Permissions | allow/ask/deny rules | Pass (test) | Pass (test) | Rust permission/approval tests |
 | Execution monitoring | `/api/events`, runs panel | Pass | Pass | EventSource 200; runs routes covered by e2e/Rust tests |
@@ -130,6 +131,7 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Feature | Test performed | Initial status | Final status | Evidence |
 |---|---|---|---|---|
 | Settings load/navigation | live UI click | Pass | Pass | Settings panel reached, no console errors |
+| Settings persistence | `POST /api/config`, restart, `GET /api/config` | Untested | **Pass** | e2e: `history_messages=12` read back after restart |
 | Config redaction | e2e | Pass | Pass | raw key absent |
 | Themes | live theme button | Pass | Pass | `data-theme=dark` after click |
 | Keyboard shortcuts | frontend suite | Pass (test) | Pass (test) | 115 frontend tests |
@@ -140,6 +142,7 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 | Error reporting | structured JSON errors | Pass | Pass | e2e error cases |
 | Backup/recovery | schema backup test | Pass (test) | Pass (test) | Rust `an_existing_database_is_copied…` |
 | Uninstall | Rust tests | Pass (test) | Pass (test) | no destructive live run |
+| Linux package payload | `cargo-deb` assembly, unpack, headless boot, payload replacement | **Not run** | **Partial** | 14/14 payload checks; `Depends:` empty because `dpkg-shlibdeps` is absent; no system install |
 | Live browser layout | load/theme/nav/chat only | Partial | Partial | no pixel/responsive assertion |
 
 ## I. Security and platform
@@ -167,10 +170,11 @@ All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STU
 ## Command evidence
 
 ```text
-cargo test --locked (with lld):        709 passed, 0 failed, 1 ignored
+cargo test --locked (with lld):        709 + 3 CLI passed, 0 failed, 1 ignored
 node --test frontend:                  115 passed
-bash scripts/ci/test-e2e.sh (debug):    53 passed, 0 failed
-bash scripts/ci/test-e2e.sh (release):  53 passed, 0 failed
+bash scripts/ci/test-e2e.sh (debug):    61 passed, 0 failed
+bash scripts/ci/test-e2e.sh (release):  61 passed, 0 failed
+bash .scratch/phase3/smoke-deb.sh:      14 passed, 0 failed
 vscode-extension npm test:              45 passed
 website npm run build:                  37 pages
 test-version.sh:                        26 passed
@@ -185,5 +189,6 @@ test-installer.sh:                      0 passed, 1 skipped (no WiX)
 ## Not tested, explicitly
 
 - A real provider, real API key, real search key, real speech service, real third-party MCP server, real language server or real debug adapter.
-- A signed/installed Windows, macOS or Android build; a tagged 11-asset GitHub release; update from a previous published version.
-- A browser layout, responsive, accessibility or cross-browser audit; a timed stop-generation abort; long-session memory/leak soak.
+- A signed/installed Windows, macOS or Android build; a tagged 11-asset GitHub release; a system-wide install or update from a previous published version.
+- A GUI `.deb`/AppImage/tarball build; the assembled payload is headless and has no resolved dependency metadata on this Arch host.
+- A browser layout, responsive, accessibility or cross-browser audit; a long-session soak beyond the measured 100-turn run.

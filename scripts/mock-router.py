@@ -69,6 +69,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_stream(self, content, model, slow=False):
+        """A real text/event-stream, so the studio's SSE machine is exercised.
+
+        `slow` sends one delta and then holds the connection open: the only way
+        a test can abort a stream that is genuinely still running.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            pieces = [content[i:i + 8] for i in range(0, len(content), 8)] or [""]
+            for index, piece in enumerate(pieces):
+                frame = {
+                    "id": "chatcmpl-mock", "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": piece},
+                                 "finish_reason": None}],
+                }
+                self.wfile.write(("data: " + json.dumps(frame) + "\n\n").encode())
+                self.wfile.flush()
+                if slow and index == 0:
+                    time.sleep(30)
+            usage = {"choices": [], "usage": {"prompt_tokens": 120,
+                     "completion_tokens": 48, "total_tokens": 168}}
+            self.wfile.write(("data: " + json.dumps(usage) + "\n\n").encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # The client stopped the stream; that is a test outcome, not a mock
+            # failure.
+            return
+
     def read_json(self):
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
@@ -229,6 +264,8 @@ class Handler(BaseHTTPRequestHandler):
                     content = "Mock router reply."
             else:
                 content = "Mock router reply. Context packed: " + str(len(messages)) + " messages."
+            if body.get("stream"):
+                return self.send_stream(content, model, slow="slow" in str(model))
             return self.send_json({
                 "id": "chatcmpl-mock", "object": "chat.completion", "model": model,
                 "choices": [{"index": 0, "finish_reason": "stop",

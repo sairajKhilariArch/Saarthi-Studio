@@ -3,7 +3,7 @@
 **Audit date:** 2026-11-24  
 **Branch:** `audit/full-application-2026-11-24`  
 **Baseline commit:** `55d1218` (`3.88.0: add broker-gated mcp.call to the extension sandbox`)  
-**Audited release:** `3.88.1`; remediation implemented in `3.88.2`<br>
+**Audited release:** `3.88.1`; remediation through `3.88.3`<br>
 **Environment:** Linux x86_64, local desktop, headless and Tauri-capable build; no Windows, macOS, Android, signing or release-runner environment available.
 
 ## Executive summary
@@ -16,7 +16,7 @@ The audit found **three reproducible defects**, all fixed and regression-tested:
 2. **P2 — HTML injection through a recent-folder name.** A filesystem path was interpolated into `innerHTML` in the project menu. It is now built with DOM text nodes, and a frontend regression test uses a hostile folder name.
 3. **P3 — Streaming chat omitted memory/retrieval metadata unless a skill auto-matched.** `memory_used` and `retrieved` were nested inside the `auto_skills` condition. They are now independent, and an end-to-end test proves a recalled memory appears in a stream's done metadata.
 
-Final evidence after the 3.88.2 remediation: **709 Rust tests**, **115 frontend tests**, **53 real-binary end-to-end checks against both debug and optimized release binaries**, **45 VS Code extension tests**, 26 version checks, 9 Linux metadata checks, all offline release/install gates, and a live browser smoke with no console errors.
+Final evidence after the 3.88.3 verification pass: **712 Rust tests**, **115 frontend tests**, **61 real-binary end-to-end checks against both debug and optimized release binaries**, **45 VS Code extension tests**, 26 version checks, 9 Linux metadata checks, all offline release/install gates, a 14-check `.deb` payload boot/replace smoke, and a live browser smoke with no console errors recorded in the earlier audit.
 
 The remediation pass closed two further code-level security gaps and the Rust dependency advisories that the audit’s missing `cargo-audit` step could not see: remote MCP is now HTTPS-only off loopback at save, connect, OAuth and SSE boundaries; saved MCP headers live in the OS credential store with startup migration; and the locked Rust dependencies were upgraded until `cargo audit` reported **0 vulnerabilities**. These are recorded in `SECURITY_REMEDIATION_REPORT.md` and `VERIFIED_FIXES.md`.
 
@@ -45,7 +45,7 @@ Size at audit time (source only): approximately 68,600 Rust LOC across 56 module
 | Area | Implementation | Condition at end of audit | Evidence |
 |---|---|---|---|
 | Conversations | `main.rs` routes + SQLite | Working | create/list/messages/delete, cascade verified in e2e; restart persistence |
-| Chat (non-stream) | `chat`, `prepare_chat`, router/client | Working | mock-provider turn stored and returned; 709 Rust tests |
+| Chat (non-stream) | `chat`, `prepare_chat`, router/client | Working | mock-provider turn stored and returned; 712 Rust tests |
 | Chat streaming | `/api/chat/stream`, SSE frames, `ReplyRecorder` | Working | e2e delta + done, one stored reply; UI stream turn against live release |
 | Stop generation | browser `AbortController` + server recorder Drop | Code-path verified, not timed against a slow stream | UI code inspected; recorder saves partial replies by construction |
 | Message edit/delete/regenerate | none found | **Not implemented** in current product | no route, UI action or documented claim; recorded as a scope gap, not a regression |
@@ -53,10 +53,10 @@ Size at audit time (source only): approximately 68,600 Rust LOC across 56 module
 | Provider connectivity | `/api/test`, `/api/models`, health probe | Working against mock; real providers unavailable | mock-router e2e; real keys/network not available |
 | Agent runs | `agent.rs`, `/api/runs`, approvals | Working | e2e run parks at approval, writes file, verifies, survives restart |
 | Agent cancellation/interruption | control map, `mark_interrupted` | Working | kill/restart e2e marks run interrupted and keeps step log |
-| Agent queue/concurrency | slot admission, max 4 | Covered by Rust tests | 709-test suite |
+| Agent queue/concurrency | slot admission, max 4 | Covered by Rust tests | 712-test suite |
 | Crew templates | `crew-templates.json` + routes | Working (unit/API) | route registered; Rust tests |
 | Skills | `skills.rs`, install/import/refresh/state/remove | Working | catalogue e2e; Git import/refresh tests in Rust/frontend |
-| Wasm extensions | `extensions.rs`, `extension_run.rs` | Working, sandboxed | 709 Rust tests, real HTTP MCP fixture documented |
+| Wasm extensions | `extensions.rs`, `extension_run.rs` | Working, sandboxed | 712 Rust tests, real HTTP MCP fixture documented |
 | Extension panels/presets | manifest panels/providers | Working | routes and CSP/sandbox tests; no real third-party extension peer |
 | Workspace files | `workspace.rs` | Working | create/save/read/rename/delete e2e; traversal refusal |
 | Workspace containment | `resolve_inside`, canonicalization | Working | e2e `../outside.txt` refusal; symlink escape Rust tests |
@@ -114,6 +114,7 @@ These are product/scope gaps or externally blocked areas, not silent failures:
 
 - Optimized release binary: **20 MB**; debug binary: **228 MB** (3.88.2 build).
 - Headless cold start to `/api/health` ready: **174 ms** for the 3.88.1 release binary on this host.
+- 3.88.3 release binary, scratch home, measured to `/api/ready`: **61 ms**; 0.0% idle CPU; 88,908 KB RSS after boot and 91,796 KB after 100 turns (+2,888 KB).
 - Resident memory: **87.5 MiB RSS** at idle immediately after boot, around 88–94 MiB after a live UI session.
 - Static UI entry document: **102,655 bytes**; local API calls complete in the low milliseconds in the smoke.
 - No long-session soak, leak profile, GPU measurement or large-conversation stress test was performed. The existing context packer, request log paging and capped panels are covered by code/tests but were not load-tested here.
@@ -124,12 +125,13 @@ These are product/scope gaps or externally blocked areas, not silent failures:
 |---|---|
 | `cargo build --locked` (debug) | Pass |
 | `cargo build --release --locked` | Pass, 20 MB binary |
-| `cargo test --locked` (with lld) | 709 passed, 0 failed, 1 ignored |
+| `cargo test --locked` (with lld) | 712 passed (709 suite + 3 CLI), 0 failed, 1 ignored |
 | `cargo clippy --locked --all-targets -- -D warnings` | Pass |
 | `cargo fmt --check` | Pass |
 | Frontend suite | 115/115 |
-| Real-binary e2e, debug | 53/53 |
-| Real-binary e2e, release | 53/53 |
+| Real-binary e2e, debug | 61/61 |
+| Real-binary e2e, release | 61/61 |
+| `.deb` payload boot/replace | 14/14 |
 | VS Code extension | 45/45 |
 | Website build | 37 pages |
 | Version/metadata | 26/26, 9/9 |
@@ -164,4 +166,4 @@ The default `cargo test` without the project's lld linker setting failed in this
 
 The tested Linux application is materially more secure and better covered than at baseline. The core request boundary is now coherent, the two discovered injection/exposure paths are closed, and the end-to-end suite exercises real persistence, files, PTY, approvals and restarts rather than mocks alone.
 
-**Recommendation:** ship `3.88.2` as a Linux patch release after the normal CI jobs and a tagged build are green. Do not describe it as a fully signed cross-platform release until Windows/macOS/Android execution and signed artifacts are actually observed.
+**Recommendation:** ship `3.88.3` as a Linux patch release after the normal CI jobs and a tagged build are green. Do not describe it as a fully signed cross-platform release until Windows/macOS/Android execution and signed artifacts are actually observed.

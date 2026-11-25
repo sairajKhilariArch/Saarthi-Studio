@@ -1,14 +1,14 @@
 # Sarthi Studio — Release Readiness Report
 
-**Date:** 2026-11-24  
-**Candidate:** 3.88.2<br>
+**Date:** 2026-11-25  
+**Candidate:** 3.88.3<br>
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** audit commit `9721a53`; `main` at `55d1218` untouched<br>
 **Host:** Linux x86_64 (local); no Windows, macOS, Android, signed-installer or tagged-release runner available.
 
 ## Recommendation
 
-**Release 3.88.2 as a Linux patch candidate after the normal GitHub checks and a tagged 11-asset build are green.** The two code-level security gaps found in remediation are fixed and regression-tested, `cargo audit` reports 0 vulnerabilities, and the Linux debug/release binaries pass the expanded 53-check end-to-end suite.
+**Release 3.88.3 as a Linux patch candidate after the normal GitHub checks and a tagged 11-asset build are green.** The two code-level security gaps found in remediation are fixed and regression-tested, `cargo audit` reports 0 vulnerabilities, the Linux debug/release binaries pass the expanded 61-check end-to-end suite, and a `.deb` payload boots and preserves data across payload replacement. The assembled `.deb` is not shippable as-is because this host cannot resolve `$auto` dependencies.
 
 **Not a full cross-platform production sign-off.** Windows/macOS installed-package behavior, Android, code signing/notarization, a real tagged release run and real third-party provider/MCP peers were not observable on this host.
 
@@ -18,8 +18,8 @@
 |---|---|---|
 | Debug build (`--locked`) | **Pass** | Build succeeds; 228 MB binary |
 | Production build (`--release --locked`) | **Pass** | 20 MB binary built in 2m17s (final incremental build) |
-| Release binary boot | **Pass** | 3.88.2 reaches readiness in both real-binary e2e runs |
-| Release binary RSS | **Observed** | 87.5 MiB at idle; ~88–94 MiB after a live UI session |
+| Release binary boot | **Pass** | 3.88.3 reaches readiness in both real-binary e2e runs; 61 ms measured on a scratch home |
+| Release binary RSS | **Measured** | 88,908 KB after boot; 91,796 KB after 100 turns (+2,888 KB); 0.0% idle CPU |
 | Live response headers | **Pass** | CSP, XFO DENY, nosniff, no-referrer, no-store; foreign Host 403 |
 | Linux desktop metadata | **Pass** | 9/9 |
 | Version consistency | **Pass** | 26/26 |
@@ -29,7 +29,8 @@
 | macOS bundle fixture | **Pass** | 13/13 |
 | Installer dependency check | **Pass** | Fake-PATH install test |
 | Windows MSI packager | **Skipped** | No WiX CLI on this host (`0 passed, 1 skipped`) |
-| Actual deb/AppImage/tarball build | **Not run** | No `dpkg-deb`/`appimagetool` here |
+| Linux `.deb` assembly/payload | **Partial** | 3.88.3 `amd64` package assembled (5,188,988 bytes); payload boots 14/14. `Depends:` is empty (no `dpkg-shlibdeps`), no system install; not shippable as built |
+| GUI tarball / AppImage | **Not run** | No `cargo tauri`/`appimagetool`; GUI tree not packaged here |
 | Actual Windows/macOS packages | **Not run** | No Windows/macOS host |
 | Tagged GitHub release | **Not run** | No release authorization/tag in this audit |
 
@@ -39,13 +40,13 @@ The release contract for 3.88.2 is:
 free-ai-studio-android.aab
 free-ai-studio-android.apk
 free-ai-studio-vscode.vsix
-free-ai-studio_3.88.2-1_amd64.deb
-sarthi-studio_3.88.2_linux-x86_64.tar.gz
-sarthi-studio_3.88.2_macos-universal.app.zip
-sarthi-studio_3.88.2_macos-universal.tar.gz
-sarthi-studio_3.88.2_windows-x86_64.msi
-sarthi-studio_3.88.2_windows-x86_64.zip
-sarthi-studio_3.88.2_x86_64.AppImage
+free-ai-studio_3.88.3-1_amd64.deb
+sarthi-studio_3.88.3_linux-x86_64.tar.gz
+sarthi-studio_3.88.3_macos-universal.app.zip
+sarthi-studio_3.88.3_macos-universal.tar.gz
+sarthi-studio_3.88.3_windows-x86_64.msi
+sarthi-studio_3.88.3_windows-x86_64.zip
+sarthi-studio_3.88.3_x86_64.AppImage
 SHA256SUMS.txt
 ```
 
@@ -53,12 +54,13 @@ SHA256SUMS.txt
 
 | Suite | Result |
 |---|---|
-| Rust (`cargo test --locked`, lld) | **709 passed, 0 failed, 1 ignored** |
+| Rust (`cargo test --locked`, lld) | **712 passed** (709 suite + 3 CLI), 0 failed, 1 ignored |
 | Rust clippy (`--all-targets -- -D warnings`) | **Pass** |
 | rustfmt (`--check`) | **Pass** |
 | Frontend (`node --test`) | **115 passed, 0 failed** |
-| Real-binary e2e — debug | **53 passed, 0 failed** |
-| Real-binary e2e — release | **53 passed, 0 failed** |
+| Real-binary e2e — debug | **61 passed, 0 failed** |
+| Real-binary e2e — release | **61 passed, 0 failed** |
+| Linux `.deb` payload smoke | **14 passed, 0 failed** |
 | VS Code extension | **45 passed, 0 failed** |
 | Website build | **37 pages** |
 | npm production audit (VS Code) | **0 vulnerabilities** |
@@ -67,13 +69,17 @@ SHA256SUMS.txt
 | Rust advisory scan | **0 vulnerabilities**; 5 warnings (exit 0) |
 | Android tests | **Blocked** — no JDK/SDK/Gradle/device |
 
-### What the 53 e2e checks cover
+### What the 61 e2e checks cover
 
 Real binary, real SQLite, real filesystem, real PTY, real process kill/restart, mock OpenAI-compatible provider:
 
 - boot/readiness/database/data-directory checks;
 - foreign `Host`/`Origin` refusal;
-- conversation create, chat, stream, storage, budget, deletion;
+- conversation create, chat, one-shot stream fallback, storage, budget, deletion;
+- a real `text/event-stream` upstream (six deltas, one done frame, one stored reply);
+- a timed stop mid-stream (partial reply stored once, studio still answering);
+- settings saved through `/api/config` and read back after restart;
+- `--version` matching the manifest without creating a home;
 - config secret redaction;
 - project/memory/workflow CRUD;
 - skill catalogue;
@@ -127,8 +133,8 @@ No P0 or unmitigated P1 issue remains. The loopback-boundary and dependency P1s 
 ### Product/verification limitations that do not block a Linux patch
 
 - Per-message edit/delete/regenerate is not implemented.
-- Stop-generation was not timed against a slow stream (fast mock completed immediately).
-- No long-session memory leak/soak profile.
+- No multi-hour memory/soak profile; a 100-turn run grew RSS by 2.9 MB after warm-up.
+- The `.deb` has no resolved dependency metadata on this Arch host, and no system-wide install/update/uninstall was run.
 - No real Secret Service/keychain integration exercised.
 - Database upgrade from every historical release was not replayed; the suite includes pre-projects migration and backup-before-migration tests.
 - The VS Code embedded server stores its OAuth session in a 0600 file (no SecretStorage bridge).
@@ -141,7 +147,7 @@ No P0 or unmitigated P1 issue remains. The loopback-boundary and dependency P1s 
 4. Let `verify-release` refuse a missing/renamed asset and `release-audit.yml` recheck it.
 5. Smoke the actual `.deb`/AppImage/tarball and, on their own hosts, the MSI and macOS `.app`.
 6. Publish only after the signed/notarized policy decision is made; if unsigned, keep the documented Gatekeeper/SmartScreen warning.
-7. Keep the foreign-Host/Origin and MCP TLS checks and all 53 e2e checks release-blocking.
+7. Keep the foreign-Host/Origin and MCP TLS checks and all 61 e2e checks release-blocking.
 
 ## Rollback plan
 
@@ -154,7 +160,7 @@ No P0 or unmitigated P1 issue remains. The loopback-boundary and dependency P1s 
 
 | Question | Answer |
 |---|---|
-| Is the tested Linux build shippable? | **Yes, as 3.88.2 after CI/tagged build** |
+| Is the tested Linux build shippable? | **Yes, as 3.88.3 after CI/tagged build produces the dependency-resolved packages** |
 | Is the security P1 closed? | **Yes** |
 | Are regression tests in place? | **Yes, including release-binary e2e** |
 | Is cross-platform runtime verified here? | **No** |
@@ -162,4 +168,4 @@ No P0 or unmitigated P1 issue remains. The loopback-boundary and dependency P1s 
 | Should this be described as a complete cross-platform production release? | **No** |
 | Should the code be pushed/deployed by this audit? | **No — not requested; branch left local** |
 
-**Release readiness: CONDITIONAL PASS for Linux 3.88.2.** The remaining conditions are execution of the normal CI/tagged-release pipeline and external platform/signing validation, not an unresolved code defect found in this remediation.
+**Release readiness: CONDITIONAL PASS for Linux 3.88.3.** The remaining conditions are execution of the normal CI/tagged-release pipeline and external platform/signing validation, not an unresolved code defect found in this remediation.

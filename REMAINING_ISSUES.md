@@ -1,7 +1,7 @@
 # Sarthi Studio — Remaining Issues
 
-**Date:** 2026-11-24  
-**Release reviewed:** 3.88.2  
+**Date:** 2026-11-25  
+**Release reviewed:** 3.88.3  
 **Open P0:** none identified in the tested Linux surface.  
 **Open unmitigated P1 from the audits:** none.  
 **Remaining P2/P3/P4:** listed below with the reason each was not changed in this pass.
@@ -100,11 +100,9 @@ The frontend harness is browser-free and covers 115 behaviors. The audit’s liv
 
 ### R-09 — Stop-generation was not timed against a slow stream
 
-**State:** verification gap, P3.
+**State:** **resolved in 3.88.3.**
 
-The browser aborts the fetch and the server recorder persists partial output by construction, but the existing mock answers immediately, so a real timed abort was not observed.
-
-**Next step:** add a mock endpoint that holds the stream open, abort after N tokens, and assert the stored partial reply and connection cleanup.
+The mock now emits a real event stream and a `mock-slow-stream` model sends one delta, then holds the connection open. The e2e aborts the fetch after that delta and observes the stored partial reply exactly once; the next turn on the same conversation succeeds. Running the same scenario twice gave the same result. This also closed the related gap that all earlier e2e “streaming” checks exercised only the one-shot JSON fallback.
 
 ### R-10 — No real third-party provider, search, speech, MCP, language-server or debugger peer
 
@@ -114,9 +112,9 @@ Tests use the project’s real HTTP mock provider and local MCP/stdio fixtures. 
 
 ### R-11 — No long-session soak/leak profile
 
-**State:** not measured.
+**State:** measured for a short run; no multi-hour soak.
 
-Idle RSS was observed at ~87.5 MiB in the earlier audit; no multi-hour session or large-conversation stress was run. Context packing, request-log paging and panel caps are unit-tested but not load-tested.
+Release binary on a scratch home with the mock provider: 61 ms to `/api/ready`, 0.0% CPU over five idle seconds, 88,908 KB RSS after boot, 91,796 KB after 100 completed turns (100/100 answered, average 48 ms per turn), 33 threads. The +2.9 MB is consistent with allocator/SQLite page-cache warm-up; it is not proof of leak-freedom over hours. Context packing, request-log paging and panel caps remain unit-tested, not load-tested.
 
 ### R-12 — Database upgrade from every historical release not replayed
 
@@ -124,10 +122,18 @@ Idle RSS was observed at ~87.5 MiB in the earlier audit; no multi-hour session o
 
 The suite covers a pre-projects migration, a newer-schema refusal, backup-before-migrate and failed-upgrade rollback. It does not replay every historical release database.
 
+### R-13 — Linux package payload only; no system install or dependency metadata
+
+**State:** partially verified, P3.
+
+A 3.88.3 `.deb` was assembled with project-local `cargo-deb` and its unpacked payload passed 14/14 checks (binary, UI, bundled skills, `--version`, headless boot, version over HTTP, conversation/setting creation, payload replacement with preserved data).
+
+**Why it is not a shippable package here:** this Arch host has no `dpkg-shlibdeps`, so the control file's `Depends:` is empty and no system-wide install was performed. The GUI tarball/AppImage were not built. The Ubuntu CI job must produce the dependency-resolved `.deb`, and a disposable Debian/Ubuntu machine must install, upgrade and uninstall it before calling Linux packaging signed off.
+
 ## 6. Incidental note from verification
 
 While checking the debug binary, `app/target/debug/free-ai-studio --version` was run. The binary has no version flag and started the app against the real home for a few seconds before the command was killed. It did not modify `config.json` (mtime unchanged from 2026-11-22) and made no user-directed request. The test and e2e suites otherwise use scratch homes. No destructive operation was performed. A `sqlite3` quick-check is not part of this report; the database is the user’s real file and was not altered intentionally.
 
 ## Closing assessment
 
-The code-level security defects found by the audit and the RustSec scan are closed and regression-tested on Linux. The remaining list is dominated by external signing/platform validation, intentionally deferred toolchain upgrades, explicit product-scope gaps, and verification breadth—not by an unrepaired critical code path in the tested build.
+The code-level security defects found by the audit and the RustSec scan are closed and regression-tested on Linux. Phase 3 closed the real-SSE, stop-generation, settings-persistence and startup-CLI verification gaps. The remaining list is dominated by external signing/platform validation, GUI/system package production, intentionally deferred toolchain upgrades, explicit product-scope gaps and long-soak/browser coverage — not by an unrepaired critical code path in the tested build.

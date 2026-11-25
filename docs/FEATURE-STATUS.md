@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.88.2
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.88.3
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -16,6 +16,13 @@ implementation), **Broken** (exists and fails).
 | Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
+
+**Revision 3.88.3 (2026-11-25):** Verification pass. The real-binary suite now
+covers a true SSE upstream (multiple deltas, one stored reply), a timed abort
+that keeps exactly one partial reply, and settings persistence across a
+restart. `--version`/`--help` print and exit instead of booting the app. A
+Linux `.deb` payload was assembled and booted from its unpacked tree; GUI
+bundles, signing and macOS/Windows/Android execution remain unverified here.
 
 **Revision 3.88.2 (2026-11-24):** Remediation pass. Remote MCP is HTTPS-only
 off loopback at save, connect and OAuth/SSE endpoint boundaries; saved MCP

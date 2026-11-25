@@ -1,8 +1,8 @@
 # Sarthi Studio — Final Test Results
 
-**Date:** 2026-11-24  
-**Release:** 3.88.2  
-**Branch:** `remediation/security-2026-11-24`  
+**Date:** 2026-11-25  
+**Release:** 3.88.3  
+**Branch:** `remediation/security-2026-11-24` (HEAD unchanged before and after the final run)  
 **Host:** Linux x86_64, local desktop; no Windows, macOS, Android, signing or release runner.
 
 ## Verdict
@@ -11,11 +11,14 @@ All runnable checks pass on the tested Linux surface:
 
 | Suite | Actual result |
 |---|---|
-| Rust unit/integration (`cargo test --locked`) | **709 passed, 0 failed, 1 ignored** |
+| Rust unit/integration (`cargo test --locked`) | **712 passed** (709 suite + 3 built-binary CLI), 0 failed, 1 ignored |
 | Rust clippy (`--all-targets -- -D warnings`) | **Pass** |
 | rustfmt (`--check`) | **Pass** |
-| Real-binary e2e — debug | **53 passed, 0 failed** |
-| Real-binary e2e — optimized release | **53 passed, 0 failed** |
+| Real-binary e2e — debug | **61 passed, 0 failed** |
+| Real-binary e2e — optimized release | **61 passed, 0 failed** |
+| Linux `.deb` payload boot/replace smoke | **14 passed, 0 failed** |
+| Startup latency (release, scratch home) | **61 ms** to `/api/ready` |
+| 100-turn stability run | **100/100 answered**; RSS +2,888 KB after warm-up; idle CPU 0.0% |
 | Frontend | **115 passed, 0 failed** |
 | VS Code extension | **45 passed, 0 failed** |
 | Website build | **37 pages** |
@@ -45,6 +48,7 @@ cargo test --locked
 
 ```
 test result: ok. 709 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out   # tests/cli.rs
 ```
 
 That total includes the new redirect regression: a local fixture answers `302 Location: http://example.com`, and the MCP client refuses the hop before contacting the external host.
@@ -95,12 +99,16 @@ E2E_NO_BUILD=1 bash scripts/ci/test-e2e.sh
 E2E_BINARY=$PWD/app/target/release/free-ai-studio E2E_NO_BUILD=1 bash scripts/ci/test-e2e.sh
 ```
 
-Both: **53 passed, 0 failed**.
+Both: **61 passed, 0 failed**.
 
 Each run uses a temporary home/config/data directory, a real SQLite database, a real filesystem workspace, a real PTY, a real process kill/restart, and a local OpenAI-compatible mock provider. It does **not** contact a real AI provider.
 
 Coverage includes:
 
+- a real `text/event-stream` upstream: six deltas, one done frame, one stored reply;
+- a timed abort against a slow stream: the partial reply is stored exactly once and the studio answers the next turn;
+- a setting saved through `/api/config`, then read back from disk after a restart;
+- `--version` printing and exiting without creating a home;
 - boot, readiness, database/data-directory requirements;
 - foreign `Host` on `/api/config` → 403; foreign `Origin` on `/api/capabilities` → 403;
 - conversation create/list/messages/delete and restart persistence;
@@ -168,6 +176,12 @@ bash scripts/ci/test-linux-metadata.sh
 bash scripts/ci/test-release.sh
 bash scripts/ci/test-artifacts.sh
 bash scripts/ci/test-bundle.sh
+
+# Package payload (project-local cargo-deb; no root)
+(cd app && cargo build --release --locked --no-default-features)
+(cd app && ../.scratch/tools/bin/cargo-deb --locked --no-build \
+  --output ../.scratch/phase3/free-ai-studio_3.88.3-1_amd64.deb)
+bash .scratch/phase3/smoke-deb.sh
 ```
 
 ```
@@ -201,15 +215,15 @@ cd website && npm audit                       # 0 vulnerabilities
 | Real third-party MCP/OAuth provider | **Not run** | no external peer; local fixtures used |
 | Real Linux Secret Service/macOS/Windows keychain | **Not run** | tests use the hermetic mock backend |
 | Browser layout, responsive, accessibility, screenshot matrix | **Not run** | no browser test suite in project; not requested |
-| Timed slow-stream stop | **Not run** | mock answers immediately |
+| System-wide `.deb` install / GUI tarball / AppImage | **Not run** | no root, no `dpkg-deb`/`appimagetool`; payload booted from an unpacked tree only |
 | Long-session soak/leak profile | **Not run** | no soak harness |
 | `glib` 0.18.5 unsoundness removed | **Not fixed** | needs newer Tauri/GTK; no GUI platform matrix |
 
 These are reported as unverified, not as passes.
 
-## Incidental command-line note
+## Command-line note (fixed in 3.88.3)
 
-`app/target/debug/free-ai-studio --version` was attempted while confirming the rebuilt debug binary. The binary does not implement `--version`; it started the app against the real home for a few seconds and was stopped by the command timeout. `config.json` mtime remained 2026-11-22, no user action was performed, and the test/e2e suites use scratch homes. This is recorded so the verification record is exact.
+Earlier in remediation, `app/target/debug/free-ai-studio --version` started the app against the real home because the flag was ignored. That is fixed: `--version`/`--help` now print and exit before any path is resolved, `app/tests/cli.rs` runs the built binary, and the e2e suite asserts `--version` matches the manifest version. The package smoke also proves a version probe creates no home.
 
 ## Reproduction
 

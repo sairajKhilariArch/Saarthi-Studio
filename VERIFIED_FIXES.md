@@ -1,7 +1,7 @@
 # Sarthi Studio — Verified Fixes
 
-**Date:** 2026-11-24  
-**Release:** 3.88.2  
+**Date:** 2026-11-25  
+**Release:** 3.88.3  
 **Rule followed:** reproduce, identify the cause, fix it, add a regression test, run the affected suite, then run the full matrix. No test was skipped, weakened or replaced with a mock success.
 
 ## Summary
@@ -15,6 +15,16 @@
 | SEC-01 | Whole local router behind loopback guard | 2 e2e checks | Retained, pass |
 | SEC-02 | Recent folder rendered with DOM text nodes | Frontend test | Retained, pass |
 | BUG-03 | Stream metadata independent of skill match | E2E stream metadata | Retained, pass |
+| CLI-01 | `--version`/`--help` exit before any user path is touched | 3 built-binary tests + e2e | Pass |
+| VER-01 | Real SSE upstream and timed stop-generation | E2E real stream + abort | Pass |
+| VER-02 | Settings persistence through the config route | E2E save/restart/read | Pass |
+
+### Phase 3 additions (3.88.3)
+
+- **VER-01:** the e2e mock now answers a real `text/event-stream`; six deltas produce one stored reply. A second scenario aborts the fetch after the first delta while the mock holds the stream open: the partial reply is stored exactly once and the next turn succeeds. This closes R-09 and the “real SSE untested” gap.
+- **VER-02:** `POST /api/config` saves `history_messages=12`, the process is killed and restarted, and `GET /api/config` returns 12 from disk.
+- **CLI-01:** `app/tests/cli.rs` runs the built binary; `--version`, `-V` and `--help` exit successfully before a config path or database is opened. The e2e suite also checks the packaged version string.
+- Suite totals after these additions: **712 Rust** (709 + 3 CLI), **61/61 e2e** on debug and release.
 
 ---
 
@@ -65,9 +75,9 @@ Real binary (`scripts/ci/test-e2e.sh`):
 
 ### Actual result
 
-- Full Rust suite: **709 passed, 0 failed, 1 ignored**.
-- Debug e2e: **53 passed, 0 failed**.
-- Optimized release e2e: **53 passed, 0 failed**.
+- Full Rust suite: **712 passed** (709 suite + 3 CLI), 0 failed, 1 ignored.
+- Debug e2e: **61 passed, 0 failed**.
+- Optimized release e2e: **61 passed, 0 failed**.
 
 ### Verification status
 
@@ -165,7 +175,7 @@ No dependency was upgraded blindly: each was followed by the complete Rust suite
 ### Tests executed
 
 - `cargo audit` — **exit 0, 0 vulnerabilities**.
-- `cargo test --locked` — **709 passed, 0 failed, 1 ignored**.
+- `cargo test --locked` — **712 passed** (709 suite + 3 CLI), 0 failed, 1 ignored.
 - `cargo clippy --locked --all-targets -- -D warnings` — pass.
 - `cargo fmt --check` — pass.
 - `cargo build --release --locked` — pass, 20 MB binary.

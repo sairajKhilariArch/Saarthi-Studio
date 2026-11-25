@@ -5370,6 +5370,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
+        // Answer a version/help probe before any path is resolved or a database
+        // is opened. These used to be ignored, so `--version` launched the
+        // whole app against the real home instead of printing and exiting.
+        Some("--version" | "-V") => {
+            println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!(
+                "{APP_NAME} {}\n\nUsage: free-ai-studio [--headless|--no-gui|--browser]\n\n  --headless, --no-gui  run the local server without a window\n  --browser             open the interface in your default browser\n  --version, -V         print the version and exit\n  --help, -h            print this help and exit",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
         Some("host-token") => {
             let (config_path, _, _) = paths();
             let token_path = config_path.with_file_name("host-auth.json");

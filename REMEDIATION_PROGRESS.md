@@ -1,10 +1,10 @@
 # Sarthi Studio — Remediation Progress
 
-**Date:** 2026-11-24  
+**Date:** 2026-11-25  
 **Branch:** `remediation/security-2026-11-24`  
 **Base:** `9721a53` (audit reports on `audit/full-application-2026-11-24`)  
-**Release under remediation:** `3.88.2`  
-**Status:** implementation complete for every code-level item that could be verified on this Linux host. Remaining items are external, platform, or explicitly accepted residuals.
+**Release under remediation:** `3.88.3`  
+**Status:** Phase 3 complete on the tested Linux surface. The prior code fixes are retained; the remaining verification gaps for real SSE, stop-generation, settings persistence and the startup CLI are now closed with real tests. External signing, Windows/macOS/Android execution and a system-wide package install remain blocked by this host.
 
 ## Working environment
 
@@ -39,6 +39,10 @@ The six audit reports were read as claims and checked against source before impl
 | P3 | P3 | No browser layout/pixel/accessibility regression suite | Application audit | Open; documented |
 | P3 | P3 | Per-message edit/delete/regenerate absent | Application audit | Open by product scope; not a regression |
 | P4 | P4 | Tauri/GTK `glib` 0.18.5 unsoundness | `cargo audit` | Open; no safe in-line upgrade |
+| VER-01 | P2 / Verification | Real SSE streaming and stop-generation were asserted only by construction; the mock answered one JSON body | Phase 3 review | **Fixed in 3.88.3**: real 6-delta event stream, timed abort keeps one partial reply |
+| VER-02 | P3 / Verification | Settings persistence across restart was not driven through the config route | Phase 3 review | **Fixed in 3.88.3**: save, restart, read back from disk |
+| CLI-01 | P4 / Usability | `--version`/`--help` were ignored, so a probe booted the app against the real home | Prior verification note | **Fixed in 3.88.3**: built-binary tests and an e2e check |
+| VER-03 | P3 / Release | No Linux package payload had been assembled or booted | Phase 3 review | **Partially fixed**: `.deb` payload boots 14/14; system install, signing and `$auto` dependency metadata blocked here |
 
 ### Stale report claims corrected
 
@@ -73,6 +77,71 @@ The six audit reports were read as claims and checked against source before impl
 - `CHANGELOG.md`, `app/packaging/io.github.sairajkhilariarch.SarthiStudio.appdata.xml`, `docs/KNOWN-ISSUES.md`, `docs/FEATURE-STATUS.md` — release/security record.
 - Audit reports and the five remediation reports — updated with actual results.
 
+## Phase 3 verification (3.88.3)
+
+### What changed
+
+- `scripts/mock-router.py` now answers a real `text/event-stream` when the request sets `stream`, and a `mock-slow-stream` model sends one delta and then holds the connection open.
+- `scripts/ci/test-e2e.sh` grew from 53 to **61 checks**: a real multi-delta stream stored once, a timed abort that stores the partial reply exactly once and leaves the studio answering, and a setting saved through `/api/config` and read back after restart.
+- `app/src/main.rs` answers `--version`/`--help` before resolving any path. `app/tests/cli.rs` runs the built binary and proves both exit without creating a home.
+
+### Test results (all on the remediation branch)
+
+| Check | Result |
+|---|---|
+| Rust `cargo test --locked` | **712 passed** (709 suite + 3 CLI), 0 failed, 1 ignored |
+| `cargo clippy --all-targets -- -D warnings` | Pass |
+| `cargo fmt --check` | Pass |
+| Real-binary e2e — debug | **61 passed, 0 failed** |
+| Real-binary e2e — release | **61 passed, 0 failed** |
+| Frontend | **115 passed** |
+| VS Code extension | **45 passed** |
+| Website build | **37 pages** |
+| Version / metadata / release / artifacts / bundle | **26 / 9 / 27 / 12 / 13**, all pass |
+| Installer dependency check | 0 passed, 1 skipped (no WiX) |
+| `cargo audit` | exit 0, **0 vulnerabilities**, 5 warnings |
+| Linux `.deb` payload smoke | **14/14** checks |
+
+### Measured runtime behaviour
+
+Release binary, scratch home, local mock provider:
+
+```text
+startup_ms=61
+idle_cpu_pct=0.0
+rss_after_boot_kb=88908
+rss_after_100_turns_kb=91796  (growth 2888 KB after warm-up)
+turns_ok=100/100  avg_turn_ms=48  threads=33
+```
+
+This is a short stability measurement, not a multi-hour soak; see `REMAINING_ISSUES.md` R-11.
+
+### Packaging
+
+`cargo-deb` (installed project-locally under `.scratch/tools`) assembled `free-ai-studio_3.88.3-1_amd64.deb` (5,188,988 bytes) from the headless release build. Its unpacked payload:
+
+- contains the binary, UI and bundled skills;
+- boots headless, serves the UI and reports `3.88.3` over HTTP;
+- writes to the documented home path;
+- keeps a conversation and a saved setting when the payload is unpacked over it (the upgrade shape).
+
+**Limit:** `dpkg-shlibdeps` is not present on this Arch host, so the control file's `Depends:` is empty and this artifact is **not** a shippable `.deb`. The official Ubuntu CI job still has to produce the dependency-resolved package. No system-wide install was performed (no root).
+
+### Branch-safety incident and recovery
+
+During the first full run, an external `git checkout main` at 21:49:29 moved the worktree while the script was running; no repository script performs a checkout. The debug e2e (53 checks) had already run on the remediation branch, but the release e2e and later gates ran against `main`. The branch was restored, and the entire matrix was rerun with a guard that records `HEAD` before and after. Final run: `head_before = head_after = 2858e4c`, branch `remediation/security-2026-11-24`. `main` was never modified.
+
+### Finding totals
+
+| Category | Count |
+|---|---|
+| Total tracked findings (audits + Phase 3 review) | 17 |
+| Fixed and verified | 10 |
+| Partially fixed | 1 (Linux package payload; system install and `$auto` metadata outstanding) |
+| Remaining / open | 3 (browser suite, per-message edit/delete/regenerate, `glib` unsoundness) |
+| Accepted risk | 1 (3 moderate dev-only npm advisories in the VS Code packaging tool) |
+| Blocked | 2 (code signing/notarization; Windows/macOS/Android execution) |
+
 ## Definition-of-done audit
 
 | Criterion | Result |
@@ -80,7 +149,7 @@ The six audit reports were read as claims and checked against source before impl
 | Safely fixable critical issues resolved | **Yes** for source-level findings; external signing gap remains |
 | High-priority vulnerabilities fixed or mitigated | **Yes**: P1 origin guard retained; P1 dependency advisories removed; SEC-03/05 fixed |
 | Broken features restored | **Yes** for the three disconnected behaviors; no feature was removed |
-| Regression tests pass | **Yes**: 709 Rust, 115 frontend, 45 extension, 53 e2e on debug and release |
+| Regression tests pass | **Yes**: 712 Rust, 115 frontend, 45 extension, 61 e2e on debug and release |
 | Existing working functionality preserved | **Yes**: no route, schema, config key or feature removed; full prior suite passes |
 | Production builds succeed on tested platforms | **Yes** on Linux debug/release; cross-platform blocked |
 | Remaining blockers documented | **Yes** in `REMAINING_ISSUES.md` |
@@ -88,7 +157,8 @@ The six audit reports were read as claims and checked against source before impl
 ## Next engineering steps
 
 1. Run the normal CI and a tagged 11-asset release; verify the Windows/macOS/Android jobs on their own hosts.
-2. Decide the signing/notarization policy and obtain certificates.
-3. Add a real Linux Secret Service smoke (current keychain test uses the project’s hermetic mock backend).
-4. Resolve or explicitly accept the five RustSec warnings, especially the Tauri/GTK `glib` line.
-5. Add browser layout/accessibility coverage and a timed slow-stream stop test.
+2. Produce the `.deb` in the Ubuntu CI job so `$auto` dependency metadata is resolved, build the GUI tarball/AppImage, and perform a real install/upgrade/uninstall on a disposable machine.
+3. Decide the signing/notarization policy and obtain certificates.
+4. Add a real Linux Secret Service smoke (current keychain test uses the project’s hermetic mock backend).
+5. Resolve or explicitly accept the five RustSec warnings, especially the Tauri/GTK `glib` line.
+6. Add browser layout/accessibility coverage; the timed slow-stream stop is now covered.

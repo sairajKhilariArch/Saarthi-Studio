@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.88.3
+
+### Fixed
+
+- `--version` and `--help` now print and exit before any config path is
+  resolved or database opened. They used to be ignored, so a packaging script
+  or a curious user asking for the version started the whole app against the
+  real home instead.
+
+### Testing
+
+- The end-to-end suite now drives a real `text/event-stream` provider, not only
+  the one-shot JSON fallback: six deltas, one done frame, and exactly one
+  stored reply.
+- Stopping generation is observed against a slow stream: the client abort keeps
+  the partial reply exactly once, and the studio answers the next turn.
+- A setting saved through the config route is read back from disk after a
+  restart.
+- Real-binary e2e grows from 53 to 61 checks; the Rust suite gains three
+  built-binary CLI tests.
+
 ## 3.88.2
 
 ### Security

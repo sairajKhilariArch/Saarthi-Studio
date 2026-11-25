@@ -103,6 +103,37 @@ fi
   exit 1
 }
 
+# A version probe must print and exit before the app resolves a home or opens
+# the database. It gets a scratch home and a deadline, so a regression cannot
+# touch real data and cannot hang the suite.
+expected_version="$(bash "$root/scripts/ci/version.sh" "$root/app/Cargo.toml")"
+probe_home="$work/version-probe-home"
+FREE_AI_STUDIO_HOME="$probe_home" "$binary" --version >"$work/version.txt" 2>/dev/null &
+probe_pid=$!
+probe_wait=0
+while kill -0 "$probe_pid" 2>/dev/null && [ "$probe_wait" -lt 40 ]; do
+  probe_wait=$((probe_wait + 1))
+  sleep 0.05
+done
+if kill -0 "$probe_pid" 2>/dev/null; then
+  kill "$probe_pid" 2>/dev/null || true
+  wait "$probe_pid" 2>/dev/null || true
+  die "--version did not exit; a probe must not start the server"
+else
+  wait "$probe_pid" 2>/dev/null
+  probe_status=$?
+  version_out="$(cat "$work/version.txt")"
+  case "$version_out" in
+    *"$expected_version"*)
+      if [ "$probe_status" = "0" ] && [ ! -e "$probe_home" ]; then
+        pass "--version reports $expected_version, exits, and creates no home"
+      else
+        die "--version status=$probe_status; created a home: $([ -e "$probe_home" ] && echo yes || echo no)"
+      fi ;;
+    *) die "--version printed '$version_out', expected $expected_version" ;;
+  esac
+fi
+
 # A free port, chosen by binding one and letting go: the studio and the mock both
 # need one, and hard-coded ports collide with whatever the machine already runs.
 free_port() {
@@ -345,6 +376,90 @@ if [ "$(http GET "$base/api/conversations/$cid/messages")" = "200" ]; then
   fi
 else
   die "messages endpoint failed after streaming for $cid"
+fi
+
+# The checks above use a router that ignores `stream` and answers one JSON body.
+# A real event-stream takes a different branch: several deltas, each recorded as
+# it arrives, and a client abort that must keep the part already received.
+code="$(http POST "$base/api/conversations" '{"title":"real sse"}')"
+sse_conv="$(field id)"
+curl -sS -N --max-time 30 -o "$work/sse.body" -w '%{http_code}' \
+  -H 'content-type: application/json' \
+  -d "{\"conversation_id\":\"$sse_conv\",\"message\":\"stream real sse\",\"model\":\"mock-sse\"}" \
+  "$base/api/chat/stream" >"$work/sse.code" 2>/dev/null
+sse_code="$(cat "$work/sse.code")"
+sse_deltas="$(grep -c '"delta"' "$work/sse.body" || true)"
+if [ "$sse_code" = "200" ] && [ "${sse_deltas:-0}" -ge 2 ] &&
+   grep -q '"done":true' "$work/sse.body" && ! grep -q '"error"' "$work/sse.body"; then
+  pass "a real event-stream turn emits multiple deltas and one done frame ($sse_deltas deltas)"
+else
+  die "real event-stream turn failed (HTTP $sse_code, $sse_deltas deltas: $(head -c 300 "$work/sse.body"))"
+fi
+
+if [ "$(http GET "$base/api/conversations/$sse_conv/messages")" = "200" ]; then
+  sse_counts="$("$py" - "$work/body" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len(rows), len([r for r in rows if r.get("role") == "assistant"]))
+PY
+)"
+  if [ "$sse_counts" = "2 1" ]; then
+    pass "the real event-stream reply is stored exactly once"
+  else
+    die "expected 2 messages and 1 reply after a real event stream, found: $sse_counts"
+  fi
+else
+  die "messages endpoint failed after a real event stream"
+fi
+
+# Stop generation: the fetch is aborted after the first delta while the provider
+# is still holding the stream open. The recorder must save what the user saw,
+# exactly once, and the studio must stay usable.
+code="$(http POST "$base/api/conversations" '{"title":"stopped stream"}')"
+stop_conv="$(field id)"
+curl -sS -N --max-time 3 -o "$work/stopped.body" \
+  -H 'content-type: application/json' \
+  -d "{\"conversation_id\":\"$stop_conv\",\"message\":\"stop this stream\",\"model\":\"mock-slow-stream\"}" \
+  "$base/api/chat/stream" >/dev/null 2>&1 || true
+if grep -q '"delta"' "$work/stopped.body"; then
+  pass "the stopped stream had already delivered a delta"
+else
+  die "the slow stream delivered no delta before the abort"
+fi
+
+stopped=""
+tries=0
+while [ "$tries" -lt 40 ]; do
+  if [ "$(http GET "$base/api/conversations/$stop_conv/messages")" = "200" ]; then
+    stopped="$("$py" - "$work/body" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))
+replies = [r for r in rows if r.get("role") == "assistant"]
+print(len(replies), (replies[0].get("content") or "") if replies else "")
+PY
+)"
+  fi
+  # One assistant row with text is the success state: zero means the recorder
+  # has not flushed yet, more than one means it saved the same turn twice.
+  case "$stopped" in
+    "1 "*) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+stopped_count="${stopped%% *}"
+stopped_text="${stopped#* }"
+if [ "$stopped_count" = "1" ] && [ -n "$stopped_text" ]; then
+  pass "stopping mid-stream stored the partial reply exactly once"
+else
+  die "the stopped stream stored '$stopped_count' replies ('$stopped_text')"
+fi
+
+code="$(http POST "$base/api/chat" "{\"conversation_id\":\"$stop_conv\",\"message\":\"after the stop\"}")"
+if [ "$code" = "200" ] && grep -q 'Mock router reply' "$work/body"; then
+  pass "the studio keeps answering after a stopped stream"
+else
+  die "chat failed after a stopped stream (HTTP $code: $(head -c 200 "$work/body"))"
 fi
 
 if [ "$(http POST "$base/api/conversations/$cid/update" '{"token_budget":5000}')" = "200" ] &&
@@ -615,6 +730,15 @@ case "$actions" in
   *) die "run steps are not write, verify, done: $actions" ;;
 esac
 
+# A setting saved through the route the Settings panel calls must come back
+# from disk after the restart below, not from an in-memory copy.
+code="$(http POST "$base/api/config" '{"history_messages":12,"approve":true}')"
+if [ "$code" = "200" ]; then
+  pass "a setting can be saved through the config route"
+else
+  die "saving a setting failed (HTTP $code: $(head -c 200 "$work/body"))"
+fi
+
 # -- restart ----------------------------------------------------------------
 # The point of the restart: state must come from disk, not from memory.
 stop_studio
@@ -626,6 +750,12 @@ else
   die "studio did not come back up (log follows)"
   tail -20 "$log" >&2
   exit 1
+fi
+
+if [ "$(http GET "$base/api/config")" = "200" ] && [ "$(field history_messages)" = "12" ]; then
+  pass "the saved setting survived the restart"
+else
+  die "the saved setting did not survive the restart ($(head -c 200 "$work/body"))"
 fi
 
 if [ "$(http GET "$base/api/conversations/$cid/messages")" = "200" ]; then

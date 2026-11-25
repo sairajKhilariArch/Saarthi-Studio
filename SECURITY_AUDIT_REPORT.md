@@ -2,10 +2,12 @@
 
 **Date:** 2026-11-24  
 **Branch:** `audit/full-application-2026-11-24`  
-**Version:** `3.88.1` audit, remediated in `3.88.2`<br>
+**Version:** `3.88.1` audit, remediated through `3.88.3`<br>
 **References used:** OWASP Top 10 (2021), OWASP ASVS 5.0 themes, desktop/local-web threat modeling, existing project ADRs and `docs/KNOWN-ISSUES.md`.
 
 > **Remediation update (3.88.2, 2026-11-24):** SEC-03 and the header half of SEC-05 are fixed in source with regression tests; SEC-07 is closed by a real `cargo-audit` scan (0 vulnerabilities); the dependency advisories found by that scan are fixed. The original findings and reproduction text are retained below, with each section marked with its final disposition. See `SECURITY_REMEDIATION_REPORT.md`, `VERIFIED_FIXES.md` and `REMAINING_ISSUES.md`.
+>
+> **Phase 3 re-verification (3.88.3, 2026-11-25):** the full security-relevant matrix was rerun on the remediation branch — 712 Rust tests, both 61-check real-binary e2e runs, clippy/rustfmt, 115 frontend tests, 45 extension tests and `cargo audit` (0 vulnerabilities, 5 warnings). No new security finding was reproduced. The newly added tests cover real SSE streaming and a timed client abort; neither bypassed the loopback guard, secret redaction or the recorder’s single-save behavior.
 
 ## Scope and threat model
 
@@ -83,7 +85,7 @@ This is deliberately one enforcement point rather than another route list. Exist
   - foreign `Host: evil.example:$port` on `/api/config` → **403**, body says loopback only;
   - foreign `Origin: http://evil.example` on `/api/capabilities` → **403**, body says cross-site;
   - normal loopback requests continue to return 200.
-- The complete 53-check suite passes against both debug and optimized release binaries.
+- The complete 61-check suite passes against both debug and optimized release binaries.
 - Manual before/after reproduction is recorded above; a foreign `Origin` is separately refused on `/api/capabilities`.
 
 ### Remaining risk
@@ -242,4 +244,4 @@ The five warnings are `chrono`, `paste`, `proc-macro-error`, `rustls-pemfile` (u
 
 ## Verdict
 
-The high-severity request-boundary defect is closed, the MCP cleartext and header-storage gaps are closed, and the locked Rust dependency set has no known vulnerabilities after the 3.88.2 upgrades. The tested Linux build enforces the loopback origin policy on every local route, keeps secrets out of config responses, contains filesystem access, gates agent/tool actions, and preserves a strong default-deny Wasm sandbox. Remaining findings are external signing/platform gaps, five advisory-database warnings, a real-keychain verification gap, and product/test breadth—not unrepaired high-severity code defects found in this pass.
+The high-severity request-boundary defect is closed, the MCP cleartext and header-storage gaps are closed, and the locked Rust dependency set has no known vulnerabilities after the 3.88.2 upgrades. Phase 3 reran the whole security-relevant matrix on 3.88.3 and reproduced no new finding. The tested Linux build enforces the loopback origin policy on every local route, keeps secrets out of config responses, contains filesystem access, gates agent/tool actions, and preserves a strong default-deny Wasm sandbox. Remaining findings are external signing/platform gaps, five advisory-database warnings, a real-keychain verification gap, and product/test breadth—not unrepaired high-severity code defects found in this pass.

@@ -3,7 +3,7 @@
 **Audit date:** 2026-11-24  
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** `55d1218` (3.88.0)  
-**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes<br>
+**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes; 3.88.3 verification/startup fixes<br>
 **Rule followed:** reproduce first, fix the cause, add a regression test, rerun the affected suite. No test was skipped or weakened to obtain a green result.
 
 ## Summary
@@ -15,6 +15,31 @@
 | BUG-03 | P3 | Stream metadata hid memory/retrieval unless a skill matched | Fixed | new e2e memory-stream check |
 | BUG-04 | P2 / Medium | Remote MCP accepted cleartext HTTP off loopback | Fixed in 3.88.2 | 3 Rust tests + 2 e2e checks |
 | BUG-05 | P2 / Medium | Saved MCP header values were plaintext in `mcp.json` | Fixed in 3.88.2 | header-keychain Rust test |
+| BUG-06 | P4 / Usability | `--version`/`--help` were ignored and booted the app against the real home | Fixed in 3.88.3 | 3 built-binary CLI tests + e2e |
+
+## BUG-06 — A version/help probe started the whole application
+
+### Description
+
+`free-ai-studio --version` did not print a version. The argument fell through to normal startup, so the process resolved the real config/data paths, opened the user's database and started a server. The earlier remediation record captured this happening while confirming a rebuilt binary. A packaging or diagnostic script that asks for the version must never touch user state.
+
+### Root cause
+
+Argument handling only matched the `host-token`, `router` and `omniroute` subcommands, then treated everything else as startup. There was no `--version`/`--help` arm and no test running the built binary.
+
+### Fix
+
+`main()` now matches `--version`/`-V` and `--help`/`-h` before any path is resolved, prints the brand and `CARGO_PKG_VERSION`, and returns. Both flags are documented in the help text next to `--headless` and `--browser`.
+
+### Verification
+
+- `app/tests/cli.rs`: `--version` succeeds and contains the package version, `-V` matches `--version`, `--help` lists every startup mode.
+- e2e: the built binary's `--version` matches `scripts/ci/version.sh`.
+- Package smoke: the binary extracted from the `.deb` prints `Sarthi Studio 3.88.3`, and a deliberately set `FREE_AI_STUDIO_HOME` is not created.
+
+### Result
+
+712 Rust tests, 61/61 e2e on debug and release, 14/14 package-payload checks.
 
 ## BUG-01 — Core UI routes were outside the loopback origin guard
 
@@ -279,12 +304,13 @@ These are permanent tests, use scratch homes/databases, clean up after themselve
 
 ## Regression status after repairs
 
-| Check | Result |
+| Check | Result (3.88.3 final) |
 |---|---|
-| Rust suite | 709 passed, 0 failed, 1 ignored |
+| Rust suite | 712 passed (709 suite + 3 CLI), 0 failed, 1 ignored |
 | Frontend suite | 115 passed, 0 failed |
-| Real-binary e2e (debug) | 53 passed, 0 failed |
-| Real-binary e2e (release) | 53 passed, 0 failed |
+| Real-binary e2e (debug) | 61 passed, 0 failed |
+| Real-binary e2e (release) | 61 passed, 0 failed |
+| Linux `.deb` payload | 14 passed, 0 failed |
 | VS Code extension | 45 passed, 0 failed |
 | Clippy (`-D warnings`) | Pass |
 | rustfmt check | Pass |

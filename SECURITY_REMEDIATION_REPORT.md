@@ -1,7 +1,7 @@
 # Sarthi Studio — Security Remediation Report
 
-**Date:** 2026-11-24  
-**Release:** 3.88.2  
+**Date:** 2026-11-25  
+**Release:** 3.88.3 (security fixes landed in 3.88.2; Phase 3 reran the matrix)  
 **Branch:** `remediation/security-2026-11-24`  
 **Scope:** desktop/local UI server, local HTTP router, MCP transports/OAuth, extension sandbox, Host API, filesystem/terminal gates, update/install path, SQLite storage, VS Code extension, website, dependency supply chain.
 
@@ -13,7 +13,7 @@ Two code-level security gaps remained after the 3.88.1 audit, and the dependency
 2. **Saved MCP header values were plaintext in `mcp.json`.** Provider keys and desktop MCP OAuth tokens already used the OS credential store; custom headers did not.
 3. **RustSec scanning had not run.** Installing `cargo-audit` found vulnerabilities in the locked `zip`, `libsqlite3-sys`, `url`, `tokio` and `cookie` versions, including a critical `zip` advisory. `zip` is used by the update/install extraction path, so this was not theoretical.
 
-All three are fixed. `cargo audit` now reports **0 vulnerabilities**. The full Rust suite (709 passed, 1 ignored), both real-binary e2e runs (53/53 debug and release), clippy, rustfmt, frontend, VS Code, website and release gates pass.
+All three are fixed. `cargo audit` now reports **0 vulnerabilities**. The full Rust suite (712 passed, 1 ignored), both real-binary e2e runs (61/61 debug and release), clippy, rustfmt, frontend, VS Code, website and release gates pass. A Linux `.deb` payload was also assembled and booted from its unpacked tree; its dependency metadata is incomplete on this host, which is a packaging limitation, not a security regression.
 
 No P0 or unmitigated P1 issue remains in the tested Linux build. External signing, cross-platform runtime validation and five RustSec **warnings** remain; see `REMAINING_ISSUES.md`.
 
@@ -66,7 +66,7 @@ The parser is the same URL implementation the HTTP client uses, so an accepted v
 - `metadata_and_token_endpoints_never_use_cleartext_off_loopback` proves discovery/token refusal before I/O.
 - `a_redirect_to_cleartext_off_loopback_is_refused` uses a local fixture that answers `302 Location: http://example.com`; the client refuses the hop without contacting the external host.
 - E2E: remote HTTP save → 400; loopback HTTP save/remove → 200.
-- Both debug and release e2e: 53/53.
+- Both debug and release e2e: 61/61.
 
 **Residual:** the policy allows HTTPS to any host, including a hostname that resolves to a local service. TLS certificate validation still applies; this is not an SSRF bypass because the user deliberately configured the server and the connection is authenticated by TLS.
 
@@ -159,4 +159,4 @@ No prompt-injection escape was reproduced. The remaining risk is the ordinary on
 
 ## Verdict
 
-The high-severity request-boundary fix remains in place, the two code-level MCP credential gaps are now closed in source and covered by tests, and the Rust dependency scan is clean. The tested Linux 3.88.2 build is materially stronger than 3.88.1. It is **not** a signed cross-platform security sign-off: Windows/macOS/Android behavior, signed packages, a real OS keychain, and a real third-party MCP peer were not exercised here.
+The high-severity request-boundary fix remains in place, the two code-level MCP credential gaps are now closed in source and covered by tests, and the Rust dependency scan is clean. The tested Linux 3.88.3 build is materially stronger than 3.88.1, and Phase 3’s independent rerun found no new security defect. It is **not** a signed cross-platform security sign-off: Windows/macOS/Android behavior, signed packages, a real OS keychain, and a real third-party MCP peer were not exercised here.
