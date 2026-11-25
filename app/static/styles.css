@@ -632,6 +632,7 @@ tr:last-child td { border-bottom: 0; }
 .suggestion small { display: block; font-size: 11px; color: var(--mute); margin-top: 3px; }
 
 .messages { display: flex; flex-direction: column; gap: 22px; padding-bottom: 10px; }
+.load-earlier { align-self: center; margin: 0 auto 2px; font-size: 12px; }
 .msg { animation: rise .18s ease both; }
 .msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .msg-avatar {

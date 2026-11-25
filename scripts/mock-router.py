@@ -244,7 +244,11 @@ class Handler(BaseHTTPRequestHandler):
             transcript = "\n".join(str(m.get("content", "")) for m in messages)
             # Only the e2e goal is scripted; every other turn keeps the plain
             # reply the UI and console smokes expect.
-            if "e2e-agent-deny" in transcript:
+            if "bench-long-stream" in transcript:
+                content = "Long streaming benchmark.\n\n" + (
+                    "Markdown paragraph with **bold**, `code`, and a [link](https://example.com).\n\n" * 400
+                )
+            elif "e2e-agent-deny" in transcript:
                 if "reviewing one finished agent run" in system:
                     content = "APPROVE: the denied write never happened."
                 elif "EXACTLY ONE JSON object" in system:

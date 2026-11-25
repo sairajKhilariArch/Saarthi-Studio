@@ -1913,7 +1913,7 @@ function closeTab(key) {
 /* ------------------------------------------------------------------ */
 
 function addMessage(role, content, options = {}) {
-  const { meta = null, error = false, attachment = null, media = null } = options;
+  const { meta = null, error = false, attachment = null, media = null, scroll = true, before = null } = options;
   $("welcome").classList.add("hidden");
 
   const row = document.createElement("div");
@@ -1979,8 +1979,12 @@ function addMessage(role, content, options = {}) {
     ]);
   }
 
-  $("messages").appendChild(row);
-  scrollChat();
+  if (before) $("messages").insertBefore(row, before);
+  else $("messages").appendChild(row);
+  // A bulk history render appends thousands of rows. Scrolling after each one
+  // forces a layout per message (measured at 3.6 s for 2,000 messages); the
+  // caller scrolls once when the batch is complete.
+  if (scroll) scrollChat();
   // Callers (the live stream row above all) keep updating the row after it
   // is added; without this they silently get undefined.
   return row;
@@ -2240,6 +2244,57 @@ function revealChatDock() {
   if (state.panelShow && state.panelShow.right === false) togglePanel("right");
 }
 
+/* A long thread is opened newest-first. Rendering every row at once blocks
+   the main thread for hundreds of milliseconds per thousand messages, so the
+   initial view is the latest page and older pages are added on request. All
+   messages stay in memory; this is presentation paging, not data loss. */
+const HISTORY_PAGE_SIZE = 200;
+
+function renderMessageHistory(messages) {
+  const first = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
+  messages.slice(first).forEach((message) => addMessage(
+    message.role === "assistant" ? "assistant" : "user",
+    message.content,
+    {
+      media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
+      scroll: false,
+    },
+  ));
+  if (first > 0) addEarlierMessagesControl(messages, first);
+}
+
+function addEarlierMessagesControl(messages, remaining) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn load-earlier";
+  const label = () => {
+    const count = Math.min(remaining, HISTORY_PAGE_SIZE);
+    button.textContent = `Load ${count} earlier message${count === 1 ? "" : "s"} (${remaining} hidden)`;
+  };
+  label();
+  button.addEventListener("click", () => {
+    const box = $("chatScroll");
+    const height = box.scrollHeight;
+    const top = box.scrollTop;
+    const from = Math.max(0, remaining - HISTORY_PAGE_SIZE);
+    messages.slice(from, remaining).forEach((message) => addMessage(
+      message.role === "assistant" ? "assistant" : "user",
+      message.content,
+      {
+        media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
+        scroll: false,
+        before: button,
+      },
+    ));
+    remaining = from;
+    // Keep the reader on the same message rather than jumping to the bottom.
+    box.scrollTop = top + (box.scrollHeight - height);
+    if (remaining > 0) label();
+    else button.remove();
+  });
+  $("messages").prepend(button);
+}
+
 async function openConversation(id) {
   const result = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
   if (!result.ok) {
@@ -2263,9 +2318,7 @@ async function openConversation(id) {
   $("messages").replaceChildren();
   const messages = Array.isArray(result.data) ? result.data : [];
   $("welcome").classList.toggle("hidden", messages.length > 0 || Boolean(liveRow));
-  messages.forEach((message) => addMessage(message.role === "assistant" ? "assistant" : "user", message.content, {
-    media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
-  }));
+  renderMessageHistory(messages);
   if (liveRow) $("messages").appendChild(liveRow);
   scrollChat();
   renderConversations();
@@ -2606,6 +2659,18 @@ async function consumeStream(body, onFrame) {
 }
 
 let streamRow = null;
+// A stream can deliver thousands of tiny deltas. Re-parsing the whole answer
+// into Markdown for each one is quadratic; paint at most once per frame and
+// keep only the newest text.
+let streamRenderHandle = null;
+let streamRenderText = "";
+
+function cancelStreamRender() {
+  if (!streamRenderHandle) return;
+  if (streamRenderHandle.raf) cancelAnimationFrame(streamRenderHandle.id);
+  else clearTimeout(streamRenderHandle.id);
+  streamRenderHandle = null;
+}
 let streamTargetId = null;
 
 function addStreamRow() {
@@ -2656,10 +2721,20 @@ function renderReasoning(text) {
 
 function appendStreamText(answer) {
   if (!streamRow) return;
-  const body = streamRow.querySelector(".msg-body");
-  if (body) {
-    body.innerHTML = renderMarkdown(answer) + '<span class="stream-caret" aria-hidden="true"></span>';
+  streamRenderText = answer;
+  if (streamRenderHandle) return;
+  const paint = () => {
+    streamRenderHandle = null;
+    if (!streamRow) return;
+    const body = streamRow.querySelector(".msg-body");
+    if (!body) return;
+    body.innerHTML = renderMarkdown(streamRenderText) + '<span class="stream-caret" aria-hidden="true"></span>';
     scrollChat();
+  };
+  if (typeof requestAnimationFrame === "function") {
+    streamRenderHandle = { raf: true, id: requestAnimationFrame(paint) };
+  } else {
+    streamRenderHandle = { raf: false, id: setTimeout(paint, 16) };
   }
 }
 
@@ -2682,6 +2757,9 @@ function applyStreamMeta(meta) {
 
 function finishStreamRow(answer, failure, deepSources = [], aborted = false) {
   if (!streamRow) return;
+  // The final render below is authoritative; a queued frame must not overwrite
+  // it with an older partial answer.
+  cancelStreamRender();
   clearStreamStatus();
   const row = streamRow;
   streamRow = null;
