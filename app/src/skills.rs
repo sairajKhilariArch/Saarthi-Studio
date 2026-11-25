@@ -1287,7 +1287,7 @@ fn skill_json(state: &AppState, skill: &Skill, usage: &HashMap<String, (i64, f64
     })
 }
 
-async fn get_skills(State(state): State<AppState>) -> Json<Value> {
+pub(crate) async fn get_skills(State(state): State<AppState>) -> Json<Value> {
     let usage = usage_summary(&state.database_path);
     let skills: Vec<Value> = all_skills(&state)
         .iter()
@@ -1320,7 +1320,7 @@ async fn get_skill(
     }
 }
 
-async fn set_skill_enabled(
+pub(crate) async fn set_skill_enabled(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
     Json(input): Json<Value>,
