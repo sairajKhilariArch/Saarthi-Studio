@@ -1,7 +1,7 @@
 # Sarthi Studio — Platform Compatibility Matrix
 
 **Date:** 2026-11-25
-**Code version:** 3.88.12 (reports committed as 3.88.13, docs-only)
+**Code version:** 3.88.12 (final reports committed as 3.88.14, docs-only)
 **Branch:** `platform/phase-8-cross-platform-2026-11-25`
 
 ## State definitions
@@ -48,6 +48,7 @@
 | Run | Branch commit | Jobs | Result |
 |---|---|---|---|
 | Desktop CI `45687899519` | `830c4e7` (3.88.12) | Linux, Windows, macOS | **success** (3/3) |
+| Desktop CI `45689992495` | `a44704a` (3.88.13 branch head) | Linux, Windows, macOS | **success** (3/3) |
 | Android CI `45686438710` | `3d30f6b` (3.88.10) | test, lint, APK, AAB, emulator | **success** |
 
 Desktop CI steps: Linux package metadata 9/9, version 26/26, artifacts 12/12, release contract 27/27, frontend 125/125, `.deb` asset guard, installer-dependency test, macOS bundle packager, formatting, build, 719 + 3 tests, clippy, 76 E2E — all successful on each applicable runner.

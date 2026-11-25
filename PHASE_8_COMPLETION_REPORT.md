@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-25
 **Branch:** `platform/phase-8-cross-platform-2026-11-25`
-**Code version:** 3.88.12 (docs commit 3.88.13)
+**Code version:** 3.88.12 (final reports 3.88.14)
 **Base:** Phase 7 `e637722` / 3.88.9
 
 ## Outcome
@@ -54,7 +54,8 @@ Phase 8 shipped concrete cross-platform fixes and validated them with native CI:
 | VS Code extension | `npm test` | **45 passed** |
 | Website | `npm run build` | **37 pages** |
 | Dependency audit | `cargo audit` | **0 vulnerabilities**, 5 allowed warnings |
-| Desktop CI | run `45687899519` | Linux, Windows, macOS **success** |
+| Desktop CI | run `45687899519` (3.88.12) | Linux, Windows, macOS **success** |
+| Desktop CI | run `45689992495` (3.88.13 branch head) | Linux, Windows, macOS **success** |
 | Android CI | run `45686438710` | **success**; 6 instrumentation tests |
 
 The local host lacks `mold`, so Cargo commands used the repository's documented `lld` workaround (`CARGO_ENCODED_RUSTFLAGS`). CI uses the repository default and passed.
@@ -66,7 +67,7 @@ e637722  3.88.9   Phase 7 base
 3d30f6b  3.88.10  complete package payloads and harden Android platform rules
 f5cb84b  3.88.11  make the installer dependency test independent of host mold
 830c4e7  3.88.12  make the conversation database owner-only
-<next>   3.88.13  Phase 8 validation reports (docs-only)
+a44704a  3.88.13  Phase 8 validation reports (docs-only)
 ```
 
 Pushed only to `platform/phase-8-cross-platform-2026-11-25`; `main` was not modified and no release was created.

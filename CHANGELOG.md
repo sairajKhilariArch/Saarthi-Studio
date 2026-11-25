@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.88.14
+
+### Documentation
+
+- Record the final branch-head Desktop CI run and commit in the Phase 8
+  completion report and compatibility matrix.
+
 ## 3.88.13
 
 ### Documentation
