@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.88.6
+
+### Performance
+
+- Painted streaming text at most once per animation frame. A 19k-character
+  answer now completes in ~186 ms with no long tasks, down from multiple
+  seconds-long blocks.
+- Opened long threads with the latest 200 messages and an explicit earlier-page
+  control. A 2,000-message thread opens in ~462 ms instead of 3.6 s, and every
+  message stays reachable.
+
+### Testing
+
+- Frontend suite covers the paged history window (116 tests).
+- The mock router gained a long-answer fixture for repeatable stream benchmarks.
+
+## 3.88.5
+
+### Performance and reliability
+
+- Added `messages(conversation_id, id)`, removing full-table scans from thread
+  reads and the conversation list. The 200k-message list drops from ~680 ms to
+  under 2 ms.
+- Enabled WAL and began chat write transactions with `BEGIN IMMEDIATE`, so
+  concurrent turns wait for the write lock instead of failing with
+  `database is locked`. A 32-worker load now completes with no errors.
+- Startup reports the settings/data directory it could not create instead of a
+  bare OS error.
+
+### Testing
+
+- Rust coverage for the query plan and eight concurrent writers.
+
 ## 3.88.4
 
 ### Fixed

@@ -3,8 +3,8 @@
 **Date:** 2026-11-25  
 **Branch:** `remediation/security-2026-11-24`  
 **Base:** `9721a53` (audit reports on `audit/full-application-2026-11-24`)  
-**Release under remediation:** `3.88.3`  
-**Status:** Phase 3 complete on the tested Linux surface. The prior code fixes are retained; the remaining verification gaps for real SSE, stop-generation, settings persistence and the startup CLI are now closed with real tests. External signing, Windows/macOS/Android execution and a system-wide package install remain blocked by this host.
+**Release under remediation:** `3.88.7`
+**Status:** Phases 3–5 complete on the tested Linux surface. Phase 5 measured and optimized the 200k-message history path, streaming UI and concurrent SQLite writes, then ran fault, soak and full regression suites. The prior code fixes are retained; the remaining verification gaps for real SSE, stop-generation, settings persistence and the startup CLI are now closed with real tests. External signing, Windows/macOS/Android execution and a system-wide package install remain blocked by this host.
 
 ## Working environment
 
@@ -141,6 +141,31 @@ During the first full run, an external `git checkout main` at 21:49:29 moved the
 | Remaining / open | 3 (browser suite, per-message edit/delete/regenerate, `glib` unsoundness) |
 | Accepted risk | 1 (3 moderate dev-only npm advisories in the VS Code packaging tool) |
 | Blocked | 2 (code signing/notarization; Windows/macOS/Android execution) |
+
+## Phase 5 — performance and reliability (3.88.5–3.88.6)
+
+Phase 5 established a reproducible baseline on a 200,000-message isolated
+database, then fixed only measured bottlenecks.
+
+| Commit | Change |
+|---|---|
+| `db12aad` (3.88.5) | `messages(conversation_id, id)` index; WAL; `BEGIN IMMEDIATE` for chat writes; startup directory errors; two Rust regression tests |
+| `24c3359` (3.88.6) | per-frame stream painting; latest-200 history paging with explicit earlier pages; single-scroll bulk render; frontend regression test; long-answer fixture |
+
+Measured on the same benchmark harness: list 680–790 ms → 1.46–3.79 ms; thread
+read 16–22 ms → 2.0–5.3 ms; 2,000-message open 3,589.5 ms → 462 ms; 19k stream
+~106.6 s of long tasks → 186 ms with none. Sixteen concurrent chats previously
+failed 4/16 with `database is locked`; 32 workers × 64 requests now return zero
+errors. Startup, idle CPU, idle RSS and shutdown remain within noise; soak RSS
+plateaus at ~206.5 MB.
+
+Fault injection verified provider-down/500 handling, a held writer lock, client
+disconnect (partial answer preserved), SIGKILL mid-stream (integrity ok, user turn
+only), corrupt database refusal, and restart recovery. One limitation remains: a
+malformed HTTP 200 provider body is surfaced as an answer rather than rejected as
+a protocol error. Details in `PERFORMANCE_BASELINE.md`,
+`PERFORMANCE_OPTIMIZATION_REPORT.md`, `RELIABILITY_TEST_REPORT.md` and
+`STRESS_TEST_REPORT.md`.
 
 ## Definition-of-done audit
 

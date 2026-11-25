@@ -1,10 +1,44 @@
 # Sarthi Studio — Release Readiness Report
 
 **Date:** 2026-11-25  
-**Candidate:** 3.88.4 (Phase 4 integration); 3.88.3 audited baseline<br>
+**Candidate:** 3.88.7 (Phase 5 performance/reliability); 3.88.4 Phase 4 integration<br>
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** audit commit `9721a53`; `main` at `55d1218` untouched<br>
 **Host:** Linux x86_64 (local); no Windows, macOS, Android, signed-installer or tagged-release runner available.
+
+## Phase 5 performance and reliability update (3.88.7)
+
+**Status: CONDITIONAL PASS for Linux 3.88.7.** Three measured bottlenecks and one
+concurrency defect are fixed, with regression coverage. The provider path was
+already fast; the user-facing costs were database scans, per-message layout, and
+streaming repaints.
+
+| Check | 3.88.7 result |
+|---|---|
+| Rust suite | 714 passed + 3 CLI, 0 failed, 1 ignored |
+| Frontend | 116 passed |
+| Real-binary e2e (debug) | 75 passed, 0 failed |
+| Real-binary e2e (release) | **75 passed, 0 failed** |
+| Release build | Pass; reports `Sarthi Studio 3.88.7` |
+| Clippy / rustfmt | Pass / Pass |
+| Version / release gate | 26 / 27 passed |
+| VS Code / website | 45 passed / 37 pages |
+| `cargo audit` | exit 0; 0 vulnerabilities, 5 unmaintained/unsound warnings |
+
+Measured outcomes on the 200k-message scratch dataset: conversation list
+680–790 ms → 1.46–3.79 ms; 2,000-message open 3,589.5 ms → 462 ms paged; 18.9k
+stream 106.6 s of long tasks → **186 ms and zero long tasks**. Concurrent chats
+no longer fail: 32 workers × 64 requests all returned 200. Startup stays 67–93 ms
+(188 ms on the first boot that builds the index), idle RSS 90.2 MB and idle CPU
+0.0%. Sustained RSS plateaus at ~206.5 MB with file descriptors constant at 27.
+
+New evidence files: `PERFORMANCE_BASELINE.md`,
+`PERFORMANCE_OPTIMIZATION_REPORT.md`, `RELIABILITY_TEST_REPORT.md`,
+`STRESS_TEST_REPORT.md`. Known limitation: a malformed HTTP 200 provider body is
+still surfaced as an answer instead of being rejected as a protocol error.
+
+**Conditions unchanged:** no Windows/macOS/Android runtime, no signing, no tagged
+11-asset release, no real provider/router, and no multi-hour soak on this host.
 
 ## Phase 4 integration update (3.88.4)
 

@@ -179,14 +179,34 @@ Phase 4 (3.88.4) added cross-module rows and grew the real-binary suite from 61 
 | Android | no SDK/device | Blocked | Blocked | no JDK/SDK/Gradle |
 | Website | build | Pass | Pass | 37 pages |
 
+## J. Performance and reliability (Phase 5)
+
+| Area | Test performed | Before | After | Evidence |
+|---|---|---|---|---|
+| History read plan | `EXPLAIN QUERY PLAN` + Rust test | `SCAN messages` | `SEARCH … USING INDEX messages_conversation` | Phase 5 benchmark, 200k messages |
+| 200k conversation list | 10 HTTP reads | 680–790 ms | 1.46–3.79 ms | `.scratch/phase5` |
+| 2,000-message open | browser MutationObserver | 3,589.5 ms | 462 ms paged | Chromium preview |
+| Long stream UI | PerformanceObserver long tasks | ~106.6 s total / 4 tasks | 186 ms / 0 tasks | 18.9k-char fixture |
+| Concurrent chats | 1–32 workers | 4/16 failed `database is locked` | 0 errors up to 32×64 | load script; Rust writer test |
+| Held writer lock | 3 s `BEGIN IMMEDIATE` | n/a | 200 after 3.09 s | isolated DB |
+| Sustained soak | 14 cycles, 16 workers | n/a | RSS plateau 206.5 MB, fds 27 | `STRESS_TEST_REPORT.md` |
+| Provider unavailable | closed port | n/a | 502 in 12.1 ms; ready 200 | `RELIABILITY_TEST_REPORT.md` |
+| Provider 500 | fixture | n/a | 502 in 14.7 ms | same |
+| Malformed 200 body | fixture | n/a | **Open limitation:** stored as answer | same |
+| Client disconnect | slow SSE | n/a | partial chunk saved; ready 200 | same |
+| SIGKILL mid-stream | release binary | n/a | integrity ok; user turn only; restart 200 | same |
+| Corrupt DB | random bytes | n/a | exit 1, clear error, no listener | same + e2e |
+| Unwritable data path | e2e + isolated home | n/a | readiness reports it; recovery works | e2e 75 |
+| Frontend retention | 10 large-thread switches | n/a | heap 5.5→7.3 MB, 201 rows | browser |
+
 ## Command evidence
 
 ```text
-cargo test (with lld):                  712 passed + 3 CLI passed, 0 failed, 1 ignored
-node --test frontend:                  115 passed
-bash scripts/ci/test-e2e.sh (debug):    75 passed, 0 failed (3.88.4)
-bash scripts/ci/test-e2e.sh (release):  not run (environment refused the command before execution)
-cargo build --release:                  pass; `Sarthi Studio 3.88.4`
+cargo test (with lld):                  714 passed + 3 CLI passed, 0 failed, 1 ignored
+node --test frontend:                  116 passed
+bash scripts/ci/test-e2e.sh (debug):    75 passed, 0 failed (3.88.6)
+bash scripts/ci/test-e2e.sh (release):   75 passed, 0 failed (3.88.7)
+cargo build --release:                  pass; `Sarthi Studio 3.88.7`
 bash .scratch/phase3/smoke-deb.sh:      14 passed, 0 failed (3.88.3 payload)
 vscode-extension npm test:              45 passed
 website npm run build:                  37 pages

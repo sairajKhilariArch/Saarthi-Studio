@@ -3,7 +3,7 @@
 **Audit date:** 2026-11-24  
 **Branch:** `remediation/security-2026-11-24`<br>
 **Baseline:** `55d1218` (3.88.0)  
-**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes; 3.88.3 verification/startup fixes; 3.88.4 integration fixes<br>
+**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes; 3.88.3 verification/startup fixes; 3.88.4 integration fixes; 3.88.5–3.88.7 performance/reliability fixes<br>
 **Rule followed:** reproduce first, fix the cause, add a regression test, rerun the affected suite. No test was skipped or weakened to obtain a green result.
 
 ## Summary
@@ -19,6 +19,10 @@
 | BUG-07 | P2 / Medium | Non-stream chat never persisted `conversations.model`, and the thread list omitted it | Fixed in 3.88.4 | Rust list test + e2e model round-trip |
 | BUG-08 | P2 / Medium | A workflow's attached skill was saved and displayed but never applied to its agents | Fixed in 3.88.4 | 4 Rust tests + two-agent e2e + missing-skill 400 |
 | BUG-09 | P3 | Workflow child agent runs bypassed the configured token ceiling | Fixed in 3.88.4 | Rust child-run budget test |
+| BUG-10 | P1 / High | History reads scanned all 200k messages, and the thread list took ~680 ms | Fixed in 3.88.5 | query-plan Rust test + benchmark |
+| BUG-11 | P1 / High | Concurrent chat writes failed with `database is locked` instead of waiting | Fixed in 3.88.5 | 8-thread Rust test + 32-way load test |
+| BUG-12 | P1 / High | Streaming repainted Markdown per delta; long answers blocked the UI for ~106 s of long tasks | Fixed in 3.88.6 | frontend suite + browser long-task measurement |
+| BUG-13 | P2 / Medium | Opening a 2,000-message thread blocked for ~3.6 s | Fixed in 3.88.6 | frontend page-window test + browser measurement |
 
 ## BUG-06 — A version/help probe started the whole application
 
@@ -357,6 +361,117 @@ Chat and workflows could attach skills, but `POST /api/runs` had no skill field.
 
 Evidence: e2e direct run finishes with the skill in its stored goal; missing skill is refused; Rust resolver tests cover the failure modes.
 
+## BUG-10 — Every history read scanned the whole message table
+
+### Description
+
+On a 200,000-message database the conversation list took 680–790 ms, and
+`EXPLAIN QUERY PLAN` showed `SCAN messages` for a thread read and a correlated
+`SCAN m` in the list. The cost grew linearly with total history, not with the
+thread being opened.
+
+### Root cause
+
+`messages` had no index on `(conversation_id, id)`, which is the shape used by
+the thread read and the list's newest-message subquery.
+
+### Fix
+
+`migrate_message_index()` in `app/src/main.rs` creates
+`messages_conversation ON messages(conversation_id, id)` from `apply_schema`, so
+fresh and upgraded databases get it and the migration is idempotent. It is a
+schema index, not a data rewrite.
+
+### Verification
+
+- `message_lookups_use_the_conversation_index` asserts the plan uses the index and
+  does not contain `SCAN messages`.
+- 200k-message benchmark: list 680–790 ms → 1.46–3.79 ms; thread read 16–22 ms →
+  2.0–5.3 ms.
+- First boot with index build: 188 ms; later boots 67–93 ms.
+
+## BUG-11 — Concurrent chats returned `database is locked`
+
+### Description
+
+Sending 16 simultaneous chat turns produced 4 HTTP 500 responses with
+`{"error":"database is locked"}`; 8 workers also failed. The write path has a
+10 s `busy_timeout`, so the failures happened before that timeout could apply.
+
+### Root cause
+
+The user-message transaction was deferred: it read the thread first and then
+tried to upgrade to a write lock. SQLite returns `SQLITE_BUSY` immediately on
+that upgrade and does not run the busy handler. The rollback journal also made
+readers wait behind the writer.
+
+### Fix
+
+- `begin_write()` starts the transaction with `TransactionBehavior::Immediate`,
+  taking the write lock up front so `busy_timeout` waits normally.
+- WAL is enabled once at startup, after the newer-schema byte-for-byte refusal
+  check, so reads can proceed during a commit.
+- Startup directory failures now name the directory in the error.
+
+### Verification
+
+- `concurrent_chat_writes_wait_instead_of_failing`: eight threads hold the lock
+  for 25 ms each and all eight messages persist.
+- Load: 1×50, 4×32, 8×32, 16×32 and 32×64 chats all returned 0 errors; 32-worker
+  median 126.4 ms, p95 393 ms.
+- `integrity_check` after a held 3 s lock: `ok`.
+
+## BUG-12 — Streaming repainted Markdown for every delta
+
+### Description
+
+A 19k-character answer arrived as 3,904 deltas. Each delta rebuilt the Markdown
+row, producing four long tasks totalling ~106.6 s (max ~37.9 s); the UI was
+unresponsive for tens of seconds.
+
+### Root cause
+
+`appendStreamText()` performed a full Markdown render and DOM replacement on
+every delta instead of batching the paints.
+
+### Fix
+
+Accumulate stream text and paint at most once per animation frame
+(`streamRenderHandle`, `streamRenderText`, `appendStreamText`);
+`finishStreamRow` cancels a queued paint before the final render.
+
+### Verification
+
+- Foreground browser: **186 ms** end-to-end, **0 long tasks** for the same 18.9k
+  answer.
+- Hidden-tab runs are throttled by Chromium (1.64 s) and are documented as a
+  browser scheduling effect, not the headline result.
+
+## BUG-13 — A long thread blocked while opening
+
+### Description
+
+Opening a 2,000-message thread took 3,589.5 ms; the bulk renderer also forced a
+layout by scrolling after every inserted row.
+
+### Root cause
+
+Every message was rendered synchronously, and `addMessage` scrolled the chat
+container after each one.
+
+### Fix
+
+- `addMessage(..., {scroll:false})` for bulk history; one scroll at the end.
+- The initial view is the latest 200 messages, with an explicit
+  `Load N earlier messages (N hidden)` control that inserts older pages while
+  preserving the reader's scroll position. All messages remain reachable.
+
+### Verification
+
+- `a long history renders one page and keeps older messages behind a control`.
+- 2,000-message open: 3,589.5 ms → 743 ms (full render) → **462 ms** (paged),
+  with two 82 ms long tasks.
+
 ## Test-suite changes made for coverage (not bug fixes)
 
 The real-binary suite grew from 34 to 53 checks. New coverage:
@@ -406,6 +521,21 @@ These are permanent tests, use scratch homes/databases, clean up after themselve
 | Version + Linux metadata | 26 + 9 passed |
 | Offline release/artifact/bundle gates | 27 + 12 + 13 passed; installer 0 + 1 skipped |
 | `cargo audit` | exit 0; 5 allowed unmaintained/unsound warnings |
+
+## Phase 5 regression status (3.88.7)
+
+| Check | Result |
+|---|---|
+| Rust suite | 714 passed + 3 CLI, 0 failed, 1 ignored |
+| Frontend suite | 116 passed, 0 failed |
+| Real-binary e2e (debug, 75 checks) | 75 passed, 0 failed |
+| Real-binary e2e (release) | 75 passed, 0 failed |
+| Release build | Pass; reports `Sarthi Studio 3.88.7` |
+| VS Code extension | 45 passed, 0 failed |
+| Clippy (`-D warnings`) / rustfmt | Pass / Pass |
+| Version / release gate | 26 / 27 passed |
+| Website build | 37 pages |
+| `cargo audit` | exit 0; 0 vulnerabilities, 5 unmaintained/unsound warnings |
 
 ## Not a code bug / not fixed
 
