@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.88.16
+
+### CI
+
+- The RustSec audit now scans `app/Cargo.lock`; the first Phase 9 CI run
+  invoked it at the repository root, where no lockfile exists, and failed
+  before auditing a single crate.
+- Added the Phase 9 release-engineering evidence reports.
+
 ## 3.88.15
 
 ### Release engineering
