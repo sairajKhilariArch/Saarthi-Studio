@@ -115,6 +115,9 @@ function stubElement(id) {
     append(...nodes) {
       this.children.push(...nodes);
     },
+    prepend(...nodes) {
+      this.children.unshift(...nodes);
+    },
     // The IDE chrome inserts beside an existing node rather than at the end.
     insertBefore(child, reference) {
       const at = reference ? this.children.indexOf(reference) : -1;

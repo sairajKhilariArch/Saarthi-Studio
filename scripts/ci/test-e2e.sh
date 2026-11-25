@@ -55,10 +55,12 @@ EOF
 work="$(mktemp -d)"
 studio_pid=""
 router_pid=""
+term_stream=""
 
 cleanup() {
   stop_studio
   if [ -n "$router_pid" ]; then kill "$router_pid" 2>/dev/null || true; fi
+  if [ -n "$term_stream" ]; then kill "$term_stream" 2>/dev/null || true; fi
   if [ "${E2E_KEEP:-0}" = "1" ]; then
     printf '\nkept %s\n' "$work"
   else
@@ -100,6 +102,37 @@ fi
   echo "no binary at $binary after the build" >&2
   exit 1
 }
+
+# A version probe must print and exit before the app resolves a home or opens
+# the database. It gets a scratch home and a deadline, so a regression cannot
+# touch real data and cannot hang the suite.
+expected_version="$(bash "$root/scripts/ci/version.sh" "$root/app/Cargo.toml")"
+probe_home="$work/version-probe-home"
+FREE_AI_STUDIO_HOME="$probe_home" "$binary" --version >"$work/version.txt" 2>/dev/null &
+probe_pid=$!
+probe_wait=0
+while kill -0 "$probe_pid" 2>/dev/null && [ "$probe_wait" -lt 40 ]; do
+  probe_wait=$((probe_wait + 1))
+  sleep 0.05
+done
+if kill -0 "$probe_pid" 2>/dev/null; then
+  kill "$probe_pid" 2>/dev/null || true
+  wait "$probe_pid" 2>/dev/null || true
+  die "--version did not exit; a probe must not start the server"
+else
+  wait "$probe_pid" 2>/dev/null
+  probe_status=$?
+  version_out="$(cat "$work/version.txt")"
+  case "$version_out" in
+    *"$expected_version"*)
+      if [ "$probe_status" = "0" ] && [ ! -e "$probe_home" ]; then
+        pass "--version reports $expected_version, exits, and creates no home"
+      else
+        die "--version status=$probe_status; created a home: $([ -e "$probe_home" ] && echo yes || echo no)"
+      fi ;;
+    *) die "--version printed '$version_out', expected $expected_version" ;;
+  esac
+fi
 
 # A free port, chosen by binding one and letting go: the studio and the mock both
 # need one, and hard-coded ports collide with whatever the machine already runs.
@@ -271,6 +304,26 @@ else
   die "readiness did not report ready ($(cat "$work/body"))"
 fi
 
+# DNS rebinding makes an attacker's hostname resolve to this loopback listener.
+# A foreign Host must not reach the core routes that are registered directly in
+# main.rs, not only the module routers that carry their own guard.
+code="$(curl -sS -o "$work/body" -w '%{http_code}' \
+  -H "Host: evil.example:$port" "$base/api/config" 2>/dev/null)"
+if [ "$code" = "403" ] && grep -q 'loopback' "$work/body"; then
+  pass "a foreign Host cannot read the core config route"
+else
+  die "a foreign Host reached /api/config (HTTP $code: $(cat "$work/body"))"
+fi
+
+code="$(curl -sS -o "$work/body" -w '%{http_code}' \
+  -H "Host: 127.0.0.1:$port" -H 'Origin: http://evil.example' \
+  "$base/api/capabilities" 2>/dev/null)"
+if [ "$code" = "403" ] && grep -q 'Cross-site' "$work/body"; then
+  pass "a foreign Origin cannot read the core capabilities route"
+else
+  die "a foreign Origin reached /api/capabilities (HTTP $code: $(cat "$work/body"))"
+fi
+
 # A conversation, then a turn through the mock provider.
 code="$(http POST "$base/api/conversations" '{"title":"e2e run"}')"
 cid="$(field id)"
@@ -304,6 +357,249 @@ else
   die "messages endpoint failed for $cid"
 fi
 
+# Reopening a thread restores the model it was using. The list route has to
+# return the value the reply recorder persisted, not just the id and title.
+if [ "$(http GET "$base/api/conversations")" = "200" ]; then
+  listed_model="$("$py" - "$work/body" "$cid" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))
+row = next((row for row in rows if row.get("id") == sys.argv[2]), {})
+print(row.get("model", ""))
+PY
+)"
+  if [ "$listed_model" = "mock-model" ]; then
+    pass "the conversation list returns the model the turn used"
+  else
+    die "conversation model round-trip failed: got '$listed_model' for $cid"
+  fi
+else
+  die "conversation list failed while checking the model"
+fi
+
+# The streaming route is a separate body machine from /api/chat and has its own
+# partial-reply recorder. A router that answers plain JSON (the mock does) must
+# still become one delta plus a done frame, and the reply must be stored once.
+code="$(http POST "$base/api/chat/stream" "{\"conversation_id\":\"$cid\",\"message\":\"stream this turn\"}")"
+if [ "$code" = "200" ] && grep -q '"delta"' "$work/body" && grep -q '"done":true' "$work/body"; then
+  pass "streaming chat emits a delta and a done frame"
+else
+  die "streaming chat failed (HTTP $code: $(head -c 300 "$work/body"))"
+fi
+
+if [ "$(http GET "$base/api/conversations/$cid/messages")" = "200" ]; then
+  count="$("$py" -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$work/body")"
+  if [ "$count" = "4" ]; then
+    pass "the streamed turn is stored exactly once"
+  else
+    die "expected 4 stored messages after streaming, found $count"
+  fi
+else
+  die "messages endpoint failed after streaming for $cid"
+fi
+
+# The checks above use a router that ignores `stream` and answers one JSON body.
+# A real event-stream takes a different branch: several deltas, each recorded as
+# it arrives, and a client abort that must keep the part already received.
+code="$(http POST "$base/api/conversations" '{"title":"real sse"}')"
+sse_conv="$(field id)"
+curl -sS -N --max-time 30 -o "$work/sse.body" -w '%{http_code}' \
+  -H 'content-type: application/json' \
+  -d "{\"conversation_id\":\"$sse_conv\",\"message\":\"stream real sse\",\"model\":\"mock-sse\"}" \
+  "$base/api/chat/stream" >"$work/sse.code" 2>/dev/null
+sse_code="$(cat "$work/sse.code")"
+sse_deltas="$(grep -c '"delta"' "$work/sse.body" || true)"
+if [ "$sse_code" = "200" ] && [ "${sse_deltas:-0}" -ge 2 ] &&
+   grep -q '"done":true' "$work/sse.body" && ! grep -q '"error"' "$work/sse.body"; then
+  pass "a real event-stream turn emits multiple deltas and one done frame ($sse_deltas deltas)"
+else
+  die "real event-stream turn failed (HTTP $sse_code, $sse_deltas deltas: $(head -c 300 "$work/sse.body"))"
+fi
+
+if [ "$(http GET "$base/api/conversations/$sse_conv/messages")" = "200" ]; then
+  sse_counts="$("$py" - "$work/body" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len(rows), len([r for r in rows if r.get("role") == "assistant"]))
+PY
+)"
+  if [ "$sse_counts" = "2 1" ]; then
+    pass "the real event-stream reply is stored exactly once"
+  else
+    die "expected 2 messages and 1 reply after a real event stream, found: $sse_counts"
+  fi
+else
+  die "messages endpoint failed after a real event stream"
+fi
+
+# Stop generation: the fetch is aborted after the first delta while the provider
+# is still holding the stream open. The recorder must save what the user saw,
+# exactly once, and the studio must stay usable.
+code="$(http POST "$base/api/conversations" '{"title":"stopped stream"}')"
+stop_conv="$(field id)"
+curl -sS -N --max-time 3 -o "$work/stopped.body" \
+  -H 'content-type: application/json' \
+  -d "{\"conversation_id\":\"$stop_conv\",\"message\":\"stop this stream\",\"model\":\"mock-slow-stream\"}" \
+  "$base/api/chat/stream" >/dev/null 2>&1 || true
+if grep -q '"delta"' "$work/stopped.body"; then
+  pass "the stopped stream had already delivered a delta"
+else
+  die "the slow stream delivered no delta before the abort"
+fi
+
+stopped=""
+tries=0
+while [ "$tries" -lt 40 ]; do
+  if [ "$(http GET "$base/api/conversations/$stop_conv/messages")" = "200" ]; then
+    stopped="$("$py" - "$work/body" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1], encoding="utf-8"))
+replies = [r for r in rows if r.get("role") == "assistant"]
+print(len(replies), (replies[0].get("content") or "") if replies else "")
+PY
+)"
+  fi
+  # One assistant row with text is the success state: zero means the recorder
+  # has not flushed yet, more than one means it saved the same turn twice.
+  case "$stopped" in
+    "1 "*) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+stopped_count="${stopped%% *}"
+stopped_text="${stopped#* }"
+if [ "$stopped_count" = "1" ] && [ -n "$stopped_text" ]; then
+  pass "stopping mid-stream stored the partial reply exactly once"
+else
+  die "the stopped stream stored '$stopped_count' replies ('$stopped_text')"
+fi
+
+code="$(http POST "$base/api/chat" "{\"conversation_id\":\"$stop_conv\",\"message\":\"after the stop\"}")"
+if [ "$code" = "200" ] && grep -q 'Mock router reply' "$work/body"; then
+  pass "the studio keeps answering after a stopped stream"
+else
+  die "chat failed after a stopped stream (HTTP $code: $(head -c 200 "$work/body"))"
+fi
+
+if [ "$(http POST "$base/api/conversations/$cid/update" '{"token_budget":5000}')" = "200" ] &&
+   [ "$(field token_budget)" = "5000" ]; then
+  pass "a conversation token budget is accepted and returned"
+else
+  die "conversation budget update failed ($(cat "$work/body"))"
+fi
+
+# Deleting a thread removes its messages. A second thread is used so the
+# restart checks below still have the original history to find.
+code="$(http POST "$base/api/conversations" '{"title":"delete me"}')"
+doomed="$(field id)"
+delete_code="$(http POST "$base/api/conversations/$doomed/delete" '{}')"
+messages_code="$(http GET "$base/api/conversations/$doomed/messages")"
+if [ "$code" = "201" ] && [ -n "$doomed" ] &&
+   [ "$delete_code" = "200" ] && [ "$messages_code" = "404" ]; then
+  pass "a deleted conversation and its messages are gone"
+else
+  die "conversation deletion did not cascade for $doomed (create=$code delete=$delete_code messages=$messages_code: $(cat "$work/body"))"
+fi
+
+# Config is read back without its secrets: the UI only needs to know whether a
+# key exists, and a raw key must never be serialized to the browser again.
+if [ "$(http GET "$base/api/config")" = "200" ] &&
+   [ "$(field has_api_key)" = "True" ] &&
+   ! grep -q 'e2e-not-a-real-key' "$work/body"; then
+  pass "the config endpoint reports a saved key without returning it"
+else
+  die "config redaction failed ($(cat "$work/body"))"
+fi
+
+# Project CRUD is the scope every conversation and memory record depends on.
+code="$(http POST "$base/api/projects" '{"name":"e2e project"}')"
+project_id="$(field id)"
+rename_code="$(http POST "$base/api/projects/$project_id/update" '{"name":"e2e renamed"}')"
+list_code="$(http GET "$base/api/projects")"
+if [ "$code" = "201" ] && [ -n "$project_id" ] && [ "$rename_code" = "200" ] &&
+   [ "$list_code" = "200" ] && grep -q 'e2e renamed' "$work/body" &&
+   [ "$(http POST "$base/api/projects/$project_id/delete" '{}')" = "200" ] &&
+   [ "$(http GET "$base/api/projects")" = "200" ] && ! grep -q 'e2e renamed' "$work/body"; then
+  pass "a project can be created, renamed, listed and deleted"
+else
+  die "project CRUD failed (create=$code rename=$rename_code list=$list_code: $(cat "$work/body"))"
+fi
+
+# Memory is real SQLite storage, not an in-memory hint list.
+code="$(http POST "$base/api/memory" '{"kind":"fact","title":"e2e memory","body":"the audit marker"}')"
+memory_id="$(field record.id)"
+if [ "$code" = "200" ] && [ -n "$memory_id" ] &&
+   [ "$(http GET "$base/api/memory")" = "200" ] && grep -q 'e2e memory' "$work/body"; then
+  pass "a memory record is created and listed"
+else
+  die "memory create/list failed (create=$code id=$memory_id: $(cat "$work/body"))"
+fi
+
+# Recall reaches the streaming meta even when no skill auto-matched: the two
+# fields are independent, and the reply must say it used the memory.
+code="$(http POST "$base/api/conversations" '{"title":"memory stream"}')"
+memory_conv="$(field id)"
+stream_code="$(http POST "$base/api/chat/stream" "{\"conversation_id\":\"$memory_conv\",\"message\":\"what does the e2e memory say?\"}")"
+if [ "$code" = "201" ] && [ -n "$memory_conv" ] && [ "$stream_code" = "200" ] &&
+   grep -q '"memory_used"' "$work/body"; then
+  pass "streaming metadata reports the memory that was used"
+else
+  die "streaming memory metadata missing (conversation=$code stream=$stream_code: $(head -c 400 "$work/body"))"
+fi
+http POST "$base/api/conversations/$memory_conv/delete" '{}' >/dev/null
+
+if [ "$(http POST "$base/api/memory/$memory_id/delete" '{}')" = "200" ] &&
+   [ "$(http GET "$base/api/memory")" = "200" ] && ! grep -q 'e2e memory' "$work/body"; then
+  pass "a deleted memory record leaves the list"
+else
+  die "memory deletion failed (id=$memory_id: $(cat "$work/body"))"
+fi
+
+# A workflow is stored in a file, exported as the documented document, and
+# removed without leaving a schedule claim or a ghost entry behind.
+code="$(http POST "$base/api/workflows" '{"name":"e2e workflow","prompt":"say hello"}')"
+workflow_id="$(field id)"
+export_code="$(http GET "$base/api/workflows/$workflow_id/export")"
+if [ "$code" = "200" ] && [ -n "$workflow_id" ] && [ "$export_code" = "200" ] &&
+   grep -q 'sarthi.workflow' "$work/body" &&
+   [ "$(http POST "$base/api/workflows/$workflow_id/delete" '{}')" = "200" ] &&
+   [ "$(http GET "$base/api/workflows")" = "200" ] && ! grep -q 'e2e workflow' "$work/body"; then
+  pass "a workflow is saved, exported and deleted"
+else
+  die "workflow CRUD failed (create=$code id=$workflow_id export=$export_code: $(cat "$work/body"))"
+fi
+
+# The built-in skill catalogue is served by the same router as user skills.
+if [ "$(http GET "$base/api/skills")" = "200" ] &&
+   "$py" - "$work/body" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if isinstance(payload.get("skills"), list) else 1)
+PY
+then
+  pass "the skill catalogue is readable"
+else
+  die "skills endpoint failed ($(head -c 300 "$work/body"))"
+fi
+
+# A remote MCP server must use TLS. The panel can warn, but the server is the
+# authority: plain http is accepted only for a loopback endpoint, and an old
+# mcp.json is refused when a connection is opened.
+code="$(http POST "$base/api/mcp/servers" '{"name":"e2e-remote","transport":"http","url":"http://example.com/mcp"}')"
+if [ "$code" = "400" ] && grep -q 'Use https://' "$work/body"; then
+  pass "a remote MCP server without TLS is refused"
+else
+  die "remote cleartext MCP was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+code="$(http POST "$base/api/mcp/servers" "{\"name\":\"e2e-loopback\",\"transport\":\"http\",\"url\":\"http://127.0.0.1:$mock_port/mcp\"}")"
+remove_code="$(http POST "$base/api/mcp/servers/remove" '{"name":"e2e-loopback"}')"
+if [ "$code" = "200" ] && [ "$remove_code" = "200" ] && [ "$(field removed)" = "1" ]; then
+  pass "loopback MCP over http is allowed and removable"
+else
+  die "loopback MCP save/remove failed (save=$code remove=$remove_code: $(cat "$work/body"))"
+fi
+
 # Every user action leaves a process-log line; the boot is one of them, so this
 # also proves the log file was created beside the database in the scratch home.
 if [ "$(http GET "$base/api/diagnostics/log")" = "200" ]; then
@@ -335,6 +631,72 @@ else
   die "could not open a workspace folder (HTTP $code: $(cat "$work/body"))"
   exit 1
 fi
+
+# The editor's file lifecycle: create, save, read, rename, delete. Paths are
+# resolved inside the open folder, so an escape is refused before I/O.
+if [ "$(http POST "$base/api/workspace/create" '{"path":"notes.txt"}')" = "200" ] &&
+   [ "$(http PUT "$base/api/workspace/file" '{"path":"notes.txt","content":"first line\\n"}')" = "200" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=notes.txt")" = "200" ] &&
+   grep -q 'first line' "$work/body"; then
+  pass "a workspace file is created, saved and read back"
+else
+  die "workspace file lifecycle failed ($(cat "$work/body"))"
+fi
+
+if [ "$(http POST "$base/api/workspace/rename" '{"from":"notes.txt","to":"renamed.txt"}')" = "200" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=notes.txt")" = "404" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=renamed.txt")" = "200" ] &&
+   [ "$(http POST "$base/api/workspace/delete" '{"path":"renamed.txt"}')" = "200" ] &&
+   [ "$(http GET "$base/api/workspace/file?path=renamed.txt")" = "404" ]; then
+  pass "a workspace file is renamed and deleted"
+else
+  die "workspace rename/delete failed ($(cat "$work/body"))"
+fi
+
+code="$(http GET "$base/api/workspace/file?path=..%2Foutside.txt")"
+if [ "$code" = "400" ] && ! grep -q 'outside.txt' "$work/body"; then
+  pass "a path outside the open folder is refused"
+else
+  die "path traversal was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+# Interactive terminal: a real PTY, a command entered over HTTP, and a file on
+# disk proving the command ran rather than merely being echoed by the shell.
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW* | MSYS* | CYGWIN*)
+    skip "the interactive terminal smoke is POSIX-only (PowerShell redirection differs)"
+    ;;
+  *)
+    code="$(http POST "$base/api/terminal/open" "{\"cwd\":\"$ws_native\",\"cols\":80,\"rows\":24}")"
+    term_id="$(field id)"
+    if [ "$code" = "200" ] && [ -n "$term_id" ]; then
+      curl -sS -N --max-time 8 "$base/api/terminal/$term_id/stream" >"$work/terminal.sse" 2>/dev/null &
+      term_stream=$!
+      sleep 0.4
+      payload="$("$py" -c 'import json,sys; print(json.dumps({"data": sys.argv[1] + "\r"}))' 'echo e2e-terminal > terminal-proof.txt')"
+      input_code="$(http POST "$base/api/terminal/$term_id/input" "$payload")"
+      seen=0
+      for _ in $(seq 1 40); do
+        if [ -f "$ws/terminal-proof.txt" ] && grep -q 'e2e-terminal' "$ws/terminal-proof.txt"; then
+          seen=1
+          break
+        fi
+        sleep 0.25
+      done
+      http POST "$base/api/terminal/$term_id/close" '{}' >/dev/null
+      kill "$term_stream" 2>/dev/null || true
+      wait "$term_stream" 2>/dev/null || true
+      term_stream=""
+      if [ "$input_code" = "200" ] && [ "$seen" = "1" ]; then
+        pass "a terminal command runs through a real PTY"
+      else
+        die "terminal did not run the command (open=$code input=$input_code seen=$seen)"
+      fi
+    else
+      die "terminal session did not open (HTTP $code: $(cat "$work/body"))"
+    fi
+    ;;
+esac
 
 code="$(http POST "$base/api/runs" '{"goal":"e2e-agent: write the marker file","allowWrites":true,"profile":"coding","maxSteps":6}')"
 run_id="$(field run.id)"
@@ -387,6 +749,159 @@ case "$actions" in
   *) die "run steps are not write, verify, done: $actions" ;;
 esac
 
+# The Runs form can attach a skill too. The child goal the route stores is the
+# same shape chat and workflows use, so the skill travels with the run.
+code="$(http POST "$base/api/runs" '{"goal":"e2e-skill-run: report on the workspace","skill":"debug","allowWrites":false,"profile":"coding","maxSteps":4}')"
+skill_agent="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$skill_agent" ]; then
+  pass "an agent run is created with an attached skill"
+else
+  die "could not create the skill run (HTTP $code: $(cat "$work/body"))"
+fi
+if wait_run_state "$skill_agent" succeeded 80; then
+  pass "the direct skill run finishes"
+else
+  die "direct skill run ended $(run_state "$skill_agent"): $(cat "$work/body")"
+fi
+http GET "$base/api/runs/$skill_agent" >/dev/null
+if "$py" - "$work/body" <<'PY'
+import json, sys
+run = json.load(open(sys.argv[1], encoding="utf-8"))
+goal = run.get("goal", "")
+checks = [
+    'Follow the skill "debug"' in goal,
+    "Debug the reported failure." in goal,
+    "e2e-skill-run" in goal,
+]
+raise SystemExit(0 if all(checks) else 1)
+PY
+then
+  pass "the direct run's stored goal carries the skill instructions"
+else
+  die "the direct run did not carry its skill: $(cat "$work/body")"
+fi
+
+code="$(http POST "$base/api/runs" '{"goal":"never runs","skill":"no-such-skill"}')"
+if [ "$code" = "400" ] && grep -qi 'No skill' "$work/body"; then
+  pass "an agent run with a missing skill is refused before it starts"
+else
+  die "missing-skill agent run was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+# Denying the write approval must stop the run and leave the file uncreated.
+code="$(http POST "$base/api/runs" '{"goal":"e2e-agent-deny: write the forbidden file","allowWrites":true,"profile":"coding","maxSteps":4}')"
+deny_run="$(field run.id)"
+if [ "$code" = "200" ] && wait_run_state "$deny_run" awaiting_approval 80; then
+  pass "the denied-write run waits for approval"
+else
+  die "denied-write run never asked for approval (HTTP $code: $(cat "$work/body"))"
+fi
+if [ "$(http POST "$base/api/runs/$deny_run/approve" '{"approve":false}')" = "200" ]; then
+  pass "the write approval was denied"
+else
+  die "denying the write failed (HTTP $(cat "$work/body"))"
+fi
+wait_run_state "$deny_run" failed 40 >/dev/null
+state="$(run_state "$deny_run")"
+if [ "$state" = "failed" ] && [ ! -e "$ws/e2e-denied.txt" ]; then
+  pass "the denied write is blocked and no file is created"
+else
+  die "denied write was not blocked (state '$state', file exists: $([ -e "$ws/e2e-denied.txt" ] && echo yes || echo no))"
+fi
+
+# A workflow attaches a skill through its own field. Attaching one is only
+# real if the child agent run actually receives those instructions; the mock
+# only finishes when the goal carries the skill, so a dropped attachment fails.
+code="$(http POST "$base/api/workflows" '{"name":"e2e skill workflow","skill":"debug","nodes":[{"id":"debug-it","kind":"agent","prompt":"e2e-workflow-skill: inspect the workspace and report","profile":"coding","maxSteps":4},{"id":"report-it","kind":"agent","prompt":"e2e-workflow-skill: report the findings","profile":"coding","maxSteps":4,"dependsOn":["debug-it"]}]}')"
+skill_wf="$(field id)"
+if [ "$code" = "200" ] && [ -n "$skill_wf" ]; then
+  pass "a workflow is saved with an attached skill"
+else
+  die "could not create the skill workflow (HTTP $code: $(cat "$work/body"))"
+fi
+
+code="$(http POST "$base/api/workflows/$skill_wf/run" '{}')"
+skill_run="$(field run.id)"
+if [ "$code" = "200" ] && [ -n "$skill_run" ]; then
+  pass "the skill workflow starts a run ($skill_run)"
+else
+  die "could not start the skill workflow (HTTP $code: $(cat "$work/body"))"
+fi
+
+tries=0
+skill_state=""
+while [ "$tries" -lt 160 ]; do
+  http GET "$base/api/workflow-runs/$skill_run" >/dev/null
+  skill_state="$(field run.status)"
+  case "$skill_state" in
+    succeeded | failed | cancelled | interrupted) break ;;
+  esac
+  tries=$((tries + 1))
+  sleep 0.25
+done
+if [ "$skill_state" = "succeeded" ]; then
+  pass "the workflow's dependent agent step finishes"
+else
+  die "skill workflow ended '$skill_state': $(cat "$work/body")"
+fi
+
+http GET "$base/api/workflow-runs/$skill_run" >/dev/null
+child_run="$(field run.stepList.0.agentRunId)"
+if [ -n "$child_run" ] && [ "$(http GET "$base/api/runs/$child_run")" = "200" ]; then
+  if "$py" - "$work/body" <<'PY'
+import json, sys
+run = json.load(open(sys.argv[1], encoding="utf-8"))
+goal = run.get("goal", "")
+checks = [
+    run.get("status") == "succeeded",
+    'Follow the skill "debug"' in goal,
+    "Debug the reported failure." in goal,
+    "e2e-workflow-skill" in goal,
+]
+raise SystemExit(0 if all(checks) else 1)
+PY
+  then
+    pass "the workflow skill's instructions reached the child agent run"
+  else
+    die "the child agent run did not carry the workflow skill: $(cat "$work/body")"
+  fi
+else
+  die "could not read the workflow's child agent run '$child_run'"
+fi
+
+if [ "$(http GET "$base/api/workflow-runs/$skill_run")" = "200" ] &&
+   [ "$(field run.steps)" = "2" ] &&
+   [ "$(field run.succeededSteps)" = "2" ] &&
+   [ -n "$(field run.stepList.0.agentRunId)" ] &&
+   [ -n "$(field run.stepList.1.agentRunId)" ]; then
+  pass "both dependent workflow agent steps ran and finished"
+else
+  die "the dependent workflow steps did not both finish: $(cat "$work/body")"
+fi
+
+# A missing skill is a configuration error: starting the run is refused with a
+# useful message instead of executing the graph as if nothing were attached.
+code="$(http POST "$base/api/workflows" '{"name":"e2e missing skill","skill":"no-such-skill","nodes":[{"id":"step","kind":"agent","prompt":"never runs"}]}')"
+missing_wf="$(field id)"
+code="$(http POST "$base/api/workflows/$missing_wf/run" '{}')"
+if [ "$code" = "400" ] && grep -qi 'no skill' "$work/body"; then
+  pass "a workflow with a missing skill is refused before it starts"
+else
+  die "missing-skill workflow was not refused (HTTP $code: $(cat "$work/body"))"
+fi
+
+http POST "$base/api/workflows/$skill_wf/delete" '{}' >/dev/null
+http POST "$base/api/workflows/$missing_wf/delete" '{}' >/dev/null
+
+# A setting saved through the route the Settings panel calls must come back
+# from disk after the restart below, not from an in-memory copy.
+code="$(http POST "$base/api/config" '{"history_messages":12,"approve":true}')"
+if [ "$code" = "200" ]; then
+  pass "a setting can be saved through the config route"
+else
+  die "saving a setting failed (HTTP $code: $(head -c 200 "$work/body"))"
+fi
+
 # -- restart ----------------------------------------------------------------
 # The point of the restart: state must come from disk, not from memory.
 stop_studio
@@ -400,12 +915,18 @@ else
   exit 1
 fi
 
+if [ "$(http GET "$base/api/config")" = "200" ] && [ "$(field history_messages)" = "12" ]; then
+  pass "the saved setting survived the restart"
+else
+  die "the saved setting did not survive the restart ($(head -c 200 "$work/body"))"
+fi
+
 if [ "$(http GET "$base/api/conversations/$cid/messages")" = "200" ]; then
   count="$("$py" -c 'import json,sys;print(len(json.load(open(sys.argv[1]))))' "$work/body")"
-  if [ "$count" = "2" ]; then
+  if [ "$count" = "4" ]; then
     pass "the conversation survived the restart"
   else
-    die "expected 2 messages after restart, found $count"
+    die "expected 4 messages after restart, found $count"
   fi
 else
   die "the conversation is gone after the restart"
@@ -417,6 +938,20 @@ if [ -f "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3" ]; th
   pass "history is in the documented database path"
 else
   die "no database at the documented path"
+fi
+
+# The parent is 0700, but the database itself holds conversation text and must
+# stay owner-only even if that directory mode is later relaxed. Git Bash on
+# Windows has no POSIX mode to read, so it skips this check.
+if command -v stat >/dev/null 2>&1 && stat -c '%a' "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3" >/dev/null 2>&1; then
+  mode="$(stat -c '%a' "$FREE_AI_STUDIO_HOME/.local/share/free-ai-studio/history.sqlite3")"
+  if [ "$mode" = "600" ]; then
+    pass "the database file is owner-only"
+  else
+    die "the database file mode is $mode, expected 600"
+  fi
+else
+  skip "database file mode (no POSIX stat on this platform)"
 fi
 
 # The run is the harder half of persistence: its row, its steps and its

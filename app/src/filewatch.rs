@@ -352,30 +352,44 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         state.workspace.open(root.to_str().unwrap()).expect("open");
         start(&state, &root);
-        // Give the platform watcher time to register before the write, so the
-        // test is about indexing rather than about setup latency.
-        std::thread::sleep(Duration::from_millis(150));
+        // A fixed sleep is not a registration handshake: macOS FSEvents can
+        // still be attaching its stream 150 ms after `watch()` returns, and a
+        // write made before that is legitimately missed. Write a sentinel and
+        // wait for it to be indexed first, so the assertion is about indexing
+        // the second file rather than about FSEvents setup latency.
+        std::fs::write(
+            root.join("src/ready.rs"),
+            "pub fn ready() -> bool { true }\n",
+        )
+        .unwrap();
+        wait_for_index(&state, "src/ready.rs", "the watcher never became ready");
         std::fs::write(root.join("src/fresh.rs"), "pub fn fresh() -> u8 { 1 }\n").unwrap();
+        wait_for_index(
+            &state,
+            "src/fresh.rs",
+            "the watcher did not index a new file within 10s",
+        );
+        stop();
+    }
 
+    fn wait_for_index(state: &AppState, path: &str, message: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let conn = crate::open_db(&state.database_path).expect("db");
             let indexed: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM code_index_files WHERE path='src/fresh.rs'",
-                    [],
+                    "SELECT COUNT(*) FROM code_index_files WHERE path=?1",
+                    [path],
                     |row| row.get(0),
                 )
                 .expect("count");
             if indexed == 1 {
-                stop();
                 return;
             }
             let give_up = Instant::now() >= deadline;
             drop(conn);
             if give_up {
-                stop();
-                panic!("the watcher did not index a new file within 10s");
+                panic!("{message}");
             }
             std::thread::sleep(Duration::from_millis(100));
         }

@@ -1,6 +1,6 @@
 [package]
 name = "free-ai-studio"
-version = "3.88.0"
+version = "3.88.18"
 edition = "2021"
 rust-version = "1.80"
 description = "Sarthi Studio — local-first AI chat and coding workspace for FreeLLMAPI"
@@ -15,7 +15,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 getrandom = "=0.2.15"
 reqwest = { version = "=0.12.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-rusqlite = { version = "=0.32.1", features = ["bundled"] }
+rusqlite = { version = "=0.43.0", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.138"
 sha2 = "=0.10.9"
@@ -28,9 +28,9 @@ subtle = "=2.6.1"
 # backend keeps the build free of a C toolchain.
 flate2 = "1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.13"
-tokio = { version = "=1.43.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "process", "io-util"] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "process", "io-util"] }
 # Broadcast wrappers feed the live thread-mirroring SSE bus.
 tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "=1.12.1", features = ["v4"] }
@@ -84,9 +84,27 @@ endpoint. Upgrades replace only the binaries and UI under /usr; conversations,
 projects, settings and credentials in the user's home are preserved."""
 assets = [
     ["target/release/free-ai-studio", "usr/bin/free-ai-studio", "755"],
+    # Every runtime file the UI loads must be listed here. A .deb that shipped
+    # only index/app/styles booted to a page whose IDE layer, syntax
+    # highlighter and brand assets were 404s. scripts/ci/test-deb-assets.sh
+    # fails if a new static runtime file is not added below.
     ["static/index.html", "usr/share/sarthi-studio/static/index.html", "644"],
     ["static/app.js", "usr/share/sarthi-studio/static/app.js", "644"],
+    ["static/ide.js", "usr/share/sarthi-studio/static/ide.js", "644"],
+    ["static/highlight.js", "usr/share/sarthi-studio/static/highlight.js", "644"],
+    ["static/replace.js", "usr/share/sarthi-studio/static/replace.js", "644"],
     ["static/styles.css", "usr/share/sarthi-studio/static/styles.css", "644"],
+    ["static/ide.css", "usr/share/sarthi-studio/static/ide.css", "644"],
+    ["static/brand/app-icon.svg", "usr/share/sarthi-studio/static/brand/app-icon.svg", "644"],
+    ["static/brand/favicon.svg", "usr/share/sarthi-studio/static/brand/favicon.svg", "644"],
+    ["static/brand/logo.svg", "usr/share/sarthi-studio/static/brand/logo.svg", "644"],
+    ["static/brand/logo-mono-black.svg", "usr/share/sarthi-studio/static/brand/logo-mono-black.svg", "644"],
+    ["static/brand/logo-mono-white.svg", "usr/share/sarthi-studio/static/brand/logo-mono-white.svg", "644"],
+    ["static/brand/splash.svg", "usr/share/sarthi-studio/static/brand/splash.svg", "644"],
+    ["static/brand/tardigrade.svg", "usr/share/sarthi-studio/static/brand/tardigrade.svg", "644"],
+    ["static/brand/tardigrade-mark.svg", "usr/share/sarthi-studio/static/brand/tardigrade-mark.svg", "644"],
+    ["static/brand/tardigrade-mono-black.svg", "usr/share/sarthi-studio/static/brand/tardigrade-mono-black.svg", "644"],
+    ["static/brand/tardigrade-mono-white.svg", "usr/share/sarthi-studio/static/brand/tardigrade-mono-white.svg", "644"],
     ["static/skills/code-review/SKILL.md", "usr/share/sarthi-studio/static/skills/code-review/SKILL.md", "644"],
     ["static/skills/debug/SKILL.md", "usr/share/sarthi-studio/static/skills/debug/SKILL.md", "644"],
     ["static/skills/tests/SKILL.md", "usr/share/sarthi-studio/static/skills/tests/SKILL.md", "644"],

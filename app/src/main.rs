@@ -10,7 +10,7 @@ use axum::{
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use reqwest::{Client, Url};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -409,8 +409,23 @@ fn set_private_permissions(path: &FsPath, dir: bool) -> io::Result<()> {
 
 pub(crate) fn open_db(path: &FsPath) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
+    // SQLite creates the file with the process umask (0644 under the usual
+    // 022). The 0700 parent keeps other users out, but the database itself
+    // holds conversation text and should not become readable if the parent's
+    // mode is ever relaxed. chmod is a no-op on Windows, where the profile
+    // ACL already restricts the file.
+    let _ = set_private_permissions(path, false);
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 10000;")?;
     Ok(conn)
+}
+
+/// Start a transaction that will write. A deferred transaction that reads first
+/// and writes later cannot wait for another writer: SQLite reports `SQLITE_BUSY`
+/// on the upgrade without running the busy handler, which turned concurrent
+/// chats into "database is locked". Taking the write lock up front lets
+/// `busy_timeout` do its job instead.
+pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
 }
 
 /// What an upgrade did, so the boot log can say it happened instead of leaving a
@@ -485,6 +500,14 @@ fn initialize_database(path: &FsPath) -> Result<SchemaUpgrade, String> {
     } else {
         None
     };
+
+    // WAL lets a read (the thread list, the message view) run while a chat turn
+    // commits, instead of serializing every reader behind every writer. The mode
+    // is persistent, so the first boot pays for it and later connections inherit
+    // it. A filesystem that refuses WAL still runs in its existing mode. This is
+    // after the version check: a database written by a newer build must be left
+    // byte-for-byte untouched, and changing its journal mode would rewrite it.
+    let _ = conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()));
 
     if let Err(error) = apply_schema(&conn) {
         drop(conn);
@@ -564,7 +587,19 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     dap::initialize(conn).map_err(|error| format!("debugger breakpoints: {error}"))?;
     agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
-    migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))
+    migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))?;
+    migrate_message_index(conn).map_err(|error| format!("message index: {error}"))
+}
+
+/// Every thread read filters `messages` by conversation and orders by id; the
+/// thread list also asks each conversation for its last message. Without this
+/// index both paths scan the whole table (measured at ~680 ms for a 100-thread
+/// list over 200k messages). The primary key already provides the order, so the
+/// composite index serves the filter and the `ORDER BY id` together.
+fn migrate_message_index(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, id);",
+    )
 }
 
 /// Give an existing messages table its `attachments` column (JSON of {kind,ref}
@@ -877,14 +912,26 @@ fn record_project_folder(state: &AppState, folder: &str) {
 
 fn ensure_setup(state: &AppState) -> Result<SchemaUpgrade, Box<dyn std::error::Error>> {
     if let Some(parent) = state.config_path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create the settings directory {}: {error}",
+                parent.display()
+            )
+        })?;
         set_private_permissions(parent, true)?;
     }
     if let Some(parent) = state.database_path.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Could not create the data directory {}: {error}",
+                parent.display()
+            )
+        })?;
         set_private_permissions(parent, true)?;
     }
-    if !state.config_path.exists() {
+    if state.config_path.exists() {
+        preserve_unreadable_config(&state.config_path);
+    } else {
         save_config_file(&state.config_path, &Config::defaults())?;
     }
     let upgrade = initialize_database(&state.database_path)?;
@@ -895,6 +942,34 @@ fn ensure_setup(state: &AppState) -> Result<SchemaUpgrade, Box<dyn std::error::E
     // credential store once, and the empty skipped runs cost one file read.
     migrate_secrets_to_keychain(state);
     Ok(upgrade)
+}
+
+/// Keep a copy of a config.json that cannot be parsed before the active-project
+/// pointer rewrites it with defaults. Without this a truncated or hand-edited
+/// file would be replaced silently and its settings lost with no recovery path.
+fn preserve_unreadable_config(path: &FsPath) -> Option<PathBuf> {
+    let bytes = fs::read(path).ok()?;
+    if serde_json::from_slice::<Config>(&bytes).is_ok() {
+        return None;
+    }
+    let backup = path.with_file_name(format!("config.json.corrupt-{}", now_seconds() as u64));
+    match fs::copy(path, &backup) {
+        Ok(_) => {
+            eprintln!(
+                "Settings at {} could not be read; kept a copy at {} and started with defaults.",
+                path.display(),
+                backup.display()
+            );
+            Some(backup)
+        }
+        Err(error) => {
+            eprintln!(
+                "Settings at {} could not be read ({error}); could not keep a backup.",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// True when a plaintext secret is still sitting in the config file.
@@ -3219,14 +3294,15 @@ async fn list_conversations(
         let sql = if all_scope {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
-             COALESCE(p.name, 'No project') AS project, COALESCE(v.token_budget,0)
+             COALESCE(p.name, 'No project') AS project, COALESCE(v.token_budget,0),
+             COALESCE(v.model,'') AS model
              FROM conversations v LEFT JOIN projects p ON p.id=v.project_id
              ORDER BY v.updated_at DESC LIMIT 100"
         } else {
             "SELECT v.id, v.title, v.created_at, v.updated_at,
              (SELECT content FROM messages m WHERE m.conversation_id=v.id ORDER BY id DESC LIMIT 1) AS last_message,
              (SELECT COALESCE(name, 'No project') FROM projects p WHERE p.id=v.project_id) AS project,
-             COALESCE(v.token_budget,0)
+             COALESCE(v.token_budget,0), COALESCE(v.model,'') AS model
              FROM conversations v WHERE v.project_id=?1 ORDER BY v.updated_at DESC"
         };
         let mut stmt = conn.prepare(sql)?;
@@ -3237,7 +3313,8 @@ async fn list_conversations(
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                     "last_message": row.get::<_, Option<String>>(4)?,
                     "project": row.get::<_, String>(5)?,
-                    "token_budget": row.get::<_, i64>(6)?
+                    "token_budget": row.get::<_, i64>(6)?,
+                    "model": row.get::<_, String>(7)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -3249,7 +3326,8 @@ async fn list_conversations(
                     "created_at": row.get::<_, f64>(2)?, "updated_at": row.get::<_, f64>(3)?,
                     "last_message": row.get::<_, Option<String>>(4)?,
                     "project": row.get::<_, String>(5)?,
-                    "token_budget": row.get::<_, i64>(6)?
+                    "token_budget": row.get::<_, i64>(6)?,
+                    "model": row.get::<_, String>(7)?
                 }))
             })?;
             rows.collect::<rusqlite::Result<Vec<Value>>>()
@@ -3866,7 +3944,7 @@ fn prepare_chat(state: &AppState, input: &Value) -> Result<ChatPrep, Box<Respons
             .clamp(context::MIN_HISTORY_MESSAGES, context::MAX_HISTORY_MESSAGES) as i64;
     let history_result = (|| -> rusqlite::Result<Option<Vec<(String, String)>>> {
         let mut conn = open_db(&state.database_path)?;
-        let tx = conn.transaction()?;
+        let tx = begin_write(&mut conn)?;
         let title = tx
             .query_row("SELECT title FROM conversations WHERE id=?1", [&cid], |r| {
                 r.get::<_, String>(0)
@@ -4146,8 +4224,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                 params![now, cid, cfg.model],
             )?;
             conn.execute(
-                "UPDATE conversations SET updated_at=?1 WHERE id=?2",
-                params![now, cid],
+                "UPDATE conversations SET updated_at=?1, model=?3 WHERE id=?2",
+                params![now, cid, cfg.model],
             )?;
             Ok(())
         })();
@@ -4205,8 +4283,8 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                         params![now, cid, model_name, started.elapsed().as_millis() as i64, completion],
                     )?;
                     conn.execute(
-                        "UPDATE conversations SET updated_at=?1 WHERE id=?2",
-                        params![now, cid],
+                        "UPDATE conversations SET updated_at=?1, model=?3 WHERE id=?2",
+                        params![now, cid, model_name],
                     )?;
                     Ok(())
                 })();
@@ -4274,8 +4352,12 @@ async fn chat(State(state): State<AppState>, Json(mut input): Json<Value>) -> Re
                     params![now, cid, meta.get("model").and_then(Value::as_str).unwrap_or("auto"), meta.get("provider").and_then(Value::as_str).unwrap_or("unknown"), meta.get("latency_ms").and_then(Value::as_i64), meta.get("prompt_tokens").and_then(Value::as_i64), meta.get("completion_tokens").and_then(Value::as_i64), meta.get("total_tokens").and_then(Value::as_i64), meta.get("fallback_attempts").and_then(Value::as_str).unwrap_or(""), cost_usd, cost_basis],
                 )?;
                 conn.execute(
-                    "UPDATE conversations SET updated_at=?1 WHERE id=?2",
-                    params![now, cid],
+                    "UPDATE conversations SET updated_at=?1, model=?3 WHERE id=?2",
+                    params![
+                        now,
+                        cid,
+                        meta.get("model").and_then(Value::as_str).unwrap_or("")
+                    ],
                 )?;
                 Ok(())
             })();
@@ -4681,12 +4763,12 @@ async fn chat_stream(
             held["model"] = json!(&chosen_model);
             if !auto_skills.is_empty() {
                 held["auto_skills"] = json!(&auto_skills);
-                if !memory_used.is_empty() {
-                    held["memory_used"] = json!(&memory_used);
-                    if !retrieved.is_empty() {
-                        held["retrieved"] = json!(&retrieved);
-                    }
-                }
+            }
+            if !memory_used.is_empty() {
+                held["memory_used"] = json!(&memory_used);
+            }
+            if !retrieved.is_empty() {
+                held["retrieved"] = json!(&retrieved);
             }
             held["deepsearch"] = json!(true);
         }
@@ -4848,12 +4930,12 @@ async fn chat_stream(
         held["model"] = json!(&chosen_model);
         if !auto_skills.is_empty() {
             held["auto_skills"] = json!(&auto_skills);
-            if !memory_used.is_empty() {
-                held["memory_used"] = json!(&memory_used);
-                if !retrieved.is_empty() {
-                    held["retrieved"] = json!(&retrieved);
-                }
-            }
+        }
+        if !memory_used.is_empty() {
+            held["memory_used"] = json!(&memory_used);
+        }
+        if !retrieved.is_empty() {
+            held["retrieved"] = json!(&retrieved);
         }
         held["thinking"] = thinking_json(thinking);
         held["model_scope"] = json!(model_scope_label);
@@ -5026,6 +5108,10 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         models_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     let upgrade = ensure_setup(&state)?;
+    // Header values in an older `mcp.json` are moved to the OS credential
+    // store now, so a boot never leaves a bearer token in plaintext when the
+    // user has not opened the MCP panel since upgrading.
+    mcp::migrate_header_secrets(&state);
     // A folder restored from the last session is watched from boot, so changes
     // made before the first paint are indexed too. No folder means no watcher.
     if let Some(root) = state.workspace.current_root() {
@@ -5260,6 +5346,14 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         )))
         .merge(router_console::router(port))
         .merge(router_api)
+        // One guard for the whole local UI, including the core chat, config,
+        // project, workflow, extension and update routes that are registered
+        // above rather than in a module router. Without this outer layer a
+        // foreign Host reaches those routes through DNS rebinding.
+        .route_layer(middleware::from_fn_with_state(
+            workspace::LocalOriginGuard::new(port),
+            workspace::guard_local_origin,
+        ))
         .layer(middleware::from_fn(local_security_headers))
         // Outermost layer: every route, including the guards inside it, runs
         // with the request's id in scope.
@@ -5358,6 +5452,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
+        // Answer a version/help probe before any path is resolved or a database
+        // is opened. These used to be ignored, so `--version` launched the
+        // whole app against the real home instead of printing and exiting.
+        Some("--version" | "-V") => {
+            println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!(
+                "{APP_NAME} {}\n\nUsage: free-ai-studio [--headless|--no-gui|--browser]\n\n  --headless, --no-gui  run the local server without a window\n  --browser             open the interface in your default browser\n  --version, -V         print the version and exit\n  --help, -h            print this help and exit",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
         Some("host-token") => {
             let (config_path, _, _) = paths();
             let token_path = config_path.with_file_name("host-auth.json");
@@ -5465,6 +5573,33 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn an_unreadable_config_is_backed_up_before_defaults_replace_it() {
+        let dir = scratch("bad-config");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{not valid json").expect("write config");
+        let backup = preserve_unreadable_config(&path).expect("backup");
+        assert_eq!(
+            std::fs::read_to_string(&backup).expect("backup readable"),
+            "{not valid json"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_valid_config_is_not_backed_up() {
+        let dir = scratch("good-config");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.json");
+        let valid = serde_json::to_vec(&Config::defaults()).expect("serialize config");
+        std::fs::write(&path, valid).expect("write config");
+        assert!(preserve_unreadable_config(&path).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -5875,6 +6010,95 @@ mod tests {
         state
     }
 
+    /// Thread reads filter by conversation and order by id; the list also asks
+    /// for each thread's newest message. The composite index must be present on
+    /// a fresh schema and after re-applying it (migrations run every boot).
+    #[test]
+    fn message_lookups_use_the_conversation_index() {
+        let conn = Connection::open_in_memory().expect("db");
+        apply_schema(&conn).expect("schema");
+        apply_schema(&conn).expect("schema is idempotent");
+        let plan: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "EXPLAIN QUERY PLAN SELECT id, role, content FROM messages \
+                     WHERE conversation_id=?1 ORDER BY id",
+                )
+                .expect("plan");
+            let rows = stmt
+                .query_map(["c1"], |row| row.get::<_, String>("detail"))
+                .expect("plan rows");
+            rows.collect::<rusqlite::Result<Vec<_>>>().expect("details")
+        };
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("messages_conversation")),
+            "the thread read must use the conversation index: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.starts_with("SCAN messages")),
+            "the thread read must not scan the whole message table: {plan:?}"
+        );
+    }
+
+    /// Concurrent chat turns each save the user message in a transaction that
+    /// reads the thread first. A deferred transaction fails its read-to-write
+    /// upgrade immediately when another turn is writing; the write must instead
+    /// wait for its turn. This holds the lock long enough for every other writer
+    /// to contend, then checks all eight messages landed.
+    #[test]
+    fn concurrent_chat_writes_wait_instead_of_failing() {
+        let state = fixture("concurrent-chat-writes");
+        let path = state.database_path.clone();
+        let project = active_project_id(&state);
+        {
+            let conn = open_db(&path).expect("database");
+            conn.execute(
+                "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget,model)
+                 VALUES('c1','Concurrent',1.0,1.0,?1,0,'')",
+                [&project],
+            )
+            .expect("conversation");
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for worker in 0..8 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || -> Result<(), String> {
+                let mut conn = open_db(&path).map_err(|error| error.to_string())?;
+                barrier.wait();
+                let tx = begin_write(&mut conn).map_err(|error| error.to_string())?;
+                let _: String = tx
+                    .query_row("SELECT title FROM conversations WHERE id='c1'", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(|error| error.to_string())?;
+                // Keep the write lock held so the other workers must wait.
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                tx.execute(
+                    "INSERT INTO messages(conversation_id,role,content,created_at)
+                     VALUES('c1','user',?1,1.0)",
+                    [format!("worker {worker}")],
+                )
+                .map_err(|error| error.to_string())?;
+                tx.commit().map_err(|error| error.to_string())
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("worker panicked").expect("write");
+        }
+        let conn = open_db(&path).expect("database");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id='c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 8, "every concurrent turn must be saved");
+    }
+
     /// The default (project-filtered) thread list used to read the project name
     /// at index 5 as the integer budget, so every fresh app answered 500 until
     /// the person switched the sidebar to "All projects". Keep the mapping tied
@@ -5890,8 +6114,8 @@ mod tests {
             })
             .expect("the default project");
         conn.execute(
-            "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget)
-             VALUES('c1','Thread',1.0,1.0,?1,7)",
+            "INSERT INTO conversations(id,title,created_at,updated_at,project_id,token_budget,model)
+             VALUES('c1','Thread',1.0,1.0,?1,7,'mock-model')",
             [&project],
         )
         .expect("conversation");
@@ -5905,6 +6129,9 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(value[0]["project"], project_name);
         assert_eq!(value[0]["token_budget"], 7);
+        // The UI restores `match.model` when a thread is reopened; the list has
+        // to carry the persisted model or that restore silently never happens.
+        assert_eq!(value[0]["model"], "mock-model");
     }
 
     /// A router that answers with the scripted statuses in order (then 200 with

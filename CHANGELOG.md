@@ -1,5 +1,276 @@
 # Changelog
 
+## 3.88.18
+
+### Phase 10 acceptance evidence
+
+- Added the 12 final acceptance reports: feature inventory, security audit,
+  performance, reliability, platform, UI, release, technical debt, readiness
+  scorecard, acceptance decision, user guide and installation/upgrade guide.
+- Desktop CI run 45704212041 passed all five jobs (Linux, Windows, macOS,
+  website, security audit); the macOS watcher regression test passed natively.
+- Corrected README runtime binary names, environment variables and user-data
+  paths to match the shipped application.
+
+## 3.88.17
+
+### Phase 10 acceptance fixes
+
+- The macOS watcher test now waits for an index sentinel instead of a fixed
+  150 ms sleep, removing a real FSEvents registration race on shared CI runners.
+- An unreadable `config.json` is copied to `config.json.corrupt-<timestamp>`
+  before defaults replace it, so a truncated settings file no longer disappears
+  without a recovery path.
+- The saved-key help text no longer reads "goes to in the OS credential store".
+- README runtime commands now use the real `free-ai-studio` binary and
+  `FREE_AI_STUDIO_*` environment variables.
+- Added the Phase 10 production-acceptance reports.
+
+## 3.88.16
+
+### CI
+
+- The RustSec audit now scans `app/Cargo.lock`; the first Phase 9 CI run
+  invoked it at the repository root, where no lockfile exists, and failed
+  before auditing a single crate.
+- Added the Phase 9 release-engineering evidence reports.
+
+## 3.88.15
+
+### Release engineering
+
+- The release pipeline now builds every platform in isolated jobs, downloads
+  the artifacts into one finalize stage, and generates a single global
+  `SHA256SUMS.txt` instead of a Linux-only checksum file.
+- Releases carry a CycloneDX 1.5 SBOM, a `release-manifest.json` binding every
+  artifact hash to the source commit and workflow run, and curated
+  `RELEASE_NOTES.md` generated from this changelog section.
+- Publication is a separate, explicitly authorized job. A tag push or branch
+  dispatch builds and verifies artifacts without creating a public release.
+- The Android release job now reflects the real unsigned Gradle output instead
+  of claiming a debug-signed APK; signing status is recorded as blocked in the
+  manifest until credentials exist.
+- Added offline tests for SBOM shape, release notes, manifest, global checksums,
+  tamper rejection and historical-contract versioning.
+
+## 3.88.14
+
+### Documentation
+
+- Record the final branch-head Desktop CI run and commit in the Phase 8
+  completion report and compatibility matrix.
+
+## 3.88.13
+
+### Documentation
+
+- Phase 8 cross-platform audit, compatibility matrix, Linux/Windows/macOS/
+  Android/web validation, platform security, installer/update validation and
+  completion reports. Records verified, CI-tested, payload-tested and blocked
+  states separately; no untested platform is claimed as supported.
+
+## 3.88.12
+
+### Security
+
+- The SQLite database is chmod 0600 when opened on Unix. It was created 0644
+  under the usual umask; the 0700 data directory protected it, but the file
+  itself contains conversation text and should stay owner-only if that parent
+  mode is ever relaxed. `test-e2e.sh` now checks the file mode.
+
+## 3.88.11
+
+### CI
+
+- The installer dependency test now hides a host-installed `mold` behind a
+  private symlink farm. The desktop workflow installs `mold` before the test,
+  so the old fake PATH found the real binary and reported the deliberately
+  missing case as present; the test failed on every runner with mold.
+
+## 3.88.10
+
+### Cross-platform packaging
+
+- The Linux `.deb` now ships the complete runtime UI: `ide.js`, `ide.css`,
+  `highlight.js`, `replace.js` and every brand asset and bundled skill. The
+  previous manifest omitted the IDE layer, so an installed package booted to a
+  page that could not render the workbench. `scripts/ci/test-deb-assets.sh`
+  fails when a runtime file under `app/static` is not in the package manifest.
+- Android release builds are unsigned again, matching `BUILDING.md`, CI's
+  `app-release-unsigned.apk` artifact and the documented signing step. The
+  release build no longer claims the debug keystore as its identity.
+- Android plaintext HTTP is enforced in code: `CleartextPolicy` allows it only
+  for localhost and private/link-local LAN addresses and refuses public hosts.
+  The network-security-config previously listed CIDR ranges under `<domain>`,
+  which never matched a LAN address and contradicted the documented setup.
+- Android 15 edge-to-edge content is padded by the live status/navigation bar
+  and display-cutout insets, so the header and composer stay reachable.
+- Android version `1.51.1` (version code `61`).
+
+## 3.88.9
+
+### Interface
+
+- Restored the workbench home on first load: the main column now shows the
+  project state and real Open folder / New thread / Search actions instead of a
+  blank surface, and returns there when leaving a page view.
+- Chat code blocks use the editor's tested syntax highlighter, keep the language
+  label, and expose a labelled Copy button. Threads can be filtered by title or
+  project, with Escape clearing the filter.
+- Added a terminal empty state and let the no-folder hint use two lines instead
+  of truncating in the explorer.
+- Dialogs trap Tab inside the open panel and return focus to their opener;
+  streaming exposes `aria-busy` and a polite status region, and the phone-width
+  assistant dock no longer covers the activity rail.
+
+### Testing
+
+- Frontend suite covers the workbench home, chat highlighting, thread filtering,
+  dialog focus, theme persistence, accessible status semantics and the phone
+  dock rule (124 tests).
+
+## 3.88.6
+
+### Performance
+
+- Painted streaming text at most once per animation frame. A 19k-character
+  answer now completes in ~186 ms with no long tasks, down from multiple
+  seconds-long blocks.
+- Opened long threads with the latest 200 messages and an explicit earlier-page
+  control. A 2,000-message thread opens in ~462 ms instead of 3.6 s, and every
+  message stays reachable.
+
+### Testing
+
+- Frontend suite covers the paged history window (116 tests).
+- The mock router gained a long-answer fixture for repeatable stream benchmarks.
+
+## 3.88.5
+
+### Performance and reliability
+
+- Added `messages(conversation_id, id)`, removing full-table scans from thread
+  reads and the conversation list. The 200k-message list drops from ~680 ms to
+  under 2 ms.
+- Enabled WAL and began chat write transactions with `BEGIN IMMEDIATE`, so
+  concurrent turns wait for the write lock instead of failing with
+  `database is locked`. A 32-worker load now completes with no errors.
+- Startup reports the settings/data directory it could not create instead of a
+  bare OS error.
+
+### Testing
+
+- Rust coverage for the query plan and eight concurrent writers.
+
+## 3.88.4
+
+### Fixed
+
+- A non-stream chat turn now stores the model that answered it, and the
+  conversation list returns that model, so reopening a thread restores the
+  choice instead of falling back to the current default.
+- A workflow's attached skill now reaches every agent node, including resumed
+  and scheduled runs. A missing, disabled, broken or incompatible skill is
+  refused with a specific error instead of being silently ignored.
+- Workflow child agent runs inherit the configured token ceiling instead of
+  using the column default of 0 (no limit).
+- Direct agent runs can attach a skill from the Runs form; the instructions are
+  validated and stored with the run goal.
+
+### Testing
+
+- Real-binary e2e grows from 61 to 75 checks: model round-trip, direct and
+  workflow skill delivery, missing-skill refusals, denied write approval, and a
+  two-agent dependent workflow.
+- Four new Rust tests cover skill resolution and workflow child-run budgeting.
+- The release-mode e2e run was refused by this host before execution; the 3.88.4
+  release binary builds and reports its version.
+
+## 3.88.3
+
+### Fixed
+
+- `--version` and `--help` now print and exit before any config path is
+  resolved or database opened. They used to be ignored, so a packaging script
+  or a curious user asking for the version started the whole app against the
+  real home instead.
+
+### Testing
+
+- The end-to-end suite now drives a real `text/event-stream` provider, not only
+  the one-shot JSON fallback: six deltas, one done frame, and exactly one
+  stored reply.
+- Stopping generation is observed against a slow stream: the client abort keeps
+  the partial reply exactly once, and the studio answers the next turn.
+- A setting saved through the config route is read back from disk after a
+  restart.
+- Real-binary e2e grows from 53 to 61 checks; the Rust suite gains three
+  built-binary CLI tests.
+
+## 3.88.2
+
+### Security
+
+- Remote MCP servers must use `https://` unless the host is loopback (localhost,
+  `127.0.0.1`, `::1` or `0.0.0.0`). The rule is enforced when a server is saved,
+  again before a connection opens, for the OAuth discovery, registration,
+  token and legacy-SSE message endpoints, and for every redirect hop. An old
+  `mcp.json` with a cleartext
+  remote URL is refused with a message naming HTTPS instead of sending its
+  configured headers or bearer token over the network in the clear.
+- Saved MCP header values move to the OS credential store. `mcp.json` keeps
+  only the header names, startup migrates values written by older builds, and a
+  store failure falls back to the permission-restricted file rather than
+  losing the value.
+- `cargo audit` now reports **0 known vulnerabilities**. Updated `zip` 2.6.1 →
+  9.8.2 (fixes the critical archive-extraction advisories),
+  `rusqlite` 0.32.1 → 0.43.0 with bundled `libsqlite3-sys` 0.40.0, `tokio`
+  1.43.0 → 1.54.1, `url` 2.5.8 → 2.5.9 and `cookie` 0.18.2 → 0.18.3. The
+  remaining audit output is five unmaintained/unsound warnings (chrono, paste,
+  proc-macro-error, rustls-pemfile and the Tauri/GTK glib line) with no safe
+  in-line upgrade; none is a known vulnerability.
+
+### Tests
+
+- The real-binary suite now has **53 checks**, including rejection of a remote
+  cleartext MCP URL and acceptance/removal of a loopback HTTP server.
+- Header-secret migration, OAuth cleartext-endpoint refusal and offline URL
+  policy have Rust unit coverage. The complete Rust suite is **709 passed**
+  (1 ignored), frontend **115 passed** and VS Code **45 passed**.
+
+## 3.88.1
+
+### Fixed
+
+- The core local UI routes now sit behind the same loopback `Host`/`Origin`
+  guard as the workspace, terminal and agent routers. A foreign `Host` could
+  reach `/api/config`, chat, projects, workflows, extensions and the
+  update/uninstall routes through DNS rebinding; the guard now wraps the whole
+  router once, after every module is merged.
+- A recent-folder name is rendered as text instead of being interpolated into
+  the project menu's `innerHTML`. A folder named like an HTML fragment can no
+  longer inject markup into the app origin.
+- Streaming chat metadata no longer hides `memory_used` and `retrieved` behind
+  an auto-matched skill. Both fields are now reported independently, so the
+  reply says when project memory or code retrieval shaped it.
+
+### Tests
+
+- The real-binary end-to-end suite grew from 34 to 51 checks: hostile
+  `Host`/`Origin` refusals, streaming chat, conversation deletion, config
+  redaction, project/memory/workflow CRUD, workspace file create/save/read/
+  rename/delete, a path-traversal refusal, an interactive PTY command, and the
+  streaming-memory metadata case. The same 51 checks pass against the release
+  binary.
+- The frontend harness now covers a hostile recent-folder name.
+
+Verified at 3.88.1: 704 Rust tests (1 ignored), 115 frontend tests, 51 release
+end-to-end checks, 45 VS Code extension tests, 26 version checks, 9 Linux
+metadata checks and all offline release/install gates. The optimized 3.88.1
+binary reached `/api/health` in 174 ms and used 87.5 MiB RSS in the headless
+smoke; its response carries CSP, `X-Frame-Options: DENY`, nosniff,
+`no-referrer` and `no-store`, and a foreign `Host` gets 403.
+
 ## 3.88.0
 
 ### Added

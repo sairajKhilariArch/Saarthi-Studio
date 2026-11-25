@@ -69,6 +69,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_stream(self, content, model, slow=False):
+        """A real text/event-stream, so the studio's SSE machine is exercised.
+
+        `slow` sends one delta and then holds the connection open: the only way
+        a test can abort a stream that is genuinely still running.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            pieces = [content[i:i + 8] for i in range(0, len(content), 8)] or [""]
+            for index, piece in enumerate(pieces):
+                frame = {
+                    "id": "chatcmpl-mock", "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": piece},
+                                 "finish_reason": None}],
+                }
+                self.wfile.write(("data: " + json.dumps(frame) + "\n\n").encode())
+                self.wfile.flush()
+                if slow and index == 0:
+                    time.sleep(30)
+            usage = {"choices": [], "usage": {"prompt_tokens": 120,
+                     "completion_tokens": 48, "total_tokens": 168}}
+            self.wfile.write(("data: " + json.dumps(usage) + "\n\n").encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # The client stopped the stream; that is a test outcome, not a mock
+            # failure.
+            return
+
     def read_json(self):
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
@@ -209,7 +244,42 @@ class Handler(BaseHTTPRequestHandler):
             transcript = "\n".join(str(m.get("content", "")) for m in messages)
             # Only the e2e goal is scripted; every other turn keeps the plain
             # reply the UI and console smokes expect.
-            if "e2e-agent" in transcript:
+            if "bench-long-stream" in transcript:
+                content = "Long streaming benchmark.\n\n" + (
+                    "Markdown paragraph with **bold**, `code`, and a [link](https://example.com).\n\n" * 400
+                )
+            elif "e2e-agent-deny" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: the denied write never happened."
+                elif "EXACTLY ONE JSON object" in system:
+                    content = json.dumps({
+                        "action": "write",
+                        "path": "e2e-denied.txt",
+                        "content": "this must never be written\n",
+                    })
+                else:
+                    content = "Mock router reply."
+            elif "e2e-skill-run" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: the skill-shaped agent run finished."
+                elif "EXACTLY ONE JSON object" in system:
+                    content = json.dumps({
+                        "action": "done",
+                        "summary": "the direct skill run finished",
+                    })
+                else:
+                    content = "Mock router reply."
+            elif "e2e-workflow-skill" in transcript:
+                if "reviewing one finished agent run" in system:
+                    content = "APPROVE: the skill-shaped workflow step finished."
+                elif "EXACTLY ONE JSON object" in system:
+                    content = json.dumps({
+                        "action": "done",
+                        "summary": "the workflow skill step finished",
+                    })
+                else:
+                    content = "Mock router reply."
+            elif "e2e-agent" in transcript:
                 if "reviewing one finished agent run" in system:
                     content = "APPROVE: e2e-agent.txt exists with the requested marker."
                 elif "EXACTLY ONE JSON object" in system:
@@ -229,6 +299,8 @@ class Handler(BaseHTTPRequestHandler):
                     content = "Mock router reply."
             else:
                 content = "Mock router reply. Context packed: " + str(len(messages)) + " messages."
+            if body.get("stream"):
+                return self.send_stream(content, model, slow="slow" in str(model))
             return self.send_json({
                 "id": "chatcmpl-mock", "object": "chat.completion", "model": model,
                 "choices": [{"index": 0, "finish_reason": "stop",

@@ -78,7 +78,7 @@ async fn terminal_open(
     AxumJson(input): AxumJson<Value>,
 ) -> Response {
     let hub = state.terminal.clone();
-    let cwd = input
+    let requested = input
         .get("cwd")
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -95,18 +95,25 @@ async fn terminal_open(
         .and_then(Value::as_u64)
         .unwrap_or(24)
         .max(5) as u16;
-    if cwd.is_empty() {
+    if requested.is_empty() {
         return json_error(
             StatusCode::BAD_REQUEST,
             "Set a project folder before opening a terminal.",
         );
     }
-    if !std::path::Path::new(&cwd).is_dir() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            format!("Folder does not exist: {cwd}").as_str(),
-        );
-    }
+    // A terminal is a project shell, not a system shell. It may only start in
+    // the folder the user has open, resolved through symlinks first: a request
+    // naming `/`, a home directory or another project is refused, and a link
+    // inside the project that points elsewhere does not pass either.
+    let cwd = match state.workspace.open_root_for(&requested) {
+        Some(root) => root.to_string_lossy().to_string(),
+        None => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "A terminal can only open in the folder that is currently open.",
+            )
+        }
+    };
     // A saved `command` rule is checked before a shell is spawned *and* before
     // an existing session for this folder is handed back, so a deny cannot be
     // bypassed by a terminal that is already running.

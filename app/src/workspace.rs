@@ -160,6 +160,16 @@ impl WorkspaceStore {
         self.current().map(|workspace| workspace.root)
     }
 
+    /// The canonical path of a directory that is exactly the folder currently
+    /// open, or `None`. Callers that spawn a process (the terminal) use this
+    /// instead of trusting a path from the request: another project, `/`, a
+    /// home directory or a symlink pointing elsewhere does not match.
+    pub(crate) fn open_root_for(&self, path: &str) -> Option<PathBuf> {
+        let root = self.current()?.root;
+        let candidate = canonical_dir(path)?;
+        (candidate == root).then_some(candidate)
+    }
+
     fn recent(&self) -> Vec<String> {
         self.recent
             .read()
@@ -1732,6 +1742,33 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn a_terminal_root_is_only_the_open_folder() {
+        let fixture = Fixture::new("terminal-root");
+        fs::create_dir_all(fixture.path("other")).unwrap();
+        let store = WorkspaceStore::load(fixture.root.join("workspace.json"));
+        let opened = store.open(fixture.root.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            store.open_root_for(fixture.root.to_str().unwrap()),
+            Some(opened.root.clone())
+        );
+        assert!(store
+            .open_root_for(fixture.path("other").to_str().unwrap())
+            .is_none());
+        assert!(store.open_root_for("/").is_none());
+
+        #[cfg(unix)]
+        {
+            let link = fixture.path("link");
+            std::os::unix::fs::symlink(fixture.path("other"), &link).unwrap();
+            assert!(
+                store.open_root_for(link.to_str().unwrap()).is_none(),
+                "a link must not turn an unrelated folder into the open project"
+            );
         }
     }
 

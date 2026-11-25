@@ -143,6 +143,17 @@
       setPanel("right", false);
     }
     if (activity.pane) {
+      // Explorer, Search and Source control are workbench surfaces. When a
+      // full-page view (Settings, Runs, Agents…) owns the main column, clicking
+      // one of them returns to the workbench instead of leaving that page on
+      // screen with no visible way back. An open editor is left alone.
+      const pageOpen = ["settings", "usage", "router", "local", "skills", "workspaces", "agents",
+        "integrations", "artifacts", "automation", "runs"]
+        .some((name) => $(`${name}View`) && !$(`${name}View`).classList.contains("hidden"));
+      const editorOpen = $("editorView") && !$("editorView").classList.contains("hidden");
+      if (pageOpen && !editorOpen && typeof window.setView === "function") {
+        window.setView("chat");
+      }
       showSidebar(activity.pane);
       if (document.body.classList.contains("no-left")) setPanel("left", true);
       // At narrow widths the sidebar is a fixed overlay driven by nav-open,
@@ -3161,6 +3172,14 @@
     });
     workbench.appendChild(actions);
     document.querySelector(".main").appendChild(workbench);
+    // app.js applied its first view before this element existed, and the
+    // Explorer activity does not call setView. Show the home surface now when
+    // no editor or page owns the main column, instead of leaving it blank.
+    const editorVisible = !$("editorView").classList.contains("hidden");
+    const pageVisible = ["settings", "usage", "router", "local", "skills", "workspaces", "agents",
+      "integrations", "artifacts", "automation", "runs"]
+      .some((name) => $(`${name}View`) && !$(`${name}View`).classList.contains("hidden"));
+    workbench.classList.toggle("hidden", editorVisible || pageVisible);
 
     openActivity("explorer");
     // An AI-first workbench starts with the assistant docked open unless the

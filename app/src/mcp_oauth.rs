@@ -190,6 +190,10 @@ fn well_known_candidates(url: &str, well_known: &str) -> Vec<String> {
 }
 
 async fn get_json(url: &str, client: &reqwest::Client) -> Result<Value, String> {
+    // Discovery documents and every endpoint they name are contacted by this
+    // app. A remote one is HTTPS; plain http is reserved for a loopback
+    // fixture or a server on this machine.
+    crate::mcp::require_remote_url(url)?;
     let response = client
         .get(url)
         .header("accept", "application/json")
@@ -305,6 +309,7 @@ pub(crate) async fn register_client(
                 .to_string(),
         );
     }
+    crate::mcp::require_remote_url(&metadata.registration_endpoint)?;
     let body = json!({
         "client_name": "Sarthi Studio MCP",
         "redirect_uris": [redirect_uri],
@@ -472,6 +477,7 @@ async fn token_request(
     resource: Option<&str>,
     http: &reqwest::Client,
 ) -> Result<Value, String> {
+    crate::mcp::require_remote_url(token_endpoint)?;
     let mut form: BTreeMap<String, String> = params
         .iter()
         .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -615,6 +621,7 @@ pub(crate) async fn attachable_header(
     let current = if existing.expired() && !existing.refresh_token.trim().is_empty() {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
+            .redirect(crate::mcp::safe_redirect_policy())
             .build()
             .ok()?;
         match refresh(state, &server.name, &http).await {
@@ -670,12 +677,14 @@ pub(crate) async fn prepare(
     server_url: &str,
     port: u16,
 ) -> Result<StartedFlow, String> {
+    crate::mcp::require_remote_url(server_url)?;
     // A state token nobody else can guess: two UUID simple spellings, the same
     // trick the PKCE verifier uses.
     let flow_state = pkce_verifier();
     let verifier = pkce_verifier();
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
+        .redirect(crate::mcp::safe_redirect_policy())
         .build()
         .map_err(|error| format!("Could not build an HTTP client: {error}"))?;
     let (resource, metadata) = discover(server_url, &http).await?;
@@ -690,6 +699,8 @@ pub(crate) async fn prepare(
             }),
     };
     let credentials = credentials?;
+    crate::mcp::require_remote_url(&metadata.authorization_endpoint)?;
+    crate::mcp::require_remote_url(&metadata.token_endpoint)?;
     let url = build_authorize_url(
         &metadata.authorization_endpoint,
         &credentials.client_id,
@@ -771,6 +782,7 @@ pub(crate) async fn wait_for_browser(
     };
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
+        .redirect(crate::mcp::safe_redirect_policy())
         .build()
         .map_err(|error| format!("Could not build an HTTP client: {error}"))?;
     let renewed = exchange(
@@ -997,6 +1009,30 @@ mod tests {
         assert_eq!(exchanged.access_token, "access-from-exchange");
         assert_eq!(exchanged.refresh_token, "refresh-from-exchange");
         assert_eq!(exchanged.scopes, vec!["read".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn metadata_and_token_endpoints_never_use_cleartext_off_loopback() {
+        let http = reqwest::Client::builder().build().unwrap();
+        let error = get_json(
+            "http://example.com/.well-known/oauth-authorization-server",
+            &http,
+        )
+        .await
+        .expect_err("a remote metadata document must not be fetched in the clear");
+        assert!(error.contains("https://"), "{error}");
+
+        let error = token_request(
+            "http://example.com/token",
+            &[("grant_type", "refresh_token")],
+            "client",
+            "",
+            None,
+            &http,
+        )
+        .await
+        .expect_err("a remote token endpoint must not be reached in the clear");
+        assert!(error.contains("https://"), "{error}");
     }
 
     #[tokio::test]

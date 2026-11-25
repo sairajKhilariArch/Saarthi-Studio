@@ -6,19 +6,26 @@ A Rust-powered local AI coding/chat workspace that works with FreeLLMAPI. The ba
 
 ## Install a release (downloaded artifacts)
 
-Pushing a `v*` tag (e.g. `v2.0.0`) to GitHub Actions attaches every release file to that tag's release page:
+A `v*` tag or a manual workflow dispatch builds and verifies every artifact. A tag alone does **not** publish: a public GitHub release is created only by a dispatch with `publish=true` and an existing tag, and the publish gate still refuses unsigned bundles. The release names are:
 
 | Platform | Artifact | Install & run |
 | --- | --- | --- |
-| Linux (deb) | `SAARTHI-STUDIO_<version>_amd64.deb` | `sudo dpkg -i SAARTHI-STUDIO_*_amd64.deb`, then launch **Sarthi Studio** from the menu or run `SAARTHI-STUDIO` |
-| Linux (AppImage) | `SAARTHI-STUDIO_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
-| Linux (portable) | `SAARTHI-STUDIO_<version>_linux-x86_64.tar.gz` | Extract, verify `SHA256SUMS.txt`, run `./SAARTHI-STUDIO` (run `./install-and-run.sh` for the full source-build install instead) |
-| Windows | `SAARTHI-STUDIO_<version>_windows-x86_64.zip` | Extract, run `SAARTHI-STUDIO.exe` (WebView2 ships with Windows 10/11) |
-| macOS (arm64) | `SAARTHI-STUDIO_<version>_macos-arm64.tar.gz` | Extract and run `./SAARTHI-STUDIO`. **Unsigned build**: on first launch right-click the binary → Open (Gatekeeper otherwise blocks it). No notarization yet. |
-| Android | `SAARTHI-STUDIO_<version>_android-release-unsigned.apk` | Enable **Install unknown apps** for your file manager, open the APK; an AAB is also attached for Play-style signing |
-| VS Code | `SAARTHI-STUDIO-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension SAARTHI-STUDIO-vscode.vsix` |
+| Linux (deb) | `free-ai-studio_<version>-1_amd64.deb` | `sudo dpkg -i free-ai-studio_*_amd64.deb`, then launch **Sarthi Studio** from the menu or run `free-ai-studio` |
+| Linux (AppImage) | `sarthi-studio_<version>_x86_64.AppImage` | `chmod +x`, double-click or run it directly — nothing else needed |
+| Linux (portable) | `sarthi-studio_<version>_linux-x86_64.tar.gz` | Extract and run `./free-ai-studio` (use `./install-and-run.sh` for the full source-build install instead) |
+| Windows (zip) | `sarthi-studio_<version>_windows-x86_64.zip` | Extract and run `free-ai-studio.exe` (WebView2 ships with Windows 10/11) |
+| Windows (MSI) | `sarthi-studio_<version>_windows-x86_64.msi` | Run the installer; it is currently **unsigned** |
+| macOS (universal) | `sarthi-studio_<version>_macos-universal.app.zip` or `..._macos-universal.tar.gz` | Unzip and open the app. **Unsigned and not notarized**: right-click → Open on first launch. |
+| Android | `free-ai-studio-android.apk` (AAB: `free-ai-studio-android.aab`) | **Unsigned diagnostic build**: sign it with the release keystore before installing or distributing |
+| VS Code | `free-ai-studio-vscode.vsix` | In VS Code: Extensions view → `…` → **Install from VSIX…** — or run `code --install-extension free-ai-studio-vscode.vsix` |
 
-Every artifact ships a `SHA256SUMS.txt`; verify before installing. All creatives talk to your router on `127.0.0.1` only — nothing is uploaded anywhere except the request you send.
+Every release ships one global `SHA256SUMS.txt`, a CycloneDX `sbom.cdx.json`, `release-manifest.json` (version, source commit, workflow run and every artifact hash) and `RELEASE_NOTES.md`. Verify before installing:
+
+```sh
+sha256sum -c SHA256SUMS.txt
+```
+
+All creatives talk to your router on `127.0.0.1` only — nothing is uploaded anywhere except the request you send.
 
 ## One-command install (from source)
 
@@ -36,7 +43,7 @@ To inspect the dependencies without changing the machine, run `./install.sh --ch
 
 The installer reuses `~/freellmapi` if it exists. It preserves FreeLLMAPI's existing `.env`, database, provider configuration, and the AI Studio's existing local settings/history outside the application folder. It does not remove or reset provider settings.
 
-After that, launch **Free AI Suite (Rust)** from the Ubuntu Applications menu, or run `~/.local/bin/SAARTHI-STUDIO`.
+After that, launch **Free AI Suite (Rust)** from the Ubuntu Applications menu, or run `~/.local/bin/sarthi-studio`.
 
 ## First-time setup
 
@@ -55,8 +62,8 @@ http://127.0.0.1:8765
 Everything works in the browser: chat with Deep search, files, skills, settings. Run it without a window when you want it as a hosted service:
 
 ```bash
-SAARTHI_STUDIO_NO_GUI=1 ./target/release/SAARTHI-STUDIO     # serve the website only
-SAARTHI_STUDIO_PORT=9000 ./target/release/SAARTHI-STUDIO   # choose your port
+FREE_AI_STUDIO_NO_GUI=1 ./target/release/free-ai-studio     # serve the website only
+FREE_AI_STUDIO_PORT=9000 ./target/release/free-ai-studio   # choose your port
 ```
 
 Use it from a phone or another computer on your network — the site binds to `127.0.0.1` only, so reach it through an SSH tunnel rather than exposing a port:
@@ -65,7 +72,7 @@ Use it from a phone or another computer on your network — the site binds to `1
 ssh -L 8765:127.0.0.1:8765 user@machine      # then open http://127.0.0.1:8765 there
 ```
 
-The **Android companion app** connects to this machine through the desktop Host API instead of the browser: enable it with `SAARTHI_STUDIO_HOST_API_ENABLED=true`, `SAARTHI_STUDIO_HOST_API_BIND=<LAN IP>`, a TLS cert/key (`SAARTHI_STUDIO_HOST_API_TLS_CERT` / `..._KEY`), then create a pairing token with `SAARTHI-STUDIO host-token create`. See `PLATFORM-ARCHITECTURE.md` for the security model.
+The **Android companion app** connects to this machine through the desktop Host API instead of the browser: enable it with `FREE_AI_STUDIO_HOST_API_ENABLED=true`, `FREE_AI_STUDIO_HOST_API_BIND=<LAN IP>`, a TLS cert/key (`FREE_AI_STUDIO_HOST_API_TLS_CERT` / `..._KEY`), then create a pairing token with `free-ai-studio host-token create`. See `PLATFORM-ARCHITECTURE.md` for the security model.
 
 ## Features
 
@@ -90,29 +97,29 @@ The **Android companion app** connects to this machine through the desktop Host 
 - **Router console**: the FreeLLMAPI dashboard's providers, model catalog, routing strategy, analytics, logs and free-tier budget, served from inside the app over loopback
 - **Docker lifecycle**: Studio starts the router only when it is stopped, and stops it on exit only if Studio started it
 - **Native window**: the UI opens in an application window (Tauri 2 + the system webview), not a browser tab; `--browser` keeps the browser flow if you prefer it
-- Binds to `127.0.0.1` only; key is stored on the server side in a `0600` configuration file
+- Binds to `127.0.0.1` only; keys are stored server-side in the OS credential store, with a permission-restricted `0600` config file as fallback
 - One-click launcher for the Rust app and FreeLLMAPI Docker service
 
-The editor edits text; it does not execute code or open a terminal. Workspace access is confined to the folder you explicitly open: paths are canonicalised, `..`/absolute escapes and symlinks leaving that folder are rejected, binary and files over 1 MB are refused, and workspace routes reject non-loopback hosts/foreign origins. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
+The editor edits text; it does not execute code. A separate Terminal panel runs a real PTY on the desktop host. Workspace access is confined to the folder you explicitly open: paths are canonicalised, `..`/absolute escapes and symlinks leaving that folder are rejected, binary and files over 1 MB are refused, and workspace routes reject non-loopback hosts/foreign origins. Automatic fallback is controlled by FreeLLMAPI and depends on available provider quota. Free tiers are not unlimited.
 
 ## Runs as an application window, not a browser tab
 
 The desktop binary links Tauri 2 and loads the same local UI in the system webview (WebKitGTK on Linux, WebView2 on Windows). That keeps the download small — no bundled Chromium — and closing the window shuts down the local server, then stops the router if this run started it.
 
 ```bash
-SAARTHI-STUDIO              # application window
-SAARTHI-STUDIO --browser    # open in your default browser instead
-SAARTHI-STUDIO --no-gui     # headless server (used by tests and the extension)
+free-ai-studio              # application window
+free-ai-studio --browser    # open in your default browser instead
+free-ai-studio --no-gui     # headless server (used by tests and the extension)
 ```
 
-Windows users run `SAARTHI-STUDIO.exe` from the release zip; WebView2 ships with Windows 10/11.
+Windows users run `free-ai-studio.exe` from the release zip; WebView2 ships with Windows 10/11.
 
 ## Router console and Docker lifecycle
 
-Studio reads where FreeLLMAPI is installed from `~/.config/SAARTHI-STUDIO/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/SAARTHI-STUDIO/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
+Studio reads where FreeLLMAPI is installed from `~/.config/sarthi-studio/freellmapi-dir`, starts it with `docker compose up -d` when it is not answering, and records ownership in `~/.config/free-ai-studio/router-owned.json`. On exit it runs `docker compose down` **only** when it started the router itself, so a router you launched by hand keeps running.
 
 ```bash
-SAARTHI-STUDIO router status|start|stop
+free-ai-studio router status|start|stop
 ```
 
 The console signs in with FreeLLMAPI's loopback desktop session (`POST /api/auth/desktop-session`); a server install can sign in once with its dashboard email/password and the session token is cached in a `0600` file. Everything the console does goes through Studio's local bridge — provider keys are typed into the router, never stored by Studio.
@@ -131,27 +138,27 @@ The built-in server now implements the desktop API surface the UI uses — strea
 
 - AI Studio: `http://127.0.0.1:8765`
 - FreeLLMAPI dashboard: `http://127.0.0.1:3001` by default
-- Settings: `~/.config/SAARTHI-STUDIO/config.json`
-- Last opened folder: `~/.config/SAARTHI-STUDIO/workspace.json`
-- Chat history: `~/.local/share/SAARTHI-STUDIO/history.sqlite3`
-- App log: `~/.local/state/SAARTHI-STUDIO/studio.log`
+- Settings: `~/.config/free-ai-studio/config.json`
+- Last opened folder: `~/.config/free-ai-studio/workspace.json`
+- Chat history: `~/.local/share/free-ai-studio/history.sqlite3`
+- App log (structured log beside the database): `~/.local/share/free-ai-studio/studio.log`; the source installer also redirects stdout to `~/.local/state/sarthi-studio/studio.log`
 
 ## Troubleshooting
 
 ```bash
 cd ~/freellmapi && sudo docker compose ps
 cd ~/freellmapi && sudo docker compose logs --tail=100 freellmapi
-cat ~/.local/state/SAARTHI-STUDIO/studio.log
+cat ~/.local/share/free-ai-studio/studio.log
 ```
 
-If the Rust build fails, run `cargo build --release` inside `~/.local/share/SAARTHI-STUDIO/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
+If the Rust build fails, run `cargo build --release` inside `~/.local/share/sarthi-studio/app` and review the first compiler error. Rust dependencies are version-pinned in `Cargo.toml`; Cargo may create `Cargo.lock` during the first build.
 
 FreeLLMAPI is a separate project: https://github.com/tashfeenahmed/freellmapi — its dashboard (`http://127.0.0.1:3001` by default) is where provider keys and fallback chains are configured.
 
 ## Other GitHub projects this app uses
 
 - **[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi)** — the OpenAI-compatible router this studio is built around. Sarthi Studio starts it via Docker Compose when it is not answering, proxies every chat request to it, and embeds its provider dashboard in the Router console.
-- **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local `0600` config file.
+- **Backend presets** also reach other OpenAI-compatible endpoints directly (Hugging Face, OpenRouter, Groq, Gemini, OpenAI, Mistral, Cloudflare, Together, Novita, Cerebras, OmniRoute) — all configured from Settings → Provider setup, keys stay in the local OS credential store (or the `0600` config fallback).
 
 ## Contacts
 
@@ -175,7 +182,7 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 ## Production readiness
 
 ### Android (companion client)
-- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.51.0` (version code `60`).
+- `release` build type uses R8 minification and resource shrinking; `targetSdk` 35. Version `1.51.1` (version code `61`). Release APK/AAB are unsigned and signed with the project's release keystore at distribution time.
 - The "Android CI" workflow gates every `android/**` change on unit tests, lint, debug + release assembly, and emulator instrumentation, and uploads the **unsigned** release APK/AAB as `sarthi-studio-android-release-unsigned`. Sign artifacts with your own keystore at distribution time.
 - Plaintext router endpoints are restricted to loopback/private LAN ranges via `network_security_config.xml`; public hosts must use HTTPS.
 - Local helper: `android/BUILD-APK-UBUNTU.sh` runs unit tests, lint, debug and release assembly.

@@ -1,0 +1,545 @@
+# Sarthi Studio — Bug Fix Log
+
+**Audit date:** 2026-11-24  
+**Branch:** `remediation/security-2026-11-24`<br>
+**Baseline:** `55d1218` (3.88.0)  
+**Fixed release:** 3.88.1 audit fixes; 3.88.2 remediation fixes; 3.88.3 verification/startup fixes; 3.88.4 integration fixes; 3.88.5–3.88.7 performance/reliability fixes<br>
+**Rule followed:** reproduce first, fix the cause, add a regression test, rerun the affected suite. No test was skipped or weakened to obtain a green result.
+
+## Summary
+
+| ID | Severity | Bug | Status | Regression coverage |
+|---|---|---|---|---|
+| BUG-01 | P1 / High | DNS rebinding reached core local routes | Fixed | 2 e2e checks + full suite |
+| BUG-02 | P2 / Medium | Recent-folder name injected into `innerHTML` | Fixed | frontend unit test + frontend suite |
+| BUG-03 | P3 | Stream metadata hid memory/retrieval unless a skill matched | Fixed | new e2e memory-stream check |
+| BUG-04 | P2 / Medium | Remote MCP accepted cleartext HTTP off loopback | Fixed in 3.88.2 | 3 Rust tests + 2 e2e checks |
+| BUG-05 | P2 / Medium | Saved MCP header values were plaintext in `mcp.json` | Fixed in 3.88.2 | header-keychain Rust test |
+| BUG-06 | P4 / Usability | `--version`/`--help` were ignored and booted the app against the real home | Fixed in 3.88.3 | 3 built-binary CLI tests + e2e |
+| BUG-07 | P2 / Medium | Non-stream chat never persisted `conversations.model`, and the thread list omitted it | Fixed in 3.88.4 | Rust list test + e2e model round-trip |
+| BUG-08 | P2 / Medium | A workflow's attached skill was saved and displayed but never applied to its agents | Fixed in 3.88.4 | 4 Rust tests + two-agent e2e + missing-skill 400 |
+| BUG-09 | P3 | Workflow child agent runs bypassed the configured token ceiling | Fixed in 3.88.4 | Rust child-run budget test |
+| BUG-10 | P1 / High | History reads scanned all 200k messages, and the thread list took ~680 ms | Fixed in 3.88.5 | query-plan Rust test + benchmark |
+| BUG-11 | P1 / High | Concurrent chat writes failed with `database is locked` instead of waiting | Fixed in 3.88.5 | 8-thread Rust test + 32-way load test |
+| BUG-12 | P1 / High | Streaming repainted Markdown per delta; long answers blocked the UI for ~106 s of long tasks | Fixed in 3.88.6 | frontend suite + browser long-task measurement |
+| BUG-13 | P2 / Medium | Opening a 2,000-message thread blocked for ~3.6 s | Fixed in 3.88.6 | frontend page-window test + browser measurement |
+
+## BUG-06 — A version/help probe started the whole application
+
+### Description
+
+`free-ai-studio --version` did not print a version. The argument fell through to normal startup, so the process resolved the real config/data paths, opened the user's database and started a server. The earlier remediation record captured this happening while confirming a rebuilt binary. A packaging or diagnostic script that asks for the version must never touch user state.
+
+### Root cause
+
+Argument handling only matched the `host-token`, `router` and `omniroute` subcommands, then treated everything else as startup. There was no `--version`/`--help` arm and no test running the built binary.
+
+### Fix
+
+`main()` now matches `--version`/`-V` and `--help`/`-h` before any path is resolved, prints the brand and `CARGO_PKG_VERSION`, and returns. Both flags are documented in the help text next to `--headless` and `--browser`.
+
+### Verification
+
+- `app/tests/cli.rs`: `--version` succeeds and contains the package version, `-V` matches `--version`, `--help` lists every startup mode.
+- e2e: the built binary's `--version` matches `scripts/ci/version.sh`.
+- Package smoke: the binary extracted from the `.deb` prints `Sarthi Studio 3.88.3`, and a deliberately set `FREE_AI_STUDIO_HOME` is not created.
+
+### Result
+
+712 Rust tests, 61/61 e2e on debug and release, 14/14 package-payload checks.
+
+## BUG-01 — Core UI routes were outside the loopback origin guard
+
+### Description
+
+A request carrying a foreign `Host` (the DNS-rebinding shape) could read `/api/config` and reach other routes registered directly in `main.rs`, including chat, conversations, projects, workflows, extensions, update and uninstall. The same request against `/api/workspace` was correctly refused with 403.
+
+### Reproduction
+
+Against a live 3.88.0 binary on `127.0.0.1:8899`:
+
+```bash
+curl -H 'Host: evil.example:8899' http://127.0.0.1:8899/api/config
+# HTTP/1.1 200 OK
+# {"adaptive_routing":false,...,"base_url":"http://localhost:3001/v1",...}
+
+curl -H 'Host: evil.example:8899' -H 'Origin: http://evil.example:8899' \
+  http://127.0.0.1:8899/api/capabilities
+# HTTP/1.1 200 OK
+
+curl -H 'Host: evil.example:8899' http://127.0.0.1:8899/api/workspace
+# HTTP/1.1 403 Forbidden
+# {"error":"This endpoint only accepts loopback requests."}
+```
+
+### Root cause
+
+`workspace::router`, `terminal::router`, `media::router` and other module routers applied `workspace::guard_local_origin` via `route_layer`. Routes built directly in `main.rs::bootstrap()` were never wrapped. The guard implementation was correct; its integration was incomplete.
+
+### Affected components
+
+- `app/src/main.rs` — local router construction.
+- All directly registered core routes, including config, chat, chat stream, conversations, projects, workflows, extensions, update, uninstall and static serving.
+- Existing module routers were already guarded and provided defense in depth.
+
+### Fix
+
+Added one outer guard after every router is merged:
+
+```rust
+.merge(router_console::router(port))
+.merge(router_api)
+.route_layer(middleware::from_fn_with_state(
+    workspace::LocalOriginGuard::new(port),
+    workspace::guard_local_origin,
+))
+.layer(middleware::from_fn(local_security_headers))
+```
+
+Why this shape:
+
+- It covers routes added to this router later without maintaining a second route list.
+- It runs before the response body and before state-changing handlers.
+- It leaves the Host API (a separate TLS router with bearer authentication) untouched.
+- It does not change the Android Host API, which has its own security model.
+
+### Tests and results
+
+Added to `scripts/ci/test-e2e.sh`:
+
+```bash
+# Foreign Host on /api/config -> 403 with the loopback message
+# Foreign Origin on /api/capabilities -> 403 with the cross-site message
+```
+
+Before the fix, the same live checks returned 200. After the fix:
+
+- Debug binary e2e: **53 passed, 0 failed**
+- Optimized release e2e: **53 passed, 0 failed**
+- Foreign Host/Origin checks both 403
+- Normal loopback UI and mock-provider chat still 200
+
+### Files modified
+
+- `app/src/main.rs`
+- `scripts/ci/test-e2e.sh`
+- `CHANGELOG.md`
+- `docs/KNOWN-ISSUES.md` (#48)
+- version/metadata files
+
+### Verification
+
+`SECURITY_AUDIT_REPORT.md` SEC-01, `FEATURE_TEST_MATRIX.md` security rows, `APPLICATION_AUDIT_REPORT.md`.
+
+## BUG-02 — Recent-folder name was parsed as HTML
+
+### Description
+
+The Workspaces page built each recent-folder row with a template literal assigned to `innerHTML`:
+
+```js
+row.innerHTML = `<span class="project-menu-main"><small title="${path}">${path}</small></span>`;
+```
+
+A folder whose name contains HTML would inject markup into the local app origin. The CSP's `script-src 'self'` blocks inline handlers, so this was not a straightforward script-execution primitive, but it is a genuine injection defect and a latent risk if CSP or markup changes.
+
+### Reproduction
+
+A unit-level reproduction through the frontend harness with:
+
+```js
+const hostile = '<img src=x onerror="alert(1)">';
+```
+
+The old code passed that string to `innerHTML`; the new test checks the rendered `<small>` element has `textContent === hostile` and `innerHTML === ""`.
+
+### Root cause
+
+Filesystem-controlled text was concatenated into an HTML string instead of being assigned as a text node. The `title` attribute was interpolated at the same time, allowing attribute injection.
+
+### Affected components
+
+- `app/static/app.js`, `renderWorkspaces()` / new `recentFolderRow()`
+- Project menu recent folders (Workspace page)
+
+### Fix
+
+Added `recentFolderRow(path)`, which uses `document.createElement`, `textContent` for the label and a property assignment for `title`. `renderWorkspaces()` appends that row. No HTML string contains the path.
+
+### Tests and results
+
+- New test: `a recent folder name is rendered as text, never as markup`
+- Frontend suite: **115 passed, 0 failed** (was 114)
+- The test fails against the old interpolation and passes against the DOM construction.
+
+### Files modified
+
+- `app/static/app.js`
+- `app/static/tests/render.test.js`
+- `CHANGELOG.md`
+
+### Verification
+
+The live UI loaded the same code with no console errors; this specific row is covered by the browser-free harness rather than a screenshot.
+
+## BUG-03 — Streaming chat metadata omitted memory/retrieval unless a skill matched
+
+### Description
+
+When a streamed reply used project memory or code retrieval, the done metadata did not include `memory_used` or `retrieved` unless at least one skill had auto-matched. The reply's context meter therefore under-reported why the answer was shaped the way it was.
+
+### Root cause
+
+In `chat_stream`, both the deep-search branch and the main router branch nested the two independent fields inside:
+
+```rust
+if !auto_skills.is_empty() {
+    held["auto_skills"] = ...;
+    if !memory_used.is_empty() { ... }
+    if !retrieved.is_empty() { ... }
+}
+```
+
+`memory_used` and `retrieved` have no logical dependency on `auto_skills`. The non-streaming `chat` path already handled them independently, which made the discrepancy clear.
+
+### Affected components
+
+- `app/src/main.rs`, `chat_stream` deep-search branch and normal stream branch.
+- The streaming meta shown by the UI (`applyStreamMeta`) and stored by `ReplyRecorder`.
+
+### Fix
+
+Moved both checks out of the `auto_skills` block in both places. Each field is now emitted independently when non-empty.
+
+### Regression test
+
+`scripts/ci/test-e2e.sh` now:
+
+1. Creates a real memory record (`title: e2e memory`, body: `the audit marker`).
+2. Creates a separate conversation.
+3. Streams a message that shares the memory's words.
+4. Asserts the SSE body contains `"memory_used"`.
+5. Deletes the conversation and the memory record.
+
+This test would fail under the old nesting. Result: **53/53 e2e checks pass** on debug and release.
+
+### Files modified
+
+- `app/src/main.rs`
+- `scripts/ci/test-e2e.sh`
+- `CHANGELOG.md`
+
+## BUG-04 — Remote MCP could use cleartext HTTP
+
+### Description
+
+The desktop MCP URL check accepted `http://` for any host. A remote server with a configured `Authorization` header, or one completed over OAuth, could send the credential in the clear. The panel hint recommended HTTPS, but the server did not enforce it. An existing `mcp.json` was not rechecked when a connection opened, and OAuth metadata controlled discovery/token/authorize URLs.
+
+### Root cause
+
+`valid_url` was a syntax check only, applied only on save. Connection setup and every OAuth endpoint trusted their own URL input.
+
+### Fix
+
+Added one shared policy (`is_loopback_host` / `remote_url_error` / `require_remote_url`): HTTPS anywhere; HTTP only for `localhost`, `127.*`, `::1` or `0.0.0.0`. Enforced at save, `Connection::open`, the legacy-SSE announced endpoint, OAuth discovery/registration/token/authorize, and every redirect hop (`safe_redirect_policy`). The panel hint now says remote servers require HTTPS.
+
+### Regression test
+
+- `plain_http_is_only_for_this_machine`
+- `opening_an_insecure_remote_server_is_refused_before_connect`
+- `metadata_and_token_endpoints_never_use_cleartext_off_loopback`
+- `a_redirect_to_cleartext_off_loopback_is_refused`
+- e2e: remote HTTP save → 400; loopback HTTP save/remove → 200.
+
+Result: **709 Rust tests pass**; **53/53 e2e** on debug and release.
+
+### Files modified
+
+- `app/src/mcp.rs`
+- `app/src/mcp_oauth.rs`
+- `app/static/index.html`
+- `scripts/ci/test-e2e.sh`
+- `CHANGELOG.md`
+
+## BUG-05 — MCP header values were plaintext at rest
+
+### Description
+
+Provider keys and desktop MCP OAuth tokens already used the OS credential store, but custom MCP headers were written verbatim into `mcp.json`. Header values are commonly bearer tokens.
+
+### Root cause
+
+The registry serializer had no secret split; all fields were ordinary JSON. The keychain helper existed but was not called for headers.
+
+### Fix
+
+- Store the header map under `mcp_headers/<server>` in the OS credential store.
+- Blank values in `mcp.json`, hydrate on read only for names still declared.
+- Migrate legacy values at startup; leave the permission-restricted plaintext fallback if the store refuses the write.
+- Delete the vault entry when a server is removed.
+
+### Regression test
+
+`header_values_live_in_the_keychain_not_the_registry` asserts the raw file is blank, the read path hydrates, and removal clears the entry. It uses the project’s hermetic mock keychain. Result: pass in the **709 passed / 1 ignored** Rust run.
+
+### Files modified
+
+- `app/src/mcp.rs`
+- `app/src/main.rs`
+- `CHANGELOG.md`
+- `docs/KNOWN-ISSUES.md`
+
+## BUG-07 — Reopening a thread lost the model a non-stream turn used
+
+### Description
+
+After a normal (non-stream) chat turn, the thread's model was not restored when the conversation was reopened. The sidebar list answered `200` but had no `model` field, and the stored `conversations.model` value was empty even after the turn.
+
+### Root cause
+
+Two gaps on the same path. The non-stream `/api/chat` branches (deep search, local runtime, router) inserted the assistant message and updated `updated_at` directly; only the streaming `ReplyRecorder` wrote `model`. The conversation-list SQL also omitted `model` from both the project-filtered and all-project queries, so even a stored value could not reach the UI's `match.model` restore.
+
+### Fix
+
+- Every non-stream save path now writes `model` in the same `UPDATE conversations` statement as `updated_at`.
+- Both list queries select `COALESCE(v.model,'') AS model`; the JSON row carries `"model"`.
+- The existing Rust project-filtered list test now inserts and asserts `model`.
+
+### Verification
+
+- Rust: `the_project_filtered_thread_list_reads_project_and_budget` asserts `mock-model`.
+- e2e: after the chat turn, `GET /api/conversations` returns `mock-model` for that conversation (`the conversation list returns the model the turn used`).
+- The restart checks continue to pass.
+
+## BUG-08 — A workflow's skill was silently ignored
+
+### Description
+
+The workflow editor exposed a skill picker; save, export and import all carried `skill`, and the stored workflow showed it. Execution never resolved the skill, so attaching one changed nothing. A user who attached a review or debug skill got the same run as one who attached nothing.
+
+### Root cause
+
+`Workflow.skill` existed but `execute_agent` built the child goal from `node.prompt` alone; `ValidNode` had no skill field and no execution path read the workflow-level value. There was also no validation that the named skill still existed, was enabled, or was compatible with this build.
+
+### Fix
+
+- One shared resolver in `skills.rs`: `select_attached` checks existence, load error, minimum version and the disabled list; `resolve_attached` reads the same catalogue the Skills page shows; `with_instructions` bounds the body and keeps the task intact.
+- The workflow resolves its skill in `run`, `resume` and the scheduler before a run can start, and refuses with a specific 400/oplog error when it cannot.
+- The resolved instructions are passed through `spawn`/`execute` to every agent node and prefixed to that node's goal. The goal is stored, so a resumed run keeps the instructions after a restart.
+
+### Verification
+
+- Rust: missing, disabled, broken and incompatible skills are each refused; the prefix keeps a maximum-length task at the end; the body is trimmed to the ceiling.
+- e2e: a two-node workflow (`debug-it` → `report-it`) with `skill: "debug"` finishes 2/2; the first child agent's stored goal contains `Follow the skill "debug"` and the skill body.
+- e2e: a workflow naming `no-such-skill` is refused with `400` before a run row exists.
+
+## BUG-09 — Workflow child runs bypassed the configured token ceiling
+
+### Description
+
+A manually started agent run inherited `run_token_budget`, but a child run created by a workflow left `agent_runs.token_budget` at its default `0` (no limit). A scheduled workflow could therefore spend past the ceiling the user configured for agent work.
+
+### Root cause
+
+`workflow::insert_agent_run` used a column list that omitted `thinking` and `token_budget`; the schema defaults filled them with `0`.
+
+### Fix
+
+The workflow child insert now goes through a testable helper that writes the configured budget and the empty thinking value ("agent scope from config"), matching `agent::create_run`.
+
+### Verification
+
+- Rust: `a_workflow_child_run_inherits_the_configured_token_ceiling` inserts a child row and asserts `token_budget = 4321` and `thinking = ""`.
+
+## INT-04 — Direct agent runs had no skill attachment (gap, not a regression)
+
+Chat and workflows could attach skills, but `POST /api/runs` had no skill field. Phase 4 closed the integration gap:
+
+- `create_run` resolves and validates an optional `skill` before inserting a row; a missing/disabled/broken/incompatible skill returns `400` with the reason.
+- The stored goal carries the bounded instructions, capped at 9,000 characters so the 5,000-character task remains intact.
+- The Runs form has a skill picker populated from the same catalogue and sends the selected id.
+
+Evidence: e2e direct run finishes with the skill in its stored goal; missing skill is refused; Rust resolver tests cover the failure modes.
+
+## BUG-10 — Every history read scanned the whole message table
+
+### Description
+
+On a 200,000-message database the conversation list took 680–790 ms, and
+`EXPLAIN QUERY PLAN` showed `SCAN messages` for a thread read and a correlated
+`SCAN m` in the list. The cost grew linearly with total history, not with the
+thread being opened.
+
+### Root cause
+
+`messages` had no index on `(conversation_id, id)`, which is the shape used by
+the thread read and the list's newest-message subquery.
+
+### Fix
+
+`migrate_message_index()` in `app/src/main.rs` creates
+`messages_conversation ON messages(conversation_id, id)` from `apply_schema`, so
+fresh and upgraded databases get it and the migration is idempotent. It is a
+schema index, not a data rewrite.
+
+### Verification
+
+- `message_lookups_use_the_conversation_index` asserts the plan uses the index and
+  does not contain `SCAN messages`.
+- 200k-message benchmark: list 680–790 ms → 1.46–3.79 ms; thread read 16–22 ms →
+  2.0–5.3 ms.
+- First boot with index build: 188 ms; later boots 67–93 ms.
+
+## BUG-11 — Concurrent chats returned `database is locked`
+
+### Description
+
+Sending 16 simultaneous chat turns produced 4 HTTP 500 responses with
+`{"error":"database is locked"}`; 8 workers also failed. The write path has a
+10 s `busy_timeout`, so the failures happened before that timeout could apply.
+
+### Root cause
+
+The user-message transaction was deferred: it read the thread first and then
+tried to upgrade to a write lock. SQLite returns `SQLITE_BUSY` immediately on
+that upgrade and does not run the busy handler. The rollback journal also made
+readers wait behind the writer.
+
+### Fix
+
+- `begin_write()` starts the transaction with `TransactionBehavior::Immediate`,
+  taking the write lock up front so `busy_timeout` waits normally.
+- WAL is enabled once at startup, after the newer-schema byte-for-byte refusal
+  check, so reads can proceed during a commit.
+- Startup directory failures now name the directory in the error.
+
+### Verification
+
+- `concurrent_chat_writes_wait_instead_of_failing`: eight threads hold the lock
+  for 25 ms each and all eight messages persist.
+- Load: 1×50, 4×32, 8×32, 16×32 and 32×64 chats all returned 0 errors; 32-worker
+  median 126.4 ms, p95 393 ms.
+- `integrity_check` after a held 3 s lock: `ok`.
+
+## BUG-12 — Streaming repainted Markdown for every delta
+
+### Description
+
+A 19k-character answer arrived as 3,904 deltas. Each delta rebuilt the Markdown
+row, producing four long tasks totalling ~106.6 s (max ~37.9 s); the UI was
+unresponsive for tens of seconds.
+
+### Root cause
+
+`appendStreamText()` performed a full Markdown render and DOM replacement on
+every delta instead of batching the paints.
+
+### Fix
+
+Accumulate stream text and paint at most once per animation frame
+(`streamRenderHandle`, `streamRenderText`, `appendStreamText`);
+`finishStreamRow` cancels a queued paint before the final render.
+
+### Verification
+
+- Foreground browser: **186 ms** end-to-end, **0 long tasks** for the same 18.9k
+  answer.
+- Hidden-tab runs are throttled by Chromium (1.64 s) and are documented as a
+  browser scheduling effect, not the headline result.
+
+## BUG-13 — A long thread blocked while opening
+
+### Description
+
+Opening a 2,000-message thread took 3,589.5 ms; the bulk renderer also forced a
+layout by scrolling after every inserted row.
+
+### Root cause
+
+Every message was rendered synchronously, and `addMessage` scrolled the chat
+container after each one.
+
+### Fix
+
+- `addMessage(..., {scroll:false})` for bulk history; one scroll at the end.
+- The initial view is the latest 200 messages, with an explicit
+  `Load N earlier messages (N hidden)` control that inserts older pages while
+  preserving the reader's scroll position. All messages remain reachable.
+
+### Verification
+
+- `a long history renders one page and keeps older messages behind a control`.
+- 2,000-message open: 3,589.5 ms → 743 ms (full render) → **462 ms** (paged),
+  with two 82 ms long tasks.
+
+## Test-suite changes made for coverage (not bug fixes)
+
+The real-binary suite grew from 34 to 53 checks. New coverage:
+
+- foreign `Host` and `Origin` refusal;
+- streaming chat produced a delta/done frame and stored one reply;
+- conversation token-budget update and deletion cascade;
+- config key redaction;
+- project create/rename/list/delete;
+- memory create/list/delete and streaming recall metadata;
+- workflow save/export/delete;
+- skill catalogue;
+- remote cleartext MCP save refusal, and loopback HTTP save/remove;
+- workspace file create/save/read/rename/delete;
+- workspace path traversal refusal;
+- interactive terminal PTY command that writes a file;
+- all prior lifecycle/provider/restart/corruption checks.
+
+These are permanent tests, use scratch homes/databases, clean up after themselves, and do not contain real credentials.
+
+## Regression status after repairs
+
+| Check | Result (3.88.3 final) |
+|---|---|
+| Rust suite | 712 passed (709 suite + 3 CLI), 0 failed, 1 ignored |
+| Frontend suite | 115 passed, 0 failed |
+| Real-binary e2e (debug) | 61 passed, 0 failed |
+| Real-binary e2e (release) | 61 passed, 0 failed |
+| Linux `.deb` payload | 14 passed, 0 failed |
+| VS Code extension | 45 passed, 0 failed |
+| Clippy (`-D warnings`) | Pass |
+| rustfmt check | Pass |
+| Website build | 37 pages |
+| Offline release/install gates | Pass (MSI skipped, no WiX) |
+
+## Phase 4 regression status (3.88.4)
+
+| Check | Result |
+|---|---|
+| Rust suite | 712 passed + 3 CLI, 0 failed, 1 ignored |
+| Frontend suite | 115 passed, 0 failed |
+| Real-binary e2e (debug, 75 checks) | 75 passed, 0 failed |
+| Real-binary e2e (release) | **Not run:** environment refused the command before execution |
+| Release build | Pass; binary reports `Sarthi Studio 3.88.4` |
+| VS Code extension | 45 passed, 0 failed |
+| Clippy (`-D warnings`) / rustfmt | Pass / Pass |
+| Version + Linux metadata | 26 + 9 passed |
+| Offline release/artifact/bundle gates | 27 + 12 + 13 passed; installer 0 + 1 skipped |
+| `cargo audit` | exit 0; 5 allowed unmaintained/unsound warnings |
+
+## Phase 5 regression status (3.88.7)
+
+| Check | Result |
+|---|---|
+| Rust suite | 714 passed + 3 CLI, 0 failed, 1 ignored |
+| Frontend suite | 116 passed, 0 failed |
+| Real-binary e2e (debug, 75 checks) | 75 passed, 0 failed |
+| Real-binary e2e (release) | 75 passed, 0 failed |
+| Release build | Pass; reports `Sarthi Studio 3.88.7` |
+| VS Code extension | 45 passed, 0 failed |
+| Clippy (`-D warnings`) / rustfmt | Pass / Pass |
+| Version / release gate | 26 / 27 passed |
+| Website build | 37 pages |
+| `cargo audit` | exit 0; 0 vulnerabilities, 5 unmaintained/unsound warnings |
+
+## Not a code bug / not fixed
+
+- **No per-message edit/delete/regenerate**: absent by product design, not a regression; reported in the matrix.
+- **Bodyless POST to the conversation delete route** showed a 405 in one early harness iteration while the same route answered with an explicit `{}` body. The e2e now sends the client-shaped `{}` request; the route was not re-tested bodyless afterwards, and no application defect was reproduced.
+- **Five RustSec warnings** remain (chrono/paste/proc-macro-error/rustls-pemfile unmaintained; glib 0.18.5 unsound). No vulnerability remains; `cargo audit` exits 0.
+- **VS Code dev advisories**: 3 moderate via `@vscode/vsce`; production dependencies 0. A tested major upgrade left 2 moderate and required Node 22, so it was reverted.

@@ -119,6 +119,39 @@ test("dragging a card moves it live, follows its edge and commits the position",
   assert.ok(clamped.y > 0, "and the height is free so a downward drag is kept");
 });
 
+test("a long history renders one page and keeps older messages behind a control", () => {
+  const ui = loadApp();
+  const call = (expression) => evaluate(ui, expression);
+  call(`$("messages").children = []`);
+  call(`renderMessageHistory(Array.from({ length: 450 }, (_, i) => ({
+    role: i % 2 ? "assistant" : "user",
+    content: "history message " + i,
+  })))`);
+
+  const box = ui.document.getElementById("messages");
+  assert.equal(call("HISTORY_PAGE_SIZE"), 200);
+  // Latest 200 messages plus the load-earlier control at the top.
+  assert.equal(box.children.length, 201);
+  const control = box.children[0];
+  assert.ok(String(control.textContent).includes("250 hidden"), String(control.textContent));
+  assert.ok(String(control.textContent).includes("Load 200 earlier"), String(control.textContent));
+  assert.ok(
+    walk(box).some((node) => String(node.textContent || "").includes("history message 250")),
+    "the first visible page starts at message 250",
+  );
+});
+
+test("a recent folder name is rendered as text, never as markup", () => {
+  const ui = loadApp();
+  const call = (expression) => evaluate(ui, expression);
+  const hostile = '<img src=x onerror="alert(1)">';
+
+  const recent = call(`recentFolderRow(${JSON.stringify(hostile)})`);
+  const small = walk(recent).find((node) => node.tag === "small");
+  assert.equal(small.textContent, hostile, "the path stays text");
+  assert.equal(small.innerHTML, "", "no folder path is parsed as HTML");
+});
+
 test("a press without movement selects the card and writes no position", () => {
   const ui = loadApp();
   const call = (expression) => evaluate(ui, expression);

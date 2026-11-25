@@ -27,7 +27,7 @@ use axum::{Json, Router};
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::permissions::{self, Action as PolicyAction, Decision as PolicyDecision};
@@ -50,6 +50,11 @@ const DESCRIPTION_CAP: usize = 2_000;
 
 /// A tool description in an agent prompt is a hint, not documentation.
 const PROMPT_DESCRIPTION_CAP: usize = 200;
+
+/// The largest single JSON-RPC message this client will hold. A malicious or
+/// broken server that never sends a newline (stdio) or streams an endless body
+/// (HTTP/SSE) must be cut off instead of growing the process without bound.
+const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Registry: the servers the user has written down
@@ -99,21 +104,92 @@ fn registry_path(state: &AppState) -> PathBuf {
     state.config_path.with_file_name("mcp.json")
 }
 
+/// Header values are bearer tokens as often as not. Keep them in the same OS
+/// credential store as provider keys; the registry file keeps only the names.
+fn header_secret_name(server_name: &str) -> String {
+    format!("mcp_headers/{server_name}")
+}
+
+fn header_location(path: &FsPath) -> String {
+    crate::keychain_location(path)
+}
+
+/// Put any stored header value back into the in-memory server. A missing entry
+/// leaves the file's value alone, which is the legacy fallback when the store
+/// is disabled or unavailable.
+fn hydrate_header_secrets(path: &FsPath, servers: &mut [Server]) {
+    let location = header_location(path);
+    for server in servers {
+        if server.headers.is_empty() {
+            continue;
+        }
+        let Ok(Some(json)) =
+            crate::keychain::read_secret(&location, &header_secret_name(&server.name))
+        else {
+            continue;
+        };
+        let Ok(stored) = serde_json::from_str::<BTreeMap<String, String>>(&json) else {
+            continue;
+        };
+        for (key, value) in stored {
+            // Only keys the current file still declares: a header removed in
+            // the panel must not be resurrected from an old vault entry.
+            if server.headers.contains_key(&key) {
+                server.headers.insert(key, value);
+            }
+        }
+    }
+}
+
+/// Move plaintext header values out of the registry before it is written. If
+/// the store refuses the write, the value stays in the permission-restricted
+/// file instead of being lost, matching the config-key fallback.
+fn stash_header_secrets(path: &FsPath, servers: &mut [Server]) {
+    let location = header_location(path);
+    for server in servers {
+        let account = header_secret_name(&server.name);
+        if server.headers.is_empty() {
+            let _ = crate::keychain::delete_secret(&location, &account);
+            continue;
+        }
+        if server.headers.values().all(String::is_empty) {
+            continue;
+        }
+        let Ok(json) = serde_json::to_string(&server.headers) else {
+            continue;
+        };
+        if crate::keychain::write_secret(&location, &account, &json).is_ok() {
+            for value in server.headers.values_mut() {
+                value.clear();
+            }
+        }
+    }
+}
+
+fn forget_header_secret(path: &FsPath, server_name: &str) {
+    let _ =
+        crate::keychain::delete_secret(&header_location(path), &header_secret_name(server_name));
+}
+
 /// Servers from disk. A file that cannot be parsed reads as an empty registry:
 /// no tools is the safe failure, and the panel can rewrite it.
 pub(crate) fn read_servers(path: &FsPath) -> Vec<Server> {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<RegistryFile>(&bytes).ok())
-        .map(|file| file.servers)
+        .map(|file| {
+            let mut servers = file.servers;
+            hydrate_header_secrets(path, &mut servers);
+            servers
+        })
         .unwrap_or_default()
 }
 
 fn write_servers(path: &FsPath, servers: &[Server]) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(&RegistryFile {
-        servers: servers.to_vec(),
-    })
-    .map_err(|e| e.to_string())?;
+    let mut stored = servers.to_vec();
+    stash_header_secrets(path, &mut stored);
+    let bytes =
+        serde_json::to_vec_pretty(&RegistryFile { servers: stored }).map_err(|e| e.to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -122,6 +198,30 @@ fn write_servers(path: &FsPath, servers: &[Server]) -> Result<(), String> {
     crate::set_private_permissions(&temp, false).map_err(|e| e.to_string())?;
     fs::rename(&temp, path).map_err(|e| e.to_string())?;
     crate::set_private_permissions(path, false).map_err(|e| e.to_string())
+}
+
+/// Move header values from an `mcp.json` written by an older build into the
+/// credential store. Best effort: a store failure leaves the file untouched,
+/// so this can never make a working server unreadable at boot.
+pub(crate) fn migrate_header_secrets(state: &AppState) {
+    let path = registry_path(state);
+    // Inspect the file itself, not the hydrated view: after the first
+    // migration every value is blank on disk, and re-writing it on every boot
+    // would be needless churn.
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(file) = serde_json::from_str::<RegistryFile>(&raw) else {
+        return;
+    };
+    if file
+        .servers
+        .iter()
+        .any(|server| server.headers.values().any(|value| !value.is_empty()))
+    {
+        let servers = read_servers(&path);
+        let _ = write_servers(&path, &servers);
+    }
 }
 
 /// A server name becomes half of every permission target, so it stays boring:
@@ -144,20 +244,81 @@ fn valid_transport(transport: &str) -> bool {
     matches!(transport, "stdio" | "http" | "sse")
 }
 
-/// A shape check, not a URL parser: the scheme must be http(s), the rest must
-/// be non-empty, and neither whitespace nor control characters may appear.
-fn valid_url(url: &str) -> bool {
+/// A URL that names this machine. Plain HTTP is allowed only here; a remote
+/// server must be HTTPS so a configured bearer header or OAuth token never
+/// crosses a network in the clear.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    if host == "localhost" {
+        return true;
+    }
+    // Parse the address instead of prefix-matching: `127.evil.com` and
+    // `127.0.0.1.evil.com` are DNS names, not loopback addresses, and a
+    // prefix test would hand them the cleartext exception.
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback(),
+        Err(_) => false,
+    }
+}
+
+/// The reason a remote URL is unusable, or `None` when it is safe. The parser
+/// is the same URL implementation the HTTP client uses, so a value accepted
+/// here cannot be reinterpreted into a different scheme or host later.
+fn remote_url_error(url: &str) -> Option<&'static str> {
     if url.is_empty() || url.len() > 2048 {
-        return false;
+        return Some("A remote server needs a valid http:// or https:// URL.");
     }
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return false;
+        return Some("A remote server needs a valid http:// or https:// URL.");
     }
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or("");
-    !rest.is_empty()
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return Some("A remote server needs a valid http:// or https:// URL.");
+    };
+    let Some(host) = parsed.host_str() else {
+        return Some("A remote server needs a valid http:// or https:// URL.");
+    };
+    match parsed.scheme() {
+        "https" => None,
+        "http" if is_loopback_host(host) => None,
+        "http" => {
+            Some("Use https:// for a remote MCP server; plain http:// is only for this machine.")
+        }
+        _ => Some("A remote server needs a valid http:// or https:// URL."),
+    }
+}
+
+#[cfg(test)]
+fn valid_url(url: &str) -> bool {
+    remote_url_error(url).is_none()
+}
+
+/// Called wherever a remote connection is opened, so an old `mcp.json` written
+/// before this policy cannot keep using plain HTTP. Saving uses the same rule
+/// and returns the same sentence to the panel.
+pub(crate) fn require_remote_url(url: &str) -> Result<(), String> {
+    match remote_url_error(url) {
+        Some(error) => Err(error.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// A redirect is another connection, so it gets the same policy as the first
+/// URL. Without this, a remote HTTPS endpoint could redirect the client to a
+/// cleartext host after the initial check and leak a configured header.
+pub(crate) fn safe_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        match remote_url_error(attempt.url().as_str()) {
+            None => attempt.follow(),
+            Some(error) => attempt.error(format!("Refusing redirect: {error}")),
+        }
+    })
 }
 
 /// Enabled servers only: a disabled server never runs for a route or a run.
@@ -311,8 +472,87 @@ pub(crate) fn health_rows(state: &AppState) -> Vec<Value> {
 struct Session {
     child: Child,
     stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
+    lines: JsonLines<ChildStdout>,
     next_id: u64,
+}
+
+/// Newline-delimited JSON with a per-message ceiling. `BufReader::lines` grows
+/// one line without limit while it waits for a newline, so a server can exhaust
+/// memory by never finishing a message. This reads incrementally and refuses a
+/// frame past [`MAX_MESSAGE_BYTES`].
+struct JsonLines<R> {
+    reader: BufReader<R>,
+    pending: Vec<u8>,
+}
+
+impl<R: AsyncRead + Unpin> JsonLines<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader: BufReader::new(reader),
+            pending: Vec::new(),
+        }
+    }
+
+    async fn next_line(&mut self) -> Result<Option<String>, String> {
+        self.next_line_with_limit(MAX_MESSAGE_BYTES).await
+    }
+
+    async fn next_line_with_limit(&mut self, limit: usize) -> Result<Option<String>, String> {
+        loop {
+            let available = self
+                .reader
+                .fill_buf()
+                .await
+                .map_err(|e| format!("Reading from the MCP server failed: {e}"))?;
+            if available.is_empty() {
+                if self.pending.is_empty() {
+                    return Ok(None);
+                }
+                let line = String::from_utf8_lossy(&self.pending).to_string();
+                self.pending.clear();
+                return Ok(Some(line));
+            }
+            let newline = available.iter().position(|byte| *byte == b'\n');
+            let take = newline.unwrap_or(available.len());
+            if self.pending.len() + take > limit {
+                return Err(format!(
+                    "The MCP server sent a message larger than {limit} bytes."
+                ));
+            }
+            self.pending.extend_from_slice(&available[..take]);
+            self.reader.consume(take + usize::from(newline.is_some()));
+            if newline.is_some() {
+                let line = String::from_utf8_lossy(&self.pending).to_string();
+                self.pending.clear();
+                return Ok(Some(line));
+            }
+        }
+    }
+}
+
+/// Read an HTTP answer with the same ceiling. `Response::text` buffers the
+/// whole body first, which is exactly what a hostile server wants.
+async fn bounded_body(response: reqwest::Response) -> Result<String, String> {
+    use futures_util::StreamExt;
+    if let Some(length) = response.content_length() {
+        if length > MAX_MESSAGE_BYTES as u64 {
+            return Err(format!(
+                "The MCP server's answer is larger than {MAX_MESSAGE_BYTES} bytes."
+            ));
+        }
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Reading the MCP server's answer failed: {e}"))?;
+        if body.len() + chunk.len() > MAX_MESSAGE_BYTES {
+            return Err(format!(
+                "The MCP server's answer is larger than {MAX_MESSAGE_BYTES} bytes."
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| "The MCP server's answer was not UTF-8.".to_string())
 }
 
 /// One JSON-RPC message per line. MCP's stdio transport is exactly this.
@@ -385,7 +625,7 @@ impl Session {
         Ok(Session {
             child,
             stdin,
-            lines: BufReader::new(stdout).lines(),
+            lines: JsonLines::new(stdout),
             next_id: 1,
         })
     }
@@ -412,14 +652,9 @@ impl Session {
         self.send(method, params, Some(id)).await?;
         let answer = async {
             loop {
-                let line = self
-                    .lines
-                    .next_line()
-                    .await
-                    .map_err(|e| format!("Reading from the MCP server failed: {e}"))?
-                    .ok_or_else(|| {
-                        "The MCP server closed its output before answering.".to_string()
-                    })?;
+                let line = self.lines.next_line().await?.ok_or_else(|| {
+                    "The MCP server closed its output before answering.".to_string()
+                })?;
                 if let Some(answer) = reply_for(&line, id) {
                     return answer;
                 }
@@ -448,12 +683,7 @@ impl Session {
         }
         let reply = async {
             loop {
-                match self
-                    .lines
-                    .next_line()
-                    .await
-                    .map_err(|e| format!("Reading from the MCP server failed: {e}"))?
-                {
+                match self.lines.next_line().await? {
                     None => {
                         return Err("The MCP server closed its output before answering.".to_string())
                     }
@@ -493,6 +723,9 @@ impl Connection {
     /// Open the transport the registry names. A remote server is a URL and a
     /// few headers; a stdio server is a child process.
     async fn open(server: &Server) -> Result<Connection, String> {
+        if server.transport != "stdio" {
+            require_remote_url(&server.url).map_err(|error| format!("{}: {error}", server.name))?;
+        }
         match server.transport.as_str() {
             "http" => Ok(Connection::Http(HttpSession::start(server)?)),
             "sse" => Ok(Connection::Sse(SseSession::start(server).await?)),
@@ -569,6 +802,7 @@ impl HttpSession {
     fn start(server: &Server) -> Result<HttpSession, String> {
         let client = reqwest::Client::builder()
             .timeout(OPERATION_TIMEOUT)
+            .redirect(safe_redirect_policy())
             .build()
             .map_err(|e| format!("Could not build an HTTP client: {e}"))?;
         Ok(HttpSession {
@@ -662,10 +896,7 @@ impl HttpSession {
             .get("content-type")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.contains("text/event-stream"));
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Reading the MCP server's answer failed: {e}"))?;
+        let body = bounded_body(response).await?;
         let answers = if is_sse {
             sse_messages(&body)
         } else {
@@ -702,6 +933,7 @@ impl SseSession {
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
+            .redirect(safe_redirect_policy())
             .build()
             .map_err(|e| format!("Could not build an HTTP client: {e}"))?;
         let mut request = client
@@ -730,10 +962,14 @@ impl SseSession {
             let mut buffer = String::new();
             let mut event = String::new();
             let mut data: Vec<String> = Vec::new();
+            let mut data_bytes = 0usize;
             let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
+            'stream: while let Some(chunk) = stream.next().await {
                 let Ok(bytes) = chunk else { break };
                 buffer.push_str(&String::from_utf8_lossy(&bytes));
+                if buffer.len() > MAX_MESSAGE_BYTES {
+                    break;
+                }
                 while let Some(index) = buffer.find('\n') {
                     let mut line = buffer[..index].to_string();
                     buffer.drain(..=index);
@@ -754,11 +990,16 @@ impl SseSession {
                         }
                         event.clear();
                         data.clear();
+                        data_bytes = 0;
                         continue;
                     }
                     if let Some(value) = line.strip_prefix("event:") {
                         event = value.trim().to_string();
                     } else if let Some(value) = line.strip_prefix("data:") {
+                        data_bytes += value.len();
+                        if data_bytes > MAX_MESSAGE_BYTES {
+                            break 'stream;
+                        }
                         data.push(value.trim_start().to_string());
                     }
                 }
@@ -770,6 +1011,11 @@ impl SseSession {
             .map_err(|_| {
                 "The MCP server closed its event stream before announcing an endpoint.".to_string()
             })?;
+        if let Err(error) = require_remote_url(&endpoint) {
+            return Err(format!(
+                "The MCP server announced an unsafe message endpoint: {error}"
+            ));
+        }
         Ok(SseSession {
             client,
             endpoint,
@@ -2019,6 +2265,9 @@ async fn oauth_start(
         )
         .into_response();
     }
+    if let Err(error) = require_remote_url(&server.url) {
+        return crate::json_error(StatusCode::BAD_REQUEST, error).into_response();
+    }
     if server.headers.contains_key("authorization") {
         return crate::json_error(
             StatusCode::BAD_REQUEST,
@@ -2247,12 +2496,10 @@ async fn save_server(State(state): State<AppState>, Json(input): Json<Value>) ->
         .unwrap_or("")
         .trim()
         .to_string();
-    if transport != "stdio" && !valid_url(&url) {
-        return crate::json_error(
-            StatusCode::BAD_REQUEST,
-            "A remote server needs an http:// or https:// URL.",
-        )
-        .into_response();
+    if transport != "stdio" {
+        if let Some(error) = remote_url_error(&url) {
+            return crate::json_error(StatusCode::BAD_REQUEST, error).into_response();
+        }
     }
     let args = match clean_args(input.get("args")) {
         Ok(args) => args,
@@ -2318,10 +2565,18 @@ async fn remove_server(State(state): State<AppState>, Json(input): Json<Value>) 
     let path = registry_path(&state);
     let mut servers = read_servers(&path);
     let before = servers.len();
+    let removed_names = servers
+        .iter()
+        .filter(|server| server.name == name)
+        .map(|server| server.name.clone())
+        .collect::<Vec<_>>();
     servers.retain(|server| server.name != name);
     let removed = before - servers.len();
     if let Err(error) = write_servers(&path, &servers) {
         return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error).into_response();
+    }
+    for removed_name in removed_names {
+        forget_header_secret(&path, &removed_name);
     }
     forget_pooled(name);
     Json(json!({ "ok": true, "removed": removed })).into_response()
@@ -2565,6 +2820,62 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         dir.join("mcp.json")
+    }
+
+    #[test]
+    fn header_values_live_in_the_keychain_not_the_registry() {
+        let path = scratch("header-secrets");
+        let mut entry = server("headers");
+        entry.headers.insert(
+            "authorization".to_string(),
+            "Bearer super-secret-token".to_string(),
+        );
+        write_servers(&path, &[entry.clone()]).expect("write registry");
+
+        let raw = fs::read_to_string(&path).expect("read registry");
+        assert!(
+            !raw.contains("super-secret-token"),
+            "the token left the file"
+        );
+        assert!(
+            raw.contains("authorization"),
+            "the name stays for the panel"
+        );
+
+        let loaded = read_servers(&path);
+        assert_eq!(
+            loaded[0].headers.get("authorization").map(String::as_str),
+            Some("Bearer super-secret-token")
+        );
+
+        forget_header_secret(&path, "headers");
+        let _ = fs::remove_dir_all(path.parent().expect("scratch parent"));
+    }
+
+    #[tokio::test]
+    async fn an_overlong_mcp_frame_is_refused_before_it_fills_memory() {
+        let input = [b'x'; 64];
+        let mut reader = JsonLines::new(&input[..]);
+        let error = reader
+            .next_line_with_limit(32)
+            .await
+            .expect_err("a frame past the limit must be refused");
+        assert!(error.contains("larger than"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn mcp_frames_split_across_reads_are_joined() {
+        let input = b"{\"id\":1}\n{\"id\":2}\n";
+        let mut reader = JsonLines::new(&input[..]);
+        assert_eq!(
+            reader.next_line().await.unwrap().as_deref(),
+            Some("{\"id\":1}")
+        );
+        assert_eq!(
+            reader.next_line().await.unwrap().as_deref(),
+            Some("{\"id\":2}")
+        );
+        assert!(reader.next_line().await.unwrap().is_none());
     }
 
     #[test]
@@ -2975,7 +3286,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_urls_must_be_http_and_free_of_whitespace() {
+    fn remote_urls_are_http_and_free_of_whitespace() {
         assert!(valid_url("http://127.0.0.1:8821/mcp"));
         assert!(valid_url("https://example.com/mcp"));
         assert!(!valid_url("ftp://example.com/mcp"));
@@ -2986,6 +3297,93 @@ mod tests {
             "https://example.com/{}",
             "x".repeat(2048)
         )));
+    }
+
+    #[test]
+    fn plain_http_is_only_for_this_machine() {
+        for local in [
+            "http://localhost:8821/mcp",
+            "http://127.0.0.1:8821/mcp",
+            "http://127.5.6.7/mcp",
+            "http://[::1]:8821/mcp",
+            "http://0.0.0.0:8821/mcp",
+        ] {
+            assert!(valid_url(local), "{local} is local");
+        }
+        for remote in [
+            "http://example.com/mcp",
+            "http://192.168.1.20:8821/mcp",
+            "http://mcp.internal/mcp",
+            "http://127.evil.com/mcp",
+            "http://127.0.0.1.evil.com/mcp",
+        ] {
+            assert!(!valid_url(remote), "{remote} must not be cleartext");
+            assert_eq!(
+                remote_url_error(remote),
+                Some(
+                    "Use https:// for a remote MCP server; plain http:// is only for this machine."
+                )
+            );
+        }
+        assert!(valid_url("https://192.168.1.20:8821/mcp"), "TLS is fine");
+    }
+
+    #[tokio::test]
+    async fn opening_an_insecure_remote_server_is_refused_before_connect() {
+        let server = Server {
+            name: "remote".to_string(),
+            transport: "http".to_string(),
+            command: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            url: "http://example.com/mcp".to_string(),
+            headers: BTreeMap::new(),
+            enabled: true,
+        };
+        let error = match Connection::open(&server).await {
+            Ok(_) => panic!("a cleartext remote server must not open"),
+            Err(error) => error,
+        };
+        assert!(error.contains("https://"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_cleartext_off_loopback_is_refused() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind redirect fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept fixture request");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://example.com/mcp\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        });
+
+        let client = reqwest::Client::builder()
+            .redirect(safe_redirect_policy())
+            .build()
+            .expect("client");
+        let error = client
+            .get(format!("http://{address}/mcp"))
+            .send()
+            .await
+            .expect_err("a redirect to a remote cleartext host must be refused");
+        let mut detail = error.to_string();
+        let mut source = std::error::Error::source(&error);
+        while let Some(inner) = source {
+            detail.push_str(": ");
+            detail.push_str(&inner.to_string());
+            source = std::error::Error::source(inner);
+        }
+        assert!(detail.contains("https://"), "{detail}");
+        server.await.expect("fixture task");
     }
 
     #[test]

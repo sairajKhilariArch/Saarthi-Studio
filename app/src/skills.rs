@@ -412,6 +412,72 @@ pub(crate) fn index_text(disabled: &[String], all: &[Skill]) -> Option<String> {
     ))
 }
 
+/// Validate a skill the user or a workflow attached to one task. Returning the
+/// reason instead of dropping the attachment keeps a broken pick visible: the
+/// caller refuses the work rather than running without the requested rules.
+pub(crate) fn select_attached<'a>(
+    id: &str,
+    all: &'a [Skill],
+    disabled: &[String],
+) -> Result<Option<&'a Skill>, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    let Some(skill) = all.iter().find(|skill| skill.id == id) else {
+        return Err(format!(
+            "No skill with the id \"{id}\" is installed, so this task cannot follow it."
+        ));
+    };
+    if let Some(error) = skill.error.as_deref() {
+        return Err(format!(
+            "The skill \"{}\" cannot be loaded: {error}",
+            skill.name
+        ));
+    }
+    if !skill.compatible() {
+        return Err(format!(
+            "The skill \"{}\" needs Sarthi Studio {} or newer; this build is {}.",
+            skill.name,
+            skill.requires,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    if disabled.iter().any(|disabled| disabled == id) {
+        return Err(format!(
+            "The skill \"{}\" is switched off in Settings, so it cannot be attached to this task.",
+            skill.name
+        ));
+    }
+    Ok(Some(skill))
+}
+
+/// Resolve an attached skill against the same catalogue the skills page shows.
+/// Instructions are bounded here, before any prompt is built.
+pub(crate) fn resolve_attached(state: &crate::AppState, id: &str) -> Result<Option<Skill>, String> {
+    if id.trim().is_empty() {
+        return Ok(None);
+    }
+    let root = state.workspace.current_root();
+    let all = discover(&roots(&state.static_dir, root.as_deref()));
+    let config = crate::load_config(state);
+    Ok(select_attached(id, &all, &config.disabled_skills)?.cloned())
+}
+
+/// Put a skill's instructions in front of one task, in the same shape the chat
+/// uses. The task stays whole at the end; only the skill body is trimmed to the
+/// caller's ceiling.
+pub(crate) fn with_instructions(skill: Option<&Skill>, goal: &str, max_chars: usize) -> String {
+    let Some(skill) = skill else {
+        return goal.to_string();
+    };
+    let header = format!("Follow the skill \"{}\" for this task:\n\n", skill.name);
+    let tail = format!("\n\n---\n\n{goal}");
+    let room = max_chars.saturating_sub(header.chars().count() + tail.chars().count());
+    let body: String = skill.body.chars().take(room).collect();
+    format!("{header}{body}{tail}")
+}
+
 /// Full instructions for one skill, cropped to a sane size.
 pub(crate) fn instructions_for(id: &str, all: &[Skill]) -> Option<Skill> {
     all.iter().find(|skill| skill.id == id).map(|skill| {

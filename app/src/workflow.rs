@@ -41,6 +41,10 @@ use crate::AppState;
 const MAX_NODES: usize = 50;
 const EXPORT_VERSION: i64 = 1;
 const MAX_PROMPT_CHARS: usize = 4_000;
+// A skill body rides with the node prompt. The prompt itself is capped at
+// MAX_PROMPT_CHARS, so the combined goal gets room for both without cutting
+// the user's task off the end.
+const MAX_SKILL_GOAL_CHARS: usize = 8_000;
 const MAX_NOTE_CHARS: usize = 1_000;
 const MAX_ERROR_CHARS: usize = 400;
 const AGENT_POLL: Duration = Duration::from_millis(400);
@@ -722,13 +726,36 @@ enum StepEnd {
     Cancelled,
 }
 
-fn spawn(state: AppState, run_id: String, nodes: Vec<ValidNode>) {
+/// Resolve the skill a workflow attaches through the same catalogue and checks
+/// the chat uses. A missing, disabled, broken or incompatible skill refuses the
+/// run instead of quietly executing without it.
+fn workflow_skill(state: &AppState, id: &str) -> Result<Option<crate::skills::Skill>, String> {
+    crate::skills::resolve_attached(state, id)
+}
+
+/// The stored child goal carries the skill, so a run resumed after a restart
+/// still follows the same instructions.
+fn skill_goal(skill: Option<&crate::skills::Skill>, goal: &str) -> String {
+    crate::skills::with_instructions(skill, goal, MAX_SKILL_GOAL_CHARS)
+}
+
+fn spawn(
+    state: AppState,
+    run_id: String,
+    nodes: Vec<ValidNode>,
+    skill: Option<crate::skills::Skill>,
+) {
     tokio::spawn(async move {
-        execute(&state, &run_id, &nodes).await;
+        execute(&state, &run_id, &nodes, skill.as_ref()).await;
     });
 }
 
-async fn execute(state: &AppState, run_id: &str, nodes: &[ValidNode]) {
+async fn execute(
+    state: &AppState,
+    run_id: &str,
+    nodes: &[ValidNode],
+    skill: Option<&crate::skills::Skill>,
+) {
     loop {
         if cancelled(state, run_id) {
             return;
@@ -748,7 +775,7 @@ async fn execute(state: &AppState, run_id: &str, nodes: &[ValidNode]) {
             }
             let mut attempt = 0;
             loop {
-                let end = execute_node(state, run_id, node, attempt).await;
+                let end = execute_node(state, run_id, node, attempt, skill).await;
                 match end {
                     StepEnd::Succeeded(output) => {
                         finish_step(state, run_id, node, "succeeded", &output);
@@ -802,9 +829,15 @@ async fn execute(state: &AppState, run_id: &str, nodes: &[ValidNode]) {
     }
 }
 
-async fn execute_node(state: &AppState, run_id: &str, node: &ValidNode, attempt: i64) -> StepEnd {
+async fn execute_node(
+    state: &AppState,
+    run_id: &str,
+    node: &ValidNode,
+    attempt: i64,
+    skill: Option<&crate::skills::Skill>,
+) -> StepEnd {
     match node.kind {
-        Kind::Agent => execute_agent(state, run_id, node, attempt).await,
+        Kind::Agent => execute_agent(state, run_id, node, attempt, skill).await,
         Kind::Approval => execute_approval(state, run_id, node).await,
         Kind::Condition => execute_condition(state, run_id, node),
         Kind::Task => {
@@ -875,7 +908,6 @@ async fn execute_approval(state: &AppState, run_id: &str, node: &ValidNode) -> S
 }
 
 fn insert_agent_run(state: &AppState, node: &ValidNode, prompt: &str) -> Result<String, String> {
-    let id = uuid::Uuid::new_v4().to_string();
     let project = crate::active_project_id(state);
     let (snapshot, model) = crate::run_record_snapshot(
         state,
@@ -885,15 +917,33 @@ fn insert_agent_run(state: &AppState, node: &ValidNode, prompt: &str) -> Result<
             Some(node.model.as_str())
         },
     );
+    let budget = crate::load_config(state).run_token_budget.max(0);
     let conn = crate::open_db(&state.database_path).map_err(|error| error.to_string())?;
+    insert_agent_run_on(&conn, node, prompt, &project, &snapshot, &model, budget)
+}
+
+/// A workflow's child run goes through the same `agent_runs` shape as a run the
+/// person starts. In particular it inherits the configured token ceiling; the
+/// column default is 0, which would let a scheduled graph spend without the
+/// limit every other run obeys.
+fn insert_agent_run_on(
+    conn: &rusqlite::Connection,
+    node: &ValidNode,
+    prompt: &str,
+    project: &str,
+    snapshot: &str,
+    model: &str,
+    token_budget: i64,
+) -> Result<String, String> {
+    let id = uuid::Uuid::new_v4().to_string();
     let stamp = now();
     conn.execute(
-        "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on) \
-         VALUES(?1,?2,?3,'queued',?4,?5,?6,?7,'','',?8,?8,?9,?10,?11,'','','',0,0,0,'')",
+        "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on,thinking,token_budget) \
+         VALUES(?1,?2,?3,'queued',?4,?5,?6,?7,'','',?8,?8,?9,?10,?11,'','','',0,0,0,'','',?12)",
         params![
             id,
             project,
-            cap(prompt, MAX_PROMPT_CHARS),
+            cap(prompt, MAX_SKILL_GOAL_CHARS),
             node.allow_writes,
             node.allow_commands,
             node.auto_approve,
@@ -902,6 +952,7 @@ fn insert_agent_run(state: &AppState, node: &ValidNode, prompt: &str) -> Result<
             snapshot,
             model,
             node.profile,
+            token_budget,
         ],
     )
     .map_err(|error| error.to_string())?;
@@ -919,13 +970,19 @@ fn agent_outcome(state: &AppState, run_id: &str) -> Option<(String, String)> {
     })
 }
 
-async fn execute_agent(state: &AppState, run_id: &str, node: &ValidNode, attempt: i64) -> StepEnd {
+async fn execute_agent(
+    state: &AppState,
+    run_id: &str,
+    node: &ValidNode,
+    attempt: i64,
+    skill: Option<&crate::skills::Skill>,
+) -> StepEnd {
     if state.workspace.root().is_err() {
         return StepEnd::Failed(
             "Open a workspace folder first — agent nodes run inside it.".to_string(),
         );
     }
-    let prompt = if attempt == 0 {
+    let task = if attempt == 0 {
         node.prompt.clone()
     } else {
         format!(
@@ -934,6 +991,7 @@ async fn execute_agent(state: &AppState, run_id: &str, node: &ValidNode, attempt
             attempt + 1
         )
     };
+    let prompt = skill_goal(skill, &task);
     let agent_id = match insert_agent_run(state, node, &prompt) {
         Ok(id) => id,
         Err(error) => return StepEnd::Failed(error),
@@ -1387,7 +1445,13 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
     if nodes.is_empty() {
         return bad("This workflow has no nodes yet. Add a graph, or load its prompt instead.");
     }
-    match begin_run(&state, &workflow, &nodes) {
+    // Fail before a run row exists: an attachment to a skill that was removed
+    // or switched off is a configuration error, not an agent failure to retry.
+    let skill = match workflow_skill(&state, &workflow.skill) {
+        Ok(skill) => skill,
+        Err(error) => return bad(error),
+    };
+    match begin_run(&state, &workflow, &nodes, skill) {
         Ok(run_id) => ok(json!({
             "ok": true,
             "run": { "id": run_id, "status": "running" }
@@ -1396,14 +1460,19 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
     }
 }
 
-fn begin_run(state: &AppState, workflow: &Workflow, nodes: &[ValidNode]) -> Result<String, String> {
+fn begin_run(
+    state: &AppState,
+    workflow: &Workflow,
+    nodes: &[ValidNode],
+    skill: Option<crate::skills::Skill>,
+) -> Result<String, String> {
     let run_id = uuid::Uuid::new_v4().to_string();
     insert_run(state, &run_id, workflow)?;
     if let Err(error) = insert_steps(state, &run_id, nodes) {
         set_run(state, &run_id, "failed", "Could not record the steps.");
         return Err(error);
     }
-    spawn(state.clone(), run_id.clone(), nodes.to_vec());
+    spawn(state.clone(), run_id.clone(), nodes.to_vec(), skill);
     Ok(run_id)
 }
 
@@ -1475,10 +1544,26 @@ async fn tick(state: &AppState) {
         }
         // One due time, one run: another process ticking at the same moment wins
         // the claim first and this one leaves the window alone.
+        // A scheduled workflow whose skill is gone waits visibly instead of
+        // spending its window on a run that would fail every node.
+        let skill = match workflow_skill(state, &workflow.skill) {
+            Ok(skill) => skill,
+            Err(error) => {
+                crate::oplog::record(
+                    "error",
+                    "workflow",
+                    "schedule-blocked",
+                    format!("{}: {error}", workflow.name),
+                );
+                continue;
+            }
+        };
+        // One due time, one run: another process ticking at the same moment wins
+        // the claim first and this one leaves the window alone.
         if !claim_window(&conn, &workflow.id, next) {
             continue;
         }
-        match begin_run(state, workflow, &nodes) {
+        match begin_run(state, workflow, &nodes, skill) {
             Ok(run_id) => {
                 // The new row is already on disk; moving the window keeps this
                 // workflow from firing again on the next tick. If the write
@@ -1710,8 +1795,12 @@ pub(crate) async fn resume(
             );
         }
     }
+    let skill = match workflow_skill(&state, &workflow.skill) {
+        Ok(skill) => skill,
+        Err(error) => return bad(error),
+    };
     set_run(&state, &id, "running", "");
-    spawn(state.clone(), id.clone(), nodes);
+    spawn(state.clone(), id.clone(), nodes, skill);
     ok(json!({
         "ok": true,
         "run": { "id": id, "status": "running" }
@@ -2068,5 +2157,103 @@ mod tests {
         // failure cannot free a window another tick already moved past.
         release_window(&conn, "nightly", 1_500.0);
         assert!(!claim_window(&conn, "nightly", 1_700.0));
+    }
+
+    fn skill(id: &str, name: &str, body: &str) -> crate::skills::Skill {
+        crate::skills::Skill {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: String::new(),
+            version: "1.0.0".to_string(),
+            requires: String::new(),
+            permissions: Vec::new(),
+            body: body.to_string(),
+            path: String::new(),
+            source: "builtin",
+            fingerprint: String::new(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn a_workflow_skill_is_checked_before_an_agent_sees_it() {
+        let all = vec![skill("debug", "Debug", "Find the cause.")];
+        assert!(crate::skills::select_attached("", &all, &[])
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            crate::skills::select_attached("debug", &all, &[])
+                .unwrap()
+                .unwrap()
+                .id,
+            "debug"
+        );
+
+        let missing = crate::skills::select_attached("gone", &all, &[]).unwrap_err();
+        assert!(missing.contains("No skill"), "{missing}");
+
+        let disabled =
+            crate::skills::select_attached("debug", &all, &["debug".to_string()]).unwrap_err();
+        assert!(disabled.contains("switched off"), "{disabled}");
+
+        let mut incompatible = all.clone();
+        incompatible[0].requires = "999.0.0".to_string();
+        let refused = crate::skills::select_attached("debug", &incompatible, &[]).unwrap_err();
+        assert!(refused.contains("needs Sarthi Studio"), "{refused}");
+
+        let mut broken = all.clone();
+        broken[0].error = Some("the manifest has no name".to_string());
+        let unloadable = crate::skills::select_attached("debug", &broken, &[]).unwrap_err();
+        assert!(unloadable.contains("cannot be loaded"), "{unloadable}");
+    }
+
+    #[test]
+    fn an_attached_skill_reaches_the_agent_goal_without_losing_the_task() {
+        let debug = skill("debug", "Debug", "STEP-ONE: reproduce the failure.");
+        let goal = skill_goal(Some(&debug), "Fix the parser crash.");
+        assert!(
+            goal.starts_with("Follow the skill \"Debug\" for this task:"),
+            "{goal}"
+        );
+        assert!(goal.contains("STEP-ONE: reproduce the failure."));
+        assert!(goal.ends_with("\n\n---\n\nFix the parser crash."));
+        assert_eq!(
+            skill_goal(None, "Fix the parser crash."),
+            "Fix the parser crash."
+        );
+
+        // A maximum-length node prompt and a long skill body still leave the
+        // user's task intact at the end, inside the stored goal's ceiling.
+        let long = skill("long", "Long", &"b".repeat(20_000));
+        let task = "t".repeat(MAX_PROMPT_CHARS);
+        let stored = skill_goal(Some(&long), &task);
+        assert!(stored.chars().count() <= MAX_SKILL_GOAL_CHARS);
+        assert!(stored.ends_with(&task));
+    }
+
+    #[test]
+    fn a_workflow_child_run_inherits_the_configured_token_ceiling() {
+        let conn = Connection::open_in_memory().expect("db");
+        crate::agent::initialize(&conn).expect("agent schema");
+        let node = graph(json!([{
+            "id": "build", "kind": "agent", "prompt": "build it"
+        }]))
+        .pop()
+        .expect("node");
+        let id = insert_agent_run_on(&conn, &node, "build it", "p1", "{}", "mock", 4_321)
+            .expect("child run");
+        let (budget, thinking): (i64, String) = conn
+            .query_row(
+                "SELECT token_budget, thinking FROM agent_runs WHERE id=?1",
+                [&id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("stored child run");
+        assert_eq!(
+            budget, 4_321,
+            "the configured ceiling, not the column default"
+        );
+        // Empty means "the agent scope from config", exactly like a manual run.
+        assert_eq!(thinking, "");
     }
 }

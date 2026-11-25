@@ -1,4 +1,4 @@
-# Feature status report — audit of `main` @ 2.1.0, revised through 3.88.0
+# Feature status report — audit of `main` @ 2.1.0, revised through 3.88.3
 
 Read against the master specification phase by phase. Status vocabulary:
 **Working** (route + persistence + UI verified in code or by a recorded run),
@@ -16,6 +16,35 @@ implementation), **Broken** (exists and fails).
 | Release line | `8ff7c5e` … `2.27.0` | 1.26.4 → 2.1.0 all shipped, LF manifests |
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
+
+**Revision 3.88.3 (2026-11-25):** Verification pass. The real-binary suite now
+covers a true SSE upstream (multiple deltas, one stored reply), a timed abort
+that keeps exactly one partial reply, and settings persistence across a
+restart. `--version`/`--help` print and exit instead of booting the app. A
+Linux `.deb` payload was assembled and booted from its unpacked tree; GUI
+bundles, signing and macOS/Windows/Android execution remain unverified here.
+
+**Revision 3.88.2 (2026-11-24):** Remediation pass. Remote MCP is HTTPS-only
+off loopback at save, connect and OAuth/SSE endpoint boundaries; saved MCP
+headers now live in the OS credential store with startup migration. RustSec
+reports zero vulnerabilities after updating `zip`, `rusqlite`/`libsqlite3-sys`,
+`tokio`, `url` and `cookie`; the remaining five advisory-database entries are
+unmaintained/unsound warnings without a safe in-line upgrade. The real-binary
+suite is 53 checks and the Rust suite is 709 passed (1 ignored). See
+`REMEDIATION_PROGRESS.md`, `VERIFIED_FIXES.md`, `SECURITY_REMEDIATION_REPORT.md`,
+`FINAL_TEST_RESULTS.md` and `REMAINING_ISSUES.md`.
+
+**Revision 3.88.1 (2026-11-24):** Full-application audit. The core routes that
+are registered directly in `main.rs` were outside the loopback `Host`/`Origin`
+guard, so DNS rebinding could read config and drive chat, projects, workflows,
+extensions, update and uninstall. The whole local router now carries one guard
+after every module merge. A recent-folder name is no longer interpolated into
+`innerHTML`, and streaming `memory_used`/`retrieved` metadata no longer depends
+on an auto-matched skill. The real-binary suite grew from 34 to 51 checks and
+was run against both the debug and optimized release binaries. See
+`APPLICATION_AUDIT_REPORT.md`, `FEATURE_TEST_MATRIX.md`,
+`SECURITY_AUDIT_REPORT.md`, `BUG_FIX_LOG.md`, `RESTORATION_REPORT.md` and
+`RELEASE_READINESS_REPORT.md`.
 
 **Revision 3.88.0 (2026-11-24):** Phase 15's last missing capability closes:
 `mcp.call` is now a host function (`env.mcp_call`) instead of a run-time

@@ -1,0 +1,228 @@
+# Sarthi Studio — Feature Test Matrix
+
+**Date:** 2026-11-25  
+**Branch:** `remediation/security-2026-11-24`  
+**Version:** `3.88.4`<br>
+**Legend:** **Pass** = exercised against the real binary or real persistence; **Pass (test)** = covered by the Rust/frontend/extension suite, not re-driven through the UI; **Partial** = present but a stated behavior is unverified or limited; **Missing** = no implementation found; **Blocked** = environment or external service unavailable; **Fixed** = broken at baseline, repaired and re-tested.
+
+All real-binary cases below use `scripts/ci/test-e2e.sh`, a scratch `FREE_AI_STUDIO_HOME`, the real debug/release binary, a real SQLite database and `scripts/mock-router.py` as the provider fixture. No real user data was touched.
+
+Phase 4 (3.88.4) added cross-module rows and grew the real-binary suite from 61 to 75 checks. The release-mode run was refused by the execution environment before it started, so the final 3.88.4 evidence is debug-binary e2e plus a successful release build; that limitation is recorded below rather than counted as a pass.
+
+## A. AI chat
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Create conversation | `POST /api/conversations`; UI "New thread" | Pass | Pass | e2e 201 + UUID; live UI created `hello from the audit UI` |
+| Send message / non-stream reply | `POST /api/chat` through mock router | Pass | Pass | e2e answer `Mock router reply…`; UI stream turn |
+| Streaming response (JSON fallback) | `POST /api/chat/stream` against a router that ignores `stream` | Pass (baseline not in e2e) | Pass | e2e delta + done; reply stored exactly once |
+| Streaming response (real SSE) | Mock answers `text/event-stream` with six deltas | **Untested** | Pass | e2e: six deltas, one done frame, 2 messages / 1 reply |
+| Stop generation | curl aborts after the first delta while the mock holds the stream open | Partial | **Pass** | e2e: partial reply stored exactly once; next turn answered |
+| Regenerate reply | UI/API search | Missing | Missing | no regenerate route or action; "Resend" resends a user message |
+| Edit previous message | UI/API search | Missing | Missing | no message `PUT` route or edit action |
+| Delete individual message | UI/API search | Missing | Missing | conversation delete only |
+| Delete conversation + cascade | `POST /api/conversations/:id/delete`; query messages | Pass | Pass | e2e 200, then messages 404; DB cascade |
+| Conversation history | `GET /api/conversations/:id/messages` | Pass | Pass | e2e 2 then 4 messages; restart retains them |
+| Reopen restores the model | non-stream `/api/chat` → `GET /api/conversations` | **Broken** | **Fixed** | all three non-stream save paths persist `model`; e2e list returns `mock-model`; Rust list test |
+| Persistence across restart | kill/start same home | Pass | Pass | e2e restart finds conversation and messages |
+| Multiple conversations | create, list, delete second | Pass | Pass | e2e create/delete; Rust project-filtered thread list test |
+| Context retention | `prepare_chat` history + SQLite | Pass (test) | Pass (test) | Rust context/history tests; e2e mock reports packed messages |
+| Long conversation / token budget | context packer, per-thread budget | Pass (test) | Pass (test) | Rust tests; e2e budget update returns 5000 |
+| Project memory in stream | recall marker + stream `meta.memory_used` | **Broken** (dependent on skill) | **Fixed** | new e2e checks `"memory_used"` in done frame |
+| Network interruption / provider down | start run with provider down; restart | Pass | Pass | e2e failed run records provider error; server still answers |
+| Error display | failure path in UI and API | Pass (test) | Pass (test) | Rust error tests; live UI no console errors |
+
+## B. Providers and models
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Config read | `GET /api/config` | Pass | Pass | e2e `has_api_key=true`, raw key absent |
+| Config update | `POST /api/config` | Pass | Pass | e2e and live UI config set |
+| Provider list / add / edit / remove | `providers.rs` routes; Rust tests | Pass (test) | Pass (test) | CRUD/redaction tests, URL validation |
+| API key redaction | e2e config scan | Pass | Pass | no `e2e-not-a-real-key` in response |
+| Key storage | keychain/fallback path | Pass (test) | Pass (test) | Rust keychain tests; no live Secret Service assertion |
+| Model discovery | mock `/v1/models` | Pass | Pass | e2e and live UI show `mock-model` |
+| Model switching | composer/model scope | Pass (test) | Pass (test) | model scope tests; live UI model button present |
+| Fallback providers | model chain | Pass (test) | Pass (test) | Rust chain tests |
+| Authentication failure | mock/error paths | Pass (test) | Pass (test) | Rust error/status tests |
+| Real provider connectivity | requires owner key/network | Blocked | Blocked | no credentials supplied; no live third-party call |
+| Local model integration | Ollama-compatible path | Pass (test) | Pass (test) | Rust local-mode tests; no Ollama runtime here |
+| Rate-limit handling | router error mapping | Pass (test) | Pass (test) | Rust tests |
+
+## C. Agents
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Create/run agent | `POST /api/runs` with mock scripted provider | Pass | Pass | e2e run created |
+| Approval gate | run stops before write; approve | Pass | Pass | e2e `waiting` then `succeeded` |
+| File write tool | approve write; read file from disk | Pass | Pass | e2e `e2e-agent.txt` |
+| Verification loop | verifier approves | Pass | Pass | e2e succeeds after verification |
+| Step log | `GET /api/runs/:id` | Pass | Pass | e2e `write, verify, done` |
+| Persistence across restart | kill/start | Pass | Pass | e2e run + steps survive |
+| Cancellation/interruption | kill mid-run; restart | Pass | Pass | e2e interrupted state and log |
+| Queue/concurrency | admission tests | Pass (test) | Pass (test) | 712-test suite |
+| Multi-agent/crew | crew templates/runtime tests | Pass (test) | Pass (test) | Rust tests; no UI crew run in this pass |
+| Permissions | allow/ask/deny rules | Pass (test) | Pass (test) | Rust permission/approval tests |
+| Denied write approval | pause → reject → inspect disk | **Untested in e2e** | **Pass** | new e2e: run `failed`, `e2e-denied.txt` absent |
+| Direct run with a skill | `POST /api/runs` + `skill` | **Missing** | **Pass** | e2e created and finished a skill run; stored goal carries the instructions |
+| Direct run with a missing skill | `POST /api/runs` + unknown id | **Missing** | **Pass** | e2e 400 naming the missing skill; no run row created |
+| Execution monitoring | `/api/events`, runs panel | Pass | Pass | EventSource 200; runs routes covered by e2e/Rust tests |
+
+## D. Skills and extensions
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Skill discovery | `GET /api/skills` | Pass | Pass | e2e catalogue readable; live UI loaded skills |
+| Install/remove/update | `skills.rs` routes | Pass (test) | Pass (test) | Rust/frontend tests |
+| Git import/refresh | import form + refresh | Pass (test) | Pass (test) | frontend + Rust tests |
+| Skill permissions | manifest validation | Pass (test) | Pass (test) | Rust tests |
+| Invalid skill handling | validation errors | Pass (test) | Pass (test) | Rust tests + e2e missing-skill 400 |
+| Skill attached to a workflow | workflow `skill` → child agent goal | **Broken / ignored** | **Fixed** | e2e two-step workflow; both child runs carry `debug` |
+| Skill attached to a direct run | Runs form + `POST /api/runs` | **Missing** | **Pass** | e2e run and goal assertion; shared resolver tests |
+| Disabled/broken/incompatible skill | resolver checks | Pass (test) | Pass (test) | Rust `select_attached` tests |
+| Extension discovery/validation | `extensions.rs` | Pass (test) | Pass (test) | Rust suite |
+| Extension isolation | wasmi sandbox, fuel/memory/table caps | Pass (test) | Pass (test) | ADR + Rust tests |
+| Extension install/remove | manifest-gated routes | Pass (test) | Pass (test) | Rust tests |
+| Host functions read/write/data/network/terminal/MCP | sandbox tests | Pass (test) | Pass (test) | Rust tests; real local fixture for MCP |
+| Panel sandbox | CSP + opaque iframe | Pass (test) | Pass (test) | code/Rust/frontend tests; no malicious panel installation |
+| Real third-party extension | unavailable | Blocked | Blocked | no external package/peer |
+
+## E. Developer environment
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Open workspace | `POST /api/workspace/open` | Pass | Pass | e2e 200 |
+| List directory | workspace entries route | Pass (test) | Pass (test) | Rust tests |
+| Create file | `POST /api/workspace/create` | Pass | Pass | e2e |
+| Save/read file | `PUT/GET /api/workspace/file` | Pass | Pass | e2e content `first line` |
+| Rename | `POST /api/workspace/rename` | Pass | Pass | e2e old 404/new 200 |
+| Delete | `POST /api/workspace/delete` | Pass | Pass | e2e 200 then 404 |
+| Path traversal refusal | `../outside.txt` | Pass | Pass | e2e 400, no path leaked |
+| Symlink escape refusal | canonicalization tests | Pass (test) | Pass (test) | Rust tests |
+| Multiple workspaces/recent folders | workspace store | Pass (test) | Pass (test) | Rust/frontend tests; HTML-injection regression added |
+| Git operations | `git.rs` tests | Pass (test) | Pass (test) | extensive Rust tests; not live-driven in this pass |
+| Runner/build/test | `runner.rs` tests | Pass (test) | Pass (test) | Rust tests; no real build command in e2e |
+| Watch mode | `watch.rs` tests | Pass (test) | Pass (test) | Rust tests |
+| Terminal open/input/output/close | real PTY, command wrote file | **Untested** | **Pass** | new e2e `terminal-proof.txt` |
+| Terminal persistence | one PTY per folder | Pass (test) | Pass (test) | code + tests; not manually held across project switches |
+| LSP diagnostics | `lsp.rs` | Pass (test) | Pass (test) | Rust tests; no real language server installed |
+| DAP debugger | `dap.rs` | Pass (test, debugpy documented) | Pass (test) | Rust tests; no lldb/dlv |
+
+## F. Memory
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Create memory | `POST /api/memory` | Pass | Pass | e2e record id |
+| List memory | `GET /api/memory` | Pass | Pass | e2e marker present |
+| Recall into chat | stream with matching message | **Broken reporting** | **Fixed** | e2e `memory_used` in stream meta |
+| Update memory | same id + new fields | Pass (test) | Pass (test) | Rust tests |
+| Delete memory | `POST /api/memory/:id/delete` | Pass | Pass | e2e list no longer contains it |
+| Project isolation | `project_id` filters | Pass (test) | Pass (test) | Rust tests |
+| Persistent storage | SQLite | Pass | Pass | e2e restart/DB |
+| Permissions | memory routes behind local guard | Pass | Pass | global guard + e2e foreign Host |
+
+## G. Workflows
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Create/save workflow | `POST /api/workflows` | Pass | Pass | e2e id |
+| Export document | `GET /api/workflows/:id/export` | Pass | Pass | e2e `sarthi.workflow` |
+| Import | `workflow.rs` tests | Pass (test) | Pass (test) | Rust validation/import tests |
+| Delete | `POST /api/workflows/:id/delete` | Pass | Pass | e2e removed from list |
+| Run graph / conditions / retries | workflow engine tests | Pass (test) | Pass (test) | Rust tests; two-node live run added in Phase 4 |
+| Two dependent agent nodes | live workflow run | **Untested** | **Pass** | e2e: `debug-it` → `report-it`, 2/2 succeeded, two child run ids |
+| Workflow skill reaches agents | workflow `skill` + child goal | **Broken / ignored** | **Fixed** | e2e child goal contains the skill header/body; missing skill refused 400 |
+| Child run token ceiling | `insert_agent_run_on` | **Broken (default 0)** | **Fixed** | Rust test asserts the configured budget is stored |
+| Sequential/parallel dependencies | graph scheduler tests | Pass (test) | Pass (test) | Rust tests |
+| Cancellation/child runs | workflow tests | Pass (test) | Pass (test) | Rust tests |
+| Persistence/history | workflow_runs/steps | Pass (test) | Pass (test) | Rust tests |
+| Scheduling | 30-second tick, SQLite claims | Pass (test) | Pass (test) | Rust tests |
+
+## H. Application management
+
+| Feature | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Settings load/navigation | live UI click | Pass | Pass | Settings panel reached, no console errors |
+| Settings persistence | `POST /api/config`, restart, `GET /api/config` | Untested | **Pass** | e2e: `history_messages=12` read back after restart |
+| Config redaction | e2e | Pass | Pass | raw key absent |
+| Themes | live theme button | Pass | Pass | `data-theme=dark` after click |
+| Keyboard shortcuts | frontend suite | Pass (test) | Pass (test) | 115 frontend tests |
+| Notifications/events | EventSource + UI | Pass | Pass | `/api/events` 200, no errors |
+| Update check/stage/prepare/swap/rollback | installer/update Rust tests | Pass (test) | Pass (test) | checksum tests; no network release |
+| Import/export | workflow export + skill import | Pass | Pass / Pass (test) | e2e + Rust/frontend tests |
+| Logging/diagnostics | process log after turns | Pass | Pass | e2e log entries |
+| Error reporting | structured JSON errors | Pass | Pass | e2e error cases |
+| Backup/recovery | schema backup test | Pass (test) | Pass (test) | Rust `an_existing_database_is_copied…` |
+| Uninstall | Rust tests | Pass (test) | Pass (test) | no destructive live run |
+| Linux package payload | `cargo-deb` assembly, unpack, headless boot, payload replacement | **Not run** | **Partial** | 14/14 payload checks; `Depends:` empty because `dpkg-shlibdeps` is absent; no system install |
+| Live browser layout | load/theme/nav/chat only | Partial | Partial | no pixel/responsive assertion |
+
+## I. Security and platform
+
+| Area | Test performed | Initial status | Final status | Evidence |
+|---|---|---|---|---|
+| Foreign `Host` on core routes | live before/after; e2e | **Broken (P1)** | **Fixed** | before 200 config, after 403; e2e |
+| Foreign `Origin` | e2e capabilities | Pass | Pass | 403 |
+| Workspace/terminal/agent guards | code + e2e traversal | Pass | Pass | 403 / 400 |
+| Host API bearer | Rust tests | Pass (test) | Pass (test) | constant-time hash verifier |
+| Host API TLS/bind policy | Rust tests | Pass (test) | Pass (test) | rejects 0.0.0.0/public |
+| CSP/headers | live response | Pass | Pass | CSP, XFO DENY, nosniff, no-store |
+| Secret redaction | config/provider tests | Pass | Pass | no raw key |
+| Update checksum | Rust tests | Pass (test) | Pass (test) | tamper refused |
+| Archive traversal | installer tests | Pass (test) | Pass (test) | zip/tar guards |
+| Dependency audit | npm prod/full | Pass / partial | Partial | 0 prod; 3 moderate dev-only VSCode advisories |
+| Rust advisory scan | `cargo-audit` | Blocked | **Fixed** | 0 vulnerabilities, 5 unmaintained/unsound warnings |
+| Remote MCP cleartext | URL policy at save/connect/OAuth/SSE | **Broken** | **Fixed** | Rust tests + e2e 400 for remote HTTP; loopback allowed |
+| MCP saved headers | keychain migration | **Plaintext** | **Fixed** | header-keychain Rust test; 0600 fallback |
+| Windows | CI/source only | Blocked | Blocked | no host |
+| macOS | CI/source only | Blocked | Blocked | no host |
+| Android | no SDK/device | Blocked | Blocked | no JDK/SDK/Gradle |
+| Website | build | Pass | Pass | 37 pages |
+
+## J. Performance and reliability (Phase 5)
+
+| Area | Test performed | Before | After | Evidence |
+|---|---|---|---|---|
+| History read plan | `EXPLAIN QUERY PLAN` + Rust test | `SCAN messages` | `SEARCH … USING INDEX messages_conversation` | Phase 5 benchmark, 200k messages |
+| 200k conversation list | 10 HTTP reads | 680–790 ms | 1.46–3.79 ms | `.scratch/phase5` |
+| 2,000-message open | browser MutationObserver | 3,589.5 ms | 462 ms paged | Chromium preview |
+| Long stream UI | PerformanceObserver long tasks | ~106.6 s total / 4 tasks | 186 ms / 0 tasks | 18.9k-char fixture |
+| Concurrent chats | 1–32 workers | 4/16 failed `database is locked` | 0 errors up to 32×64 | load script; Rust writer test |
+| Held writer lock | 3 s `BEGIN IMMEDIATE` | n/a | 200 after 3.09 s | isolated DB |
+| Sustained soak | 14 cycles, 16 workers | n/a | RSS plateau 206.5 MB, fds 27 | `STRESS_TEST_REPORT.md` |
+| Provider unavailable | closed port | n/a | 502 in 12.1 ms; ready 200 | `RELIABILITY_TEST_REPORT.md` |
+| Provider 500 | fixture | n/a | 502 in 14.7 ms | same |
+| Malformed 200 body | fixture | n/a | **Open limitation:** stored as answer | same |
+| Client disconnect | slow SSE | n/a | partial chunk saved; ready 200 | same |
+| SIGKILL mid-stream | release binary | n/a | integrity ok; user turn only; restart 200 | same |
+| Corrupt DB | random bytes | n/a | exit 1, clear error, no listener | same + e2e |
+| Unwritable data path | e2e + isolated home | n/a | readiness reports it; recovery works | e2e 75 |
+| Frontend retention | 10 large-thread switches | n/a | heap 5.5→7.3 MB, 201 rows | browser |
+
+## Command evidence
+
+```text
+cargo test (with lld):                  714 passed + 3 CLI passed, 0 failed, 1 ignored
+node --test frontend:                  116 passed
+bash scripts/ci/test-e2e.sh (debug):    75 passed, 0 failed (3.88.6)
+bash scripts/ci/test-e2e.sh (release):   75 passed, 0 failed (3.88.7)
+cargo build --release:                  pass; `Sarthi Studio 3.88.7`
+bash .scratch/phase3/smoke-deb.sh:      14 passed, 0 failed (3.88.3 payload)
+vscode-extension npm test:              45 passed
+website npm run build:                  37 pages
+test-version.sh:                        26 passed
+test-linux-metadata.sh:                 9 passed
+cargo audit:                            exit 0; 5 allowed unmaintained/unsound warnings
+test-release.sh:                        27 passed
+test-artifacts.sh:                      12 passed
+test-bundle.sh:                         13 passed
+test-installer.sh:                      0 passed, 1 skipped (no WiX)
+```
+
+## Not tested, explicitly
+
+- A real provider, real API key, real search key, real speech service, real third-party MCP server, real language server or real debug adapter.
+- A signed/installed Windows, macOS or Android build; a tagged 11-asset GitHub release; a system-wide install or update from a previous published version.
+- The 3.88.4 release-mode e2e run: the environment refused the command twice before it executed, so only the debug suite is final evidence for this candidate.
+- A GUI `.deb`/AppImage/tarball build; the assembled payload is headless and has no resolved dependency metadata on this Arch host.
+- A browser layout, responsive, accessibility or cross-browser audit; a long-session soak beyond the measured 100-turn run.

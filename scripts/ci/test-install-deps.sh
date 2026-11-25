@@ -15,6 +15,20 @@ trap 'rm -rf "$tmp"' EXIT
 bin="$tmp/bin"
 mkdir -p "$bin"
 
+# The test hides `mold` by removing the stub, but a developer or CI runner may
+# have the real /usr/bin/mold installed (the desktop workflow installs it two
+# steps earlier). A PATH containing /usr/bin would then find it and report the
+# "missing" case as present. Expose the host tools through a private symlink
+# farm that deliberately omits mold, so the test measures install.sh rather
+# than the machine.
+hostbin="$tmp/hostbin"
+mkdir -p "$hostbin"
+for executable in /usr/bin/*; do
+  name="$(basename "$executable")"
+  [ "$name" = "mold" ] && continue
+  ln -sf "$executable" "$hostbin/$name"
+done
+
 stub() { # name body
   printf '#!/usr/bin/env bash\n%s\n' "$2" >"$bin/$1"
   chmod +x "$bin/$1"
@@ -35,7 +49,7 @@ stub apt-get 'if [[ "${1:-}" == "install" ]]; then printf "#!/usr/bin/env bash\n
 run_installer() { # logfile args...
   local log="$1"
   shift
-  HOME="$tmp/home" PATH="$bin:/usr/bin:/bin" bash "$root/install.sh" "$@" >"$log" 2>&1
+  HOME="$tmp/home" PATH="$bin:$hostbin" bash "$root/install.sh" "$@" >"$log" 2>&1
 }
 
 fail() {

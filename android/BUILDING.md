@@ -28,7 +28,7 @@ gradle assembleRelease bundleRelease
 
 - The release build enables R8 minification and resource shrinking. Rules live in `app/proguard-rules.pro` (currently none are needed; add one only with a regression test proving it).
 - No signing configuration is committed, so both artifacts are unsigned: `app/build/outputs/apk/release/app-release-unsigned.apk` and `app/build/outputs/bundle/release/app-release.aab`. Sign them with your own keystore at distribution time (or use Play App Signing for the AAB).
-- Plaintext HTTP is restricted to loopback and private/link-local ranges by `app/src/main/res/xml/network_security_config.xml`; router endpoints on any other host must use HTTPS.
+- Android cannot express IP ranges in `network_security_config.xml`; it permits cleartext and `CleartextPolicy.java` enforces loopback/private-LAN-only HTTP before every connection. Router endpoints on any other host must use HTTPS.
 - CI (`android-ci.yml`) runs unit tests, lint, debug and release assembly on every push/PR touching `android/**`, runs instrumentation tests on an API 35 emulator, and uploads the debug APK plus the unsigned release APK/AAB. The workflow fails if any required gate fails.
 
 ## Regression checks

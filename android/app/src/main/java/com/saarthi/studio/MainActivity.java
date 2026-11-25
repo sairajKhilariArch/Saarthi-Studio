@@ -14,6 +14,7 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.provider.OpenableColumns;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -28,6 +29,7 @@ import android.text.style.ForegroundColorSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -216,6 +218,7 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(BG);
         root.setPadding(dp(16), dp(12), dp(16), dp(10));
         setContentView(root);
+        applySystemBarInsets();
 
         LinearLayout header = row();
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -917,7 +920,7 @@ public class MainActivity extends Activity {
 
     private StreamResult requestStream(String url, String apiKey, String body, StringBuilder answer) throws Exception {
         if (stopRequested) throw new java.io.InterruptedIOException("Generation stopped by user");
-        HttpURLConnection connection = (HttpURLConnection)new URL(url).openConnection();
+        HttpURLConnection connection = openHttpConnection(url);
         activeConnection = connection;
         connection.setRequestMethod("POST");
         connection.setConnectTimeout(12000);
@@ -2850,7 +2853,7 @@ public class MainActivity extends Activity {
     }
 
     private HttpResult request(String method, String url, String apiKey, String body) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection)new URL(url).openConnection();
+        HttpURLConnection conn = openHttpConnection(url);
         activeConnection = conn;
         conn.setRequestMethod(method); conn.setConnectTimeout(12000); conn.setReadTimeout(120000);
         try {
@@ -2870,6 +2873,39 @@ public class MainActivity extends Activity {
             conn.disconnect();
             if (activeConnection == conn) activeConnection = null;
         }
+    }
+
+    /** Enforce the LAN-only cleartext rule before any socket is opened. */
+    private HttpURLConnection openHttpConnection(String url) throws Exception {
+        String policyError = CleartextPolicy.insecureUrlError(url);
+        if (policyError != null) throw new Exception(policyError);
+        return (HttpURLConnection) new URL(url).openConnection();
+    }
+
+    /**
+     * Android 15 enforces edge-to-edge for targetSdk 35, so the header and
+     * composer would otherwise sit under the status and navigation bars.
+     * Pad the root by the live bar/cutout insets; API 26-29 reports them
+     * through the legacy getters.
+     */
+    private void applySystemBarInsets() {
+        final int baseLeft = dp(16), baseTop = dp(12), baseRight = dp(16), baseBottom = dp(10);
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int left = 0, top = 0, right = 0, bottom = 0;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                left = bars.left; top = bars.top; right = bars.right; bottom = bars.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft();
+                top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(baseLeft + left, baseTop + top, baseRight + right, baseBottom + bottom);
+            return insets;
+        });
+        root.requestApplyInsets();
     }
 
     private static String endpoint(String base, String path) { return base.replaceAll("/+$", "") + "/" + path.replaceAll("^/+", ""); }

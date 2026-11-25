@@ -63,7 +63,9 @@ jobs:
           test -f android/app/src/main/java/com/saarthi/studio/MainActivity.java
           test -f android/app/src/main/java/com/saarthi/studio/ChatDatabase.java
           test -f android/app/src/main/java/com/saarthi/studio/DatabaseMigrations.java
+          test -f android/app/src/main/java/com/saarthi/studio/CleartextPolicy.java
           test -f android/app/src/test/java/com/saarthi/studio/BackupPolicyTest.java
+          test -f android/app/src/test/java/com/saarthi/studio/CleartextPolicyTest.java
           test -f android/app/src/androidTest/java/com/saarthi/studio/DatabaseMigrationInstrumentedTest.java
           test -f android/app/src/androidTest/java/com/saarthi/studio/ChatHistoryPagingInstrumentedTest.java
           test -f android/app/src/androidTest/java/com/saarthi/studio/BackupRestoreInstrumentedTest.java

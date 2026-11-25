@@ -503,6 +503,7 @@ async function loadSkills() {
   }
   const payload = result.data.skills || result.data;
   state.skills = Array.isArray(payload) ? payload : [];
+  fillRunSkillOptions();
   renderSkills();
   renderSkillsOverview();
   if ($("skillMenu") && !$("skillMenu").classList.contains("hidden")) renderSkillMenu();
@@ -1703,9 +1704,13 @@ function inlineMarkdown(text) {
 }
 
 function codeBlockHtml(code, language) {
-  return `<div class="code-block"><div class="code-head"><span>${escapeHtml(language || "code")}</span>` +
-    `<button class="code-copy" data-copy-code>Copy</button></div>` +
-    `<pre><code>${escapeHtml(code)}</code></pre></div>`;
+  const label = language || "code";
+  // The same tested tokenizer the editor uses. It escapes before wrapping, and
+  // returns escaped plain text for an unknown language or an oversized buffer.
+  const painted = typeof highlightCode === "function" ? highlightCode(code, language) : escapeHtml(code);
+  return `<div class="code-block"><div class="code-head"><span>${escapeHtml(label)}</span>` +
+    `<button type="button" class="code-copy" data-copy-code aria-label="Copy ${escapeHtml(label)} code">Copy</button></div>` +
+    `<pre><code class="hljs language-${escapeHtml(label)}">${painted}</code></pre></div>`;
 }
 
 function renderMarkdown(source) {
@@ -1912,7 +1917,7 @@ function closeTab(key) {
 /* ------------------------------------------------------------------ */
 
 function addMessage(role, content, options = {}) {
-  const { meta = null, error = false, attachment = null, media = null } = options;
+  const { meta = null, error = false, attachment = null, media = null, scroll = true, before = null } = options;
   $("welcome").classList.add("hidden");
 
   const row = document.createElement("div");
@@ -1978,8 +1983,12 @@ function addMessage(role, content, options = {}) {
     ]);
   }
 
-  $("messages").appendChild(row);
-  scrollChat();
+  if (before) $("messages").insertBefore(row, before);
+  else $("messages").appendChild(row);
+  // A bulk history render appends thousands of rows. Scrolling after each one
+  // forces a layout per message (measured at 3.6 s for 2,000 messages); the
+  // caller scrolls once when the batch is complete.
+  if (scroll) scrollChat();
   // Callers (the live stream row above all) keep updating the row after it
   // is added; without this they silently get undefined.
   return row;
@@ -2038,6 +2047,7 @@ function setBusy(value) {
   $("sendBtn").disabled = value;
   $("attachContextBtn").disabled = value;
   $("mediaAttachBtn").disabled = value;
+  $("messages").setAttribute("aria-busy", String(Boolean(value)));
   $("thinking").classList.toggle("hidden", !value);
   if (value) scrollChat();
 }
@@ -2098,6 +2108,17 @@ function relativeTime(epoch, now = Date.now() / 1000) {
   return new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/// A thread matches when its title or project contains the filter. Pure so the
+/// rule can be tested without a DOM, and case-insensitive so typing "auth"
+/// finds "Fix Auth flow".
+function filterConversations(conversations, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (!needle) return conversations;
+  return conversations.filter((conversation) =>
+    `${conversation.title || ""} ${conversation.project || ""}`.toLowerCase().includes(needle)
+  );
+}
+
 function renderConversations() {
   const box = $("conversationList");
   box.replaceChildren();
@@ -2108,7 +2129,16 @@ function renderConversations() {
     box.appendChild(note);
     return;
   }
-  state.conversations.forEach((conversation) => {
+  const filterInput = $("threadFilter");
+  const conversations = filterConversations(state.conversations, filterInput ? filterInput.value : "");
+  if (!conversations.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No threads match that filter.";
+    box.appendChild(note);
+    return;
+  }
+  conversations.forEach((conversation) => {
     const item = document.createElement("div");
     const isOpen = conversation.id === state.currentId;
     item.className = "thread-item" + (isOpen ? " active" : "");
@@ -2239,6 +2269,57 @@ function revealChatDock() {
   if (state.panelShow && state.panelShow.right === false) togglePanel("right");
 }
 
+/* A long thread is opened newest-first. Rendering every row at once blocks
+   the main thread for hundreds of milliseconds per thousand messages, so the
+   initial view is the latest page and older pages are added on request. All
+   messages stay in memory; this is presentation paging, not data loss. */
+const HISTORY_PAGE_SIZE = 200;
+
+function renderMessageHistory(messages) {
+  const first = Math.max(0, messages.length - HISTORY_PAGE_SIZE);
+  messages.slice(first).forEach((message) => addMessage(
+    message.role === "assistant" ? "assistant" : "user",
+    message.content,
+    {
+      media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
+      scroll: false,
+    },
+  ));
+  if (first > 0) addEarlierMessagesControl(messages, first);
+}
+
+function addEarlierMessagesControl(messages, remaining) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn load-earlier";
+  const label = () => {
+    const count = Math.min(remaining, HISTORY_PAGE_SIZE);
+    button.textContent = `Load ${count} earlier message${count === 1 ? "" : "s"} (${remaining} hidden)`;
+  };
+  label();
+  button.addEventListener("click", () => {
+    const box = $("chatScroll");
+    const height = box.scrollHeight;
+    const top = box.scrollTop;
+    const from = Math.max(0, remaining - HISTORY_PAGE_SIZE);
+    messages.slice(from, remaining).forEach((message) => addMessage(
+      message.role === "assistant" ? "assistant" : "user",
+      message.content,
+      {
+        media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
+        scroll: false,
+        before: button,
+      },
+    ));
+    remaining = from;
+    // Keep the reader on the same message rather than jumping to the bottom.
+    box.scrollTop = top + (box.scrollHeight - height);
+    if (remaining > 0) label();
+    else button.remove();
+  });
+  $("messages").prepend(button);
+}
+
 async function openConversation(id) {
   const result = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
   if (!result.ok) {
@@ -2262,9 +2343,7 @@ async function openConversation(id) {
   $("messages").replaceChildren();
   const messages = Array.isArray(result.data) ? result.data : [];
   $("welcome").classList.toggle("hidden", messages.length > 0 || Boolean(liveRow));
-  messages.forEach((message) => addMessage(message.role === "assistant" ? "assistant" : "user", message.content, {
-    media: Array.isArray(message.attachments) && message.attachments.length ? message.attachments : null,
-  }));
+  renderMessageHistory(messages);
   if (liveRow) $("messages").appendChild(liveRow);
   scrollChat();
   renderConversations();
@@ -2605,6 +2684,18 @@ async function consumeStream(body, onFrame) {
 }
 
 let streamRow = null;
+// A stream can deliver thousands of tiny deltas. Re-parsing the whole answer
+// into Markdown for each one is quadratic; paint at most once per frame and
+// keep only the newest text.
+let streamRenderHandle = null;
+let streamRenderText = "";
+
+function cancelStreamRender() {
+  if (!streamRenderHandle) return;
+  if (streamRenderHandle.raf) cancelAnimationFrame(streamRenderHandle.id);
+  else clearTimeout(streamRenderHandle.id);
+  streamRenderHandle = null;
+}
 let streamTargetId = null;
 
 function addStreamRow() {
@@ -2655,10 +2746,20 @@ function renderReasoning(text) {
 
 function appendStreamText(answer) {
   if (!streamRow) return;
-  const body = streamRow.querySelector(".msg-body");
-  if (body) {
-    body.innerHTML = renderMarkdown(answer) + '<span class="stream-caret" aria-hidden="true"></span>';
+  streamRenderText = answer;
+  if (streamRenderHandle) return;
+  const paint = () => {
+    streamRenderHandle = null;
+    if (!streamRow) return;
+    const body = streamRow.querySelector(".msg-body");
+    if (!body) return;
+    body.innerHTML = renderMarkdown(streamRenderText) + '<span class="stream-caret" aria-hidden="true"></span>';
     scrollChat();
+  };
+  if (typeof requestAnimationFrame === "function") {
+    streamRenderHandle = { raf: true, id: requestAnimationFrame(paint) };
+  } else {
+    streamRenderHandle = { raf: false, id: setTimeout(paint, 16) };
   }
 }
 
@@ -2681,6 +2782,9 @@ function applyStreamMeta(meta) {
 
 function finishStreamRow(answer, failure, deepSources = [], aborted = false) {
   if (!streamRow) return;
+  // The final render below is authoritative; a queued frame must not overwrite
+  // it with an older partial answer.
+  cancelStreamRender();
   clearStreamStatus();
   const row = streamRow;
   streamRow = null;
@@ -4455,14 +4559,51 @@ function attachFromComposer() {
 /* dialogs                                                             */
 /* ------------------------------------------------------------------ */
 
+function modalFocusables(element) {
+  const nodes = Array.from(element.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ));
+  return nodes.filter((node) => {
+    const hidden = node.classList && node.classList.contains("hidden");
+    return !node.disabled && !hidden && !(node.closest && node.closest(".hidden"));
+  });
+}
+
+function trapModalFocus(element, event) {
+  if (event.key !== "Tab") return;
+  const items = modalFocusables(element);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function showModal(element) {
+  // Remember the control that opened the dialog so keyboard users land back
+  // where they were, not at the top of the page.
+  element._returnFocus = document.activeElement;
   element.classList.remove("hidden");
+  if (!element._focusTrap) {
+    element._focusTrap = (event) => trapModalFocus(element, event);
+    element.addEventListener("keydown", element._focusTrap);
+  }
   const focusable = element.querySelector("input, button");
   if (focusable) setTimeout(() => focusable.focus(), 20);
 }
 
 function hideModal(element) {
   element.classList.add("hidden");
+  const back = element._returnFocus;
+  element._returnFocus = null;
+  if (back && typeof back.focus === "function") {
+    try { back.focus(); } catch { /* the opener went away */ }
+  }
 }
 
 let nameResolver = null;
@@ -5580,7 +5721,7 @@ async function loadSettings() {
     : "Paste an OpenAI Platform key";
   $("openaiKeyStatus").textContent = result.data.has_openai_key
     ? `A platform key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it.`
-    : `No platform key saved. Needed for openai: models. A saved key goes to ${keychainStoreName(keychain)}.`;
+    : `No platform key saved. Needed for openai: models. A saved key goes ${keychainStoreName(keychain)}.`;
   $("thinkingLevel").value = result.data.thinking_level || "";
   $("runThinkingLevel").value = result.data.run_thinking_level || "";
   $("agentModel").value = result.data.agent_model || "";
@@ -5594,14 +5735,14 @@ async function loadSettings() {
   $("searchApiKey").placeholder = result.data.has_search_key ? "Saved key (leave blank to keep it)" : "Paste an Exa or Tavily key";
   $("searchKeyStatus").textContent = result.data.has_search_key
     ? `A search key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it.`
-    : `Needed for Deep search with Exa or Tavily. A saved key goes to ${keychainStoreName(keychain)}.`;
+    : `Needed for Deep search with Exa or Tavily. A saved key goes ${keychainStoreName(keychain)}.`;
   updateContextMeter();
   $("modelChip").textContent = state.model;
   $("apiKey").value = "";
   $("apiKey").placeholder = result.data.has_api_key ? "Saved key (leave blank to keep it)" : "Paste your router API key";
   $("keyStatus").textContent = result.data.has_api_key
     ? `A key is saved ${keychainStoreName(keychain)}. Leave the field blank to keep it, or enter a new key to replace it.`
-    : `No key saved yet. A saved key goes to ${keychainStoreName(keychain)}.`;
+    : `No key saved yet. A saved key goes ${keychainStoreName(keychain)}.`;
   renderBackendPresets();
   void loadPermissions();
 }
@@ -6693,12 +6834,24 @@ async function renderWorkspaces() {
   openFolderRow.appendChild(openActions);
   openHost.appendChild(openFolderRow);
   state.recentFolders.slice(0, 5).forEach((path) => {
-    const row = document.createElement("div");
-    row.className = "project-menu-item";
-    row.innerHTML = `<span class="project-menu-main"><small title="${path}">${path}</small></span>`;
-    row.appendChild(rowButton("Open", () => openWorkspacePath(path)));
-    openHost.appendChild(row);
+    openHost.appendChild(recentFolderRow(path));
   });
+}
+
+/* A recent path comes from the filesystem, so it is assigned as text instead of
+   interpolated into markup: a folder name is not an HTML fragment. */
+function recentFolderRow(path) {
+  const row = document.createElement("div");
+  row.className = "project-menu-item";
+  const main = document.createElement("span");
+  main.className = "project-menu-main";
+  const small = document.createElement("small");
+  small.title = path;
+  small.textContent = path;
+  main.appendChild(small);
+  row.appendChild(main);
+  row.appendChild(rowButton("Open", () => openWorkspacePath(path)));
+  return row;
 }
 
 /* Agents: the enabled skills as runnable agents. Attaching flips the same
@@ -7203,6 +7356,24 @@ function fillSkillOptions(selectedId) {
     option.value = skill.id;
     option.textContent = skill.name || skill.id;
     if (skill.id === selectedId) option.selected = true;
+    select.appendChild(option);
+  });
+}
+
+function fillRunSkillOptions() {
+  const select = $("runSkill");
+  if (!select) return;
+  const selected = select.value;
+  select.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "No skill";
+  select.appendChild(blank);
+  state.skills.filter((skill) => !skill.error && skill.enabled !== false && skill.compatible !== false).forEach((skill) => {
+    const option = document.createElement("option");
+    option.value = skill.id;
+    option.textContent = skill.name || skill.id;
+    if (skill.id === selected) option.selected = true;
     select.appendChild(option);
   });
 }
@@ -8954,6 +9125,15 @@ function bindEvents() {
     try { localStorage.setItem("freeai-thread-scope", state.threadScope); } catch { /* private mode */ }
     await loadConversations();
   });
+  if ($("threadFilter")) {
+    $("threadFilter").addEventListener("input", renderConversations);
+    // Escape clears the filter without leaving the keyboard behind.
+    $("threadFilter").addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      $("threadFilter").value = "";
+      renderConversations();
+    });
+  }
   $("projectSwitcher").addEventListener("click", (event) => {
     event.stopPropagation();
     if ($("projectMenu").classList.contains("hidden")) openProjectMenu();
@@ -10402,6 +10582,7 @@ async function submitRun(event) {
   for (const el of [crewRoster, stageBudget, stagePolicy, crewChips]) { if (el) el.classList.toggle("hidden", crewOnly); }
   const payload = {
     goal,
+    skill: $("runSkill") ? $("runSkill").value : "",
     profile: $("runProfile").value,
     mode: $("runMode").value,
     allowWrites: $("runAllowWrites").checked,
@@ -10436,6 +10617,7 @@ async function submitRun(event) {
     return;
   }
   $("runGoal").value = "";
+  if ($("runSkill")) $("runSkill").value = "";
   const queued = result.data.run && result.data.run.status === "queued";
   toast(queued
     ? `Run queued${result.data.run.queuePosition ? ` (position ${result.data.run.queuePosition})` : ""} — it starts when a slot frees.`
