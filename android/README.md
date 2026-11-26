@@ -1,12 +1,12 @@
 # Sarthi Studio Android companion
 
-Sarthi Studio is an Android client for a self-hosted FreeLLMAPI endpoint. This project preserves locally stored chats and encrypted endpoint settings while adding conversation organization, model preferences/fallback, budget inspection, developer attachments, voice, and optional vision input.
+Sarthi Studio for Android is the companion client for the Sarthi Studio desktop host. It supports Direct Router mode for an OpenAI-compatible endpoint and Desktop Host mode through the desktop Host API. Conversations and Android preferences are stored locally.
 
 ## Project status
 
-> **Monorepo architecture status:** the Rust desktop app is the primary host. This Android source currently connects directly to a configured FreeLLMAPI-compatible endpoint; moving it under `android/` does not yet connect it to the desktop host. Desktop-host pairing and its authenticated network API are a separate implementation milestone. See the repository-root `PLATFORM-ARCHITECTURE.md`.
+> **Architecture:** the Rust desktop app is the primary host. Android supports both Direct Router and Desktop Host modes. Host mode uses the desktop's separate authenticated Host API over TLS; host-mode chat currently advertises non-streaming text and no attachment support. See [`PLATFORM-ARCHITECTURE.md`](../docs/PLATFORM-ARCHITECTURE.md).
 
-**v1.51.1 (version code 61) — production release build.** The `release` build type enables R8 minification and resource shrinking, `targetSdk` is 35, and plaintext router endpoints are restricted to loopback/private LAN ranges (public hosts must use HTTPS). Release APK/AAB artifacts are assembled unsigned and signed at distribution time. CI must pass and the physical-device checklist in `UPGRADE-GUIDE-1.11.1.md` must be completed before distribution.
+**v1.52.0 (version code 62) — current Android build.** The `release` build type enables R8 minification and resource shrinking, `targetSdk` is 35, and plaintext router endpoints are restricted to loopback/private LAN ranges (public hosts must use HTTPS). Release APK/AAB artifacts are assembled unsigned and signed at distribution time. CI must pass and the physical-device checklist in `UPGRADE-GUIDE-1.11.1.md` must be completed before distribution.
 
 ## Included capabilities
 - OpenAI-compatible FreeLLMAPI chat, model listing, streaming and Stop.
