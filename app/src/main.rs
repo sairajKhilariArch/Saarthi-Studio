@@ -5634,6 +5634,15 @@ mod tests {
         assert_eq!(answer, "first\nsecond");
     }
 
+    #[test]
+    fn router_chat_response_rejects_non_text_content() {
+        let error = parse_router_chat_response(
+            r#"{"choices":[{"message":{"content":[{"type":"image","url":"local"}]}}]}"#,
+        )
+        .expect_err("unsupported content must not become an assistant answer");
+        assert!(error.contains("unsupported or empty"), "{error}");
+    }
+
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
     }
