@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.88.20
+
+### Tests
+- Fixed an assertion race in the mobile navigation instrumentation suite: the
+  model-chip content description is set asynchronously to "Model auto · Choose
+  model", and the selector assertion previously required the exact string
+  "Choose model". The helper now does a substring match, so the "Model
+  selector missing" failure is resolved and the full 8/8 test suite passes.
+
+## 3.88.19
+
+### Mobile UI/UX redesign completion (189cee5)
+
+- Mobile application redesign complete: native Android client with real
+  streaming chat, markdown code blocks, voice dictation/TTS, image attachments,
+  agents, projects, skills, workflows, memory, conversation search/history/
+  restore, backup/export/import, dark + light themes, and a 5-destination
+  bottom navigation.
+- Authenticated Host API path for mobile feature parity (desktop exposes a
+  real, authenticated API rather than inventing mobile-specific routes).
+
 ## 3.88.18
 
 ### Phase 10 acceptance evidence

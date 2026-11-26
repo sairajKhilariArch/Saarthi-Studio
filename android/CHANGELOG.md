@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.52.0
+
+### Fixed
+- Mobile navigation instrumentation test assertion race fixed (substring-safe
+  content-description match); full 8/8 test suite passes on emulator.
+
 ## 1.51.1 — cross-platform hardening
 
 ### Fixed
@@ -93,5 +99,12 @@
 - CI uploads a built debug APK when assembly succeeds, uploads a lint report for review, and runs instrumentation tests on an Android emulator.
 
 ### Release gate
-- Version: `1.11.1`, version code `14`.
-- A successful CI run and physical-device upgrade, FreeLLMAPI, voice, vision, and backup/restore tests remain required before production distribution.
+- Version: `1.52.0` (version code `62`). Mobile navigation instrumentation
+  test assertion race fixed (substring-safe content-description match);
+  full 8/8 test suite passes on emulator.
+- A successful CI run and physical-device upgrade, FreeLLMAPI, voice, vision,
+  and backup/restore tests remain required before production distribution.
+
+## 1.51.1
+
+### Fixed

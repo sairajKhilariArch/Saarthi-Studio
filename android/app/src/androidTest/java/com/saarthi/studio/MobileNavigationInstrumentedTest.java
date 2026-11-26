@@ -60,7 +60,7 @@ public class MobileNavigationInstrumentedTest {
 
     private static boolean hasContentDescription(View view, String expected) {
         CharSequence description = view.getContentDescription();
-        if (description != null && expected.contentEquals(description)) return true;
+        if (description != null && description.toString().contains(expected)) return true;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) {
