@@ -1510,11 +1510,9 @@ fn thinking_json(resolved: Option<thinking::Resolved>) -> Value {
 }
 
 fn response_content(data: &Value) -> Result<String, String> {
-    let content = data
-        .pointer("/choices/0/message/content")
-        .ok_or_else(|| {
-            "Router returned valid JSON without choices[0].message.content.".to_string()
-        })?;
+    let content = data.pointer("/choices/0/message/content").ok_or_else(|| {
+        "Router returned valid JSON without choices[0].message.content.".to_string()
+    })?;
 
     if let Some(text) = content.as_str() {
         return Ok(text.to_string());
@@ -5615,7 +5613,10 @@ mod tests {
     fn router_chat_response_rejects_invalid_json() {
         let error = parse_router_chat_response(r#"{"choices":["#)
             .expect_err("malformed JSON must be rejected");
-        assert!(error.starts_with("Router returned invalid JSON:"), "{error}");
+        assert!(
+            error.starts_with("Router returned invalid JSON:"),
+            "{error}"
+        );
     }
 
     #[test]
