@@ -56,7 +56,10 @@ pub(super) fn build_router(state: AppState, token_store: HostTokenStore) -> Rout
             "/api/host/v1/projects",
             get(super::list_projects).post(super::create_project),
         )
-        .route("/api/host/v1/projects/:id/activate", post(super::activate_project))
+        .route(
+            "/api/host/v1/projects/:id/activate",
+            post(super::activate_project),
+        )
         .route("/api/host/v1/skills", get(crate::skills::get_skills))
         .route(
             "/api/host/v1/skills/:id/state",
@@ -73,8 +76,9 @@ pub(super) fn build_router(state: AppState, token_store: HostTokenStore) -> Rout
             "/api/host/v1/workflow-runs/:id/cancel",
             post(crate::workflow::cancel),
         )
-                .route("/api/host/v1/extensions", get(crate::extensions::list))
-        .route("/api/host/v1/memory",
+        .route("/api/host/v1/extensions", get(crate::extensions::list))
+        .route(
+            "/api/host/v1/memory",
             get(crate::memory::list_records).post(crate::memory::save_record),
         )
         .route(
@@ -1623,7 +1627,9 @@ mod tests {
         ] {
             let unauthorised = fixture.send(Method::GET, path, None, None).await;
             assert_eq!(unauthorised.status(), StatusCode::UNAUTHORIZED, "{path}");
-            let response = fixture.send(Method::GET, path, Some(&fixture.token), None).await;
+            let response = fixture
+                .send(Method::GET, path, Some(&fixture.token), None)
+                .await;
             assert_eq!(response.status(), StatusCode::OK, "{path}");
         }
         let projects = fixture

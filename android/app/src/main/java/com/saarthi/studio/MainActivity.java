@@ -2395,6 +2395,18 @@ public class MainActivity extends Activity {
         goalField.setPadding(dp(12), dp(10), dp(12), dp(10));
         content.addView(goalField, new LinearLayout.LayoutParams(-1, -2));
 
+        EditText modelField = field("Model (agent runtime)", config.model == null ? "auto" : config.model, InputType.TYPE_CLASS_TEXT);
+        modelField.setMinLines(1);
+        modelField.setBackground(round(PANEL_ALT, 12));
+        modelField.setPadding(dp(12), dp(10), dp(12), dp(10));
+        content.addView(modelField, new LinearLayout.LayoutParams(-1, -2));
+
+        final EditText skillField = field("Skill (optional)", "", InputType.TYPE_CLASS_TEXT);
+        skillField.setMinLines(1);
+        skillField.setBackground(round(PANEL_ALT, 12));
+        skillField.setPadding(dp(12), dp(10), dp(12), dp(10));
+        content.addView(skillField, new LinearLayout.LayoutParams(-1, -2));
+
         android.widget.CheckBox writes = new android.widget.CheckBox(this);
         writes.setText("Allow file edits (read-only inspection without this)");
         writes.setTextSize(13);
@@ -2421,12 +2433,15 @@ public class MainActivity extends Activity {
                 .setView(content)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Start run", (d, w) -> startAgentRun(
-                        goalField.getText().toString(), writes.isChecked(), commands.isChecked(), autoApprove.isChecked()))
+                        goalField.getText().toString(),
+                        modelField.getText().toString(),
+                        skillField.getText().toString(),
+                        writes.isChecked(), commands.isChecked(), autoApprove.isChecked()))
                 .create()
                 .show();
     }
 
-    private void startAgentRun(String goalText, boolean allowWrites, boolean allowCommands, boolean autoApprove) {
+    private void startAgentRun(String goalText, String model, String skill, boolean allowWrites, boolean allowCommands, boolean autoApprove) {
         String goal = goalText == null ? "" : goalText.trim();
         if (goal.isEmpty()) {
             toast("Describe what the agent should do.");
