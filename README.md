@@ -174,7 +174,7 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - **VS Code extension:** `vscode-extension/` — TypeScript extension, built-in server, and tests.
 - **Android companion:** `android/` — independent Gradle project, Android source/tests, Android-specific changelog, and Android CI. It shares the desktop UI's dark, accent-led visual language.
 - **Build toolchain:** `.cargo/config.toml` + `rust-toolchain.toml` pin nightly (the config uses `-Z threads`) and link with mold for fast development builds, so `mold` must be installed (`apt install mold`) or the link step fails with `cannot find 'ld'`. The cranelift backend is deliberately disabled — it aborts on the Tauri/GTK window code. Android requires JDK 17 — newer JDKs can break Gradle 8.9's embedded Kotlin.
-- **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
+- **Platform architecture:** see [`PLATFORM-ARCHITECTURE.md`](docs/PLATFORM-ARCHITECTURE.md) for the desktop-host/Android-client plan and the security requirements for remote access.
 - **Android build:** `cd android && gradle testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest assembleRelease bundleRelease` (requires JDK 17, Gradle 8.9, and Android SDK Platform 35).
 
 **Platform parity (current state):** the Android client supports both Direct Router and Desktop Host mode (authenticated HTTPS, bearer host token — see `docs/android/`); host bridge chat is non-streaming text, and the capabilities endpoint advertises `streaming: false` / `attachments: false` honestly, so media and streaming in chat remain desktop/web/VS Code features until the host API declares and implements them.
@@ -188,6 +188,7 @@ The Rust desktop app remains the **primary product and intended host**. Its exis
 - Local helper: `android/BUILD-APK-UBUNTU.sh` runs unit tests, lint, debug and release assembly.
 
 ### Desktop (Rust host)
+- **Current desktop release line: 4.0.0** (tag: `v4.0.0`). Android, VS Code and the website retain independent version numbers.
 - The "Desktop CI" workflow builds, tests, and clippy-gates every `app/**` change against the committed `Cargo.lock`.
 - Pushing a `v*` tag runs "Desktop Release" and attaches all 11 assets: Linux x86_64 tarball, `.deb` (cargo-deb) and AppImage; Windows x86_64 zip and MSI; a macOS universal `.app.zip` and tarball (unsigned, built on `macos-15-intel`); the unsigned Android APK/AAB (`free-ai-studio-android.apk`/`.aab`); the VS Code extension (`free-ai-studio-vscode.vsix`); and `SHA256SUMS.txt`.
 - Release profile: LTO, single codegen unit, symbol stripping. The binary resolves its static UI directory at runtime (`FREE_AI_STUDIO_STATIC_DIR` override → installed `../share/sarthi-studio/static` → macOS `../Resources/static` → adjacent `static/` → source tree for `cargo run`), so one binary works from every packaged layout.

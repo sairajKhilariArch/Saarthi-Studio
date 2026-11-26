@@ -2,7 +2,7 @@
 
 Rust + SQLite + static frontend desktop AI studio (Linux/Windows/macOS), with an
 Android client, a VS Code extension, and a headless server mode. This file is the
-agent-facing map of the repo; see `README.md` and `PLATFORM-ARCHITECTURE.md` for
+agent-facing map of the repo; see `README.md` and `docs/PLATFORM-ARCHITECTURE.md` for
 the human-facing docs.
 
 ## Agent skills
@@ -17,7 +17,7 @@ The five default triage-role labels are used as-is. See `docs/agents/triage-labe
 
 ### Domain docs
 
-Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agents/domain.md`.
+Domain concepts and architecture decisions live in `docs/ARCHITECTURE.md`, `docs/adr/` and `docs/agents/domain.md`.
 
 ## Layout
 

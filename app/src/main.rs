@@ -1509,25 +1509,40 @@ fn thinking_json(resolved: Option<thinking::Resolved>) -> Value {
     }
 }
 
-fn response_content(data: &Value) -> String {
-    let content = match data.pointer("/choices/0/message/content") {
-        Some(value) => value,
-        None => return serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string()),
-    };
-    if let Some(s) = content.as_str() {
-        return s.to_string();
+fn response_content(data: &Value) -> Result<String, String> {
+    let content = data
+        .pointer("/choices/0/message/content")
+        .ok_or_else(|| {
+            "Router returned valid JSON without choices[0].message.content.".to_string()
+        })?;
+
+    if let Some(text) = content.as_str() {
+        return Ok(text.to_string());
     }
+
     if let Some(parts) = content.as_array() {
         let joined = parts
             .iter()
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .filter_map(|part| {
+                part.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.as_str())
+            })
             .collect::<Vec<_>>()
             .join("\n");
         if !joined.is_empty() {
-            return joined;
+            return Ok(joined);
         }
     }
-    serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
+
+    Err("Router returned an unsupported or empty choices[0].message.content value.".to_string())
+}
+
+fn parse_router_chat_response(body: &str) -> Result<(Value, String), String> {
+    let parsed: Value = serde_json::from_str(body)
+        .map_err(|error| format!("Router returned invalid JSON: {error}"))?;
+    let answer = response_content(&parsed)?;
+    Ok((parsed, answer))
 }
 
 /// Opt-in rule-based tier choice for agent steps. Cheap follows routine
@@ -1852,8 +1867,13 @@ async fn attempt_router_once(
         .map_err(|e| format!("Could not read router response: {e}"))?;
     let latency = started.elapsed().as_millis() as i64;
 
-    let parsed: Value = serde_json::from_str(&body)
-        .unwrap_or_else(|_| json!({"message": body.chars().take(3000).collect::<String>()}));
+    let parsed: Value = match serde_json::from_str(&body) {
+        Ok(parsed) => parsed,
+        Err(error) if status.is_success() => {
+            return Err(format!("Router returned invalid JSON: {error}"));
+        }
+        Err(_) => json!({"message": body.chars().take(3000).collect::<String>()}),
+    };
     if !status.is_success() {
         let detail = parsed
             .pointer("/error/message")
@@ -1868,7 +1888,7 @@ async fn attempt_router_once(
         ));
     }
 
-    let answer = response_content(&parsed);
+    let answer = response_content(&parsed)?;
     let usage = parsed.get("usage").cloned().unwrap_or_else(|| json!({}));
     let provider = headers
         .get("x-routed-via")
@@ -4953,9 +4973,19 @@ async fn chat_stream(
     // A router that ignores `stream` and answers with plain JSON still gets a
     // one-shot stream, so the UI's stop/retry path works either way.
     if !content_type.contains("event-stream") {
-        let body = response.text().await.unwrap_or_default();
-        let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-        let answer = response_content(&parsed);
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(error) => {
+                return json_error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("Could not read router response: {error}"),
+                );
+            }
+        };
+        let (parsed, answer) = match parse_router_chat_response(&body) {
+            Ok(result) => result,
+            Err(error) => return json_error(StatusCode::BAD_GATEWAY, error),
+        };
         let usage = parsed.get("usage").cloned().unwrap_or_else(|| json!({}));
         if let Ok(mut held) = recorder.meta.lock() {
             for key in [
@@ -5570,6 +5600,39 @@ const USAGE_BY_AGENT_SQL: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn router_chat_response_extracts_plain_text() {
+        let (parsed, answer) = parse_router_chat_response(
+            r#"{"choices":[{"message":{"content":"hello"}}],"usage":{"total_tokens":3}}"#,
+        )
+        .expect("valid chat response");
+        assert_eq!(answer, "hello");
+        assert_eq!(parsed["usage"]["total_tokens"], 3);
+    }
+
+    #[test]
+    fn router_chat_response_rejects_invalid_json() {
+        let error = parse_router_chat_response(r#"{"choices":["#)
+            .expect_err("malformed JSON must be rejected");
+        assert!(error.starts_with("Router returned invalid JSON:"), "{error}");
+    }
+
+    #[test]
+    fn router_chat_response_rejects_missing_message_content() {
+        let error = parse_router_chat_response(r#"{"choices":[{"message":{}}]}"#)
+            .expect_err("missing content must be rejected");
+        assert!(error.contains("choices[0].message.content"), "{error}");
+    }
+
+    #[test]
+    fn router_chat_response_extracts_text_parts() {
+        let (_, answer) = parse_router_chat_response(
+            r#"{"choices":[{"message":{"content":[{"type":"text","text":"first"},{"type":"text","text":"second"}]}}]}"#,
+        )
+        .expect("valid content parts");
+        assert_eq!(answer, "first\nsecond");
+    }
 
     fn scratch(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("free-ai-studio-test-{}-{name}", std::process::id()))
