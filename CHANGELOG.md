@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.3.0
+
+### Autonomous engineering
+- Add **project intelligence**: a bounded workspace scan reports languages, source/test/documentation counts, manifests, frameworks, declared dependencies and entry points, cached against the git fingerprint and refreshed when HEAD or the file counts move.
+- Add **requirement intake**: a request that names nothing is planned by asking at most two questions instead of guessing; every pipeline records deterministic acceptance criteria and the risks the project profile implies. A `needs-input` pipeline calls no model.
+- Add **engineering pipelines** on top of missions: analyse → plan → implement → verify → document → review, with the analysis facts in every plan and a trace that labels each acceptance criterion `verified`, `no-artifact`, `in-progress` or `not-verified` from the mission's own evidence.
+- Add **autonomy levels** 1–3 mapped to mission task approvals: assisted gates every stage, supervised gates stages that change files, autonomous runs the authorised plan. Branch creation and commits are `Action::Git` decisions that still require approval at levels 1 and 2.
+- Add **checks and repair**: `cargo check` behind the command permission with classified failures and suggestions, and a bounded four-stage repair mission (diagnose, fix, verify, review) that never self-loops.
+- Add **delivery**: a delivery branch named from the goal and a commit that stages only the files the pipeline itself wrote, through the same guarded git helpers the Source control pane uses.
+- Add **measured metrics**: run, mission, task, retry, verification and command counts over 30 days, plus lcov coverage when a file exists; unavailable values are labelled instead of estimated.
+- Add the **Engineering dashboard** with the project profile, metrics, autonomy control, pipeline launcher, question intake, stage list, acceptance trace, checks, delivery and an emergency stop that cancels live missions and runs.
+- Add `docs/engineering/` (architecture, pipelines, autonomy, safety, debugging, testing, git, metrics, developer guide) and unit plus scripted-provider integration tests for intake, approval gating, a full six-stage run, delivery refusal and the emergency stop.
+
 ## 4.2.0
 
 ### Multi-agent missions

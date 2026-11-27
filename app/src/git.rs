@@ -704,6 +704,36 @@ pub(crate) fn discard_run_worktree(root: &Path, run_id: &str) -> Result<Value, S
 /// Is this folder the root of a git repository? Isolation needs exactly that: a
 /// worktree is created for the repository the user opened, not for whatever
 /// enclosing repository a subfolder happens to sit inside.
+/// Branch, commit and dirty state for the engineering layer, read from git
+/// itself rather than inferred from files.
+pub(crate) fn head_info(root: &Path) -> (String, String, bool) {
+    let branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|output| output.stdout.trim().to_string())
+        .unwrap_or_default();
+    let commit = git(root, &["rev-parse", "--short", "HEAD"])
+        .map(|output| output.stdout.trim().to_string())
+        .unwrap_or_default();
+    let dirty = git(root, &["status", "--porcelain"])
+        .map(|output| !output.stdout.trim().is_empty())
+        .unwrap_or(false);
+    (branch, commit, dirty)
+}
+
+/// The same validated branch creation the Source control pane uses.
+pub(crate) fn create_branch_checked(root: &Path, name: &str) -> Result<Value, String> {
+    create_branch(root, name)
+}
+
+/// The same guarded commit the Source control pane uses, staging only the
+/// paths the caller names.
+pub(crate) fn commit_checked(
+    root: &Path,
+    message: &str,
+    paths: &[String],
+) -> Result<Value, String> {
+    commit(root, message, paths)
+}
+
 pub(crate) fn is_repository_root(root: &Path) -> bool {
     let Ok(output) = git(root, &["rev-parse", "--show-toplevel"]) else {
         return false;

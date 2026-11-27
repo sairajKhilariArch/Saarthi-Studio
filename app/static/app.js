@@ -1601,6 +1601,10 @@ const state = {
   missionRoles: [],
   missionId: null,
   missionTimer: null,
+  engTimer: null,
+  eng: null,
+  engPipelines: [],
+  engPipelineId: null,
   openSkillId: null,
   skillDetail: null,
   /* permissions: saved rules plus the audit trail from /api/permissions. */
@@ -2312,12 +2316,14 @@ const VIEWS = [
   "automation",
   "runs",
   "missions",
+  "engineering",
 ];
 
 function setView(view) {
   state.view = view;
   // Live mission status is polled only while the page is open.
   if (view !== "missions") stopMissionPolling();
+  if (view !== "engineering") stopEngineeringPolling();
   VIEWS.forEach((name) => {
     const section = $(`${name}View`);
     if (section) section.classList.toggle("hidden", view !== name);
@@ -2341,6 +2347,7 @@ function setView(view) {
   if (view === "automation") loadWorkflows();
   if (view === "runs") void loadRuns();
   if (view === "missions") void loadMissions();
+  if (view === "engineering") void loadEngineering();
 }
 
 function activateTab(key) {
@@ -6244,6 +6251,648 @@ async function forgetSavedKey(field, button, statusElement) {
   toast("Saved key removed.");
 }
 
+/* ------------------------------------------------------------------ */
+/* engineering: project intelligence, pipelines and delivery            */
+/* ------------------------------------------------------------------ */
+
+const ENGINEERING_ACTIVE = ["planned", "running", "paused", "awaiting-approval"];
+
+function engineeringStatusLabel(status) {
+  switch (status) {
+    case "needs-input":
+      return "Needs input";
+    case "planned":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "paused":
+      return "Paused";
+    case "awaiting-approval":
+      return "Waiting for approval";
+    case "succeeded":
+      return "Succeeded";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    case "delivered":
+      return "Delivered";
+    case "unknown":
+      return "Mission missing";
+    default:
+      return status ? String(status) : "Unknown";
+  }
+}
+
+function autonomyLabel(level) {
+  switch (Number(level)) {
+    case 1:
+      return "Assisted";
+    case 2:
+      return "Supervised";
+    case 3:
+      return "Autonomous";
+    default:
+      return "Unknown";
+  }
+}
+
+function traceStatusLabel(status) {
+  switch (status) {
+    case "verified":
+      return "Verified";
+    case "no-artifact":
+      return "Observed, no artifact";
+    case "in-progress":
+      return "In progress";
+    case "not-verified":
+      return "Not verified";
+    default:
+      return status ? String(status) : "Unknown";
+  }
+}
+
+function engineeringIsActive(pipeline) {
+  return !!pipeline && ENGINEERING_ACTIVE.includes(pipeline.status);
+}
+
+/** Settled over total, from the counts the mission reported. */
+function engineeringProgress(pipeline) {
+  const counts = (pipeline && pipeline.counts) || {};
+  const total = Number(counts.total) || 0;
+  const settled =
+    (Number(counts.done) || 0) + (Number(counts.failed) || 0) + (Number(counts.blocked) || 0);
+  return { settled, total, percent: total ? Math.round((settled / total) * 100) : 0 };
+}
+
+function stopEngineeringPolling() {
+  if (state.engTimer) {
+    clearTimeout(state.engTimer);
+    state.engTimer = null;
+  }
+}
+
+function scheduleEngineeringPoll() {
+  stopEngineeringPolling();
+  if (state.view !== "engineering") return;
+  if (!(state.engPipelines || []).some(engineeringIsActive)) return;
+  state.engTimer = setTimeout(() => {
+    void loadEngineering();
+  }, 3000);
+}
+
+function engLine(parent, text, className) {
+  const line = document.createElement("p");
+  line.className = className || "mission-card-meta";
+  line.textContent = text;
+  parent.appendChild(line);
+  return line;
+}
+
+function ensureEngineeringState() {
+  if (!state.eng) {
+    state.eng = {
+      settings: null,
+      project: null,
+      metrics: null,
+      pipelines: [],
+      pipeline: null,
+      wired: false,
+    };
+  }
+  return state.eng;
+}
+
+function wireEngineeringForm() {
+  const eng = ensureEngineeringState();
+  if (eng.wired) return;
+  eng.wired = true;
+  $("engForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void startEngineeringPipeline();
+  });
+  $("engSaveAutonomy").addEventListener("click", () => void saveEngineeringAutonomy());
+  $("engStop").addEventListener("click", () => void engineeringEmergencyStop());
+  $("engChecksBtn").addEventListener("click", () => void runEngineeringChecks());
+  $("engClarify").addEventListener("click", () => void answerEngineeringQuestion());
+}
+
+async function loadEngineering() {
+  wireEngineeringForm();
+  ensureEngineeringState();
+  const settings = await api("/api/engineering/settings");
+  if (settings.ok) renderEngineeringSettings(settings.data);
+  const project = await api("/api/engineering/project");
+  if (project.ok) renderEngineeringProject(project.data.project);
+  else renderEngineeringProject(null, project.data.error);
+  const metrics = await api("/api/engineering/metrics");
+  if (metrics.ok) renderEngineeringMetrics(metrics.data);
+  const list = await api("/api/engineering/pipelines");
+  const box = $("engList");
+  if (!list.ok) {
+    box.replaceChildren();
+    engLine(box, list.data.error || "Pipelines could not be read.", "empty-note");
+    return;
+  }
+  state.engPipelines = Array.isArray(list.data.pipelines) ? list.data.pipelines : [];
+  renderEngineeringList();
+  if (state.engPipelineId) {
+    const still = state.engPipelines.some((pipeline) => pipeline.id === state.engPipelineId);
+    if (still) await openEngineeringPipeline(state.engPipelineId, { quiet: true });
+    else state.engPipelineId = null;
+  }
+  scheduleEngineeringPoll();
+}
+
+function renderEngineeringSettings(settings) {
+  const select = $("engAutonomyLevel");
+  const note = $("engAutonomyNote");
+  if (!settings) return;
+  state.eng.settings = settings;
+  select.value = String(settings.autonomy);
+  note.textContent = `Saved level: ${autonomyLabel(settings.autonomy)}. Level 1 waits on every stage, level 2 waits on stages that change files, level 3 runs the authorised plan. Preparing a branch or committing still asks at levels 1 and 2.`;
+}
+
+function renderEngineeringProject(project, errorMessage) {
+  const box = $("engProject");
+  box.replaceChildren();
+  if (!project) {
+    engLine(box, errorMessage || "Open a workspace folder to analyse it.", "empty-note");
+    return;
+  }
+  state.eng.project = project;
+  const summary = document.createElement("p");
+  summary.className = "mission-goal";
+  const languages = (project.languages || [])
+    .slice(0, 4)
+    .map((entry) => `${entry.name} (${entry.files})`);
+  summary.textContent = `${project.files} files — ${project.sourceFiles} source, ${project.testFiles} test, ${project.docFiles} documentation. Languages: ${
+    languages.length ? languages.join(", ") : "none detected"
+  }. Frameworks: ${(project.frameworks || []).join(", ") || "none detected"}.`;
+  box.appendChild(summary);
+  engLine(
+    box,
+    `Branch ${project.branch || "(not a git repository)"}${
+      project.commit ? ` at ${project.commit}` : ""
+    }${project.dirty ? " — uncommitted changes present" : ""}. Manifests: ${
+      (project.manifests || []).join(", ") || "none"
+    }. Declared dependencies: ${project.dependencies}.`,
+  );
+  engLine(
+    box,
+    `${project.cached ? "Cached analysis" : "Fresh analysis"}${
+      project.bounded ? " (scan hit its file limit)" : ""
+    }. Entry points: ${(project.entryPoints || []).join(", ") || "none found"}.`,
+    "mission-card-meta muted",
+  );
+}
+
+function renderEngineeringMetrics(metrics) {
+  const box = $("engMetrics");
+  const notes = $("engMetricsNotes");
+  box.replaceChildren();
+  notes.replaceChildren();
+  if (!metrics) {
+    engLine(box, "Metrics are unavailable.", "empty-note");
+    return;
+  }
+  state.eng.metrics = metrics;
+  const measured = metrics.measured || {};
+  const coverage = metrics.coverage;
+  const tiles = [];
+  if (measured.runs) {
+    const total = Number(measured.runs.total) || 0;
+    const ok = Number(measured.runs.succeeded) || 0;
+    tiles.push([
+      "Run success",
+      total ? `${Math.round((ok / total) * 100)}%` : "no runs",
+      `${ok}/${total} in ${measured.windowDays} days`,
+    ]);
+    tiles.push([
+      "Runs failed",
+      String(measured.runs.failed || 0),
+      "recorded as failed or interrupted",
+    ]);
+  }
+  if (measured.tasks) {
+    const total = Number(measured.tasks.total) || 0;
+    const done = Number(measured.tasks.done) || 0;
+    tiles.push([
+      "Task completion",
+      total ? `${Math.round((done / total) * 100)}%` : "no tasks",
+      `${done}/${total}`,
+    ]);
+  }
+  tiles.push(["Pipelines", String(measured.pipelines || 0), "started in the window"]);
+  tiles.push(["Retries", String(measured.retries || 0), "repair attempts after failures"]);
+  tiles.push(["Verifications", String(measured.verifications || 0), "agent verifier steps"]);
+  tiles.push([
+    "Test/check commands",
+    String(measured.testCommands || 0),
+    "command steps mentioning test, check or build",
+  ]);
+  tiles.push([
+    "Coverage",
+    coverage ? `${coverage.percent}%` : "unavailable",
+    coverage ? coverage.source : "no lcov.info found",
+  ]);
+  tiles.forEach(([label, value, note]) => {
+    const tile = document.createElement("div");
+    tile.className = "eng-metric";
+    const big = document.createElement("strong");
+    big.textContent = value;
+    const name = document.createElement("span");
+    name.textContent = label;
+    const detail = document.createElement("small");
+    detail.textContent = note;
+    tile.append(big, name, detail);
+    box.appendChild(tile);
+  });
+  (metrics.notes || []).forEach((note) => {
+    const item = document.createElement("li");
+    item.textContent = note;
+    notes.appendChild(item);
+  });
+  (metrics.unavailable || []).forEach((entry) => {
+    const item = document.createElement("li");
+    item.className = "muted";
+    item.textContent = `Unavailable: ${entry}`;
+    notes.appendChild(item);
+  });
+}
+
+function renderEngineeringList() {
+  const box = $("engList");
+  box.replaceChildren();
+  const pipelines = state.engPipelines || [];
+  if (!pipelines.length) {
+    engLine(
+      box,
+      "No pipelines yet. Describe a change above; the project is analysed before any agent writes a file.",
+      "empty-note",
+    );
+    return;
+  }
+  pipelines.forEach((pipeline) => {
+    const card = document.createElement("article");
+    card.className = "mission-card";
+    if (pipeline.id === state.engPipelineId) card.classList.add("selected");
+    const head = document.createElement("div");
+    head.className = "mission-card-head";
+    const goal = document.createElement("p");
+    goal.className = "mission-goal";
+    goal.textContent = pipeline.goal;
+    const badge = document.createElement("span");
+    badge.className = `mission-badge mission-${pipeline.status}`;
+    badge.textContent = engineeringStatusLabel(pipeline.status);
+    head.append(goal, badge);
+    card.appendChild(head);
+    const progress = engineeringProgress(pipeline);
+    const meta = document.createElement("p");
+    meta.className = "mission-card-meta";
+    meta.textContent = `${autonomyLabel(pipeline.autonomy)} · ${progress.settled}/${progress.total} stages settled · ${
+      pipeline.branch || "no branch recorded"
+    }`;
+    card.appendChild(meta);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn btn-quiet btn-small";
+    open.textContent = "Open";
+    open.addEventListener("click", () => void openEngineeringPipeline(pipeline.id));
+    card.appendChild(open);
+    box.appendChild(card);
+  });
+}
+
+function engTaskRow(task) {
+  const row = document.createElement("div");
+  row.className = "eng-task";
+  const head = document.createElement("div");
+  head.className = "mission-card-head";
+  const title = document.createElement("p");
+  title.className = "mission-goal";
+  title.textContent = `${task.title || task.id} — ${task.roleName || task.role}`;
+  const badge = document.createElement("span");
+  badge.className = `mission-badge mission-${task.status}`;
+  badge.textContent = missionStatusLabel(task.status);
+  head.append(title, badge);
+  row.appendChild(head);
+  if (task.needsApproval && !task.approved && task.status === "planned") {
+    const note = document.createElement("p");
+    note.className = "mission-card-meta";
+    note.textContent =
+      "This stage waits for your approval; approve it in Mission control or raise the autonomy level before starting.";
+    row.appendChild(note);
+  }
+  if (task.summary) engLine(row, task.summary, "mission-card-meta");
+  if (task.error) engLine(row, `Error: ${task.error}`, "mission-card-meta");
+  return row;
+}
+
+async function openEngineeringPipeline(id, options) {
+  state.engPipelineId = id;
+  const result = await api(`/api/engineering/pipelines/${id}`);
+  const box = $("engDetail");
+  if (!result.ok) {
+    box.classList.remove("hidden");
+    box.replaceChildren();
+    engLine(box, result.data.error || "This pipeline could not be read.", "empty-note");
+    return;
+  }
+  const pipeline = result.data.pipeline;
+  state.engPipeline = pipeline;
+  box.classList.remove("hidden");
+  box.replaceChildren();
+
+  const head = document.createElement("div");
+  head.className = "mission-card-head";
+  const title = document.createElement("h2");
+  title.className = "form-group-title";
+  title.textContent = "Pipeline";
+  const badge = document.createElement("span");
+  badge.className = `mission-badge mission-${pipeline.status}`;
+  badge.textContent = engineeringStatusLabel(pipeline.status);
+  head.append(title, badge);
+  box.appendChild(head);
+  engLine(box, pipeline.goal, "mission-goal");
+  engLine(
+    box,
+    `${autonomyLabel(pipeline.autonomy)} · baseline ${pipeline.baseline || "none"} · branch ${
+      pipeline.branch || "none"
+    }${pipeline.missionId ? ` · mission ${pipeline.missionId}` : ""}`,
+  );
+
+  if ((pipeline.questions || []).length && !pipeline.missionId) {
+    const questions = document.createElement("div");
+    questions.className = "eng-questions";
+    engLine(questions, "The request cannot be planned until these are answered:", "mission-card-meta");
+    const list = document.createElement("ul");
+    list.className = "eng-notes";
+    pipeline.questions.forEach((question) => {
+      const item = document.createElement("li");
+      item.textContent = question;
+      list.appendChild(item);
+    });
+    questions.appendChild(list);
+    box.appendChild(questions);
+  }
+
+  if ((pipeline.tasks || []).length) {
+    const tasksTitle = document.createElement("h3");
+    tasksTitle.className = "form-group-title";
+    tasksTitle.textContent = "Stages";
+    box.appendChild(tasksTitle);
+    pipeline.tasks.forEach((task) => box.appendChild(engTaskRow(task)));
+  }
+
+  const traceTitle = document.createElement("h3");
+  traceTitle.className = "form-group-title";
+  traceTitle.textContent = "Acceptance criteria";
+  box.appendChild(traceTitle);
+  const trace = pipeline.trace || {};
+  (trace.acceptance || []).forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "eng-trace-row";
+    const criterion = document.createElement("p");
+    criterion.className = "mission-goal";
+    criterion.textContent = entry.criterion;
+    const status = document.createElement("span");
+    status.className = "mission-badge";
+    status.textContent = traceStatusLabel(entry.status);
+    row.append(criterion, status);
+    if ((entry.sources || []).length) {
+      engLine(row, `Evidence: ${entry.sources.join("; ")}`, "mission-card-meta");
+    } else {
+      engLine(row, "No evidence recorded yet.", "mission-card-meta");
+    }
+    box.appendChild(row);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "form-actions";
+  const branch = document.createElement("button");
+  branch.type = "button";
+  branch.className = "btn btn-quiet btn-small";
+  branch.textContent = "Prepare branch";
+  branch.addEventListener("click", () => void engineeringDelivery(id, "branch"));
+  const deliver = document.createElement("button");
+  deliver.type = "button";
+  deliver.className = "btn btn-accent btn-small";
+  deliver.textContent = "Commit the pipeline's files";
+  deliver.disabled = pipeline.status !== "succeeded";
+  deliver.addEventListener("click", () => void engineeringDelivery(id, "deliver"));
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "btn btn-quiet btn-small";
+  refresh.textContent = "Refresh";
+  refresh.addEventListener("click", () => void loadEngineering());
+  actions.append(branch, deliver, refresh);
+  box.appendChild(actions);
+  if (pipeline.delivery) {
+    engLine(
+      box,
+      `Delivered ${pipeline.delivery.commit || ""} on ${pipeline.delivery.branch || ""} with ${
+        (pipeline.delivery.files || []).length
+      } file(s).`,
+      "mission-card-meta",
+    );
+  }
+  if (pipeline.status === "succeeded" && !(pipeline.report || {}).filesWritten?.length) {
+    engLine(
+      box,
+      "Delivery is unavailable because the pipeline wrote no files; the trace above says which criteria have evidence and which do not.",
+      "mission-card-meta",
+    );
+  }
+  if (!options || !options.quiet) scheduleEngineeringPoll();
+}
+
+async function startEngineeringPipeline() {
+  const goal = $("engGoal").value.trim();
+  const note = $("engNote");
+  if (!goal) {
+    note.textContent = "Describe the change first.";
+    return;
+  }
+  const body = { goal };
+  const autonomy = $("engPipelineAutonomy").value;
+  if (autonomy) body.autonomy = Number(autonomy);
+  $("engStart").disabled = true;
+  const result = await api("/api/engineering/pipelines", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  $("engStart").disabled = false;
+  if (!result.ok) {
+    note.textContent = result.data.error || "The pipeline was refused.";
+    return;
+  }
+  note.textContent = result.data.needsInput
+    ? "The request needs one more detail before any agent starts."
+    : "Pipeline started. Each stage is a real agent run; open Mission control for the step log.";
+  $("engGoal").value = "";
+  if (result.data.needsInput) {
+    $("engQuestions").classList.remove("hidden");
+    $("engQuestionList").replaceChildren();
+    (result.data.pipeline.questions || []).forEach((question) => {
+      const item = document.createElement("li");
+      item.textContent = question;
+      $("engQuestionList").appendChild(item);
+    });
+    state.engPipelineId = result.data.pipeline.id;
+  } else {
+    $("engQuestions").classList.add("hidden");
+  }
+  await loadEngineering();
+  if (state.engPipelineId) await openEngineeringPipeline(state.engPipelineId, { quiet: true });
+}
+
+async function answerEngineeringQuestion() {
+  const id = state.engPipelineId;
+  const answer = $("engAnswer").value.trim();
+  const note = $("engNote");
+  if (!id) {
+    note.textContent = "Start a pipeline first.";
+    return;
+  }
+  if (answer.split(/\s+/).filter(Boolean).length < 3) {
+    note.textContent = "Add the missing detail before the pipeline starts.";
+    return;
+  }
+  const result = await api(`/api/engineering/pipelines/${id}/clarify`, {
+    method: "POST",
+    body: JSON.stringify({ answer }),
+  });
+  if (!result.ok) {
+    note.textContent = result.data.error || "The answer was refused.";
+    return;
+  }
+  if (result.data.needsInput) {
+    note.textContent = "That was still not enough: the remaining questions are listed.";
+    $("engQuestionList").replaceChildren();
+    (result.data.questions || []).forEach((question) => {
+      const item = document.createElement("li");
+      item.textContent = question;
+      $("engQuestionList").appendChild(item);
+    });
+    return;
+  }
+  $("engQuestions").classList.add("hidden");
+  $("engAnswer").value = "";
+  note.textContent = "Pipeline started from your answer.";
+  await loadEngineering();
+  await openEngineeringPipeline(id, { quiet: true });
+}
+
+async function saveEngineeringAutonomy() {
+  const level = Number($("engAutonomyLevel").value);
+  const result = await api("/api/engineering/settings", {
+    method: "POST",
+    body: JSON.stringify({ autonomy: level }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The autonomy level was refused.");
+    return;
+  }
+  toast(`Autonomy: ${autonomyLabel(level)}.`);
+  await loadEngineering();
+}
+
+async function engineeringEmergencyStop() {
+  const result = await api("/api/engineering/stop", { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "The stop request failed.");
+    return;
+  }
+  toast(
+    `Stopped ${result.data.missionsCancelled || 0} mission(s) and ${result.data.runsStopped || 0} run(s).`,
+  );
+  await loadEngineering();
+}
+
+async function engineeringDelivery(id, kind) {
+  const result = await api(`/api/engineering/pipelines/${id}/${kind}`, {
+    method: "POST",
+    body: JSON.stringify({ approve: true }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The git operation was refused.");
+    return;
+  }
+  toast(
+    kind === "branch" ? `Branch ${result.data.branch} created.` : "Committed the pipeline's files.",
+  );
+  await loadEngineering();
+  await openEngineeringPipeline(id, { quiet: true });
+}
+
+async function runEngineeringChecks() {
+  const box = $("engCheckResults");
+  const result = await api("/api/engineering/checks", {
+    method: "POST",
+    body: JSON.stringify({ approve: true, pipeline: state.engPipelineId || "" }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The checks could not run.");
+    return;
+  }
+  box.classList.remove("hidden");
+  box.replaceChildren();
+  const title = document.createElement("h2");
+  title.className = "form-group-title";
+  title.textContent = "Project checks";
+  box.appendChild(title);
+  const ran = result.data.ran || [];
+  if (!ran.length) engLine(box, "No supported check command was found for this project.", "empty-note");
+  ran.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "eng-check";
+    const head = document.createElement("div");
+    head.className = "mission-card-head";
+    const command = document.createElement("p");
+    command.className = "mission-goal";
+    command.textContent = entry.command;
+    const badge = document.createElement("span");
+    badge.className = "mission-badge";
+    badge.textContent = entry.ok ? "passed" : entry.kind;
+    head.append(command, badge);
+    row.appendChild(head);
+    engLine(row, `${entry.elapsedMs} ms`);
+    if (!entry.ok) {
+      engLine(row, entry.suggestion, "mission-card-meta");
+      const output = document.createElement("pre");
+      output.className = "eng-output";
+      output.textContent = entry.summary || "";
+      row.appendChild(output);
+      const repair = document.createElement("button");
+      repair.type = "button";
+      repair.className = "btn btn-quiet btn-small";
+      repair.textContent = "Start a repair pipeline for this";
+      repair.addEventListener("click", () => void startEngineeringRepair(entry));
+      row.appendChild(repair);
+    }
+    box.appendChild(row);
+  });
+  (result.data.skipped || []).forEach((entry) =>
+    engLine(box, `Skipped: ${entry}`, "mission-card-meta muted"),
+  );
+}
+
+async function startEngineeringRepair(entry) {
+  const result = await api("/api/engineering/repair", {
+    method: "POST",
+    body: JSON.stringify({ problem: `${entry.command} failed: ${entry.summary || entry.kind}` }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The repair pipeline was refused.");
+    return;
+  }
+  toast("Repair pipeline started: diagnose, fix, prove, review.");
+  state.engPipelineId = result.data.pipeline.id;
+  await loadEngineering();
+  await openEngineeringPipeline(state.engPipelineId, { quiet: true });
+}
+
 /* ---- permissions: saved rules and what they decided lately --------- */
 
 function permissionScopeLabel(scope) {
@@ -10087,7 +10736,7 @@ function bindEvents() {
   });
 
   $("routerBtn").addEventListener("click", () => setView("router"));
-  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"], ["localBtn", "local"], ["runsBtn", "runs"]].forEach(([id, view]) => {
+  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"], ["localBtn", "local"], ["runsBtn", "runs"], ["engineeringBtn", "engineering"]].forEach(([id, view]) => {
 
     $(id).addEventListener("click", () => setView(view));
   });

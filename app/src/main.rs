@@ -38,6 +38,7 @@ mod deepsearch;
 mod diagnostics;
 mod drafts;
 mod embeddings;
+mod engineering;
 mod events;
 mod extension_run;
 mod extensions;
@@ -589,6 +590,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
     multi_agent::initialize(conn).map_err(|error| format!("mission tables: {error}"))?;
+    engineering::initialize(conn).map_err(|error| format!("engineering tables: {error}"))?;
     migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))?;
     migrate_message_index(conn).map_err(|error| format!("message index: {error}"))
 }
@@ -5379,6 +5381,12 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         )))
         .merge(
             multi_agent::router().route_layer(middleware::from_fn_with_state(
+                workspace::LocalOriginGuard::new(port),
+                workspace::guard_local_origin,
+            )),
+        )
+        .merge(
+            engineering::router().route_layer(middleware::from_fn_with_state(
                 workspace::LocalOriginGuard::new(port),
                 workspace::guard_local_origin,
             )),

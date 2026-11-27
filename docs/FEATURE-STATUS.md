@@ -17,6 +17,15 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
 
+**Revision 4.3.0 (2026-11-27):** Autonomous engineering. Project intelligence from a
+bounded scan, requirement intake that asks instead of guessing, six-stage pipelines built
+as missions, autonomy levels 1–3 mapped to task approvals, guarded branch and commit
+delivery limited to the pipeline's own files, classified check failures with a bounded
+repair mission, and metrics that label unavailable values. Covered by unit tests and four
+scripted-provider integration tests. Not verified here: a display-level review of the
+Engineering page, a real-provider pipeline run, and CI workflow triggering (not
+implemented; checks run locally).
+
 **Revision 4.2.0 (2026-11-27):** Multi-agent missions. Eight specialised roles run
 as real agent runs under a mission supervisor: dependency-ordered delegation,
 parallel read-only work, a writer-conflict rule, retries as fresh runs, blocked

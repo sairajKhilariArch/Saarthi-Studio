@@ -226,6 +226,7 @@
         <button id="artifactsBtn" class="foot-btn" title="Files"><svg class="icon"><use href="#i-file"/></svg><span>Files</span></button>
         <button id="automationBtn" class="foot-btn" title="Automation"><svg class="icon"><use href="#i-undo"/></svg><span>Auto</span></button>
         <button id="runsBtn" class="foot-btn" title="Agent runs"><svg class="icon"><use href="#i-play"/></svg><span>Runs</span></button>
+        <button id="engineeringBtn" class="foot-btn" title="Autonomous engineering"><svg class="icon"><use href="#i-spark"/></svg><span>Engineering</span></button>
       </div>
       <p class="foot-note">Chats stay in local SQLite. Files stay on this computer.</p>
     </footer>
@@ -655,6 +656,85 @@
         </form>
         <div id="missionList" class="mission-list"></div>
         <div id="missionDetail" class="mission-detail hidden"></div>
+      </div>
+    </section>
+
+    <section id="engineeringView" class="view page-view hidden" role="tabpanel" aria-label="Engineering">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Autonomous engineering</p>
+          <h1>Engineering</h1>
+          <p>A request becomes a pipeline: the project is analysed first, a plan is made, code is written, checks run, documentation is updated and an independent review follows. Each stage is a real agent run recorded in Mission control; nothing here is simulated. The autonomy level decides which stages wait for you, and delivery stages only the files the pipeline itself wrote.</p>
+        </header>
+
+        <div class="card form-card eng-controls">
+          <div class="eng-control-row">
+            <label class="field">
+              <span>Autonomy</span>
+              <select id="engAutonomyLevel">
+                <option value="1">1 — Assisted: approve every stage</option>
+                <option value="2" selected>2 — Supervised: approve stages that change files</option>
+                <option value="3">3 — Autonomous: run authorised workflows; git still asks</option>
+              </select>
+            </label>
+            <div class="form-actions">
+              <button id="engSaveAutonomy" type="button" class="btn btn-quiet btn-small">Save level</button>
+              <button id="engStop" type="button" class="btn btn-quiet btn-small danger">Emergency stop</button>
+            </div>
+          </div>
+          <p id="engAutonomyNote" class="muted"></p>
+        </div>
+
+        <section class="card form-card" aria-labelledby="engProjectTitle">
+          <h2 class="form-group-title" id="engProjectTitle">What the project is</h2>
+          <div id="engProject" class="eng-project" aria-live="polite"></div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="engMetricsTitle">
+          <h2 class="form-group-title" id="engMetricsTitle">Engineering quality</h2>
+          <p class="muted">Measured numbers come from rows this app recorded and from the workspace itself. Anything unavailable says so instead of showing an estimate.</p>
+          <div id="engMetrics" class="eng-metrics" aria-live="polite"></div>
+          <ul id="engMetricsNotes" class="eng-notes"></ul>
+        </section>
+
+        <form id="engForm" class="card form-card">
+          <label class="field">
+            <span>What should change?</span>
+            <textarea id="engGoal" rows="4" placeholder="Add a CSV export button to the reports page and cover it with a test." required></textarea>
+            <small>Name the behaviour and the area. A request too vague to plan comes back as questions instead of a guess.</small>
+          </label>
+          <div class="field-row">
+            <label class="field">
+              <span>Autonomy for this pipeline</span>
+              <select id="engPipelineAutonomy">
+                <option value="">Use the saved level</option>
+                <option value="1">1 — Assisted</option>
+                <option value="2">2 — Supervised</option>
+                <option value="3">3 — Autonomous</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button id="engStart" type="submit" class="btn btn-accent">Start pipeline</button>
+            <button id="engChecksBtn" type="button" class="btn btn-quiet btn-small">Run project checks</button>
+          </div>
+          <p id="engNote" class="empty-note"></p>
+          <div id="engQuestions" class="hidden">
+            <h2 class="form-group-title">The request needs an answer first</h2>
+            <ul id="engQuestionList" class="eng-notes"></ul>
+            <label class="field">
+              <span>Your answer</span>
+              <textarea id="engAnswer" rows="3" placeholder="Which page, which behaviour, and how it should be verified."></textarea>
+            </label>
+            <div class="form-actions">
+              <button id="engClarify" type="button" class="btn btn-accent btn-small">Answer and start</button>
+            </div>
+          </div>
+        </form>
+
+        <div id="engCheckResults" class="card form-card hidden" aria-live="polite"></div>
+        <div id="engList" class="mission-list"></div>
+        <div id="engDetail" class="mission-detail hidden"></div>
       </div>
     </section>
 

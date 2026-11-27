@@ -1641,6 +1641,40 @@ fn mission_json(state: &AppState, mission: &Mission, tasks: &[Task]) -> Value {
     })
 }
 
+/// A mission as the API sees it, for other modules (engineering) that must not
+/// reimplement the mission store.
+pub(crate) fn mission_json_for(state: &AppState, id: &str) -> Option<Value> {
+    let mission = load_mission(state, id).ok().flatten()?;
+    let tasks = load_tasks(state, id).unwrap_or_default();
+    Some(mission_json(state, &mission, &tasks))
+}
+
+/// Cancel every live mission and stop its runs. The emergency stop calls this;
+/// it never asks for approval because stopping is the safe direction.
+pub(crate) async fn cancel_all(state: &AppState) -> (usize, usize) {
+    let ids: Vec<String> = db(state)
+        .ok()
+        .and_then(|conn| {
+            conn.prepare("SELECT id FROM missions WHERE status IN ('planned','running','paused','awaiting-approval')")
+                .ok()
+                .map(|mut stmt| {
+                    stmt.query_map([], |row| row.get::<_, String>(0))
+                        .map(|rows| rows.filter_map(|row| row.ok()).collect::<Vec<String>>())
+                        .unwrap_or_default()
+                })
+        })
+        .unwrap_or_default();
+    let mut missions = 0;
+    let mut runs = 0;
+    for id in ids {
+        if let Ok(stopped) = cancel_mission_record(state, &id).await {
+            missions += 1;
+            runs += stopped;
+        }
+    }
+    (missions, runs)
+}
+
 async fn list_missions(State(state): State<AppState>) -> Response {
     let Ok(conn) = db(&state) else {
         return crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error.");
@@ -1747,40 +1781,56 @@ async fn resume_mission(State(state): State<AppState>, Path(id): Path<String>) -
 }
 
 async fn cancel_mission(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match cancel_mission_record(&state, &id).await {
+        Ok(stopped) => Json(json!({ "ok": true, "status": M_CANCELLED, "stoppedRuns": stopped }))
+            .into_response(),
+        Err(error) if error == "no such mission" => {
+            crate::json_error(StatusCode::NOT_FOUND, "No such mission.")
+        }
+        Err(error) if error == "already finished" => {
+            crate::json_error(StatusCode::BAD_REQUEST, "This mission already finished.")
+        }
+        Err(error) => crate::json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+/// The cancellation itself, shared by the route and the emergency stop so both
+/// take the tick lock and stop runs the same way.
+pub(crate) async fn cancel_mission_record(state: &AppState, id: &str) -> Result<usize, String> {
     let _tick = TICK.lock().await;
-    let Some(mission) = load_mission(&state, &id).ok().flatten() else {
-        return crate::json_error(StatusCode::NOT_FOUND, "No such mission.");
+    let Some(mission) = load_mission(state, id).ok().flatten() else {
+        return Err("no such mission".to_string());
     };
     if terminal_mission(&mission.status) {
-        return crate::json_error(StatusCode::BAD_REQUEST, "This mission already finished.");
+        return Err("already finished".to_string());
     }
-    let mut tasks = load_tasks(&state, &id).unwrap_or_default();
+    let mut tasks = load_tasks(state, id).unwrap_or_default();
     let mut stopped = 0;
     for task in &mut tasks {
         if !settled_task(&task.status) {
             if !task.run_id.is_empty()
-                && crate::agent::stop_run(&state, &task.run_id, "Mission cancelled.").is_ok()
+                && crate::agent::stop_run(state, &task.run_id, "Mission cancelled.").is_ok()
             {
                 stopped += 1;
             }
             task.status = CANCELLED.to_string();
-            let _ = set_task(&state, &id, task);
+            let _ = set_task(state, id, task);
         }
     }
     let mut settled = Mission { ..mission };
     settled.status = M_CANCELLED.to_string();
-    let report = build_report(&state, &settled, &tasks);
-    let _ = set_mission(&state, &id, M_CANCELLED, "Cancelled by user.", &report);
+    let report = build_report(state, &settled, &tasks);
+    let _ = set_mission(state, id, M_CANCELLED, "Cancelled by user.", &report);
     message(
-        &state,
-        &id,
+        state,
+        id,
         "",
         "status",
         "user",
         "orchestrator",
         &format!("Cancelled the mission; stopped {stopped} live run(s)."),
     );
-    Json(json!({ "ok": true, "status": M_CANCELLED, "stoppedRuns": stopped })).into_response()
+    Ok(stopped)
 }
 
 async fn approve_task(
