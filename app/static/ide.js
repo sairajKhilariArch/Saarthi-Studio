@@ -91,6 +91,7 @@
     { id: "run", icon: "play", label: "Run and task history", view: "runs" },
     { id: "modules", icon: "cube", label: "Modules and connections", view: "integrations" },
     { id: "agents", icon: "user", label: "Agents", view: "agents" },
+    { id: "missions", icon: "spark", label: "Mission control", view: "missions" },
     { id: "skills", icon: "spark", label: "Skills", view: "skills" },
     { id: "projects", icon: "layers", label: "Projects and workspaces", view: "workspaces" },
     { id: "settings", icon: "gear", label: "Settings", view: "settings" },

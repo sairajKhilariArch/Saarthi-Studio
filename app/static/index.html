@@ -603,6 +603,61 @@
       </div>
     </section>
 
+    <section id="missionsView" class="view page-view hidden" role="tabpanel" aria-label="Mission control">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Coordinated agents</p>
+          <h1>Mission control</h1>
+          <p>One request becomes a plan of tasks, and each task goes to the agent whose role fits it — planner, architect, coding, debugging, testing, review, documentation or research. Agents build on the summaries of the tasks they depend on, and independent read-only work runs at the same time. A task counts as done only when its own run reached succeeded; the report lists the real steps, files and commands.</p>
+        </header>
+        <div id="missionRoles" class="mission-roles"></div>
+        <form id="missionForm" class="card form-card">
+          <label class="field">
+            <span>Mission goal</span>
+            <textarea id="missionGoal" rows="3" placeholder="Fix the flaky export test, then document the behaviour it covers." required></textarea>
+          </label>
+          <label class="field">
+            <span>Workflow</span>
+            <select id="missionTemplate">
+              <option value="feature" selected>Feature — plan, implement, test, document, review</option>
+              <option value="debug">Debug — diagnose, fix, prove, review</option>
+              <option value="audit">Audit — research, review and tests in parallel, then a recommendation</option>
+              <option value="custom">Custom — write the task list yourself</option>
+            </select>
+            <small>Each workflow is a fixed sequence of real agents. Nothing is simulated: every task is an agent run with its role's tools.</small>
+          </label>
+          <label class="field hidden" id="missionTasksField">
+            <span>Custom tasks (JSON)</span>
+            <textarea id="missionTasks" rows="6" placeholder='[{ "id": "fix", "role": "coding", "files": ["src/lib.rs"] }, { "id": "check", "role": "review", "dependsOn": ["fix"] }]'></textarea>
+            <small>Declare <code>files</code> for every writing task: two writers may only run together when their declared paths do not overlap. A task whose dependency fails is blocked, never retried behind your back.</small>
+          </label>
+          <label class="field">
+            <span>Parallel tasks</span>
+            <input id="missionParallel" type="number" min="1" max="4" value="2">
+            <small>Independent tasks may run at once. A writing task never shares the workspace with another task that could touch the same file.</small>
+          </label>
+          <label class="field">
+            <span>Retries per task</span>
+            <input id="missionRetries" type="number" min="0" max="3" value="1">
+            <small>A retry is a fresh agent run with the failure in its goal; a pinned role model falls back to the routed default on that retry.</small>
+          </label>
+          <div class="field">
+            <span>Mission permissions</span>
+            <label class="mission-role-enabled"><input id="missionWrites" type="checkbox"> allow file edits</label>
+            <label class="mission-role-enabled"><input id="missionCommands" type="checkbox"> allow commands</label>
+            <label class="mission-role-enabled"><input id="missionAutoApprove" type="checkbox"> approve risky steps automatically</label>
+            <small>Roles that write cannot write without this, and the agent profile's own rules still apply on top.</small>
+          </div>
+          <div class="form-actions">
+            <button id="missionStart" type="submit" class="btn btn-accent">Start mission</button>
+          </div>
+          <p id="missionFormNote" class="empty-note"></p>
+        </form>
+        <div id="missionList" class="mission-list"></div>
+        <div id="missionDetail" class="mission-detail hidden"></div>
+      </div>
+    </section>
+
     <section id="runsView" class="view page-view hidden" role="tabpanel" aria-label="Runs">
       <div class="page">
         <header class="page-head">

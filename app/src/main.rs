@@ -62,6 +62,7 @@ mod mcp_oauth;
 mod media;
 mod memory;
 mod model_scope;
+mod multi_agent;
 mod openai;
 mod oplog;
 mod permissions;
@@ -587,6 +588,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     dap::initialize(conn).map_err(|error| format!("debugger breakpoints: {error}"))?;
     agent::initialize(conn).map_err(|error| format!("agent run tables: {error}"))?;
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
+    multi_agent::initialize(conn).map_err(|error| format!("mission tables: {error}"))?;
     migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))?;
     migrate_message_index(conn).map_err(|error| format!("message index: {error}"))
 }
@@ -5223,6 +5225,9 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
     // freed the slots they were waiting for, so admit them now instead of
     // leaving them parked until something else happens to dispatch.
     agent::start_queued(&state).await;
+    // A mission that was running when the app closed keeps its tasks; its
+    // supervisor starts again and re-reads the real run states.
+    multi_agent::resume_after_restart(&state);
     let port: u16 = env::var("FREE_AI_STUDIO_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -5372,6 +5377,12 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
         )))
+        .merge(
+            multi_agent::router().route_layer(middleware::from_fn_with_state(
+                workspace::LocalOriginGuard::new(port),
+                workspace::guard_local_origin,
+            )),
+        )
         .merge(router_console::router(port))
         .merge(router_api)
         // One guard for the whole local UI, including the core chat, config,

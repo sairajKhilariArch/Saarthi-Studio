@@ -511,6 +511,457 @@ async function loadSkills() {
 }
 
 /* ------------------------------------------------------------------ */
+/* missions: coordinated multi-agent work                               */
+/* ------------------------------------------------------------------ */
+
+const MISSION_ACTIVE = ["planned", "running", "paused", "awaiting-approval"];
+
+function missionStatusLabel(status) {
+  switch (status) {
+    case "planned":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "paused":
+      return "Paused";
+    case "awaiting-approval":
+      return "Waiting for approval";
+    case "succeeded":
+      return "Succeeded";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    case "done":
+      return "Done";
+    case "blocked":
+      return "Blocked";
+    default:
+      return status ? String(status) : "Unknown";
+  }
+}
+
+/** Settled over total, from the counts the server computed from its own rows. */
+function missionProgress(mission) {
+  const counts = (mission && mission.counts) || {};
+  const total = Number(counts.total) || 0;
+  const settled =
+    (Number(counts.done) || 0) + (Number(counts.failed) || 0) + (Number(counts.blocked) || 0);
+  return {
+    settled,
+    total,
+    percent: total ? Math.round((settled / total) * 100) : 0,
+  };
+}
+
+function missionIsActive(mission) {
+  return !!mission && MISSION_ACTIVE.includes(mission.status);
+}
+
+function stopMissionPolling() {
+  if (state.missionTimer) {
+    clearTimeout(state.missionTimer);
+    state.missionTimer = null;
+  }
+}
+
+function scheduleMissionPoll() {
+  stopMissionPolling();
+  if (state.view !== "missions") return;
+  if (!(state.missions || []).some(missionIsActive)) return;
+  state.missionTimer = setTimeout(() => {
+    void loadMissions();
+  }, 2500);
+}
+
+async function loadMissions() {
+  wireMissionForm();
+  const rolesBox = $("missionRoles");
+  const roles = await api("/api/mission-roles");
+  if (rolesBox && roles.ok) {
+    state.missionRoles = Array.isArray(roles.data.roles) ? roles.data.roles : [];
+    renderMissionRoles();
+  }
+  const result = await api("/api/missions");
+  const list = $("missionList");
+  if (!list) return;
+  if (!result.ok) {
+    list.replaceChildren();
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = result.data.error || "Missions could not be read.";
+    list.appendChild(note);
+    return;
+  }
+  state.missions = Array.isArray(result.data.missions) ? result.data.missions : [];
+  renderMissions();
+  if (state.missionId) {
+    const still = state.missions.some((mission) => mission.id === state.missionId);
+    if (still) await openMission(state.missionId, { quiet: true });
+    else state.missionId = null;
+  }
+  scheduleMissionPoll();
+}
+
+function renderMissionRoles() {
+  const box = $("missionRoles");
+  if (!box) return;
+  box.replaceChildren();
+  const roles = state.missionRoles || [];
+  if (!roles.length) return;
+  const intro = document.createElement("p");
+  intro.className = "mission-roles-intro";
+  intro.textContent =
+    "Each agent runs on the model you pin here (blank uses the routed default). The role's tools come from its agent profile and are enforced server-side.";
+  box.appendChild(intro);
+  roles.forEach((agent) => {
+    const row = document.createElement("div");
+    row.className = "mission-role";
+    const head = document.createElement("div");
+    head.className = "mission-role-head";
+    const name = document.createElement("strong");
+    name.textContent = agent.name;
+    const profile = document.createElement("span");
+    profile.className = "mission-role-meta";
+    profile.textContent = `${agent.profile} · ${(agent.tools || []).join(", ")}`;
+    head.append(name, profile);
+    const purpose = document.createElement("p");
+    purpose.className = "mission-role-purpose";
+    purpose.textContent = agent.purpose;
+    const controls = document.createElement("div");
+    controls.className = "mission-role-controls";
+    const model = document.createElement("input");
+    model.type = "text";
+    model.className = "mission-model";
+    model.value = agent.model || "";
+    model.placeholder = "Routed default";
+    model.setAttribute("aria-label", `${agent.name} model`);
+    const enabled = document.createElement("label");
+    enabled.className = "mission-role-enabled";
+    const box2 = document.createElement("input");
+    box2.type = "checkbox";
+    box2.checked = agent.enabled !== false;
+    enabled.append(box2, document.createTextNode("enabled"));
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "btn btn-quiet btn-small";
+    save.textContent = "Save";
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      const result = await api("/api/mission-roles", {
+        method: "POST",
+        body: JSON.stringify({
+          role: agent.id,
+          model: model.value.trim(),
+          enabled: box2.checked,
+        }),
+      });
+      save.textContent = result.ok ? "Saved" : "Failed";
+      save.disabled = false;
+      if (!result.ok) {
+        const note = $("missionFormNote");
+        if (note) note.textContent = result.data.error || "The role could not be saved.";
+      }
+    });
+    controls.append(model, enabled, save);
+    row.append(head, purpose, controls);
+    box.appendChild(row);
+  });
+}
+
+function missionBadge(status) {
+  const badge = document.createElement("span");
+  badge.className = `mission-badge mission-${status || "unknown"}`;
+  badge.textContent = missionStatusLabel(status);
+  return badge;
+}
+
+function missionAction(label, onClick, extra) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `btn btn-quiet btn-small${extra ? ` ${extra}` : ""}`;
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function missionControl(id, action) {
+  const result = await api(`/api/missions/${id}/${action}`, { method: "POST", body: "{}" });
+  const note = $("missionFormNote");
+  if (!result.ok && note) note.textContent = result.data.error || `${action} failed.`;
+  await loadMissions();
+}
+
+function renderMissions() {
+  const box = $("missionList");
+  if (!box) return;
+  box.replaceChildren();
+  const missions = state.missions || [];
+  if (!missions.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent =
+      "No missions yet. A mission plans the request, hands each task to its own agent and reports what actually ran.";
+    box.appendChild(note);
+    return;
+  }
+  missions.forEach((mission) => {
+    const card = document.createElement("article");
+    card.className = "mission-card";
+    if (mission.id === state.missionId) card.classList.add("selected");
+    const head = document.createElement("div");
+    head.className = "mission-card-head";
+    const goal = document.createElement("p");
+    goal.className = "mission-goal";
+    goal.textContent = mission.goal;
+    head.append(goal, missionBadge(mission.status));
+    const meta = document.createElement("div");
+    meta.className = "mission-card-meta";
+    const progress = missionProgress(mission);
+    meta.textContent = `${mission.template} · ${progress.settled}/${progress.total} tasks settled · ${mission.counts.failed || 0} failed · parallel ${mission.parallel}`;
+    const actions = document.createElement("div");
+    actions.className = "form-actions";
+    actions.append(
+      missionAction("Open", () => void openMission(mission.id)),
+      missionAction(mission.status === "paused" ? "Resume" : "Pause", () =>
+        missionControl(mission.id, mission.status === "paused" ? "resume" : "pause"),
+      ),
+      missionAction("Cancel", () => missionControl(mission.id, "cancel")),
+    );
+    card.append(head, meta, actions);
+    box.appendChild(card);
+  });
+}
+
+async function openMission(id, options = {}) {
+  state.missionId = id;
+  const box = $("missionDetail");
+  if (!box) return;
+  const [detail, messages] = await Promise.all([
+    api(`/api/missions/${id}`),
+    api(`/api/missions/${id}/messages`),
+  ]);
+  if (!detail.ok) {
+    box.classList.remove("hidden");
+    box.textContent = detail.data.error || "The mission could not be read.";
+    return;
+  }
+  const mission = detail.data.mission;
+  box.classList.remove("hidden");
+  box.replaceChildren();
+
+  const head = document.createElement("div");
+  head.className = "mission-detail-head";
+  const title = document.createElement("h2");
+  title.textContent = mission.goal;
+  head.append(title, missionBadge(mission.status));
+  const meta = document.createElement("p");
+  meta.className = "mission-card-meta";
+  const progress = missionProgress(mission);
+  meta.textContent = `${progress.settled}/${progress.total} tasks settled · ${mission.counts.running || 0} running · ${mission.counts.failed || 0} failed · retries ${mission.maxRetries}`;
+  const bar = document.createElement("div");
+  bar.className = "mission-bar";
+  const fill = document.createElement("span");
+  fill.style.width = `${progress.percent}%`;
+  bar.appendChild(fill);
+  const controls = document.createElement("div");
+  controls.className = "form-actions";
+  controls.append(
+    missionAction("Pause", () => missionControl(id, "pause")),
+    missionAction("Resume", () => missionControl(id, "resume")),
+    missionAction("Cancel", () => missionControl(id, "cancel")),
+    missionAction("Advance now", () => missionControl(id, "advance")),
+  );
+  if (mission.status === "succeeded" || mission.status === "failed" || mission.status === "cancelled") {
+    controls.appendChild(missionAction("Remove", () => missionControl(id, "remove")));
+  }
+  box.append(head, meta, bar, controls);
+
+  if (mission.error) {
+    const error = document.createElement("p");
+    error.className = "mission-error";
+    error.textContent = mission.error;
+    box.appendChild(error);
+  }
+
+  const taskTitle = document.createElement("h3");
+  taskTitle.className = "section-title";
+  taskTitle.textContent = "Tasks";
+  box.appendChild(taskTitle);
+
+  (mission.tasks || []).forEach((task) => {
+    const row = document.createElement("div");
+    row.className = "mission-task";
+    const line = document.createElement("div");
+    line.className = "mission-task-head";
+    const name = document.createElement("strong");
+    name.textContent = `${task.roleName}: ${task.title}`;
+    line.append(name, missionBadge(task.status));
+    if (task.dependsOn && task.dependsOn.length) {
+      const deps = document.createElement("span");
+      deps.className = "mission-task-deps";
+      deps.textContent = `after ${task.dependsOn.join(", ")}`;
+      line.appendChild(deps);
+    }
+    row.appendChild(line);
+    const facts = document.createElement("p");
+    facts.className = "mission-task-facts";
+    facts.textContent = [
+      task.runId ? `run ${task.runId.slice(0, 8)}` : "no run yet",
+      task.runStatus ? `run status ${task.runStatus}` : "",
+      task.attempts ? `attempt ${task.attempts + 1}/${task.maxAttempts}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    row.appendChild(facts);
+    if (task.summary) {
+      const summary = document.createElement("p");
+      summary.className = "mission-task-summary";
+      summary.textContent = task.summary;
+      row.appendChild(summary);
+    }
+    if (task.error) {
+      const error = document.createElement("p");
+      error.className = "mission-error";
+      error.textContent = task.error;
+      row.appendChild(error);
+    }
+    if ((task.needsApproval && !task.approved) || !["done", "failed", "blocked", "cancelled"].includes(task.status)) {
+      const actions = document.createElement("div");
+      actions.className = "form-actions";
+      if (task.needsApproval && !task.approved) {
+        actions.appendChild(
+          missionAction("Approve task", async () => {
+            const result = await api(`/api/missions/${id}/tasks/${task.id}/approve`, {
+              method: "POST",
+              body: "{}",
+            });
+            if (!result.ok) {
+              const note = $("missionFormNote");
+              if (note) note.textContent = result.data.error || "Approval failed.";
+            }
+            await loadMissions();
+          }),
+        );
+      }
+      if (!["done", "failed", "blocked", "cancelled"].includes(task.status)) {
+        actions.appendChild(missionAction("Cancel task", () => missionControlTask(id, task.id)));
+      }
+      if (actions.childNodes.length) row.appendChild(actions);
+    }
+    box.appendChild(row);
+  });
+
+  const messageTitle = document.createElement("h3");
+  messageTitle.className = "section-title";
+  messageTitle.textContent = "Agent messages";
+  box.appendChild(messageTitle);
+  const list = document.createElement("div");
+  list.className = "mission-messages";
+  const entries = messages.ok && Array.isArray(messages.data.messages) ? messages.data.messages : [];
+  if (!entries.length) {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "No messages recorded yet.";
+    list.appendChild(note);
+  }
+  entries.forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = `mission-message kind-${entry.kind}`;
+    const from = document.createElement("span");
+    from.className = "mission-message-from";
+    from.textContent = `${entry.from || "system"} → ${entry.to || "team"}`;
+    const kind = document.createElement("span");
+    kind.className = "mission-message-kind";
+    kind.textContent = entry.kind;
+    const body = document.createElement("p");
+    body.textContent = entry.body;
+    item.append(from, kind, body);
+    list.appendChild(item);
+  });
+  box.appendChild(list);
+
+  const reportTitle = document.createElement("h3");
+  reportTitle.className = "section-title";
+  reportTitle.textContent = "Report";
+  box.appendChild(reportTitle);
+  const pre = document.createElement("pre");
+  pre.className = "console-json mission-report";
+  pre.textContent = mission.report
+    ? JSON.stringify(mission.report, null, 2)
+    : "The report appears when every task has settled.";
+  box.appendChild(pre);
+  if (!options.quiet) box.scrollIntoView({ block: "nearest" });
+}
+
+async function missionControlTask(id, taskId) {
+  const result = await api(`/api/missions/${id}/tasks/${taskId}/cancel`, {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result.ok) {
+    const note = $("missionFormNote");
+    if (note) note.textContent = result.data.error || "The task could not be cancelled.";
+  }
+  await loadMissions();
+}
+
+function wireMissionForm() {
+  const form = $("missionForm");
+  if (!form || form.dataset.wired === "1") return;
+  form.dataset.wired = "1";
+  const template = $("missionTemplate");
+  const tasksField = $("missionTasksField");
+  const syncTemplate = () => {
+    if (!tasksField || !template) return;
+    tasksField.classList.toggle("hidden", template.value !== "custom");
+  };
+  if (template) template.addEventListener("change", syncTemplate);
+  syncTemplate();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const note = $("missionFormNote");
+    const button = $("missionStart");
+    const goal = ($("missionGoal")?.value || "").trim();
+    if (!goal) {
+      if (note) note.textContent = "Describe what the team should accomplish.";
+      return;
+    }
+    const body = {
+      goal,
+      template: template ? template.value : "feature",
+      parallel: Number($("missionParallel")?.value) || 2,
+      maxRetries: Number($("missionRetries")?.value) || 0,
+      allowWrites: !!$("missionWrites")?.checked,
+      allowCommands: !!$("missionCommands")?.checked,
+      autoApprove: !!$("missionAutoApprove")?.checked,
+    };
+    if (body.template === "custom") {
+      try {
+        body.tasks = JSON.parse($("missionTasks")?.value || "[]");
+      } catch {
+        if (note) note.textContent = "The custom task list is not valid JSON.";
+        return;
+      }
+    }
+    if (button) button.disabled = true;
+    if (note) note.textContent = "Starting…";
+    const result = await api("/api/missions", { method: "POST", body: JSON.stringify(body) });
+    if (button) button.disabled = false;
+    if (!result.ok) {
+      if (note) note.textContent = result.data.error || "The mission was refused.";
+      return;
+    }
+    if (note) note.textContent = "";
+    const goalBox = $("missionGoal");
+    if (goalBox) goalBox.value = "";
+    const id = result.data.mission && result.data.mission.id;
+    await loadMissions();
+    if (id) await openMission(id);
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* memory: records the user asked the project to keep                   */
 /* ------------------------------------------------------------------ */
 
@@ -1146,6 +1597,10 @@ const state = {
   extensionsRunning: new Set(),
   /* skills: local SKILL.md folders served by /api/skills. */
   skills: [],
+  missions: [],
+  missionRoles: [],
+  missionId: null,
+  missionTimer: null,
   openSkillId: null,
   skillDetail: null,
   /* permissions: saved rules plus the audit trail from /api/permissions. */
@@ -1856,10 +2311,13 @@ const VIEWS = [
   "artifacts",
   "automation",
   "runs",
+  "missions",
 ];
 
 function setView(view) {
   state.view = view;
+  // Live mission status is polled only while the page is open.
+  if (view !== "missions") stopMissionPolling();
   VIEWS.forEach((name) => {
     const section = $(`${name}View`);
     if (section) section.classList.toggle("hidden", view !== name);
@@ -1882,6 +2340,7 @@ function setView(view) {
   if (view === "artifacts") renderArtifacts();
   if (view === "automation") loadWorkflows();
   if (view === "runs") void loadRuns();
+  if (view === "missions") void loadMissions();
 }
 
 function activateTab(key) {

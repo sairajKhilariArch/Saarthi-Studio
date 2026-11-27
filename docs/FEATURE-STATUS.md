@@ -17,6 +17,16 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
 
+**Revision 4.2.0 (2026-11-27):** Multi-agent missions. Eight specialised roles run
+as real agent runs under a mission supervisor: dependency-ordered delegation,
+parallel read-only work, a writer-conflict rule, retries as fresh runs, blocked
+dependents, approval checkpoints, pause/resume/cancel with real cancellation and
+a report quoted from run steps. Per-role model assignment reaches the provider.
+Covered by eight orchestration tests against a scripted provider and unit tests
+for roles, plans, conflicts, normalisation and report status. Not verified here:
+a display-level review of the Mission control page, and behaviour against a live
+third-party provider.
+
 **Revision 3.88.3 (2026-11-25):** Verification pass. The real-binary suite now
 covers a true SSE upstream (multiple deltas, one stored reply), a timed abort
 that keeps exactly one partial reply, and settings persistence across a

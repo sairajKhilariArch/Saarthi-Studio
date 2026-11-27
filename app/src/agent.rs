@@ -2889,13 +2889,22 @@ async fn step_once(state: &AppState, run: &RunRow) -> Result<bool, String> {
         // acting profile pushes inspectors to cheap even on their first step.
         let (last_action, had_error) = last_step_kind(state, &run.id)?;
         let tier = crate::adaptive_tier(state, &last_action, had_error, &run.profile);
+        // A run that named its own model keeps it: that is how one agent in a
+        // team runs on a different model from another. Adaptive routing still
+        // wins for the steps it classified, because it picked that tier for a
+        // reason; an empty run model means the agent scope decides, as before.
+        let step_model = tier
+            .clone()
+            .filter(|tier| !tier.trim().is_empty())
+            .or_else(|| Some(run.model.clone()).filter(|model| !model.trim().is_empty()));
         // call_model routes to the local runtime in Local AI mode and to the
         // remote router otherwise; a local miss never silently goes remote.
         // A platform pick is asked for one JSON action; every other model gets
         // the same free-form request it has always had.
-        let outcome = crate::call_model_step(state, messages, tier.as_deref(), step_options).await;
+        let outcome =
+            crate::call_model_step(state, messages, step_model.as_deref(), step_options).await;
         match outcome {
-            Ok((reply, _)) => (reply, tier.clone()),
+            Ok((reply, _)) => (reply, step_model.clone()),
             // Visible failover: a tier miss falls back to the configured base
             // model instead of killing a long run over one bad cheap pick.
             Err(tier_error) if tier.is_some() => {
@@ -3885,7 +3894,36 @@ fn crew_stage_index(handoff_steps: i64, crew_len: usize) -> usize {
     (handoff_steps as usize).min(crew_len.saturating_sub(1))
 }
 
+/// Where a freshly created run ended up: already admitted, or waiting its turn.
+pub(crate) struct StartedRun {
+    pub(crate) id: String,
+    pub(crate) status: String,
+    pub(crate) queue_position: Option<i64>,
+}
+
 async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> Response {
+    match create_run_with(&state, input).await {
+        Ok(started) => Json(json!({
+            "ok": true,
+            "run": {
+                "id": started.id,
+                "status": started.status,
+                "queuePosition": started.queue_position,
+            }
+        }))
+        .into_response(),
+        Err((code, message)) => error_response(code, message),
+    }
+}
+
+/// The run form and the mission orchestrator share this one entry point, so a
+/// delegated task is created exactly like a person's run: same goal limits, same
+/// profile rules, same queue, budget and dependency checks. Nothing about a run
+/// changes because an agent asked for it.
+pub(crate) async fn create_run_with(
+    state: &AppState,
+    input: Value,
+) -> Result<StartedRun, (StatusCode, String)> {
     let goal = input
         .get("goal")
         .and_then(Value::as_str)
@@ -3893,23 +3931,23 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         .trim()
         .to_string();
     if goal.is_empty() {
-        return error_response(
+        return Err((
             StatusCode::BAD_REQUEST,
-            "Describe what the agent should do.",
-        );
+            "Describe what the agent should do.".to_string(),
+        ));
     }
     if goal.chars().count() > 5_000 {
-        return error_response(StatusCode::BAD_REQUEST, "Goal is too long.");
+        return Err((StatusCode::BAD_REQUEST, "Goal is too long.".to_string()));
     }
     // A skill is prompt text the person attached to this run. It is resolved
     // against the installed catalogue and refused before a run row exists when
     // it is missing, broken, incompatible or switched off.
     let skill = match crate::skills::resolve_attached(
-        &state,
+        state,
         input.get("skill").and_then(Value::as_str).unwrap_or(""),
     ) {
         Ok(skill) => skill,
-        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+        Err(error) => return Err((StatusCode::BAD_REQUEST, error.to_string())),
     };
     let goal = crate::skills::with_instructions(skill.as_ref(), &goal, MAX_SKILLED_GOAL_CHARS);
     let allow_writes = input
@@ -3930,11 +3968,8 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         .get("allowMcp")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if allow_mcp && crate::mcp::enabled_servers(&state).is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "No enabled MCP server is registered - add one in Settings \u{2192} MCP first, or start the run without MCP tools.",
-        );
+    if allow_mcp && crate::mcp::enabled_servers(state).is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No enabled MCP server is registered - add one in Settings \u{2192} MCP first, or start the run without MCP tools.".to_string()));
     }
     let max_steps = input
         .get("maxSteps")
@@ -3943,30 +3978,35 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         .clamp(1, HARD_MAX_STEPS);
     let profile = normalize_profile(input.get("profile").and_then(Value::as_str).unwrap_or(""));
     if profile.trim().is_empty() {
-        return error_response(StatusCode::BAD_REQUEST, "Unknown agent profile.");
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Unknown agent profile.".to_string(),
+        ));
     }
     let mode = match normalize_mode(input.get("mode").and_then(Value::as_str).unwrap_or("")) {
         Some(mode) => mode,
         None => {
-            return error_response(
+            return Err((
                 StatusCode::BAD_REQUEST,
-                "Unknown agent mode — use \"hybrid\", \"team\", \"crew\", or leave it out.",
-            )
+                "Unknown agent mode — use \"hybrid\", \"team\", \"crew\", or leave it out."
+                    .to_string(),
+            ))
         }
     };
     // Hybrid runs need a local executor up front, so a run can never be
     // started down a path that is guaranteed to fail on its first step.
-    if mode == "hybrid" && crate::load_config(&state).local_model.trim().is_empty() {
-        return error_response(
+    if mode == "hybrid" && crate::load_config(state).local_model.trim().is_empty() {
+        return Err((
             StatusCode::BAD_REQUEST,
-            "Hybrid mode needs a local model: pick and pull one on the Local AI page first.",
-        );
+            "Hybrid mode needs a local model: pick and pull one on the Local AI page first."
+                .to_string(),
+        ));
     }
     // Crew line-up validates before any run row exists: an unknown role or a
     // write-permissionless crew should never leave a broken run behind.
     let crew = match parse_crew(&input, &mode, allow_writes) {
         Ok(crew) => crew,
-        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+        Err(message) => return Err((StatusCode::BAD_REQUEST, message.to_string())),
     };
     let crew_json = serde_json::to_string(&crew).unwrap_or_default();
     let stage_policy = match normalize_stage_policy(
@@ -3976,7 +4016,7 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
             .unwrap_or(""),
     ) {
         Ok(policy) => policy,
-        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+        Err(message) => return Err((StatusCode::BAD_REQUEST, message.to_string())),
     };
     // The per-stage budget only exists for crew runs.
     let stage_max_steps = if mode == "crew" {
@@ -3992,24 +4032,25 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     // The agent works inside the open workspace folder; without one there is
     // nothing safe to read or edit.
     if state.workspace.root().is_err() {
-        return error_response(
+        return Err((
             StatusCode::BAD_REQUEST,
-            "Open a workspace folder first — agent runs only work inside an open workspace.",
-        );
+            "Open a workspace folder first — agent runs only work inside an open workspace."
+                .to_string(),
+        ));
     }
-    let project_id = crate::active_project_id(&state);
+    let project_id = crate::active_project_id(state);
     // A project's token budget covers the work it delegates too, not only its
     // chat turns: a run that would blow the window is refused before it queues.
-    if let Some(refusal) = crate::project_budget_gate(&state, &project_id) {
-        return error_response(StatusCode::TOO_MANY_REQUESTS, refusal);
+    if let Some(refusal) = crate::project_budget_gate(state, &project_id) {
+        return Err((StatusCode::TOO_MANY_REQUESTS, refusal.to_string()));
     }
     let id = uuid::Uuid::new_v4().to_string();
     let priority = parse_priority(&input);
     // Dependencies are validated before the row exists: an unknown id, a self
     // reference or a loop would otherwise sit in the queue forever.
-    let depends_on = match parse_depends_on(&state, &input, &id) {
+    let depends_on = match parse_depends_on(state, &input, &id) {
         Ok(deps) => deps,
-        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+        Err(message) => return Err((StatusCode::BAD_REQUEST, message.to_string())),
     };
     let depends_json = if depends_on.is_empty() {
         String::new()
@@ -4020,7 +4061,7 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     // Every other spelling is refused before a row exists, like the mode.
     let thinking = match parse_run_thinking(&input) {
         Ok(level) => level,
-        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+        Err(message) => return Err((StatusCode::BAD_REQUEST, message.to_string())),
     };
     // A run's own token ceiling: the request's value, else the configured
     // default, never below zero. Fixed now so a later settings change cannot
@@ -4028,7 +4069,7 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
     let run_token_budget = input
         .get("tokenBudget")
         .and_then(Value::as_i64)
-        .unwrap_or_else(|| crate::load_config(&state).run_token_budget)
+        .unwrap_or_else(|| crate::load_config(state).run_token_budget)
         .max(0);
     let stamp = now();
     // Reproducible-run record: freeze the routing config as it was when the
@@ -4040,8 +4081,8 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty());
-    let (snapshot, base_model) = crate::run_record_snapshot(&state, task_model);
-    if let Err(error) = db(&state).and_then(|conn|
+    let (snapshot, base_model) = crate::run_record_snapshot(state, task_model);
+    if let Err(error) = db(state).and_then(|conn|
         conn.execute(
             "INSERT INTO agent_runs(id,project_id,goal,status,allow_writes,allow_commands,auto_approve,max_steps,pending_action,error,created_at,updated_at,router_config,model,profile,mode,crew,stage_policy,stage_max_steps,allow_mcp,priority,depends_on,thinking,token_budget) \
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'','',?9,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
@@ -4053,26 +4094,26 @@ async fn create_run(State(state): State<AppState>, Json(input): Json<Value>) -> 
             ],
         ).map_err(|e| e.to_string())
     ) {
-        return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
     }
     // Every run is created queued and admitted by one pass, so "start now" and
     // "wait your turn" can never disagree about the rules.
-    let _ = dispatch(&state).await;
-    let status = run_status(&state, &id)
+    let _ = dispatch(state).await;
+    let status = run_status(state, &id)
         .ok()
         .flatten()
         .unwrap_or_else(|| QUEUED.to_string());
     let queue_position = if status == QUEUED {
-        queued_position(&state, &id).unwrap_or(None)
+        queued_position(state, &id).unwrap_or(None)
     } else {
         None
     };
-    notify(&state, Some(&id));
-    Json(json!({
-        "ok": true,
-        "run": { "id": id, "status": status, "queuePosition": queue_position }
-    }))
-    .into_response()
+    notify(state, Some(&id));
+    Ok(StartedRun {
+        id,
+        status,
+        queue_position,
+    })
 }
 
 /// This run's 1-based place in the queue, from the same ordering the dispatcher
