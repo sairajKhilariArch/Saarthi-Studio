@@ -407,6 +407,36 @@
       </div>
     </section>
 
+    <section id="pluginsView" class="view page-view hidden" role="tabpanel" aria-label="Plugins">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Extensions, skills and the marketplace</p>
+          <h1>Plugins</h1>
+          <p>Extensions add sandboxed tools, HTML panels and provider presets; skills add instructions the model follows. This page is one catalog over both. Disabling a plugin stops it from running — its tools leave the model's list and its panel stops serving — it does not merely hide the row.</p>
+        </header>
+        <div id="pluginsSummary" class="skills-overview"></div>
+        <h2 class="form-group-title">Installed</h2>
+        <div id="pluginsInstalled" class="list-block"></div>
+        <button type="button" id="pluginsRefresh" class="btn btn-quiet btn-small">Refresh</button>
+        <h2 class="form-group-title">Marketplace</h2>
+        <p class="muted" id="pluginsMarketplaceNote">No marketplace is bundled. Add the URL of a registry index to browse real plugins; until then this list stays empty rather than showing placeholders.</p>
+        <label class="field">
+          <span>Registry URL</span>
+          <input id="pluginRegistryUrl" type="url" placeholder="https://example.com/plugins/index.json" autocomplete="off">
+          <small>https only, or a localhost URL while developing. Nothing is fetched until a registry is added, and every download is checked against the SHA-256 its listing declares.</small>
+        </label>
+        <button type="button" id="pluginRegistryAdd" class="btn btn-accent btn-small">Add registry</button>
+        <div id="pluginRegistries" class="list-block"></div>
+        <div id="pluginMarketplaceErrors" class="list-block"></div>
+        <label class="field">
+          <span>Search</span>
+          <input id="pluginSearch" type="search" placeholder="Name, id, author, category or tag" autocomplete="off">
+        </label>
+        <div id="pluginMarketplace" class="list-block"></div>
+        <p class="muted">Skills are installed, imported, created and exported from the Skills page; extensions can also be installed by pointing at a folder in Settings → Extensions.</p>
+      </div>
+    </section>
+
     <section id="workspacesView" class="view page-view hidden" role="tabpanel" aria-label="Workspaces">
       <div class="page">
         <header class="page-head">

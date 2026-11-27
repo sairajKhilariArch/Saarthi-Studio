@@ -255,7 +255,7 @@ pub(crate) fn runs_at(db: &std::path::Path, limit: usize) -> Vec<Value> {
     .unwrap_or_default()
 }
 
-fn extensions_dir(state: &AppState) -> PathBuf {
+pub(crate) fn extensions_dir(state: &AppState) -> PathBuf {
     state
         .database_path
         .parent()
@@ -858,7 +858,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn install_into(source: &Path, root: &Path) -> Result<String, String> {
+pub(crate) fn install_into(source: &Path, root: &Path) -> Result<String, String> {
     let folder = source
         .file_name()
         .and_then(|name| name.to_str())
@@ -1074,7 +1074,116 @@ fn read_manifest(folder: &Path, name: &str) -> Result<Manifest, String> {
     Ok(parsed)
 }
 
-fn inspect(dir: &Path) -> Vec<Value> {
+/// The manifest object exactly as written, without judging it. Used by the
+/// marketplace installer to check that an archive is the plugin that was chosen
+/// before the validating install path runs.
+pub(crate) fn raw_manifest(folder: &Path) -> Result<Value, String> {
+    let path = folder.join("manifest.json");
+    let meta =
+        fs::metadata(&path).map_err(|_| "The folder has no readable manifest.json.".to_string())?;
+    if meta.len() > MAX_MANIFEST_BYTES {
+        return Err(format!(
+            "manifest.json is larger than {MAX_MANIFEST_BYTES} bytes."
+        ));
+    }
+    let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    serde_json::from_str(&text).map_err(|error| format!("manifest.json is not valid JSON: {error}"))
+}
+
+/// What one manifest would do if it were installed, without writing anything.
+/// This is the installer's own parser ([`parse_manifest`]), so a manifest that
+/// validates here installs there.
+pub(crate) fn validation_report(folder: &str, raw: &Value) -> Value {
+    match parse_manifest(folder, raw) {
+        Ok(manifest) => {
+            let compatibility = compatibility_block(&manifest, env!("CARGO_PKG_VERSION"));
+            json!({
+                "ok": true,
+                "valid": true,
+                "errors": [],
+                "warnings": compatibility.clone().into_iter().collect::<Vec<String>>(),
+                "compatible": compatibility.is_none(),
+                "manifest": {
+                    "id": manifest.id,
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "entry": manifest.entry,
+                    "runtime": manifest.runtime,
+                    "apiVersion": manifest.api_version,
+                    "requiresStudio": manifest.requires_studio,
+                    "dependencies": manifest.dependencies,
+                    "permissions": manifest.permissions,
+                    "tools": manifest.tools.iter().map(|tool| tool.name.clone()).collect::<Vec<String>>(),
+                    "panels": manifest.panels.iter().map(|panel| panel.id.clone()).collect::<Vec<String>>(),
+                    "providers": manifest.providers.iter().map(|preset| preset.id.clone()).collect::<Vec<String>>(),
+                },
+            })
+        }
+        Err(error) => json!({ "ok": true, "valid": false, "errors": [error] }),
+    }
+}
+
+/// Validate a folder on disk: the manifest, its entry file, and the file every
+/// panel names. Broader than [`validation_report`], which sees only JSON.
+pub(crate) fn folder_report(folder: &Path) -> Value {
+    let name = folder
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if !folder.is_dir() {
+        return json!({
+            "ok": true,
+            "valid": false,
+            "errors": [format!("{} is not a folder.", folder.display())],
+        });
+    }
+    let manifest = match read_manifest(folder, name) {
+        Ok(manifest) => manifest,
+        Err(error) => return json!({ "ok": true, "valid": false, "errors": [error] }),
+    };
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    if manifest.runtime.as_deref().is_none() && !manifest.tools.is_empty() {
+        errors.push("tools need runtime \"wasm\".".to_string());
+    }
+    if manifest.runtime.as_deref() == Some("wasm")
+        && manifest.entry.is_none()
+        && manifest.tools.is_empty()
+    {
+        warnings.push("runtime is wasm but the extension declares no entry or tools.".to_string());
+    }
+    for panel in &manifest.panels {
+        if !folder.join(&panel.entry).is_file() {
+            errors.push(format!(
+                "panel \"{}\" names a missing file: {}",
+                panel.id, panel.entry
+            ));
+        }
+    }
+    let compatibility = compatibility_block(&manifest, env!("CARGO_PKG_VERSION"));
+    if let Some(reason) = &compatibility {
+        warnings.push(reason.clone());
+    }
+    json!({
+        "ok": true,
+        "valid": errors.is_empty(),
+        "errors": errors,
+        "warnings": warnings,
+        "compatible": compatibility.is_none(),
+        "manifest": {
+            "id": manifest.id,
+            "name": manifest.name,
+            "version": manifest.version,
+            "runtime": manifest.runtime,
+            "permissions": manifest.permissions,
+            "tools": manifest.tools.iter().map(|tool| tool.name.clone()).collect::<Vec<String>>(),
+            "panels": manifest.panels.iter().map(|panel| panel.id.clone()).collect::<Vec<String>>(),
+            "providers": manifest.providers.iter().map(|preset| preset.id.clone()).collect::<Vec<String>>(),
+        },
+    })
+}
+
+pub(crate) fn inspect(dir: &Path) -> Vec<Value> {
     // Every verdict is recomputed from the manifests on each listing, so a
     // folder is judged against the build that is running now — an upgrade frees
     // a folder that needed a newer Studio, with nothing stored to go stale.
@@ -1272,7 +1381,15 @@ fn provider_presets(dir: &Path) -> Vec<Value> {
 
 pub(crate) async fn provider_presets_route(State(state): State<AppState>) -> Response {
     let dir = extensions_dir(&state);
-    Json(json!({ "ok": true, "presets": provider_presets(&dir) })).into_response()
+    // A disabled extension contributes nothing, so its presets are not offered
+    // in Settings either.
+    let presets: Vec<Value> = provider_presets(&dir)
+        .into_iter()
+        .filter(|preset| {
+            crate::plugins::extension_enabled(&state, preset["extension"].as_str().unwrap_or(""))
+        })
+        .collect();
+    Json(json!({ "ok": true, "presets": presets })).into_response()
 }
 
 /// The HTML of one declared panel, or the status and message the route answers
@@ -1351,6 +1468,13 @@ pub(crate) async fn panel(
     State(state): State<AppState>,
     AxumPath((id, panel_id)): AxumPath<(String, String)>,
 ) -> Response {
+    if !crate::plugins::extension_enabled(&state, &id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "ok": false, "error": "This extension is disabled." })),
+        )
+            .into_response();
+    }
     match panel_file(&extensions_dir(&state), &id, &panel_id) {
         Ok(html) => {
             let mut response = (StatusCode::OK, html).into_response();
@@ -1475,6 +1599,9 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
     if !reason.is_empty() {
         return bad(reason);
     }
+    if !crate::plugins::extension_enabled(&state, &id) {
+        return bad("This extension is disabled. Enable it in Plugins first.");
+    }
     let Some(entry_file) = entry["entry"].as_str() else {
         return bad("This extension has no entry file to run.");
     };
@@ -1500,6 +1627,9 @@ pub(crate) async fn run(State(state): State<AppState>, AxumPath(id): AxumPath<St
         cancel: Some(cancel),
         wall: None,
         arguments: None,
+        // Settings are a snapshot, like the grant: what the module reads is what
+        // the person had saved when they started the run.
+        settings: Some(crate::plugins::extension_settings(&state, &id)),
     };
     let started_at = crate::now_seconds();
     let started = std::time::Instant::now();
@@ -1601,6 +1731,12 @@ pub(crate) fn catalog(state: &AppState) -> Vec<Value> {
         if !entry["blockedReason"].as_str().unwrap_or("").is_empty() {
             continue;
         }
+        // A disabled extension is not advertised to the model: the tool list is
+        // what the model chooses from, so leaving it in would offer a call that
+        // is then refused.
+        if !crate::plugins::extension_enabled(state, entry["id"].as_str().unwrap_or("")) {
+            continue;
+        }
         let id = entry["id"].as_str().unwrap_or("");
         let Some(list) = entry["tools"].as_array() else {
             continue;
@@ -1638,6 +1774,11 @@ pub(crate) async fn invoke_for_run(
     let Some(entry) = entries.iter().find(|entry| entry["id"] == extension) else {
         return Err(format!("No extension \"{extension}\" is installed."));
     };
+    // A run that reaches here while the extension is disabled is a stale
+    // advertisement, not a permission the loop may assume.
+    if !crate::plugins::extension_enabled(state, extension) {
+        return Err(format!("Extension \"{extension}\" is disabled."));
+    }
     if entry["valid"] != Value::Bool(true) {
         return Err(entry["error"]
             .as_str()
@@ -1685,6 +1826,7 @@ pub(crate) async fn invoke_for_run(
         cancel: Some(cancel),
         wall: None,
         arguments: Some(arguments_text),
+        settings: Some(crate::plugins::extension_settings(state, extension)),
     };
     let started_at = crate::now_seconds();
     let started = std::time::Instant::now();
@@ -1977,6 +2119,9 @@ pub(crate) async fn call_tool(
     if !reason.is_empty() {
         return bad(reason);
     }
+    if !crate::plugins::extension_enabled(&state, &id) {
+        return bad("This extension is disabled. Enable it in Plugins first.");
+    }
     let definition = entry["tools"].as_array().and_then(|tools| {
         tools
             .iter()
@@ -2034,6 +2179,7 @@ pub(crate) async fn call_tool(
         cancel: Some(cancel),
         wall: None,
         arguments: Some(arguments_text),
+        settings: Some(crate::plugins::extension_settings(&state, &id)),
     };
     let started_at = crate::now_seconds();
     let started = std::time::Instant::now();
@@ -3330,6 +3476,98 @@ mod tests {
         assert_eq!(run.audit[0].path, "mcp-bridge-fixture.echo");
         assert_eq!(run.audit[0].decision, crate::permissions::Decision::Allow);
         server.abort();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The example plugin ships compiled modules because a release build cannot
+    /// run WAT, and a repository is not a build machine. This keeps each compiled
+    /// module byte-identical to the `.wat` a reader can actually review.
+    #[test]
+    fn example_tool_modules_match_their_wat() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/hello-studio");
+        for name in ["echo", "settings"] {
+            let source = fs::read_to_string(dir.join(format!("{name}.wat")))
+                .unwrap_or_else(|error| panic!("{name}.wat is missing: {error}"));
+            let expected = match wat::parse_str(&source) {
+                Ok(bytes) => bytes,
+                Err(error) => panic!("{name}.wat does not compile: {error}"),
+            };
+            let actual = fs::read(dir.join(format!("{name}.wasm"))).unwrap_or_else(|error| {
+                panic!(
+                    "{name}.wasm is missing ({error}); regenerate it with \
+                     `REGENERATE=1 cargo test --manifest-path app/Cargo.toml \
+                     regenerate_example_tools -- --ignored`"
+                )
+            });
+            assert_eq!(
+                actual, expected,
+                "{name}.wasm does not match {name}.wat; regenerate it instead of editing one alone"
+            );
+        }
+    }
+
+    /// Writes the compiled example modules from their sources. Ignored by
+    /// default because it edits the working tree.
+    #[test]
+    #[ignore = "writes the example plugin's .wasm files; run with REGENERATE=1"]
+    fn regenerate_example_tools() {
+        if std::env::var("REGENERATE").is_err() {
+            return;
+        }
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/hello-studio");
+        for name in ["echo", "settings"] {
+            let source = fs::read_to_string(dir.join(format!("{name}.wat"))).expect("wat source");
+            let bytes = wat::parse_str(&source).expect("wat compiles");
+            fs::write(dir.join(format!("{name}.wasm")), bytes).expect("write module");
+        }
+    }
+
+    /// The shipped example is a real plugin, not a mock: its manifest passes the
+    /// installer's validation, and both of its tools run in the sandbox and answer
+    /// with the arguments and settings they were given.
+    #[test]
+    fn the_example_plugin_installs_and_its_tools_run() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/hello-studio");
+        let root = std::env::temp_dir().join(format!(
+            "free-ai-studio-example-plugin-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let id = install_into(&source, &root).expect("the example plugin installs");
+        assert_eq!(id, "hello-studio");
+        let entries = inspect(&root);
+        let entry = entries
+            .iter()
+            .find(|entry| entry["id"] == "hello-studio")
+            .expect("the example is listed");
+        assert_eq!(entry["valid"], Value::Bool(true), "{entry}");
+        assert_eq!(entry["runnable"], Value::Bool(true), "{entry}");
+
+        let echo = crate::extension_run::run_file_with(
+            &root.join("hello-studio/echo.wasm"),
+            None,
+            crate::extension_run::RunOptions {
+                cancel: None,
+                wall: None,
+                arguments: Some("{\"hello\":\"studio\"}".to_string()),
+                settings: Some("{}".to_string()),
+            },
+        )
+        .expect("the echo tool runs");
+        assert_eq!(echo.result.as_deref(), Some("{\"hello\":\"studio\"}"));
+
+        let settings = crate::extension_run::run_file_with(
+            &root.join("hello-studio/settings.wasm"),
+            None,
+            crate::extension_run::RunOptions {
+                cancel: None,
+                wall: None,
+                arguments: None,
+                settings: Some("{\"mode\":\"fast\"}".to_string()),
+            },
+        )
+        .expect("the settings tool runs");
+        assert_eq!(settings.result.as_deref(), Some("{\"mode\":\"fast\"}"));
         let _ = fs::remove_dir_all(&root);
     }
 }

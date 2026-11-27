@@ -1,0 +1,46 @@
+{
+  "apiVersion": 1,
+  "id": "hello-studio",
+  "name": "Hello Studio",
+  "version": "0.1.0",
+  "description": "A working reference plugin: two sandboxed tools, a JSON formatter panel and an Ollama preset.",
+  "author": "Sarthi Studio",
+  "runtime": "wasm",
+  "entry": "echo.wasm",
+  "permissions": [],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Returns the JSON arguments it was given, unchanged.",
+      "entry": "echo.wasm",
+      "inputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "settings",
+      "description": "Returns this plugin's saved settings as JSON. Empty settings read as {}.",
+      "entry": "settings.wasm",
+      "inputSchema": {
+        "type": "object"
+      }
+    }
+  ],
+  "panels": [
+    {
+      "id": "json",
+      "title": "JSON formatter",
+      "entry": "json.html"
+    }
+  ],
+  "providers": [
+    {
+      "id": "ollama-local",
+      "name": "Ollama (local)",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "model": "llama3.2",
+      "keyUrl": "https://ollama.com/download",
+      "note": "Runs on this machine; no API key is needed."
+    }
+  ]
+}

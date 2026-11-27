@@ -65,6 +65,7 @@ mod model_scope;
 mod openai;
 mod oplog;
 mod permissions;
+mod plugins;
 mod privacy;
 mod providers;
 mod router;
@@ -580,6 +581,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("permission request ids: {error}"))?;
     extensions::initialize(conn).map_err(|error| format!("extensions: {error}"))?;
     skills::initialize(conn).map_err(|error| format!("skills: {error}"))?;
+    plugins::initialize(conn).map_err(|error| format!("plugins: {error}"))?;
     memory::initialize(conn).map_err(|error| format!("memory: {error}"))?;
     embeddings::initialize(conn).map_err(|error| format!("embeddings: {error}"))?;
     index::initialize(conn).map_err(|error| format!("code index: {error}"))?;
@@ -5341,6 +5343,12 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,
         )))
+        .merge(
+            plugins::router().route_layer(middleware::from_fn_with_state(
+                workspace::LocalOriginGuard::new(port),
+                workspace::guard_local_origin,
+            )),
+        )
         .merge(memory::router().route_layer(middleware::from_fn_with_state(
             workspace::LocalOriginGuard::new(port),
             workspace::guard_local_origin,

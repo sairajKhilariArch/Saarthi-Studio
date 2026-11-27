@@ -98,6 +98,10 @@ pub(crate) struct RunOptions {
     /// JSON text for a tool call, readable through `env.arguments`. `None` (the
     /// default) is a plain run.
     pub arguments: Option<String>,
+    /// The plugin's saved settings as JSON, readable through `env.config`.
+    /// `None` reads as `{}`. Settings are the person's own data, not a
+    /// capability, so reading them needs no permission.
+    pub settings: Option<String>,
 }
 
 #[derive(Debug)]
@@ -199,6 +203,8 @@ struct HostState {
     wall: Duration,
     /// JSON text a tool call was given; empty for a plain run.
     arguments: String,
+    /// The plugin's saved settings as JSON; `{}` when none are saved.
+    settings: String,
     /// The module's one answer. The first report wins.
     result: Option<String>,
     /// Set by a host call that saw the run cancelled or out of time. The run is
@@ -337,7 +343,10 @@ fn run_bytes(
             // The tool ABI is the shape of a call, not access to anything, so
             // it needs no permission: a module that imports it without a tool
             // declared simply reads empty arguments.
-            ("env", "last_error") | ("env", "arguments") | ("env", "result") => true,
+            ("env", "last_error")
+            | ("env", "arguments")
+            | ("env", "result")
+            | ("env", "config") => true,
             _ => false,
         };
         if !allowed {
@@ -361,6 +370,10 @@ fn run_bytes(
             deadline: Instant::now() + wall,
             wall,
             arguments: options.arguments.unwrap_or_default(),
+            settings: options
+                .settings
+                .filter(|settings| !settings.trim().is_empty())
+                .unwrap_or_else(|| "{}".to_string()),
             result: None,
             stop: None,
         },
@@ -429,6 +442,15 @@ fn run_bytes(
             "arguments",
             |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
                 host_arguments(&mut caller, ptr, cap)
+            },
+        )
+        .map_err(|error| format!("The sandbox could not be built: {error}"))?;
+    linker
+        .func_wrap(
+            "env",
+            "config",
+            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, cap: i32| -> i32 {
+                host_settings(&mut caller, ptr, cap)
             },
         )
         .map_err(|error| format!("The sandbox could not be built: {error}"))?;
@@ -1276,6 +1298,42 @@ fn host_arguments(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, cap: i32)
     bytes.len() as i32
 }
 
+/// The plugin's saved settings, as JSON. Separate from `arguments` so a module
+/// can tell what the caller passed from what the person configured, and so a
+/// tool call always sees its settings even when the arguments are empty.
+fn host_settings(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, cap: i32) -> i32 {
+    if let Some(code) = caller.data_mut().stop_requested() {
+        return code;
+    }
+    if caller.data_mut().cap_reached() {
+        return -1;
+    }
+    let text = caller.data().settings.clone();
+    let bytes = text.as_bytes();
+    let limit = (cap.max(0) as usize).min(MAX_HOST_BYTES);
+    if bytes.len() > limit {
+        let message = format!(
+            "The {} settings bytes do not fit the {limit}-byte buffer.",
+            bytes.len()
+        );
+        return caller.data_mut().fail(-4, message);
+    }
+    let Some(memory) = guest_memory(caller) else {
+        return caller
+            .data_mut()
+            .fail(-1, "The module exports no memory for its settings.");
+    };
+    if memory
+        .write(&mut *caller, ptr.max(0) as usize, bytes)
+        .is_err()
+    {
+        return caller
+            .data_mut()
+            .fail(-4, "The settings do not fit the module's memory.");
+    }
+    bytes.len() as i32
+}
+
 /// The module's answer to a tool call. One report wins: a second call is refused
 /// instead of replacing the result the caller may already have used.
 fn host_result(caller: &mut wasmi::Caller<'_, HostState>, ptr: i32, len: i32) -> i32 {
@@ -1807,6 +1865,7 @@ mod tests {
                 cancel: Some(cancel),
                 wall: None,
                 arguments: None,
+                settings: None,
             },
         )
         .expect_err("a cancelled run is stopped");
@@ -1827,6 +1886,7 @@ mod tests {
                 cancel: None,
                 wall: Some(Duration::ZERO),
                 arguments: None,
+                settings: None,
             },
         )
         .expect_err("the wall budget is enforced");
@@ -1877,6 +1937,7 @@ mod tests {
                 cancel: None,
                 wall: None,
                 arguments: Some("{\"text\":\"hi\"}".to_string()),
+                settings: None,
             },
         )
         .expect("run");

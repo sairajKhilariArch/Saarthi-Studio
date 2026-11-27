@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JSON formatter</title>
+    <style>
+      :root { color-scheme: dark light; }
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+        background: Canvas;
+        color: CanvasText;
+      }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      p.hint { margin: 0 0 12px; opacity: 0.7; font-size: 12px; }
+      label { display: flex; gap: 6px; align-items: center; font-size: 12px; margin-bottom: 10px; }
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 110px;
+        padding: 10px;
+        border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+        border-radius: 8px;
+        background: color-mix(in srgb, CanvasText 4%, Canvas);
+        color: inherit;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        resize: vertical;
+      }
+      .row { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+      button {
+        padding: 6px 12px;
+        border-radius: 7px;
+        border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+        background: color-mix(in srgb, CanvasText 8%, Canvas);
+        color: inherit;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button.primary { background: #2f8f83; border-color: #2f8f83; color: #fff; }
+      button:disabled { opacity: 0.55; cursor: default; }
+      #status { min-height: 18px; font-size: 12px; }
+      #status.error { color: #d05f5f; }
+      #status.ok { color: #3f9d7a; }
+    </style>
+  </head>
+  <body>
+    <h1>JSON formatter</h1>
+    <p class="hint">
+      Runs entirely inside this panel's sandboxed frame. It has no network, no
+      access to your projects and no way to call the app's API.
+    </p>
+    <label><input type="checkbox" id="sort"> Sort object keys</label>
+    <textarea id="input" spellcheck="false" aria-label="JSON input">{"plugin":"hello-studio","tools":["echo","settings"],"ok":true}</textarea>
+    <div class="row">
+      <button class="primary" id="format" type="button">Format</button>
+      <button id="minify" type="button">Minify</button>
+      <button id="clear" type="button">Clear</button>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <textarea id="output" spellcheck="false" readonly aria-label="Formatted JSON"></textarea>
+    <script>
+      (function () {
+        var input = document.getElementById("input");
+        var output = document.getElementById("output");
+        var status = document.getElementById("status");
+        var sort = document.getElementById("sort");
+
+        function say(message, kind) {
+          status.textContent = message;
+          status.className = kind || "";
+        }
+
+        function ordered(value) {
+          if (Array.isArray(value)) return value.map(ordered);
+          if (!value || typeof value !== "object") return value;
+          var out = {};
+          Object.keys(value).sort().forEach(function (key) { out[key] = ordered(value[key]); });
+          return out;
+        }
+
+        function render(indent) {
+          var text = input.value.trim();
+          if (!text) { say("Paste JSON first.", "error"); return; }
+          var parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch (error) {
+            output.value = "";
+            say(error && error.message ? error.message : "That is not valid JSON.", "error");
+            return;
+          }
+          var value = sort.checked ? ordered(parsed) : parsed;
+          output.value = JSON.stringify(value, null, indent);
+          say("Valid JSON · " + new Blob([output.value]).size + " bytes", "ok");
+        }
+
+        document.getElementById("format").addEventListener("click", function () { render(2); });
+        document.getElementById("minify").addEventListener("click", function () { render(0); });
+        document.getElementById("clear").addEventListener("click", function () {
+          input.value = "";
+          output.value = "";
+          say("");
+          input.focus();
+        });
+      })();
+    </script>
+  </body>
+</html>

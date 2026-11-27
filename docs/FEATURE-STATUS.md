@@ -17,6 +17,17 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
 
+**Revision 4.1.0 (2026-11-27):** Plugin and extension ecosystem. A unified catalog over
+extensions and skills (`GET /api/plugins`) with enforced enable/disable, per-extension
+settings delivered to the sandbox through `env.config`, and a marketplace over
+person-added registry indexes with SHA-256 verification, traversal-checked extraction
+and an id match against the listing (`docs/plugins/MARKETPLACE.md`).
+`POST /api/plugins/validate` runs the installer's own parser against a folder or an
+inline manifest; `GET /api/skills/:id/export` returns the exact `SKILL.md`. The shipped
+example plugin installs through the real installer and both of its tools are run in
+the sandbox by a test. Not implemented: plugin signing, automatic plugin updates, and
+a hosted public registry.
+
 **Revision 3.88.3 (2026-11-25):** Verification pass. The real-binary suite now
 covers a true SSE upstream (multiple deltas, one stored reply), a timed abort
 that keeps exactly one partial reply, and settings persistence across a

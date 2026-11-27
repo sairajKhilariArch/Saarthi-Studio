@@ -1287,6 +1287,81 @@ fn skill_json(state: &AppState, skill: &Skill, usage: &HashMap<String, (i64, f64
     })
 }
 
+/// One row per skill for the unified plugin catalog ([`crate::plugins`]). Uses
+/// the same discovery and the same disabled list as the Skills page, so the two
+/// views can never disagree about whether a skill is active.
+pub(crate) fn plugin_catalog(state: &AppState) -> Vec<Value> {
+    let disabled = disabled_list(state);
+    all_skills(state)
+        .iter()
+        .map(|skill| {
+            let disabled = disabled.contains(&skill.id);
+            json!({
+                "kind": "skill",
+                "id": skill.id,
+                "name": skill.name,
+                "version": skill.version,
+                "description": skill.description,
+                "author": "",
+                "path": skill.path,
+                "source": skill.source,
+                "permissions": skill.permissions,
+                "requires": skill.requires,
+                "tools": [],
+                "panels": [],
+                "providers": [],
+                "valid": skill.error.is_none(),
+                "compatible": skill.compatible(),
+                "runnable": skill.error.is_none() && skill.compatible() && !disabled,
+                "enabled": !disabled,
+                "blockedReason": if skill.compatible() {
+                    String::new()
+                } else {
+                    format!("Requires Sarthi Studio {} or newer.", skill.requires)
+                },
+                "error": skill.error.clone().unwrap_or_default(),
+                "settings": {},
+            })
+        })
+        .collect()
+}
+
+/// Toggle a skill from the plugin manager. Writes the same list the Skills page
+/// writes, so one switch works for both views.
+pub(crate) fn set_plugin_enabled(state: &AppState, id: &str, enabled: bool) -> Result<(), String> {
+    if id.is_empty() || slugify(id) != id {
+        return Err("Invalid skill id.".to_string());
+    }
+    set_enabled(state, id, enabled)
+}
+
+/// The exact `SKILL.md` text, so a skill can be copied to another machine or
+/// committed to a repository. Read-only: exporting never changes the file.
+async fn export_skill(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response<Body> {
+    let Some(skill) = all_skills(&state).into_iter().find(|skill| skill.id == id) else {
+        return crate::json_error(StatusCode::NOT_FOUND, "No such skill.");
+    };
+    match fs::read_to_string(&skill.path) {
+        Ok(document) => Json(json!({
+            "ok": true,
+            "id": skill.id,
+            "name": skill.name,
+            "version": skill.version,
+            "source": skill.source,
+            "document": document,
+            "file": MANIFEST,
+        }))
+        .into_response(),
+        Err(error) => crate::json_error(
+            StatusCode::CONFLICT,
+            format!("Could not read {}: {error}", skill.path),
+        ),
+    }
+}
+
 pub(crate) async fn get_skills(State(state): State<AppState>) -> Json<Value> {
     let usage = usage_summary(&state.database_path);
     let skills: Vec<Value> = all_skills(&state)
@@ -1831,6 +1906,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/skills/:id/update", post(update_skill))
         .route("/api/skills/:id/remove", post(remove_skill))
         .route("/api/skills/:id/usage", get(get_usage))
+        .route("/api/skills/:id/export", get(export_skill))
 }
 
 #[cfg(test)]

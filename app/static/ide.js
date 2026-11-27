@@ -92,6 +92,7 @@
     { id: "modules", icon: "cube", label: "Modules and connections", view: "integrations" },
     { id: "agents", icon: "user", label: "Agents", view: "agents" },
     { id: "skills", icon: "spark", label: "Skills", view: "skills" },
+    { id: "plugins", icon: "cube", label: "Plugins", view: "plugins" },
     { id: "projects", icon: "layers", label: "Projects and workspaces", view: "workspaces" },
     { id: "settings", icon: "gear", label: "Settings", view: "settings" },
   ];
@@ -147,7 +148,7 @@
       // full-page view (Settings, Runs, Agents…) owns the main column, clicking
       // one of them returns to the workbench instead of leaving that page on
       // screen with no visible way back. An open editor is left alone.
-      const pageOpen = ["settings", "usage", "router", "local", "skills", "workspaces", "agents",
+      const pageOpen = ["settings", "usage", "router", "local", "skills", "plugins", "workspaces", "agents",
         "integrations", "artifacts", "automation", "runs"]
         .some((name) => $(`${name}View`) && !$(`${name}View`).classList.contains("hidden"));
       const editorOpen = $("editorView") && !$("editorView").classList.contains("hidden");
@@ -2894,7 +2895,7 @@
       const label = labels[button.dataset.settingsSection];
       if (label) button.textContent = label;
     });
-    [["Local AI", "local"], ["Agents", "agents"], ["Skills", "skills"]].forEach(([label, view]) => {
+    [["Local AI", "local"], ["Agents", "agents"], ["Skills", "skills"], ["Plugins", "plugins"]].forEach(([label, view]) => {
       const button = el("button", "", label);
       button.type = "button";
       button.dataset.goto = view;
@@ -2936,7 +2937,7 @@
         $("chatView").classList.remove("hidden");
       }
       const editorVisible = !$("editorView").classList.contains("hidden");
-      const pageVisible = ["settings", "usage", "router", "local", "skills", "workspaces", "agents",
+      const pageVisible = ["settings", "usage", "router", "local", "skills", "plugins", "workspaces", "agents",
         "integrations", "artifacts", "automation", "runs"]
         .some((name) => $(`${name}View`) && !$(`${name}View`).classList.contains("hidden"));
       if ($("workbenchEmpty")) $("workbenchEmpty").classList.toggle("hidden", editorVisible || pageVisible);
@@ -3176,7 +3177,7 @@
     // Explorer activity does not call setView. Show the home surface now when
     // no editor or page owns the main column, instead of leaving it blank.
     const editorVisible = !$("editorView").classList.contains("hidden");
-    const pageVisible = ["settings", "usage", "router", "local", "skills", "workspaces", "agents",
+    const pageVisible = ["settings", "usage", "router", "local", "skills", "plugins", "workspaces", "agents",
       "integrations", "artifacts", "automation", "runs"]
       .some((name) => $(`${name}View`) && !$(`${name}View`).classList.contains("hidden"));
     workbench.classList.toggle("hidden", editorVisible || pageVisible);

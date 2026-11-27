@@ -511,6 +511,408 @@ async function loadSkills() {
 }
 
 /* ------------------------------------------------------------------ */
+/* plugins: one catalog over extensions and skills                       */
+/* ------------------------------------------------------------------ */
+
+function pluginError(plugin) {
+  return String(plugin.error || plugin.blockedReason || "").trim();
+}
+
+function pluginPermissions(plugin) {
+  const permissions = Array.isArray(plugin.permissions) ? plugin.permissions : [];
+  return permissions.length ? permissions.join(", ") : "no permissions declared";
+}
+
+function pluginFacts(plugin) {
+  const facts = [plugin.id];
+  if (plugin.version) facts.push(`v${plugin.version}`);
+  if (plugin.author) facts.push(plugin.author);
+  const tools = Array.isArray(plugin.tools) ? plugin.tools.length : 0;
+  const panels = Array.isArray(plugin.panels) ? plugin.panels.length : 0;
+  if (tools) facts.push(`${tools} tool${tools === 1 ? "" : "s"}`);
+  if (panels) facts.push(`${panels} panel${panels === 1 ? "" : "s"}`);
+  if (plugin.kind === "skill" && plugin.source) facts.push(plugin.source);
+  facts.push(pluginPermissions(plugin));
+  return facts.join(" · ");
+}
+
+function pluginBadge(text, extra) {
+  const badge = document.createElement("span");
+  badge.className = "badge" + (extra ? ` ${extra}` : "");
+  badge.textContent = text;
+  return badge;
+}
+
+/* The plugin page is the one place that lists both kinds together, so the two
+   loaders below are deliberately separate: the installed catalog comes from
+   /api/plugins, and the marketplace from the registries a person added. */
+async function loadPlugins() {
+  wirePluginPage();
+  const host = $("pluginsInstalled");
+  if (!host) return;
+  const result = await api("/api/plugins");
+  if (!result.ok) {
+    host.replaceChildren(pageNote(result.data.error || "Could not read the plugin catalog."));
+    return;
+  }
+  state.plugins = Array.isArray(result.data.plugins) ? result.data.plugins : [];
+  state.pluginCounts = result.data.counts || null;
+  renderPlugins();
+  await loadMarketplace();
+}
+
+function renderPlugins() {
+  const host = $("pluginsInstalled");
+  if (!host) return;
+  const summary = $("pluginsSummary");
+  const counts = state.pluginCounts || {};
+  const plugins = state.plugins || [];
+  if (summary) {
+    summary.replaceChildren();
+    const row = document.createElement("div");
+    row.className = "skill-row";
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = `${counts.total || 0} installed`;
+    const line = document.createElement("p");
+    const plural = (value, noun) => `${value} ${noun}${value === 1 ? "" : "s"}`;
+    line.textContent = [
+      `${counts.enabled || 0} enabled`,
+      `${counts.disabled || 0} disabled`,
+      plural(counts.extensions || 0, "extension"),
+      plural(counts.skills || 0, "skill"),
+    ].join(" · ");
+    main.append(strong, line);
+    row.appendChild(main);
+    summary.appendChild(row);
+  }
+  host.replaceChildren();
+  if (!plugins.length) {
+    host.appendChild(pageNote("Nothing installed yet. Install an extension folder from Settings → Extensions, or add a SKILL.md folder on the Skills page."));
+    return;
+  }
+  plugins.forEach((plugin) => host.appendChild(pluginRow(plugin)));
+}
+
+function pluginRow(plugin) {
+  const broken = Boolean(pluginError(plugin));
+  const row = document.createElement("div");
+  row.className = "skill-row" + (plugin.enabled ? "" : " off") + (broken ? " broken" : "");
+  const main = document.createElement("div");
+  main.className = "skill-main";
+  const name = document.createElement("strong");
+  name.textContent = plugin.name || plugin.id;
+  main.appendChild(name);
+  const description = document.createElement("p");
+  description.textContent = pluginError(plugin) || plugin.description || "No description.";
+  main.appendChild(description);
+  const facts = document.createElement("small");
+  facts.className = "skill-meta";
+  facts.textContent = pluginFacts(plugin);
+  main.appendChild(facts);
+
+  /* Settings are the plugin's own data, handed to its tools through the
+     sandbox's `config` call. They are flat and bounded server-side, so the box
+     shows exactly what the server will accept. */
+  if (plugin.kind === "extension") {
+    const details = document.createElement("details");
+    details.className = "plugin-settings";
+    const summary = document.createElement("summary");
+    summary.textContent = "Settings";
+    const area = document.createElement("textarea");
+    area.rows = 4;
+    area.spellcheck = false;
+    area.setAttribute("aria-label", `Settings for ${plugin.name || plugin.id}`);
+    const current = plugin.settings && typeof plugin.settings === "object" && !Array.isArray(plugin.settings) ? plugin.settings : {};
+    area.value = JSON.stringify(current, null, 2);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "btn btn-quiet btn-small";
+    save.textContent = "Save settings";
+    save.addEventListener("click", () => void savePluginSettings(plugin, area));
+    details.append(summary, area, save);
+    main.appendChild(details);
+  }
+
+  const side = document.createElement("div");
+  side.className = "skill-side";
+  side.appendChild(pluginBadge(plugin.kind === "extension" ? "Extension" : "Skill"));
+  side.appendChild(
+    pluginBadge(broken ? "Error" : plugin.enabled ? "Enabled" : "Disabled", broken ? "broken" : plugin.enabled ? "on" : ""),
+  );
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "btn btn-quiet btn-small";
+  toggle.textContent = plugin.enabled ? "Disable" : "Enable";
+  toggle.addEventListener("click", async () => {
+    toggle.disabled = true;
+    await setPluginState(plugin, !plugin.enabled);
+  });
+  side.appendChild(toggle);
+
+  const panels = Array.isArray(plugin.panels) ? plugin.panels : [];
+  panels.forEach((panel) => {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn btn-quiet btn-small";
+    open.textContent = panel.title || panel.id;
+    open.addEventListener("click", () => openExtensionPanel(plugin, panel));
+    side.appendChild(open);
+  });
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn btn-quiet btn-small";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", () => void removePlugin(plugin));
+  side.appendChild(remove);
+
+  row.append(main, side);
+  return row;
+}
+
+async function setPluginState(plugin, enabled) {
+  const result = await api(`/api/plugins/${plugin.kind}/${encodeURIComponent(plugin.id)}/state`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+  if (!result.ok) toast(result.data.error || "Could not change that plugin.");
+  await loadPlugins();
+  await loadSkills();
+}
+
+async function savePluginSettings(plugin, area) {
+  let settings;
+  try {
+    settings = JSON.parse(area.value || "{}");
+  } catch (error) {
+    toast(`Settings must be valid JSON: ${error.message}`);
+    return;
+  }
+  const result = await api(`/api/plugins/extension/${encodeURIComponent(plugin.id)}/settings`, {
+    method: "POST",
+    body: JSON.stringify({ settings }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not save those settings.");
+    return;
+  }
+  toast("Settings saved. The plugin reads them on its next run.");
+  await loadPlugins();
+}
+
+async function removePlugin(plugin) {
+  const noun = plugin.kind === "skill" ? "skill" : "extension";
+  if (!confirm(`Remove the ${noun} "${plugin.name || plugin.id}"? Its folder moves aside instead of being deleted.`)) return;
+  const path =
+    plugin.kind === "skill"
+      ? `/api/skills/${encodeURIComponent(plugin.id)}/remove`
+      : `/api/extensions/${encodeURIComponent(plugin.id)}/remove`;
+  const result = await api(path, { method: "POST", body: "{}", confirmApproval: true });
+  if (!result.ok) {
+    toast(result.data.error || `Could not remove that ${noun}.`);
+    return;
+  }
+  toast(`${noun === "skill" ? "Skill" : "Extension"} removed.`);
+  await loadPlugins();
+  await loadSkills();
+}
+
+/* ---------------------------------------------------------------- */
+/* plugins: marketplace                                              */
+/* ---------------------------------------------------------------- */
+
+async function loadMarketplace() {
+  const host = $("pluginMarketplace");
+  if (!host) return;
+  const result = await api("/api/plugins/marketplace");
+  if (!result.ok) {
+    host.replaceChildren(pageNote(result.data.error || "Could not read the marketplace."));
+    return;
+  }
+  state.marketplace = result.data;
+  const registries = Array.isArray(result.data.registries) ? result.data.registries : [];
+  const note = $("pluginsMarketplaceNote");
+  if (note) {
+    note.textContent = registries.length
+      ? `${registries.length} ${registries.length === 1 ? "registry" : "registries"} configured. Every listing below comes from one of them; nothing is bundled.`
+      : "No marketplace is bundled. Add the URL of a registry index to browse real plugins; until then this list stays empty rather than showing placeholders.";
+  }
+  renderPluginRegistries(result.data);
+  renderMarketplaceEntries(result.data);
+}
+
+function renderPluginRegistries(data) {
+  const host = $("pluginRegistries");
+  if (!host) return;
+  host.replaceChildren();
+  const registries = Array.isArray(data.registries) ? data.registries : [];
+  registries.forEach((registry) => {
+    const row = document.createElement("div");
+    row.className = "skill-row";
+    const main = document.createElement("div");
+    main.className = "skill-main";
+    const strong = document.createElement("strong");
+    strong.textContent = registry.name || registry.url;
+    const url = document.createElement("p");
+    url.textContent = registry.name ? registry.url : "Registry index";
+    main.append(strong, url);
+    row.appendChild(main);
+    const side = document.createElement("div");
+    side.className = "skill-side";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-quiet btn-small";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => void removePluginRegistry(registry.url));
+    side.appendChild(remove);
+    row.appendChild(side);
+    host.appendChild(row);
+  });
+}
+
+function renderMarketplaceEntries(data) {
+  const host = $("pluginMarketplace");
+  if (!host) return;
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  const query = String(state.pluginFilter || "").trim().toLowerCase();
+  const filtered = entries.filter((entry) => {
+    if (!query) return true;
+    const haystack = [entry.id, entry.name, entry.author, entry.category, ...(Array.isArray(entry.tags) ? entry.tags : [])]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+  host.replaceChildren();
+  if (!entries.length) {
+    host.appendChild(pageNote("No plugins are listed by the configured registries."));
+  } else if (!filtered.length) {
+    host.appendChild(pageNote(`No plugin matches "${state.pluginFilter}".`));
+  }
+  filtered.forEach((entry) => host.appendChild(marketplaceRow(entry)));
+
+  const errors = $("pluginMarketplaceErrors");
+  if (!errors) return;
+  errors.replaceChildren();
+  (Array.isArray(data.errors) ? data.errors : []).forEach((error) => {
+    errors.appendChild(pageNote(`${error.registry || "Registry"}: ${error.error || "could not be read"}`));
+  });
+}
+
+function marketplaceRow(entry) {
+  const row = document.createElement("div");
+  row.className = "skill-row";
+  const main = document.createElement("div");
+  main.className = "skill-main";
+  const name = document.createElement("strong");
+  name.textContent = entry.name || entry.id;
+  main.appendChild(name);
+  const description = document.createElement("p");
+  description.textContent = entry.description || "No description in the registry.";
+  main.appendChild(description);
+  const facts = [entry.id];
+  if (entry.version) facts.push(`v${entry.version}`);
+  if (entry.author) facts.push(entry.author);
+  if (entry.category) facts.push(entry.category);
+  if (entry.requiresStudio) facts.push(`needs Studio ${entry.requiresStudio}+`);
+  const permissions = Array.isArray(entry.permissions) && entry.permissions.length ? entry.permissions.join(", ") : "no permissions declared";
+  facts.push(permissions);
+  const meta = document.createElement("small");
+  meta.className = "skill-meta";
+  meta.textContent = facts.join(" · ");
+  main.appendChild(meta);
+  row.appendChild(main);
+
+  const side = document.createElement("div");
+  side.className = "skill-side";
+  side.appendChild(pluginBadge(entry.kind === "skill" ? "Skill" : "Extension"));
+  const install = document.createElement("button");
+  install.type = "button";
+  install.className = "btn btn-accent btn-small";
+  install.textContent = "Install";
+  install.addEventListener("click", () => void installMarketplacePlugin(entry, install));
+  side.appendChild(install);
+  row.appendChild(side);
+  return row;
+}
+
+async function installMarketplacePlugin(entry, button) {
+  button.disabled = true;
+  button.textContent = "Installing…";
+  const result = await api("/api/plugins/marketplace/install", {
+    method: "POST",
+    body: JSON.stringify({ id: entry.id }),
+    confirmApproval: true,
+  });
+  button.disabled = false;
+  button.textContent = "Install";
+  if (!result.ok) {
+    toast(result.data.error || "Could not install that plugin.");
+    return;
+  }
+  toast(`${entry.name || entry.id} ${result.data.version || ""} installed (${pluginPermissions(result.data)}).`.replace(/\s+/g, " "));
+  await loadPlugins();
+}
+
+async function addPluginRegistry() {
+  const input = $("pluginRegistryUrl");
+  const url = input ? input.value.trim() : "";
+  if (!url) {
+    toast("Paste a registry URL first.");
+    return;
+  }
+  const result = await api("/api/plugins/marketplace/registries", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not add that registry.");
+    return;
+  }
+  if (input) input.value = "";
+  toast("Registry added.");
+  await loadMarketplace();
+}
+
+async function removePluginRegistry(url) {
+  if (!confirm(`Remove the registry ${url}? Installed plugins stay installed.`)) return;
+  const result = await api("/api/plugins/marketplace/registries/remove", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "Could not remove that registry.");
+    return;
+  }
+  toast("Registry removed.");
+  await loadMarketplace();
+}
+
+function wirePluginPage() {
+  const refresh = $("pluginsRefresh");
+  if (refresh && !refresh.dataset.wired) {
+    refresh.dataset.wired = "1";
+    refresh.addEventListener("click", () => void loadPlugins());
+  }
+  const add = $("pluginRegistryAdd");
+  if (add && !add.dataset.wired) {
+    add.dataset.wired = "1";
+    add.addEventListener("click", () => void addPluginRegistry());
+  }
+  const search = $("pluginSearch");
+  if (search && !search.dataset.wired) {
+    search.dataset.wired = "1";
+    search.addEventListener("input", () => {
+      state.pluginFilter = search.value;
+      if (state.marketplace) renderMarketplaceEntries(state.marketplace);
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* memory: records the user asked the project to keep                   */
 /* ------------------------------------------------------------------ */
 
@@ -1146,6 +1548,12 @@ const state = {
   extensionsRunning: new Set(),
   /* skills: local SKILL.md folders served by /api/skills. */
   skills: [],
+  /* plugins: the unified catalog from /api/plugins, its counts, and the
+     marketplace listing (registries, entries and per-registry errors). */
+  plugins: [],
+  pluginCounts: null,
+  marketplace: null,
+  pluginFilter: "",
   openSkillId: null,
   skillDetail: null,
   /* permissions: saved rules plus the audit trail from /api/permissions. */
@@ -1850,6 +2258,7 @@ const VIEWS = [
   "router",
   "local",
   "skills",
+  "plugins",
   "workspaces",
   "agents",
   "integrations",
@@ -1876,6 +2285,7 @@ function setView(view) {
   }
   if (view === "local") void loadLocal();
   if (view === "skills") renderSkillsOverview();
+  if (view === "plugins") void loadPlugins();
   if (view === "workspaces") renderWorkspaces();
   if (view === "agents") renderAgents();
   if (view === "integrations") loadIntegrations();
