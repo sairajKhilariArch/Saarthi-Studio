@@ -1346,6 +1346,7 @@ pub(crate) async fn advance(state: &AppState, mission_id: &str) -> Result<bool, 
             "user",
             "Mission failed: no task could start.",
         );
+        let _ = crate::improve::observe_mission(state, mission_id);
         return Ok(true);
     }
     if all_settled {
@@ -1391,6 +1392,7 @@ pub(crate) async fn advance(state: &AppState, mission_id: &str) -> Result<bool, 
                 tasks.iter().filter(|task| task.status == BLOCKED).count(),
             ),
         );
+        let _ = crate::improve::observe_mission(state, mission_id);
         return Ok(true);
     }
     Ok(false)

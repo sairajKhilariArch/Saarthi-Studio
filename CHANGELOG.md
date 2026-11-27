@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.4.0
+
+### Self-improving development environment
+- Add **measured self-evaluation**: one report aggregates missions, tasks, retries, first-attempt success, recovery, review rejections, tokens, tool errors, per-role and per-model performance, workflow density and maintenance state from rows the app already wrote. A rate without a denominator is `null` and printed as `not measured`, never zero.
+- Add **verified engineering experience**: a lesson is stored only when a mission is terminal, succeeded and left an artifact (a file write, a command or a verifier check); failures are stored as normalised failure keys, user preferences are the only records trusted without a mission, unvalidated rows are hidden by default, confidence grows with use and stops below certainty, and deduplication plus workspace scoping keep retrieval honest.
+- Add **privacy and retention controls**: goal sentences are stored only when the user opts in (otherwise a digest key), every row is scoped to one workspace, retention sets an expiry and purge removes exactly the expired rows.
+- Add **deterministic improvement proposals**: a scan detects duplicate top-level definitions, files over 1200 lines, documentation naming missing paths and a missing test suite, and writes proposals with problem, evidence, benefit, risk, files, testing and rollback. Approving starts a Phase 14 engineering pipeline on an isolated branch; rollback creates a guarded revert commit.
+- Add **controlled experiments**: two read-only missions (analyse → check → review versus check → review) over the same goal, compared success-first with tokens, elapsed time and task counts, labelled `sampleSize: 1`, and marked `inconclusive` when verification was dropped.
+- Add **model advice**: measured runs, success, average tokens, duration and estimated cost per model, ranked under a user-chosen priority (balanced, reliability, speed, cost) with a stated reason. Advice never pins a model or spends tokens; unpriced models are labelled instead of guessed.
+- Add **risk assessment** with an explicit heuristic label and evidence lines, a **maintenance** section, and a **governance trail** of settings changes, scans, approvals, rejections, rollbacks, experiments and deletions.
+- Add the **Improve dashboard** with quality tiles, agent and model tables, model advice, workflow recommendations, proposals, experiments, knowledge search and preferences, risk, maintenance and event log, plus an emergency stop.
+- Add `docs/self-improvement/` (architecture, experiences, agents, workflows, models, proposals, experiments, governance, prediction, metrics, developer guide), 16 backend tests and 4 frontend tests.
+
 ## 4.3.0
 
 ### Autonomous engineering

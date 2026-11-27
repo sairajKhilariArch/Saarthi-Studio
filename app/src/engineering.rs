@@ -1485,24 +1485,60 @@ async fn create_pipeline(State(state): State<AppState>, Json(input): Json<Value>
         .unwrap_or("")
         .trim()
         .to_string();
-    if goal.is_empty() {
-        return bad("Describe what you want built or fixed.");
-    }
-    if goal.chars().count() > 5_000 {
-        return bad("The request is too long.");
-    }
-    let (profile_json, profile) = match project_profile(&state) {
-        Ok(result) => result,
-        Err(error) => return bad(error),
-    };
-    if state.workspace.root().is_err() {
-        return bad("Open a workspace folder first — a pipeline works on its files.");
-    }
     let autonomy = input
         .get("autonomy")
         .and_then(Value::as_i64)
         .unwrap_or_else(|| autonomy_of(&state).level)
         .clamp(1, 3);
+    match create_for_goal(&state, &goal, autonomy).await {
+        Ok((pipeline, needs_input, risks)) => Json(json!({
+            "ok": true,
+            "needsInput": needs_input,
+            "pipeline": pipeline,
+            "risks": risks,
+        }))
+        .into_response(),
+        Err((code, message)) => crate::json_error(code, message),
+    }
+}
+
+/// A pipeline created by another module (self-improvement) rather than the
+/// route, with the same validation, profile, plan and audit.
+pub(crate) async fn create_for_goal(
+    state: &AppState,
+    goal: &str,
+    autonomy: i64,
+) -> Result<(Value, bool, Vec<String>), (StatusCode, String)> {
+    let goal = goal.trim().to_string();
+    if goal.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Describe what you want built or fixed.".to_string(),
+        ));
+    }
+    if goal.chars().count() > 5_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "The request is too long.".to_string(),
+        ));
+    }
+    let (profile_json, profile) = project_profile(state).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            if error.contains("Open a workspace") {
+                "Open a workspace folder first — a pipeline works on its files.".to_string()
+            } else {
+                error
+            },
+        )
+    })?;
+    if state.workspace.root().is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Open a workspace folder first — a pipeline works on its files.".to_string(),
+        ));
+    }
+    let autonomy = autonomy.clamp(1, 3);
     let requirement = analyse_requirement(&goal, Some(&profile));
     let git = crate::git::head_info(
         &state
@@ -1528,24 +1564,35 @@ async fn create_pipeline(State(state): State<AppState>, Json(input): Json<Value>
         "updatedAt": now(),
     });
     if !requirement.questions.is_empty() {
-        store_pipeline(&state, &row).ok();
-        return Json(json!({
-            "ok": true,
-            "needsInput": true,
-            "pipeline": pipeline_json(&state, &row),
-            "risks": requirement.risks,
-        }))
-        .into_response();
+        store_pipeline(state, &row).ok();
+        return Ok((pipeline_json(state, &row), true, requirement.risks));
     }
-    match start_pipeline(&state, &mut row, &goal, autonomy, &profile, &requirement).await {
-        Ok(()) => Json(json!({
-            "ok": true,
-            "pipeline": pipeline_json(&state, &row),
-            "risks": requirement.risks,
-        }))
-        .into_response(),
-        Err((code, message)) => crate::json_error(code, message),
-    }
+    start_pipeline(state, &mut row, &goal, autonomy, &profile, &requirement).await?;
+    Ok((pipeline_json(state, &row), false, requirement.risks))
+}
+
+/// The cached project profile as the API sees it, for modules that must not
+/// re-scan the workspace.
+pub(crate) fn profile_view(state: &AppState) -> Option<Value> {
+    project_profile(state).ok().map(|(json, _)| json)
+}
+
+/// A pipeline as the API sees it, for modules that must not reimplement the
+/// store (the self-improvement proposals read its delivery commit).
+pub(crate) fn pipeline_view(state: &AppState, id: &str) -> Option<Value> {
+    load_pipeline(state, id)
+        .ok()
+        .flatten()
+        .map(|row| pipeline_json(state, &row))
+}
+
+/// Record a proposal's delivery branch and commit by asking git, not by
+/// guessing from the pipeline row.
+pub(crate) fn delivery_of(pipeline: &Value) -> Option<(String, String)> {
+    let delivery = pipeline.get("delivery")?.as_object()?;
+    let commit = delivery.get("commit")?.as_str().unwrap_or("").to_string();
+    let branch = delivery.get("branch")?.as_str().unwrap_or("").to_string();
+    (!commit.is_empty()).then_some((commit, branch))
 }
 
 async fn start_pipeline(

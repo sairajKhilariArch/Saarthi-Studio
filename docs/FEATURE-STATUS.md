@@ -17,6 +17,17 @@ implementation), **Broken** (exists and fails).
 
 These are the 2.1.0 snapshot, not a current count; later revisions are appended below and current release evidence is in `CHANGELOG.md`.
 
+**Revision 4.4.0 (2026-11-27):** Self-improving development environment. A measured
+evaluation report over existing mission and run rows, experience lessons written only
+from finished successful missions that left evidence, deterministic proposals that an
+approved Phase 14 pipeline implements on an isolated branch with a guarded revert, two-arm
+read-only experiments compared success-first, model advice ranked under a chosen priority,
+a labelled heuristic risk score, and a governance trail. Covered by 16 backend tests
+(unit plus scripted-provider flows) and 4 frontend tests. Not verified here: a
+display-level review of the Improve page, a real-provider lesson, and statistics from a
+young database; the report states its window and labels missing measurements instead of
+estimating them.
+
 **Revision 4.3.0 (2026-11-27):** Autonomous engineering. Project intelligence from a
 bounded scan, requirement intake that asks instead of guessing, six-stage pipelines built
 as missions, autonomy levels 1–3 mapped to task approvals, guarded branch and commit

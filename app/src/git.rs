@@ -724,6 +724,30 @@ pub(crate) fn create_branch_checked(root: &Path, name: &str) -> Result<Value, St
     create_branch(root, name)
 }
 
+/// Revert one commit with a new commit. Refuses in a dirty tree, because the
+/// revert would otherwise mix the user's uncommitted work into the rollback.
+pub(crate) fn revert_checked(root: &Path, commit: &str) -> Result<Value, String> {
+    let sha = commit.trim();
+    if sha.is_empty() || sha.len() > 64 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("A rollback needs a commit hash to revert.".to_string());
+    }
+    let dirty = git(root, &["status", "--porcelain"])?;
+    if !dirty.stdout.trim().is_empty() {
+        return Err(
+            "The worktree has uncommitted changes; commit or stash them before rolling back."
+                .to_string(),
+        );
+    }
+    let output = git(root, &["revert", "--no-edit", sha])?;
+    if !output.ok {
+        return Err(format!("git revert failed: {}", output.stderr.trim()));
+    }
+    let head = git(root, &["rev-parse", "--short", "HEAD"])
+        .map(|info| info.stdout.trim().to_string())
+        .unwrap_or_default();
+    Ok(json!({ "reverted": sha, "commit": head, "stdout": output.stdout.trim() }))
+}
+
 /// The same guarded commit the Source control pane uses, staging only the
 /// paths the caller names.
 pub(crate) fn commit_checked(

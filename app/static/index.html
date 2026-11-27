@@ -227,6 +227,7 @@
         <button id="automationBtn" class="foot-btn" title="Automation"><svg class="icon"><use href="#i-undo"/></svg><span>Auto</span></button>
         <button id="runsBtn" class="foot-btn" title="Agent runs"><svg class="icon"><use href="#i-play"/></svg><span>Runs</span></button>
         <button id="engineeringBtn" class="foot-btn" title="Autonomous engineering"><svg class="icon"><use href="#i-spark"/></svg><span>Engineering</span></button>
+        <button id="improveBtn" class="foot-btn" title="Self-improvement"><svg class="icon"><use href="#i-chart"/></svg><span>Improve</span></button>
       </div>
       <p class="foot-note">Chats stay in local SQLite. Files stay on this computer.</p>
     </footer>
@@ -735,6 +736,152 @@
         <div id="engCheckResults" class="card form-card hidden" aria-live="polite"></div>
         <div id="engList" class="mission-list"></div>
         <div id="engDetail" class="mission-detail hidden"></div>
+      </div>
+    </section>
+
+    <section id="improveView" class="view page-view hidden" role="tabpanel" aria-label="Self-improvement">
+      <div class="page">
+        <header class="page-head">
+          <p class="eyebrow">Measured, reviewable, reversible</p>
+          <h1>Self-improvement</h1>
+          <p>Studio learns only from missions that finished and keep a report. A strategy is stored when the mission succeeded and left a file, a command or a verifier check; a failure is stored as a failure. Every number below is counted from rows this app wrote, and anything unmeasured says so. Improving the studio itself is a proposal you approve, implemented by an engineering pipeline on an isolated branch, committed through the git policy and revertible.</p>
+        </header>
+
+        <div class="card form-card">
+          <div class="eng-control-row">
+            <label class="mission-role-enabled"><input id="improveEnabled" type="checkbox"> enable learning, proposals and experiments</label>
+            <label class="field eng-inline-field">
+              <span>Autonomy for approved improvements</span>
+              <select id="improveAutonomy">
+                <option value="1">1 — Assisted</option>
+                <option value="2" selected>2 — Supervised</option>
+                <option value="3">3 — Autonomous</option>
+              </select>
+            </label>
+            <label class="field eng-inline-field">
+              <span>Retention (days)</span>
+              <input id="improveRetention" type="number" min="1" max="3650" value="90">
+            </label>
+            <label class="field eng-inline-field">
+              <span>Experiment token budget / 24h (0 = none)</span>
+              <input id="improveBudget" type="number" min="0" max="100000000" value="0">
+            </label>
+            <label class="field eng-inline-field">
+              <span>Model advice priority</span>
+              <select id="improvePriority">
+                <option value="balanced" selected>Balanced</option>
+                <option value="reliability">Reliability</option>
+                <option value="speed">Speed</option>
+                <option value="cost">Cost</option>
+              </select>
+            </label>
+            <label class="mission-role-enabled"><input id="improveStoreGoals" type="checkbox"> store goal sentences with lessons</label>
+          </div>
+          <div class="form-actions">
+            <button id="improveSave" type="button" class="btn btn-quiet btn-small">Save</button>
+            <button id="improveScan" type="button" class="btn btn-quiet btn-small">Scan for improvements</button>
+            <button id="improveStop" type="button" class="btn btn-quiet btn-small danger">Emergency stop</button>
+          </div>
+          <p id="improveNote" class="muted">These controls cannot change permissions, credential storage or approval requirements; there is no field for them on purpose.</p>
+        </div>
+
+        <section class="card form-card" aria-labelledby="improveQualityTitle">
+          <h2 class="form-group-title" id="improveQualityTitle">Engineering quality</h2>
+          <div id="improveQuality" class="eng-metrics" aria-live="polite"></div>
+          <ul id="improveUnavailable" class="eng-notes"></ul>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveAgentsTitle">
+          <h2 class="form-group-title" id="improveAgentsTitle">Agents</h2>
+          <div id="improveAgents" class="table-wrap" aria-live="polite"></div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveModelsTitle">
+          <h2 class="form-group-title" id="improveModelsTitle">Models</h2>
+          <div id="improveModels" class="table-wrap" aria-live="polite"></div>
+          <p class="muted">Cost is the provider's published price times the average reported tokens; the output split is unknown, so it is an estimate per run, never a bill.</p>
+          <h3 class="form-group-title">Advice for the chosen priority</h3>
+          <div id="improveModelAdvice" class="table-wrap" aria-live="polite"></div>
+          <p class="muted">Advice orders recorded measurements only: it does not pin a model, switch a provider or spend tokens.</p>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveWorkflowTitle">
+          <h2 class="form-group-title" id="improveWorkflowTitle">Workflow efficiency</h2>
+          <div id="improveWorkflow" class="eng-project" aria-live="polite"></div>
+          <ul id="improveWorkflowNotes" class="eng-notes"></ul>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveFailuresTitle">
+          <h2 class="form-group-title" id="improveFailuresTitle">Recurring failures</h2>
+          <div id="improveFailures" class="eng-project" aria-live="polite"></div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveProposalsTitle">
+          <h2 class="form-group-title" id="improveProposalsTitle">Improvement proposals</h2>
+          <p class="muted">A proposal is deterministic: every line quotes a path or a count. Approving starts an engineering pipeline on an isolated branch; rejecting leaves the code untouched; rolling back reverts the delivered commit.</p>
+          <div id="improveProposals" class="mission-list" aria-live="polite"></div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveExperimentsTitle">
+          <h2 class="form-group-title" id="improveExperimentsTitle">Experiments</h2>
+          <form id="improveExperimentForm">
+            <label class="field">
+              <span>Goal both arms work on</span>
+              <input id="improveExperimentGoal" type="text" placeholder="Check whether the reports page exports an empty CSV" required>
+              <small>Both arms are read-only missions over the same goal: baseline (analyse → check → review) versus lean (check → review). One run per arm, so a verdict is a measurement, not a statistical result.</small>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-accent btn-small">Start experiment</button>
+              <button id="improveExperimentsRefresh" type="button" class="btn btn-quiet btn-small">Refresh</button>
+            </div>
+          </form>
+          <div id="improveExperiments" class="mission-list" aria-live="polite"></div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveKnowledgeTitle">
+          <h2 class="form-group-title" id="improveKnowledgeTitle">Engineering knowledge</h2>
+          <form id="improveSearchForm">
+            <label class="field">
+              <span>Search this workspace's lessons</span>
+              <input id="improveQuery" type="text" placeholder="csv export">
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-quiet btn-small">Search</button>
+              <button id="improvePurge" type="button" class="btn btn-quiet btn-small">Remove expired</button>
+            </div>
+          </form>
+          <div id="improveKnowledge" class="mission-list" aria-live="polite"></div>
+          <label class="field">
+            <span>Record a preference</span>
+            <textarea id="improvePreference" rows="2" placeholder="Always run the frontend tests before a release commit."></textarea>
+            <small>User-authored preferences are the only records trusted without a completed mission. They are stored with this workspace only.</small>
+          </label>
+          <div class="form-actions">
+            <button id="improvePreferenceSave" type="button" class="btn btn-accent btn-small">Record preference</button>
+          </div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improvePredictTitle">
+          <h2 class="form-group-title" id="improvePredictTitle">Change risk</h2>
+          <form id="improvePredictForm">
+            <label class="field">
+              <span>Describe the change</span>
+              <input id="improvePredictGoal" type="text" placeholder="Add a CSV export button to the reports page" required>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-quiet btn-small">Assess risk</button>
+            </div>
+          </form>
+          <div id="improvePredictResult" class="eng-project" aria-live="polite"></div>
+        </section>
+
+        <section class="card form-card" aria-labelledby="improveMaintenanceTitle">
+          <h2 class="form-group-title" id="improveMaintenanceTitle">Maintenance</h2>
+          <div id="improveMaintenance" class="eng-project" aria-live="polite"></div>
+          <ul id="improveMaintenanceNotes" class="eng-notes"></ul>
+          <h3 class="form-group-title">Governance trail</h3>
+          <div id="improveEvents" class="eng-project" aria-live="polite"></div>
+        </section>
       </div>
     </section>
 

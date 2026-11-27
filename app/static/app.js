@@ -1605,6 +1605,7 @@ const state = {
   eng: null,
   engPipelines: [],
   engPipelineId: null,
+  improve: null,
   openSkillId: null,
   skillDetail: null,
   /* permissions: saved rules plus the audit trail from /api/permissions. */
@@ -2317,6 +2318,7 @@ const VIEWS = [
   "runs",
   "missions",
   "engineering",
+  "improve",
 ];
 
 function setView(view) {
@@ -2348,6 +2350,7 @@ function setView(view) {
   if (view === "runs") void loadRuns();
   if (view === "missions") void loadMissions();
   if (view === "engineering") void loadEngineering();
+  if (view === "improve") void loadImprove();
 }
 
 function activateTab(key) {
@@ -6893,6 +6896,669 @@ async function startEngineeringRepair(entry) {
   await openEngineeringPipeline(state.engPipelineId, { quiet: true });
 }
 
+/* ------------------------------------------------------------------ */
+/* self-improvement: measured learning, proposals and experiments      */
+/* ------------------------------------------------------------------ */
+
+function improveRate(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "not measured";
+  return `${Number(value)}%`;
+}
+
+function improveRiskLabel(band) {
+  switch (band) {
+    case "high":
+      return "High risk";
+    case "medium":
+      return "Medium risk";
+    case "low":
+      return "Low risk";
+    default:
+      return "Unknown";
+  }
+}
+
+function improveVerdictLabel(verdict) {
+  switch (verdict) {
+    case "variant":
+      return "Variant better on this sample";
+    case "baseline":
+      return "Baseline better on this sample";
+    case "tie":
+      return "No measurable difference";
+    case "inconclusive":
+      return "Inconclusive";
+    case "neither":
+      return "Both arms failed";
+    default:
+      return verdict ? String(verdict) : "Not completed";
+  }
+}
+
+function improveConfidence(confidence) {
+  if (confidence === null || confidence === undefined) return "confidence unknown";
+  const value = Number(confidence);
+  if (!Number.isFinite(value)) return "confidence unknown";
+  return `${Math.round(value * 100)}% confidence`;
+}
+
+function improveWired() {
+  if (!state.improve) {
+    state.improve = { wired: false, settings: null, report: null, proposals: [], experiments: [] };
+  }
+  return state.improve;
+}
+
+function improveLine(parent, text, className) {
+  return engLine(parent, text, className);
+}
+
+function improveTable(box, columns, rows) {
+  box.replaceChildren();
+  if (!rows.length) {
+    improveLine(box, "No recorded rows yet.", "empty-note");
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "data-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  columns.forEach((column) => {
+    const cell = document.createElement("th");
+    cell.textContent = column;
+    headRow.appendChild(cell);
+  });
+  head.appendChild(headRow);
+  table.appendChild(head);
+  const body = document.createElement("tbody");
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    row.forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = String(value ?? "—");
+      tr.appendChild(cell);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  box.appendChild(table);
+}
+
+function wireImproveForm() {
+  const improve = improveWired();
+  if (improve.wired) return;
+  improve.wired = true;
+  $("improveSave").addEventListener("click", () => void saveImproveSettings());
+  $("improveScan").addEventListener("click", () => void scanImprovements());
+  $("improveStop").addEventListener("click", () => void improveEmergencyStop());
+  $("improvePurge").addEventListener("click", () => void purgeKnowledge());
+  $("improvePreferenceSave").addEventListener("click", () => void savePreference());
+  $("improveSearchForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void searchKnowledge();
+  });
+  $("improveExperimentForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void startExperiment();
+  });
+  $("improveExperimentsRefresh").addEventListener("click", () => void loadImprove());
+  $("improvePredictForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void assessRisk();
+  });
+}
+
+async function loadImprove() {
+  wireImproveForm();
+  improveWired();
+  const settings = await api("/api/improve/settings");
+  if (settings.ok) renderImproveSettings(settings.data.settings);
+  const report = await api("/api/improve/report");
+  if (report.ok) renderImproveReport(report.data);
+  else {
+    const box = $("improveQuality");
+    box.replaceChildren();
+    improveLine(box, report.data.error || "The report could not be read.", "empty-note");
+  }
+  const proposals = await api("/api/improve/proposals");
+  if (proposals.ok) {
+    state.improve.proposals = proposals.data.proposals || [];
+    renderProposals();
+  }
+  const experiments = await api("/api/improve/experiments");
+  if (experiments.ok) {
+    state.improve.experiments = experiments.data.experiments || [];
+    renderExperiments();
+  }
+}
+
+function renderImproveSettings(settings) {
+  if (!settings) return;
+  state.improve.settings = settings;
+  $("improveEnabled").checked = !!settings.enabled;
+  $("improveAutonomy").value = String(settings.autonomy);
+  $("improveRetention").value = String(settings.retentionDays);
+  $("improveBudget").value = String(settings.budgetTokens);
+  $("improveStoreGoals").checked = !!settings.storeGoals;
+  $("improvePriority").value = settings.priority || "balanced";
+}
+
+function renderImproveReport(report) {
+  state.improve.report = report;
+  const quality = report.quality || {};
+  const box = $("improveQuality");
+  box.replaceChildren();
+  const tiles = [
+    ["Mission success", improveRate(quality.missionSuccessRate), `${quality.missionsSucceeded || 0}/${quality.missions || 0} in ${quality.windowDays} days`],
+    ["Task success", improveRate(quality.taskSuccessRate), `${quality.tasksDone || 0}/${quality.tasks || 0}`],
+    ["First attempt", improveRate(quality.firstAttemptRate), "done tasks that needed no retry"],
+    ["Recovery after retry", improveRate(quality.recoveryRate), `${quality.retries || 0} retried task(s)`],
+    ["Review rejections", improveRate(quality.reviewRejectionRate), "review stages that failed"],
+    ["Tokens", String(quality.tokens || 0), "reported by runs in the window"],
+    ["Lessons", String((report.experiences || {}).total || 0), `${(report.experiences || {}).validated || 0} validated, ${(report.experiences || {}).unvalidated || 0} unvalidated`],
+    ["Proposals", String((report.proposals || {}).proposed || 0), `${(report.proposals || {}).inProgress || 0} in progress`],
+  ];
+  tiles.forEach(([label, value, note]) => {
+    const tile = document.createElement("div");
+    tile.className = "eng-metric";
+    const big = document.createElement("strong");
+    big.textContent = value;
+    const name = document.createElement("span");
+    name.textContent = label;
+    const detail = document.createElement("small");
+    detail.textContent = note;
+    tile.append(big, name, detail);
+    box.appendChild(tile);
+  });
+  const unavailable = $("improveUnavailable");
+  unavailable.replaceChildren();
+  (report.unavailable || []).forEach((entry) => {
+    const item = document.createElement("li");
+    item.className = "muted";
+    item.textContent = `Unavailable: ${entry}`;
+    unavailable.appendChild(item);
+  });
+
+  improveTable(
+    $("improveAgents"),
+    ["Role", "Tasks", "Success", "First attempt", "Retry rate", "Recovery", "Avg time", "Tokens"],
+    (report.agents || []).map((agent) => [
+      agent.role,
+      agent.total,
+      improveRate(agent.successRate),
+      agent.done
+        ? improveRate(Math.round(((agent.done - agent.retried) / agent.done) * 1000) / 10)
+        : "not measured",
+      improveRate(agent.retryRate),
+      improveRate(agent.recoveryRate),
+      agent.avgDurationSeconds === null ? "not measured" : `${agent.avgDurationSeconds}s`,
+      agent.tokens,
+    ]),
+  );
+
+  improveTable(
+    $("improveModels"),
+    ["Model", "Runs", "Success", "Avg tokens", "Avg time", "Est. cost/run"],
+    (report.models || []).map((model) => [
+      model.model,
+      model.runs,
+      improveRate(model.successRate),
+      model.avgTokens ?? "not reported",
+      model.avgDurationSeconds === null ? "not measured" : `${model.avgDurationSeconds}s`,
+      model.estimatedCostPerRunUsd === null ? "price unavailable" : `$${model.estimatedCostPerRunUsd}`,
+    ]),
+  );
+
+  improveTable(
+    $("improveModelAdvice"),
+    ["Model", "Runs", "Success", "Avg time", "Est. cost/run", "Why"],
+    (report.modelAdvice || []).map((row) => [
+      row.model,
+      row.runs,
+      improveRate(row.successRate),
+      row.avgDurationSeconds === null ? "not measured" : `${row.avgDurationSeconds}s`,
+      row.estimatedCostPerRunUsd === null ? "price unavailable" : `$${row.estimatedCostPerRunUsd}`,
+      row.reason,
+    ]),
+  );
+
+  const workflow = report.workflow || {};
+  const workflowBox = $("improveWorkflow");
+  workflowBox.replaceChildren();
+  improveLine(
+    workflowBox,
+    `${workflow.missions || 0} mission(s), ${workflow.tasks || 0} task(s), ${workflow.avgTasksPerMission || 0} task(s) per mission on average. ${workflow.verifiedMissions || 0} mission(s) recorded a command or verifier check.`,
+    "mission-goal",
+  );
+  improveLine(
+    workflowBox,
+    `Retried tasks: ${workflow.retriedTasks || 0}. Repeated file reads: ${workflow.repeatedReads || 0}. ` +
+      ((workflow.duplicateCommands || []).length
+        ? `Repeated commands: ${workflow.duplicateCommands
+            .map((entry) => `${entry.command} ×${entry.count}`)
+            .join(", ")}.`
+        : "No command was run twice in the window."),
+    "mission-card-meta",
+  );
+  const workflowNotes = $("improveWorkflowNotes");
+  workflowNotes.replaceChildren();
+  (workflow.recommendations || []).forEach((entry) => {
+    const item = document.createElement("li");
+    item.textContent = `${entry.finding} — ${entry.suggestion} (${entry.evidence})`;
+    workflowNotes.appendChild(item);
+  });
+
+  const failures = $("improveFailures");
+  failures.replaceChildren();
+  if (!(report.failures || []).length) {
+    improveLine(failures, "No failed task errors were recorded in the window.", "empty-note");
+  }
+  (report.failures || []).forEach((failure) => {
+    improveLine(failures, `${failure.count}× ${failure.error}`, "mission-card-meta");
+  });
+
+  const maintenance = report.maintenance || {};
+  const maintenanceBox = $("improveMaintenance");
+  maintenanceBox.replaceChildren();
+  improveLine(
+    maintenanceBox,
+    `Branch ${maintenance.branch || "(not a git repository)"}${
+      maintenance.dirty ? " with uncommitted changes" : ""
+    }. ${maintenance.sourceFiles || 0} source, ${maintenance.testFiles || 0} test, ${
+      maintenance.docFiles || 0
+    } documentation file(s). Declared dependencies: ${maintenance.declaredDependencies || 0}.`,
+    "mission-goal",
+  );
+  improveLine(
+    maintenanceBox,
+    maintenance.lastCheck
+      ? `Last check: ${maintenance.lastCheck.status} — ${
+          maintenance.lastCheck.summary || maintenance.lastCheck.kind
+        }.`
+      : "No project check has been recorded yet.",
+    "mission-card-meta",
+  );
+  improveLine(
+    maintenanceBox,
+    `${maintenance.openProposals || 0} open proposal(s), ${
+      maintenance.expiredExperiences || 0
+    } expired lesson(s) waiting for cleanup.`,
+    "mission-card-meta",
+  );
+  const maintenanceNotes = $("improveMaintenanceNotes");
+  maintenanceNotes.replaceChildren();
+  (report.unavailable || [])
+    .filter((entry) => /dependenc|vulnerab|dead-code|coverage/i.test(entry))
+    .forEach((entry) => {
+      const item = document.createElement("li");
+      item.className = "muted";
+      item.textContent = entry;
+      maintenanceNotes.appendChild(item);
+    });
+
+  const events = $("improveEvents");
+  events.replaceChildren();
+  if (!(report.events || []).length) {
+    improveLine(events, "No governance events recorded yet.", "empty-note");
+  }
+  (report.events || []).forEach((entry) => {
+    improveLine(
+      events,
+      `${entry.kind} — ${entry.subject || "self-improvement"}: ${entry.detail || ""}`,
+      "mission-card-meta",
+    );
+  });
+}
+
+function renderProposals() {
+  const box = $("improveProposals");
+  box.replaceChildren();
+  const proposals = state.improve.proposals || [];
+  if (!proposals.length) {
+    improveLine(
+      box,
+      "No proposals yet. Scan the workspace: duplicate definitions, oversized files, documentation that names missing paths and a missing test suite are deterministic findings.",
+      "empty-note",
+    );
+    return;
+  }
+  proposals.forEach((proposal) => {
+    const card = document.createElement("article");
+    card.className = "mission-card";
+    const head = document.createElement("div");
+    head.className = "mission-card-head";
+    const title = document.createElement("p");
+    title.className = "mission-goal";
+    title.textContent = proposal.title;
+    const badge = document.createElement("span");
+    badge.className = "mission-badge";
+    badge.textContent = `${proposal.status} · P${proposal.priority}`;
+    head.append(title, badge);
+    card.appendChild(head);
+    improveLine(card, proposal.problem, "mission-card-meta");
+    if ((proposal.evidence || []).length) {
+      const list = document.createElement("ul");
+      list.className = "eng-notes";
+      proposal.evidence.slice(0, 6).forEach((entry) => {
+        const item = document.createElement("li");
+        item.textContent = entry;
+        list.appendChild(item);
+      });
+      card.appendChild(list);
+    }
+    improveLine(card, `Benefit: ${proposal.benefit}`, "mission-card-meta");
+    improveLine(card, `Risk: ${proposal.risk}`, "mission-card-meta");
+    improveLine(card, `Testing: ${proposal.testing}`, "mission-card-meta");
+    improveLine(card, `Rollback: ${proposal.rollback}`, "mission-card-meta");
+    if ((proposal.files || []).length) {
+      improveLine(card, `Files: ${proposal.files.join(", ")}`, "mission-card-meta muted");
+    }
+    const actions = document.createElement("div");
+    actions.className = "form-actions";
+    if (proposal.status === "proposed") {
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "btn btn-accent btn-small";
+      approve.textContent = "Approve and start pipeline";
+      approve.addEventListener("click", () => void approveProposal(proposal));
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "btn btn-quiet btn-small";
+      reject.textContent = "Reject";
+      reject.addEventListener("click", () => void rejectProposal(proposal));
+      actions.append(approve, reject);
+    }
+    if (proposal.pipeline && proposal.status === "in-progress") {
+      const status = document.createElement("span");
+      status.className = "mission-card-meta";
+      status.textContent = `Pipeline ${proposal.pipeline} — review its diff in Engineering.`;
+      actions.appendChild(status);
+      const rollback = document.createElement("button");
+      rollback.type = "button";
+      rollback.className = "btn btn-quiet btn-small danger";
+      rollback.textContent = "Roll back delivered commit";
+      rollback.addEventListener("click", () => void rollbackProposal(proposal));
+      actions.appendChild(rollback);
+    }
+    if (proposal.rollbackCommit) {
+      improveLine(card, `Rolled back by commit ${proposal.rollbackCommit}.`, "mission-card-meta");
+    }
+    card.appendChild(actions);
+    box.appendChild(card);
+  });
+}
+
+function renderExperiments() {
+  const box = $("improveExperiments");
+  box.replaceChildren();
+  const experiments = state.improve.experiments || [];
+  if (!experiments.length) {
+    improveLine(box, "No experiments yet. Both arms are read-only missions over the same goal.", "empty-note");
+    return;
+  }
+  experiments.forEach((experiment) => {
+    const card = document.createElement("article");
+    card.className = "mission-card";
+    const head = document.createElement("div");
+    head.className = "mission-card-head";
+    const title = document.createElement("p");
+    title.className = "mission-goal";
+    title.textContent = experiment.name;
+    const badge = document.createElement("span");
+    badge.className = "mission-badge";
+    badge.textContent = experiment.status;
+    head.append(title, badge);
+    card.appendChild(head);
+    improveLine(card, experiment.goal, "mission-card-meta");
+    if (experiment.verdict && experiment.verdict.verdict) {
+      improveLine(
+        card,
+        `${improveVerdictLabel(experiment.verdict.verdict)} — ${experiment.verdict.reason || ""}`,
+        "mission-goal",
+      );
+      const deltas = experiment.verdict.deltas || {};
+      improveLine(
+        card,
+        `Tokens ${deltas.tokens >= 0 ? "+" : ""}${deltas.tokens ?? 0}, time ${
+          deltas.elapsedSeconds >= 0 ? "+" : ""
+        }${deltas.elapsedSeconds ?? 0}s, tasks ${deltas.tasks >= 0 ? "+" : ""}${deltas.tasks ?? 0}. ${
+          experiment.verdict.caveat || ""
+        }`,
+        "mission-card-meta",
+      );
+    } else {
+      improveLine(card, "Both arms run read-only; complete the experiment when both finish.", "mission-card-meta");
+    }
+    const actions = document.createElement("div");
+    actions.className = "form-actions";
+    if (experiment.status !== "completed") {
+      const complete = document.createElement("button");
+      complete.type = "button";
+      complete.className = "btn btn-quiet btn-small";
+      complete.textContent = "Complete and compare";
+      complete.addEventListener("click", () => void completeExperiment(experiment));
+      actions.appendChild(complete);
+    }
+    card.appendChild(actions);
+    box.appendChild(card);
+  });
+}
+
+async function saveImproveSettings() {
+  const body = {
+    enabled: $("improveEnabled").checked,
+    autonomy: Number($("improveAutonomy").value),
+    retentionDays: Number($("improveRetention").value),
+    budgetTokens: Number($("improveBudget").value),
+    storeGoals: $("improveStoreGoals").checked,
+    priority: $("improvePriority").value,
+  };
+  const result = await api("/api/improve/settings", { method: "POST", body: JSON.stringify(body) });
+  if (!result.ok) {
+    toast(result.data.error || "The settings were refused.");
+    return;
+  }
+  $("improveNote").textContent =
+    "Saved. These controls cannot change permissions, credential storage or approval requirements.";
+  toast("Self-improvement settings saved.");
+  await loadImprove();
+}
+
+async function scanImprovements() {
+  const result = await api("/api/improve/scan", { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "The scan was refused.");
+    return;
+  }
+  toast(`${result.data.created} new proposal(s); ${result.data.alreadyOpen} already open.`);
+  await loadImprove();
+}
+
+async function approveProposal(proposal) {
+  const result = await api(`/api/improve/proposals/${proposal.id}/approve`, {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The proposal was refused.");
+    return;
+  }
+  toast(
+    result.data.needsInput
+      ? "The pipeline needs one more detail; open Engineering to answer it."
+      : "Pipeline started on an isolated branch. Review its diff before delivering.",
+  );
+  await loadImprove();
+}
+
+async function rejectProposal(proposal) {
+  const result = await api(`/api/improve/proposals/${proposal.id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason: "rejected from the dashboard" }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The proposal could not be rejected.");
+    return;
+  }
+  toast("Proposal rejected; no code was touched.");
+  await loadImprove();
+}
+
+async function rollbackProposal(proposal) {
+  const result = await api(`/api/improve/proposals/${proposal.id}/rollback`, {
+    method: "POST",
+    body: JSON.stringify({ approve: true }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The rollback was refused.");
+    return;
+  }
+  toast(`Reverted ${result.data.reverted} as ${result.data.revertCommit}.`);
+  await loadImprove();
+}
+
+async function startExperiment() {
+  const goal = $("improveExperimentGoal").value.trim();
+  if (!goal) return;
+  const result = await api("/api/improve/experiments", {
+    method: "POST",
+    body: JSON.stringify({ goal }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The experiment was refused.");
+    return;
+  }
+  $("improveExperimentGoal").value = "";
+  toast("Two read-only missions started; complete the experiment when both finish.");
+  await loadImprove();
+}
+
+async function completeExperiment(experiment) {
+  const result = await api(`/api/improve/experiments/${experiment.id}/complete`, {
+    method: "POST",
+    body: "{}",
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The experiment is not ready to compare.");
+    return;
+  }
+  toast(improveVerdictLabel((result.data.experiment.verdict || {}).verdict));
+  await loadImprove();
+}
+
+async function searchKnowledge() {
+  const query = $("improveQuery").value.trim();
+  const box = $("improveKnowledge");
+  const result = await api(`/api/improve/experiences?q=${encodeURIComponent(query)}&limit=20`);
+  box.replaceChildren();
+  if (!result.ok) {
+    improveLine(box, result.data.error || "The lessons could not be read.", "empty-note");
+    return;
+  }
+  const lessons = result.data.experiences || [];
+  if (!lessons.length) {
+    improveLine(
+      box,
+      "No validated lesson matches this workspace. A lesson appears only after a mission finishes with evidence, or when you record a preference.",
+      "empty-note",
+    );
+    return;
+  }
+  lessons.forEach((lesson) => {
+    const card = document.createElement("article");
+    card.className = "mission-card";
+    const head = document.createElement("div");
+    head.className = "mission-card-head";
+    const title = document.createElement("p");
+    title.className = "mission-goal";
+    title.textContent = lesson.title;
+    const badge = document.createElement("span");
+    badge.className = "mission-badge";
+    badge.textContent = `${lesson.kind} · ${improveConfidence(lesson.confidence)} · used ${lesson.uses}×`;
+    head.append(title, badge);
+    card.appendChild(head);
+    improveLine(card, lesson.detail, "mission-card-meta");
+    improveLine(card, lesson.evidence, "mission-card-meta muted");
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "btn btn-quiet btn-small";
+    forget.textContent = "Forget this";
+    forget.addEventListener("click", () => void forgetLesson(lesson));
+    card.appendChild(forget);
+    box.appendChild(card);
+  });
+}
+
+async function forgetLesson(lesson) {
+  const result = await api(`/api/improve/experiences/${lesson.id}`, { method: "DELETE" });
+  if (!result.ok) {
+    toast(result.data.error || "The lesson could not be removed.");
+    return;
+  }
+  toast("Lesson removed.");
+  await searchKnowledge();
+}
+
+async function savePreference() {
+  const text = $("improvePreference").value.trim();
+  if (!text) return;
+  const result = await api("/api/improve/experiences", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+  if (!result.ok) {
+    toast(result.data.error || "The preference was refused.");
+    return;
+  }
+  $("improvePreference").value = "";
+  toast("Preference recorded for this workspace.");
+  await loadImprove();
+}
+
+async function purgeKnowledge() {
+  const result = await api("/api/improve/purge", { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "Cleanup failed.");
+    return;
+  }
+  toast(`${result.data.removed} expired lesson(s) removed.`);
+  await loadImprove();
+}
+
+async function assessRisk() {
+  const goal = $("improvePredictGoal").value.trim();
+  if (!goal) return;
+  const box = $("improvePredictResult");
+  const result = await api("/api/improve/predict", {
+    method: "POST",
+    body: JSON.stringify({ goal }),
+  });
+  box.replaceChildren();
+  if (!result.ok) {
+    improveLine(box, result.data.error || "The assessment was refused.", "empty-note");
+    return;
+  }
+  const risk = result.data.risk || {};
+  improveLine(box, `${improveRiskLabel(risk.band)} — score ${risk.score}`, "mission-goal");
+  improveLine(box, risk.label || "", "mission-card-meta");
+  (risk.evidence || []).forEach((entry) => improveLine(box, `• ${entry}`, "mission-card-meta"));
+  if (!(risk.evidence || []).length) {
+    improveLine(box, "No recorded failure or gap supports a higher score.", "mission-card-meta");
+  }
+}
+
+async function improveEmergencyStop() {
+  const result = await api("/api/improve/stop", { method: "POST", body: "{}" });
+  if (!result.ok) {
+    toast(result.data.error || "The stop request failed.");
+    return;
+  }
+  toast(
+    `Stopped ${result.data.missionsCancelled || 0} mission(s) and ${result.data.runsStopped || 0} run(s).`,
+  );
+  await loadImprove();
+}
+
 /* ---- permissions: saved rules and what they decided lately --------- */
 
 function permissionScopeLabel(scope) {
@@ -10736,7 +11402,7 @@ function bindEvents() {
   });
 
   $("routerBtn").addEventListener("click", () => setView("router"));
-  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"], ["localBtn", "local"], ["runsBtn", "runs"], ["engineeringBtn", "engineering"]].forEach(([id, view]) => {
+  [["workspacesBtn", "workspaces"], ["agentsBtn", "agents"], ["integrationsBtn", "integrations"], ["artifactsBtn", "artifacts"], ["automationBtn", "automation"], ["localBtn", "local"], ["runsBtn", "runs"], ["engineeringBtn", "engineering"], ["improveBtn", "improve"]].forEach(([id, view]) => {
 
     $(id).addEventListener("click", () => setView(view));
   });

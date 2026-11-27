@@ -1824,3 +1824,10 @@ kbd {
 .eng-trace-row .mission-card-meta { grid-column: 1 / -1; }
 .eng-questions { border: 1px solid var(--warn, #d29922); border-radius: 8px; padding: 10px; display: grid; gap: 6px; }
 .eng-output { margin: 0; padding: 8px; border-radius: 6px; background: var(--bg, #0d1117); border: 1px solid var(--line); font-family: var(--mono, ui-monospace, monospace); font-size: 11px; white-space: pre-wrap; max-height: 220px; overflow: auto; }
+
+/* Self-improvement: tables, inline fields and the risk result. */
+.eng-inline-field { min-width: 160px; margin: 0; }
+.table-wrap { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.data-table th, .data-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.data-table th { color: var(--mute); font-weight: 600; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }

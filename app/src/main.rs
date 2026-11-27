@@ -53,6 +53,7 @@ mod host_api;
 mod host_auth;
 mod host_security;
 mod host_transport;
+mod improve;
 mod index;
 mod installer;
 mod keychain;
@@ -591,6 +592,7 @@ fn apply_schema(conn: &Connection) -> Result<(), String> {
     workflow::initialize(conn).map_err(|error| format!("workflow tables: {error}"))?;
     multi_agent::initialize(conn).map_err(|error| format!("mission tables: {error}"))?;
     engineering::initialize(conn).map_err(|error| format!("engineering tables: {error}"))?;
+    improve::initialize(conn).map_err(|error| format!("self-improvement tables: {error}"))?;
     migrate_message_attachments(conn).map_err(|error| format!("message attachments: {error}"))?;
     migrate_message_index(conn).map_err(|error| format!("message index: {error}"))
 }
@@ -5387,6 +5389,12 @@ async fn bootstrap() -> Result<Boot, Box<dyn std::error::Error>> {
         )
         .merge(
             engineering::router().route_layer(middleware::from_fn_with_state(
+                workspace::LocalOriginGuard::new(port),
+                workspace::guard_local_origin,
+            )),
+        )
+        .merge(
+            improve::router().route_layer(middleware::from_fn_with_state(
                 workspace::LocalOriginGuard::new(port),
                 workspace::guard_local_origin,
             )),

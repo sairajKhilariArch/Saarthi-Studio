@@ -1,14 +1,14 @@
 # Sarthi Studio versioning strategy
 
-**Current desktop version:** 4.3.0  
+**Current desktop version:** 4.4.0  
 **Desktop source of truth:** `app/Cargo.toml`  
-**Desktop tag:** `v4.3.0`
+**Desktop tag:** `v4.4.0`
 
 ## Independent release lines
 
 | Product | Source of truth | Current version | Release convention |
 |---|---|---:|---|
-| Desktop (Rust host, installers) | `app/Cargo.toml` | **4.3.0** | Git tag `v4.3.0` |
+| Desktop (Rust host, installers) | `app/Cargo.toml` | **4.4.0** | Git tag `v4.4.0` |
 | Android companion | `android/app/build.gradle.kts` | **1.52.0** (version code 62) | Independent Android version |
 | VS Code extension | `vscode-extension/package.json` | **2.6.1** | Marketplace/package version |
 | Website | `website/package.json` | **0.5.2** | Independent static-site version |
